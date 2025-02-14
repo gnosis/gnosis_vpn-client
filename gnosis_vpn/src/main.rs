@@ -350,7 +350,11 @@ fn loop_daemon(
 fn main() {
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting {}", env!("CARGO_PKG_NAME"));
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
 
     let _args = Cli::parse();
     let socket_path = socket::path();
