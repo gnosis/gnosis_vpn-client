@@ -10,36 +10,9 @@
 use crate::{backend, io};
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
-#[cfg(linux_kernel)]
-use backend::process::types::RawCpuid;
 
 pub use crate::pid::{Pid, RawPid};
 pub use crate::ugid::{Gid, RawGid, RawUid, Uid};
-
-/// A Linux CPU ID.
-#[cfg(linux_kernel)]
-#[repr(transparent)]
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
-pub struct Cpuid(RawCpuid);
-
-#[cfg(linux_kernel)]
-impl Cpuid {
-    /// Converts a `RawCpuid` into a `Cpuid`.
-    ///
-    /// # Safety
-    ///
-    /// `raw` must be the value of a valid Linux CPU ID.
-    #[inline]
-    pub const unsafe fn from_raw(raw: RawCpuid) -> Self {
-        Self(raw)
-    }
-
-    /// Converts a `Cpuid` into a `RawCpuid`.
-    #[inline]
-    pub const fn as_raw(self) -> RawCpuid {
-        self.0
-    }
-}
 
 /// `getuid()`—Returns the process' real user ID.
 ///
@@ -113,8 +86,9 @@ pub fn getpid() -> Pid {
 
 /// `getppid()`—Returns the parent process' ID.
 ///
-/// This will return `None` if the current process has no parent (or no parent accessible in the
-/// current PID namespace), such as if the current process is an init process (PID 1).
+/// This will return `None` if the current process has no parent (or no parent
+/// accessible in the current PID namespace), such as if the current process is
+/// an init process (PID 1).
 ///
 /// # References
 ///  - [POSIX]
@@ -204,6 +178,7 @@ pub fn setsid() -> io::Result<Pid> {
 /// [POSIX]: https://pubs.opengroup.org/onlinepubs/9799919799/functions/getgroups.html
 /// [Linux]: https://man7.org/linux/man-pages/man2/getgroups.2.html
 #[cfg(feature = "alloc")]
+#[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
 pub fn getgroups() -> io::Result<Vec<Gid>> {
     // This code would benefit from having a better way to read into
     // uninitialized memory, but that requires `unsafe`.

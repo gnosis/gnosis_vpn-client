@@ -13,7 +13,7 @@
 edition = "2018"
 rust-version = "1.49.0"
 name = "http"
-version = "1.2.0"
+version = "1.3.1"
 authors = [
     "Alex Crichton <alex@alexcrichton.com>",
     "Carl Lerche <me@carllerche.com>",
@@ -34,6 +34,10 @@ keywords = ["http"]
 categories = ["web-programming"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hyperium/http"
+
+[features]
+default = ["std"]
+std = []
 
 [lib]
 name = "http"
@@ -74,7 +78,3 @@ version = "1.0"
 
 [dev-dependencies.serde_json]
 version = "1.0"
-
-[features]
-default = ["std"]
-std = []

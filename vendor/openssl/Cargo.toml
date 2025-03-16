@@ -13,8 +13,14 @@
 edition = "2021"
 rust-version = "1.63.0"
 name = "openssl"
-version = "0.10.70"
+version = "0.10.71"
 authors = ["Steven Fackler <sfackler@gmail.com>"]
+build = "build.rs"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "OpenSSL bindings"
 readme = "README.md"
 keywords = [
@@ -30,6 +36,14 @@ categories = [
 license = "Apache-2.0"
 repository = "https://github.com/sfackler/rust-openssl"
 
+[lib]
+name = "openssl"
+path = "src/lib.rs"
+
+[[example]]
+name = "mk_certs"
+path = "examples/mk_certs.rs"
+
 [dependencies.bitflags]
 version = "2.2.1"
 
@@ -37,7 +51,7 @@ version = "2.2.1"
 version = "1.0"
 
 [dependencies.ffi]
-version = "0.9.105"
+version = "0.9.106"
 package = "openssl-sys"
 
 [dependencies.foreign-types]

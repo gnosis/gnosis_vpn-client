@@ -49,6 +49,7 @@ use rustc_ast::ast::Extern;
 use rustc_ast::ast::FieldDef;
 use rustc_ast::ast::FloatTy;
 use rustc_ast::ast::Fn;
+use rustc_ast::ast::FnContract;
 use rustc_ast::ast::FnDecl;
 use rustc_ast::ast::FnHeader;
 use rustc_ast::ast::FnRetTy;
@@ -147,6 +148,8 @@ use rustc_ast::ast::TyAlias;
 use rustc_ast::ast::TyAliasWhereClause;
 use rustc_ast::ast::TyAliasWhereClauses;
 use rustc_ast::ast::TyKind;
+use rustc_ast::ast::TyPat;
+use rustc_ast::ast::TyPatKind;
 use rustc_ast::ast::UintTy;
 use rustc_ast::ast::UnOp;
 use rustc_ast::ast::UnsafeBinderCastKind;
@@ -173,13 +176,13 @@ use rustc_ast::tokenstream::{
     Spacing, TokenStream, TokenTree,
 };
 use rustc_data_structures::packed::Pu128;
-use rustc_data_structures::sync::Lrc;
 use rustc_span::source_map::Spanned;
 use rustc_span::symbol::{sym, Ident};
 use rustc_span::{ErrorGuaranteed, Span, Symbol, SyntaxContext, DUMMY_SP};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash};
+use std::sync::Arc;
 use thin_vec::ThinVec;
 
 pub trait SpanlessEq {
@@ -198,7 +201,7 @@ impl<T: ?Sized + SpanlessEq> SpanlessEq for P<T> {
     }
 }
 
-impl<T: ?Sized + SpanlessEq> SpanlessEq for Lrc<T> {
+impl<T: ?Sized + SpanlessEq> SpanlessEq for Arc<T> {
     fn eq(&self, other: &Self) -> bool {
         SpanlessEq::eq(&**self, &**other)
     }
@@ -497,7 +500,8 @@ spanless_eq_struct!(EnumDef; variants);
 spanless_eq_struct!(Expr; id kind span attrs !tokens);
 spanless_eq_struct!(ExprField; attrs id span ident expr is_shorthand is_placeholder);
 spanless_eq_struct!(FieldDef; attrs id span vis safety ident ty default is_placeholder);
-spanless_eq_struct!(Fn; defaultness generics sig body);
+spanless_eq_struct!(Fn; defaultness generics sig contract body);
+spanless_eq_struct!(FnContract; requires ensures);
 spanless_eq_struct!(FnDecl; inputs output);
 spanless_eq_struct!(FnHeader; constness coroutine_kind safety ext);
 spanless_eq_struct!(FnSig; header decl span);
@@ -545,6 +549,7 @@ spanless_eq_struct!(Ty; id kind span tokens);
 spanless_eq_struct!(TyAlias; defaultness generics where_clauses bounds ty);
 spanless_eq_struct!(TyAliasWhereClause; !has_where_token span);
 spanless_eq_struct!(TyAliasWhereClauses; before after !split);
+spanless_eq_struct!(TyPat; id kind span tokens);
 spanless_eq_struct!(UnsafeBinderTy; generic_params inner_ty);
 spanless_eq_struct!(UseTree; prefix kind span);
 spanless_eq_struct!(Variant; attrs id span !vis ident data disr_expr is_placeholder);
@@ -552,7 +557,7 @@ spanless_eq_struct!(Visibility; kind span tokens);
 spanless_eq_struct!(WhereBoundPredicate; bound_generic_params bounded_ty bounds);
 spanless_eq_struct!(WhereClause; has_where_token predicates span);
 spanless_eq_struct!(WhereEqPredicate; lhs_ty rhs_ty);
-spanless_eq_struct!(WherePredicate; kind id span);
+spanless_eq_struct!(WherePredicate; attrs kind id span is_placeholder);
 spanless_eq_struct!(WhereRegionPredicate; lifetime bounds);
 spanless_eq_enum!(AngleBracketedArg; Arg(0) Constraint(0));
 spanless_eq_enum!(AsmMacro; Asm GlobalAsm NakedAsm);
@@ -568,7 +573,7 @@ spanless_eq_enum!(BoundAsyncness; Normal Async(0));
 spanless_eq_enum!(BoundConstness; Never Always(0) Maybe(0));
 spanless_eq_enum!(BoundPolarity; Positive Negative(0) Maybe(0));
 spanless_eq_enum!(ByRef; Yes(0) No);
-spanless_eq_enum!(CaptureBy; Value(move_kw) Ref);
+spanless_eq_enum!(CaptureBy; Value(move_kw) Ref Use(use_kw));
 spanless_eq_enum!(ClosureBinder; NotPresent For(span generic_params));
 spanless_eq_enum!(Const; Yes(0) No);
 spanless_eq_enum!(Defaultness; Default(0) Final);
@@ -618,6 +623,7 @@ spanless_eq_enum!(StructRest; Base(0) Rest(0) None);
 spanless_eq_enum!(Term; Ty(0) Const(0));
 spanless_eq_enum!(TokenTree; Token(0 1) Delimited(0 1 2 3));
 spanless_eq_enum!(TraitObjectSyntax; Dyn DynStar None);
+spanless_eq_enum!(TyPatKind; Range(0 1 2) Err(0));
 spanless_eq_enum!(UintTy; Usize U8 U16 U32 U64 U128);
 spanless_eq_enum!(UnOp; Deref Not Neg);
 spanless_eq_enum!(UnsafeBinderCastKind; Wrap Unwrap);
@@ -632,8 +638,8 @@ spanless_eq_enum!(CoroutineKind; Async(span closure_id return_impl_trait_id)
 spanless_eq_enum!(ExprKind; Array(0) ConstBlock(0) Call(0 1) MethodCall(0)
     Tup(0) Binary(0 1 2) Unary(0 1) Lit(0) Cast(0 1) Type(0 1) Let(0 1 2 3)
     If(0 1 2) While(0 1 2) ForLoop(pat iter body label kind) Loop(0 1 2)
-    Match(0 1 2) Closure(0) Block(0 1) Gen(0 1 2 3) Await(0 1) TryBlock(0)
-    Assign(0 1 2) AssignOp(0 1 2) Field(0 1) Index(0 1 2) Underscore
+    Match(0 1 2) Closure(0) Block(0 1) Gen(0 1 2 3) Await(0 1) Use(0 1)
+    TryBlock(0) Assign(0 1 2) AssignOp(0 1 2) Field(0 1) Index(0 1 2) Underscore
     Range(0 1 2) Path(0 1) AddrOf(0 1 2) Break(0 1) Continue(0) Ret(0)
     InlineAsm(0) OffsetOf(0 1) MacCall(0) Struct(0) Repeat(0 1) Paren(0) Try(0)
     Yield(0) Yeet(0) Become(0) IncludedBytes(0) FormatArgs(0)
@@ -769,7 +775,7 @@ fn doc_comment<'a>(
         match trees.next() {
             Some(TokenTree::Token(
                 Token {
-                    kind: TokenKind::Not,
+                    kind: TokenKind::Bang,
                     span: _,
                 },
                 _spacing,

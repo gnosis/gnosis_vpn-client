@@ -6,6 +6,14 @@ The MSRV (Minimum Supported Rust Version) is 1.37.0, and typenum is tested
 against this Rust version.
 
 ### Unreleased
+
+### 1.18.0 (2025-02-17)
+- [changed] Remove build scripts; instead check-in the built code (PR #219)
+- [added] Constants for 3600 (PR #220)
+- [added] Elixir-style syntax for `tarr!` macro (PR #214)
+- [added] `FoldAdd` and `FoldMul` to get the sum/product of an array (PR #209)
+
+### 1.17.0 (2023-09-15)
 - [removed] Remove `force_unix_path_separator` feature, make it the default
 - [added] docs.rs metadata and cfg options
 - [added] Playground metadata

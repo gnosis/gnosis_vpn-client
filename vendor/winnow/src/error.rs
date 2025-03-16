@@ -94,6 +94,12 @@ impl Needed {
 }
 
 /// Add parse error state to [`ParserError`]s
+///
+/// Needed for
+/// - [`Partial`][crate::stream::Partial] to track whether the [`Stream`] is [`ErrMode::Incomplete`].
+///   See also [`_topic/partial`]
+/// - Marking errors as unrecoverable ([`ErrMode::Cut`]) and not retrying alternative parsers.
+///   See also [`_tutorial/chapter_7#error-cuts`]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ErrMode<E> {
     /// There was not enough data to determine the appropriate action
@@ -167,7 +173,7 @@ impl<E> ErrMode<E> {
 
     /// Unwrap the mode, returning the underlying error
     ///
-    /// Returns `None` for [`ErrMode::Incomplete`]
+    /// Returns `Err(self)` for [`ErrMode::Incomplete`]
     #[inline(always)]
     pub fn into_inner(self) -> Result<E, Self> {
         match self {
@@ -219,7 +225,6 @@ impl<I: Stream, E: ParserError<I>> ParserError<I> for ErrMode<E> {
         matches!(self, ErrMode::Backtrack(_))
     }
 
-    /// Unwrap the mode, returning the underlying error
     #[inline(always)]
     fn into_inner(self) -> Result<Self::Inner, Self> {
         match self {
@@ -669,6 +674,9 @@ impl ErrorConvert<()> for () {
 }
 
 /// Accumulate context while backtracking errors
+///
+/// See the [tutorial][crate::_tutorial::chapter_7#error-adaptation-and-rendering]
+/// for an example of how to adapt this to an application error with custom rendering.
 #[derive(Debug)]
 pub struct ContextError<C = StrContext> {
     #[cfg(feature = "alloc")]
@@ -1258,6 +1266,8 @@ impl<I, E> ParseError<I, E> {
 
     /// The location in [`ParseError::input`] where parsing failed
     ///
+    /// To get the span for the `char` this points to, see [`ParseError::char_span`].
+    ///
     /// <div class="warning">
     ///
     /// **Note:** This is an offset, not an index, and may point to the end of input
@@ -1280,6 +1290,48 @@ impl<I, E> ParseError<I, E> {
     pub fn into_inner(self) -> E {
         self.inner
     }
+}
+
+impl<I: AsBStr, E> ParseError<I, E> {
+    /// The byte indices for the `char` at [`ParseError::offset`]
+    #[inline]
+    pub fn char_span(&self) -> crate::lib::std::ops::Range<usize> {
+        char_boundary(self.input.as_bstr(), self.offset())
+    }
+}
+
+fn char_boundary(input: &[u8], offset: usize) -> crate::lib::std::ops::Range<usize> {
+    let len = input.len();
+    if offset == len {
+        return offset..offset;
+    }
+
+    let start = (0..(offset + 1).min(len))
+        .rev()
+        .find(|i| {
+            input
+                .get(*i)
+                .copied()
+                .map(is_utf8_char_boundary)
+                .unwrap_or(false)
+        })
+        .unwrap_or(0);
+    let end = (offset + 1..len)
+        .find(|i| {
+            input
+                .get(*i)
+                .copied()
+                .map(is_utf8_char_boundary)
+                .unwrap_or(false)
+        })
+        .unwrap_or(len);
+    start..end
+}
+
+/// Taken from `core::num`
+const fn is_utf8_char_boundary(b: u8) -> bool {
+    // This is bit magic equivalent to: b < 128 || b >= 192
+    (b as i8) >= -0x40
 }
 
 impl<I, E> core::fmt::Display for ParseError<I, E>
@@ -1377,6 +1429,52 @@ fn translate_position(input: &[u8], index: usize) -> (usize, usize) {
     let column = column + column_offset;
 
     (line, column)
+}
+
+#[cfg(test)]
+mod test_char_boundary {
+    use super::*;
+
+    #[test]
+    fn ascii() {
+        let input = "hi";
+        let cases = [(0, 0..1), (1, 1..2), (2, 2..2)];
+        for (offset, expected) in cases {
+            assert_eq!(
+                char_boundary(input.as_bytes(), offset),
+                expected,
+                "input={input:?}, offset={offset:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn utf8() {
+        let input = "βèƒôřè";
+        assert_eq!(input.len(), 12);
+        let cases = [
+            (0, 0..2),
+            (1, 0..2),
+            (2, 2..4),
+            (3, 2..4),
+            (4, 4..6),
+            (5, 4..6),
+            (6, 6..8),
+            (7, 6..8),
+            (8, 8..10),
+            (9, 8..10),
+            (10, 10..12),
+            (11, 10..12),
+            (12, 12..12),
+        ];
+        for (offset, expected) in cases {
+            assert_eq!(
+                char_boundary(input.as_bytes(), offset),
+                expected,
+                "input={input:?}, offset={offset:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

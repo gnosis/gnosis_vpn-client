@@ -2,7 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tempfile::{env, tempdir, Builder, NamedTempFile, TempPath};
 
@@ -291,6 +291,16 @@ fn test_change_dir() {
 }
 
 #[test]
+fn test_change_dir_make() {
+    std::env::set_current_dir(env::temp_dir()).unwrap();
+    let tmpfile = Builder::new().make_in(".", |p| File::create(p)).unwrap();
+    let path = std::env::current_dir().unwrap().join(tmpfile.path());
+    std::env::set_current_dir("/").unwrap();
+    drop(tmpfile);
+    assert!(!exists(path))
+}
+
+#[test]
 fn test_into_parts() {
     let mut file = NamedTempFile::new().unwrap();
     write!(file, "abcd").expect("write failed");
@@ -459,17 +469,24 @@ fn test_reseed() {
     // Deterministic seed.
     fastrand::seed(42);
 
+    // I need to create 5 conflicts but I can't just make 5 temporary files because we fork the RNG
+    // each time we create a file.
     let mut attempts = 0;
-    let _files: Vec<_> = std::iter::repeat_with(|| {
-        Builder::new()
-            .make(|path| {
-                attempts += 1;
-                File::options().write(true).create_new(true).open(path)
-            })
-            .unwrap()
-    })
-    .take(5)
-    .collect();
+    let mut files: Vec<_> = Vec::new();
+    let _ = Builder::new().make(|path| -> io::Result<File> {
+        if attempts == 5 {
+            return Err(io::Error::new(io::ErrorKind::Other, "stop!"));
+        }
+        attempts += 1;
+        let f = File::options()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .unwrap();
+
+        files.push(NamedTempFile::from_parts(f, TempPath::from_path(path)));
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "fake!"))
+    });
 
     assert_eq!(5, attempts);
     attempts = 0;

@@ -240,7 +240,16 @@ impl<T> OptionParser<T> {
         //
         // outer parser gets value in ParseFailure format
 
-        if self.info.help_if_no_args && args.is_empty() {
+        let no_args = args.is_empty();
+        let res = self.inner.eval(args);
+
+        // Don't override inner parser printing usage info
+        let parser_failed = match res {
+            Ok(_) | Err(Error(Message::ParseFailure(ParseFailure::Stdout(..)))) => false,
+            Err(_) => true,
+        };
+
+        if parser_failed && self.info.help_if_no_args && no_args {
             let buffer = render_help(
                 &args.path,
                 &self.info,
@@ -251,7 +260,6 @@ impl<T> OptionParser<T> {
             return Err(ParseFailure::Stdout(buffer, false));
         };
 
-        let res = self.inner.eval(args);
         if let Err(Error(Message::ParseFailure(failure))) = res {
             return Err(failure);
         }

@@ -466,7 +466,10 @@ impl<'a, 'b> Builder<'a, 'b> {
     /// scope.
     ///
     /// By default, the file/folder is automatically cleaned up in the destructor of
-    /// [`NamedTempFile`]/[`TempDir`]. When `keep` is set to `true`, this behavior is supressed.
+    /// [`NamedTempFile`]/[`TempDir`]. When `keep` is set to `true`, this behavior is suppressed.
+    ///
+    /// If you wish to keep a temporary file or directory after creating it, call
+    /// [`NamedTempFile::keep`] or [`TempDir::into_path`] respectively.
     ///
     /// # Examples
     ///
@@ -604,17 +607,13 @@ impl<'a, 'b> Builder<'a, 'b> {
     ///
     /// [resource-leaking]: struct.TempDir.html#resource-leaking
     pub fn tempdir_in<P: AsRef<Path>>(&self, dir: P) -> io::Result<TempDir> {
-        let storage;
-        let mut dir = dir.as_ref();
-        if !dir.is_absolute() {
-            let cur_dir = std::env::current_dir()?;
-            storage = cur_dir.join(dir);
-            dir = &storage;
-        }
-
-        util::create_helper(dir, self.prefix, self.suffix, self.random_len, |path| {
-            dir::create(path, self.permissions.as_ref(), self.keep)
-        })
+        util::create_helper(
+            dir.as_ref(),
+            self.prefix,
+            self.suffix,
+            self.random_len,
+            |path| dir::create(path, self.permissions.as_ref(), self.keep),
+        )
     }
 
     /// Attempts to create a temporary file (or file-like object) using the

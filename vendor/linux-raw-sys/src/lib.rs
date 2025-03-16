@@ -1,16 +1,41 @@
 #![allow(non_camel_case_types, non_upper_case_globals, non_snake_case)]
 #![cfg_attr(not(feature = "std"), no_std)]
+/*
+Unsafe functions no longer implicitly create unsafe blocks (RFC 2585).
+While newer bindgen versions follow this convention, we support Rust 1.63 which warns about
+this behavior. We can simply silence these warnings.
+*/
+#![allow(unused_unsafe)]
 
 #[cfg(feature = "std")]
 pub use std::os::raw as ctypes;
 
 #[cfg(all(not(feature = "std"), feature = "no_std"))]
 pub mod ctypes {
-    // The signedness of `char` is platform-specific, however a consequence
-    // of it being platform-specific is that any code which depends on the
-    // signedness of `char` is already non-portable. So we can just use `u8`
-    // here and no portable code will notice.
-    pub type c_char = u8;
+    // The signedness of `char` is platform-specific, and we have to match
+    // what Rust's `CStr` uses.
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "msp430",
+        target_arch = "powerpc",
+        target_arch = "powerpc64",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "s390x",
+    ))]
+    pub type c_char = c_uchar;
+    #[cfg(any(
+        target_arch = "loongarch64",
+        target_arch = "mips",
+        target_arch = "mips64",
+        target_arch = "sparc",
+        target_arch = "sparc64",
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "xtensa",
+    ))]
+    pub type c_char = c_schar;
 
     // The following assumes that Linux is always either ILP32 or LP64,
     // and char is always 8-bit.
@@ -222,6 +247,10 @@ pub mod if_ether;
 #[cfg(target_arch = "arm")]
 #[path = "arm/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "arm")]
+#[path = "arm/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "arm")]
 #[path = "arm/io_uring.rs"]
@@ -298,6 +327,10 @@ pub mod if_ether;
 #[cfg(target_arch = "aarch64")]
 #[path = "aarch64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "aarch64")]
 #[path = "aarch64/io_uring.rs"]
@@ -374,6 +407,10 @@ pub mod if_ether;
 #[cfg(target_arch = "csky")]
 #[path = "csky/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "csky")]
+#[path = "csky/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "csky")]
 #[path = "csky/io_uring.rs"]
@@ -450,6 +487,10 @@ pub mod if_ether;
 #[cfg(target_arch = "loongarch64")]
 #[path = "loongarch64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "loongarch64")]
+#[path = "loongarch64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "loongarch64")]
 #[path = "loongarch64/io_uring.rs"]
@@ -526,6 +567,10 @@ pub mod if_ether;
 #[cfg(target_arch = "mips")]
 #[path = "mips/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "mips")]
+#[path = "mips/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "mips")]
 #[path = "mips/io_uring.rs"]
@@ -602,6 +647,10 @@ pub mod if_ether;
 #[cfg(target_arch = "mips64")]
 #[path = "mips64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "mips64")]
+#[path = "mips64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "mips64")]
 #[path = "mips64/io_uring.rs"]
@@ -678,6 +727,10 @@ pub mod if_ether;
 #[cfg(target_arch = "mips32r6")]
 #[path = "mips32r6/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "mips32r6")]
+#[path = "mips32r6/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "mips32r6")]
 #[path = "mips32r6/io_uring.rs"]
@@ -754,6 +807,10 @@ pub mod if_ether;
 #[cfg(target_arch = "mips64r6")]
 #[path = "mips64r6/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "mips64r6")]
+#[path = "mips64r6/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "mips64r6")]
 #[path = "mips64r6/io_uring.rs"]
@@ -830,6 +887,10 @@ pub mod if_ether;
 #[cfg(target_arch = "powerpc")]
 #[path = "powerpc/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "powerpc")]
+#[path = "powerpc/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "powerpc")]
 #[path = "powerpc/io_uring.rs"]
@@ -906,6 +967,10 @@ pub mod if_ether;
 #[cfg(target_arch = "powerpc64")]
 #[path = "powerpc64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "powerpc64")]
+#[path = "powerpc64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "powerpc64")]
 #[path = "powerpc64/io_uring.rs"]
@@ -982,6 +1047,10 @@ pub mod if_ether;
 #[cfg(target_arch = "riscv32")]
 #[path = "riscv32/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "riscv32")]
+#[path = "riscv32/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "riscv32")]
 #[path = "riscv32/io_uring.rs"]
@@ -1058,6 +1127,10 @@ pub mod if_ether;
 #[cfg(target_arch = "riscv64")]
 #[path = "riscv64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "riscv64")]
+#[path = "riscv64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "riscv64")]
 #[path = "riscv64/io_uring.rs"]
@@ -1134,6 +1207,10 @@ pub mod if_ether;
 #[cfg(target_arch = "s390x")]
 #[path = "s390x/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "s390x")]
+#[path = "s390x/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "s390x")]
 #[path = "s390x/io_uring.rs"]
@@ -1210,6 +1287,10 @@ pub mod if_ether;
 #[cfg(target_arch = "sparc")]
 #[path = "sparc/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "sparc")]
+#[path = "sparc/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "sparc")]
 #[path = "sparc/io_uring.rs"]
@@ -1286,6 +1367,10 @@ pub mod if_ether;
 #[cfg(target_arch = "sparc64")]
 #[path = "sparc64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "sparc64")]
+#[path = "sparc64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "sparc64")]
 #[path = "sparc64/io_uring.rs"]
@@ -1362,6 +1447,10 @@ pub mod if_ether;
 #[cfg(target_arch = "x86")]
 #[path = "x86/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(target_arch = "x86")]
+#[path = "x86/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(target_arch = "x86")]
 #[path = "x86/io_uring.rs"]
@@ -1438,6 +1527,10 @@ pub mod if_ether;
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 #[path = "x86_64/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+#[path = "x86_64/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
 #[path = "x86_64/io_uring.rs"]
@@ -1514,6 +1607,10 @@ pub mod if_ether;
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
 #[path = "x32/if_packet.rs"]
 pub mod if_packet;
+#[cfg(feature = "image")]
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
+#[path = "x32/image.rs"]
+pub mod image;
 #[cfg(feature = "io_uring")]
 #[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
 #[path = "x32/io_uring.rs"]

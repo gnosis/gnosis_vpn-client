@@ -11,7 +11,7 @@ use crate::log::{debug, error, warn};
 use crate::msgs::alert::AlertMessagePayload;
 use crate::msgs::base::Payload;
 use crate::msgs::codec::Codec;
-use crate::msgs::enums::{AlertLevel, ExtensionType, KeyUpdateRequest};
+use crate::msgs::enums::{AlertLevel, KeyUpdateRequest};
 use crate::msgs::fragmenter::MessageFragmenter;
 use crate::msgs::handshake::{CertificateChain, HandshakeMessagePayload};
 use crate::msgs::message::{
@@ -24,7 +24,7 @@ use crate::suites::{PartiallyExtractedSecrets, SupportedCipherSuite};
 use crate::tls12::ConnectionSecrets;
 use crate::unbuffered::{EncryptError, InsufficientSizeError};
 use crate::vecbuf::ChunkVecBuffer;
-use crate::{quic, record_layer, PeerIncompatible};
+use crate::{quic, record_layer};
 
 /// Connection state common to both client and server connections.
 pub struct CommonState {
@@ -40,6 +40,8 @@ pub struct CommonState {
     pub(crate) may_receive_application_data: bool,
     pub(crate) early_traffic: bool,
     sent_fatal_alert: bool,
+    /// If we signaled end of stream.
+    pub(crate) has_sent_close_notify: bool,
     /// If the peer has signaled end of stream.
     pub(crate) has_received_close_notify: bool,
     #[cfg(feature = "std")]
@@ -74,6 +76,7 @@ impl CommonState {
             may_receive_application_data: false,
             early_traffic: false,
             sent_fatal_alert: false,
+            has_sent_close_notify: false,
             has_received_close_notify: false,
             #[cfg(feature = "std")]
             has_seen_eof: false,
@@ -573,6 +576,7 @@ impl CommonState {
         }
         debug!("Sending warning alert {:?}", AlertDescription::CloseNotify);
         self.sent_fatal_alert = true;
+        self.has_sent_close_notify = true;
         self.send_warning_alert_no_log(AlertDescription::CloseNotify);
     }
 
@@ -898,35 +902,6 @@ enum Limit {
     #[cfg(feature = "std")]
     Yes,
     No,
-}
-
-#[derive(Debug)]
-pub(super) struct RawKeyNegotiationParams {
-    pub(super) peer_supports_raw_key: bool,
-    pub(super) local_expects_raw_key: bool,
-    pub(super) extension_type: ExtensionType,
-}
-
-impl RawKeyNegotiationParams {
-    pub(super) fn validate_raw_key_negotiation(&self) -> RawKeyNegotationResult {
-        match (self.local_expects_raw_key, self.peer_supports_raw_key) {
-            (true, true) => RawKeyNegotationResult::Negotiated(self.extension_type),
-            (false, false) => RawKeyNegotationResult::NotNegotiated,
-            (true, false) => RawKeyNegotationResult::Err(Error::PeerIncompatible(
-                PeerIncompatible::IncorrectCertificateTypeExtension,
-            )),
-            (false, true) => RawKeyNegotationResult::Err(Error::PeerIncompatible(
-                PeerIncompatible::UnsolicitedCertificateTypeExtension,
-            )),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum RawKeyNegotationResult {
-    Negotiated(ExtensionType),
-    NotNegotiated,
-    Err(Error),
 }
 
 /// Tracking technically-allowed protocol actions

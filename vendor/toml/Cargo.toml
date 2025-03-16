@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.65"
 name = "toml"
-version = "0.8.19"
+version = "0.8.20"
 authors = ["Alex Crichton <alex@alexcrichton.com>"]
 build = false
 include = [
@@ -27,6 +27,7 @@ include = [
     "examples/**/*",
     "tests/**/*",
 ]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -93,6 +94,21 @@ replace = """
 [Unreleased]: https://github.com/toml-rs/toml/compare/{{tag_name}}...HEAD"""
 search = "<!-- next-url -->"
 
+[features]
+default = [
+    "parse",
+    "display",
+]
+display = [
+    "dep:toml_edit",
+    "toml_edit?/display",
+]
+parse = [
+    "dep:toml_edit",
+    "toml_edit?/parse",
+]
+preserve_order = ["indexmap"]
+
 [lib]
 name = "toml"
 path = "src/lib.rs"
@@ -151,7 +167,7 @@ optional = true
 version = "1.0.145"
 
 [dependencies.serde_spanned]
-version = "0.6.7"
+version = "0.6.8"
 features = ["serde"]
 
 [dependencies.toml_datetime]
@@ -159,7 +175,7 @@ version = "0.6.8"
 features = ["serde"]
 
 [dependencies.toml_edit]
-version = "0.22.20"
+version = "0.22.23"
 features = ["serde"]
 optional = true
 default-features = false
@@ -179,21 +195,6 @@ version = "1.11.0"
 
 [dev-dependencies.toml-test-harness]
 version = "0.4.8"
-
-[features]
-default = [
-    "parse",
-    "display",
-]
-display = [
-    "dep:toml_edit",
-    "toml_edit?/display",
-]
-parse = [
-    "dep:toml_edit",
-    "toml_edit?/parse",
-]
-preserve_order = ["indexmap"]
 
 [lints.clippy]
 bool_assert_comparison = "allow"
@@ -240,6 +241,7 @@ rc_mutex = "warn"
 redundant_feature_names = "warn"
 ref_option_ref = "warn"
 rest_pat_in_fully_bound_structs = "warn"
+result_large_err = "allow"
 same_functions_in_if_condition = "warn"
 self_named_module_files = "warn"
 semicolon_if_nothing_returned = "warn"
@@ -250,6 +252,7 @@ string_lit_as_bytes = "warn"
 string_to_string = "warn"
 todo = "warn"
 trait_duplication_in_bounds = "warn"
+uninlined_format_args = "warn"
 verbose_file_reads = "warn"
 wildcard_imports = "warn"
 zero_sized_map_values = "warn"

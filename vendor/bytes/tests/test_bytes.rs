@@ -291,6 +291,7 @@ fn split_to_uninitialized() {
 }
 
 #[test]
+#[cfg_attr(not(panic = "unwind"), ignore)]
 fn split_off_to_at_gt_len() {
     fn make_bytes() -> Bytes {
         let mut bytes = BytesMut::with_capacity(100);
@@ -727,6 +728,7 @@ fn advance_past_len() {
 // Only run these tests on little endian systems. CI uses qemu for testing
 // big endian... and qemu doesn't really support threading all that well.
 #[cfg(any(miri, target_endian = "little"))]
+#[cfg(not(target_family = "wasm"))] // wasm without experimental threads proposal doesn't support threads
 fn stress() {
     // Tests promoting a buffer from a vec -> shared in a concurrent situation
     use std::sync::{Arc, Barrier};
@@ -1618,6 +1620,20 @@ fn owned_to_vec() {
 }
 
 #[test]
+fn owned_into_vec() {
+    let drop_counter = SharedAtomicCounter::new();
+    let buf: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let owner = OwnedTester::new(buf, drop_counter.clone());
+    let b1 = Bytes::from_owner(owner);
+
+    let v1: Vec<u8> = b1.into();
+    assert_eq!(&v1[..], &buf[..]);
+    // into() vec will copy out of the owner and drop it
+    assert_eq!(drop_counter.get(), 1);
+}
+
+#[test]
+#[cfg_attr(not(panic = "unwind"), ignore)]
 fn owned_safe_drop_on_as_ref_panic() {
     let buf: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let drop_counter = SharedAtomicCounter::new();

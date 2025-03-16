@@ -1,11 +1,10 @@
 //! Buffered Base64 decoder.
 
 use crate::{
-    encoding,
-    line_ending::{CHAR_CR, CHAR_LF},
     Encoding,
     Error::{self, InvalidLength},
-    MIN_LINE_WIDTH,
+    MIN_LINE_WIDTH, encoding,
+    line_ending::{CHAR_CR, CHAR_LF},
 };
 use core::{cmp, marker::PhantomData};
 
@@ -105,7 +104,7 @@ impl<'i, E: Encoding> Decoder<'i, E> {
     /// - `Ok(bytes)` if the expected amount of data was read
     /// - `Err(Error::InvalidLength)` if the exact amount of data couldn't be read
     pub fn decode<'o>(&mut self, out: &'o mut [u8]) -> Result<&'o [u8], Error> {
-        if self.is_finished() {
+        if self.is_finished() && !out.is_empty() {
             return Err(InvalidLength);
         }
 
@@ -248,7 +247,7 @@ impl<'i, E: Encoding> Decoder<'i, E> {
 }
 
 #[cfg(feature = "std")]
-impl<'i, E: Encoding> io::Read for Decoder<'i, E> {
+impl<E: Encoding> io::Read for Decoder<'_, E> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.is_finished() {
             return Ok(0);
@@ -339,7 +338,7 @@ pub struct Line<'i> {
     remaining: &'i [u8],
 }
 
-impl<'i> Default for Line<'i> {
+impl Default for Line<'_> {
     fn default() -> Self {
         Self::new(&[])
     }
@@ -543,8 +542,9 @@ impl<'i> Iterator for LineReader<'i> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
-    use crate::{alphabet::Alphabet, test_vectors::*, Base64, Base64Unpadded, Decoder};
+    use crate::{Base64, Base64Unpadded, Decoder, alphabet::Alphabet, test_vectors::*};
 
     #[cfg(feature = "std")]
     use {alloc::vec::Vec, std::io::Read};
@@ -591,7 +591,23 @@ mod tests {
         assert_eq!(buf.as_slice(), MULTILINE_PADDED_BIN);
     }
 
+    #[cfg(feature = "std")]
+    #[test]
+    fn decode_empty_at_end() {
+        let mut decoder = Decoder::<Base64>::new(b"AAAA").unwrap();
+
+        // Strip initial bytes
+        let mut buf = vec![0u8; 3];
+        assert_eq!(decoder.decode(&mut buf), Ok(&vec![0u8; 3][..]));
+
+        // Now try to read nothing from the end
+        let mut buf: Vec<u8> = vec![];
+
+        assert_eq!(decoder.decode(&mut buf), Ok(&[][..]));
+    }
+
     /// Core functionality of a decoding test
+    #[allow(clippy::arithmetic_side_effects)]
     fn decode_test<'a, F, V>(expected: &[u8], f: F)
     where
         F: Fn() -> Decoder<'a, V>,
@@ -607,7 +623,8 @@ mod tests {
                 let decoded = decoder.decode(&mut buffer[..chunk.len()]).unwrap();
                 assert_eq!(chunk, decoded);
 
-                remaining_len -= decoded.len();
+                let dlen = decoded.len();
+                remaining_len -= dlen;
                 assert_eq!(remaining_len, decoder.remaining_len());
             }
 

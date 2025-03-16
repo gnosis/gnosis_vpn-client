@@ -29,6 +29,9 @@ use system_configuration::{
     sys::schema_definitions::kSCPropNetProxiesHTTPSProxy,
 };
 
+#[cfg(target_os = "windows")]
+use windows_registry::CURRENT_USER;
+
 /// Configuration of a proxy that a `Client` should pass requests to.
 ///
 /// A `Proxy` has a couple pieces to it:
@@ -105,7 +108,7 @@ pub enum ProxyScheme {
         host: http::uri::Authority,
     },
     #[cfg(feature = "socks")]
-    Socks4 { addr: SocketAddr },
+    Socks4 { addr: SocketAddr, remote_dns: bool },
     #[cfg(feature = "socks")]
     Socks5 {
         addr: SocketAddr,
@@ -280,6 +283,13 @@ impl Proxy {
             get_from_platform(),
         ))));
         proxy.no_proxy = NoProxy::from_env();
+
+        #[cfg(target_os = "windows")]
+        {
+            let win_exceptions: String = get_windows_proxy_exceptions();
+            proxy.no_proxy = NoProxy::from_string(&win_exceptions);
+        }
+
         proxy
     }
 
@@ -578,7 +588,25 @@ impl ProxyScheme {
     /// Current SOCKS4 support is provided via blocking IO.
     #[cfg(feature = "socks")]
     fn socks4(addr: SocketAddr) -> crate::Result<Self> {
-        Ok(ProxyScheme::Socks4 { addr })
+        Ok(ProxyScheme::Socks4 {
+            addr,
+            remote_dns: false,
+        })
+    }
+
+    /// Proxy traffic via the specified socket address over SOCKS4A
+    ///
+    /// This differs from SOCKS4 in that DNS resolution is also performed via the proxy.
+    ///
+    /// # Note
+    ///
+    /// Current SOCKS4 support is provided via blocking IO.
+    #[cfg(feature = "socks")]
+    fn socks4a(addr: SocketAddr) -> crate::Result<Self> {
+        Ok(ProxyScheme::Socks4 {
+            addr,
+            remote_dns: true,
+        })
     }
 
     /// Proxy traffic via the specified socket address over SOCKS5
@@ -694,7 +722,7 @@ impl ProxyScheme {
         let to_addr = || {
             let addrs = url
                 .socket_addrs(|| match url.scheme() {
-                    "socks4" | "socks5" | "socks5h" => Some(1080),
+                    "socks4" | "socks4a" | "socks5" | "socks5h" => Some(1080),
                     _ => None,
                 })
                 .map_err(crate::error::builder)?;
@@ -709,6 +737,8 @@ impl ProxyScheme {
             "https" => Self::https(&url[Position::BeforeHost..Position::AfterPort])?,
             #[cfg(feature = "socks")]
             "socks4" => Self::socks4(to_addr()?)?,
+            #[cfg(feature = "socks")]
+            "socks4a" => Self::socks4a(to_addr()?)?,
             #[cfg(feature = "socks")]
             "socks5" => Self::socks5(to_addr()?)?,
             #[cfg(feature = "socks")]
@@ -756,8 +786,9 @@ impl fmt::Debug for ProxyScheme {
             ProxyScheme::Http { auth: _auth, host } => write!(f, "http://{host}"),
             ProxyScheme::Https { auth: _auth, host } => write!(f, "https://{host}"),
             #[cfg(feature = "socks")]
-            ProxyScheme::Socks4 { addr } => {
-                write!(f, "socks4://{addr}")
+            ProxyScheme::Socks4 { addr, remote_dns } => {
+                let h = if *remote_dns { "a" } else { "" };
+                write!(f, "socks4{}://{}", h, addr)
             }
             #[cfg(feature = "socks")]
             ProxyScheme::Socks5 {
@@ -1113,6 +1144,24 @@ fn extract_type_prefix(address: &str) -> Option<&str> {
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn parse_platform_values(platform_values: String) -> SystemProxyMap {
     parse_platform_values_impl(platform_values)
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_proxy_exceptions() -> String {
+    let mut exceptions = String::new();
+    if let Ok(key) =
+        CURRENT_USER.create(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+    {
+        if let Ok(value) = key.get_string("ProxyOverride") {
+            exceptions = value
+                .split(';')
+                .map(|s| s.trim())
+                .collect::<Vec<&str>>()
+                .join(",")
+                .replace("*.", "");
+        }
+    }
+    exceptions
 }
 
 #[cfg(test)]

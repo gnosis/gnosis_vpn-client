@@ -3,35 +3,60 @@
 # When uploading crates to the registry Cargo will automatically
 # "normalize" Cargo.toml files for maximal compatibility
 # with all versions of Cargo and also rewrite `path` dependencies
-# to registry (e.g., crates.io) dependencies
+# to registry (e.g., crates.io) dependencies.
 #
-# If you believe there's an error in this file please file an
-# issue against the rust-lang/cargo repository. If you're
-# editing this file be aware that the upstream Cargo.toml
-# will likely look very different (and much more reasonable)
+# If you are reading this file be aware that the original Cargo.toml
+# will likely look very different (and much more reasonable).
+# See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2021"
 name = "humantime"
-version = "2.1.0"
-authors = ["Paul Colomiets <paul@colomiets.name>"]
-description = "    A parser and formatter for std::time::{Duration, SystemTime}\n"
-homepage = "https://github.com/tailhook/humantime"
+version = "2.2.0"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "A parser and formatter for std::time::{Duration, SystemTime}"
+homepage = "https://github.com/chronotope/humantime"
 documentation = "https://docs.rs/humantime"
 readme = "README.md"
-keywords = ["time", "human", "human-friendly", "parser", "duration"]
+keywords = [
+    "time",
+    "human",
+    "human-friendly",
+    "parser",
+    "duration",
+]
 categories = ["date-and-time"]
-license = "MIT/Apache-2.0"
-repository = "https://github.com/tailhook/humantime"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/chronotope/humantime"
 
 [lib]
 name = "humantime"
 path = "src/lib.rs"
+
+[[bench]]
+name = "datetime_format"
+path = "benches/datetime_format.rs"
+harness = false
+
+[[bench]]
+name = "datetime_parse"
+path = "benches/datetime_parse.rs"
+harness = false
+
+[dev-dependencies.bencher]
+version = "0.1.5"
+
 [dev-dependencies.chrono]
 version = "0.4"
 
 [dev-dependencies.rand]
-version = "0.6"
+version = "0.9"
 
 [dev-dependencies.time]
-version = "0.1"
+version = "0.3"
+features = ["formatting"]

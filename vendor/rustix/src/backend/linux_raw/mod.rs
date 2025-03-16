@@ -18,9 +18,9 @@
 mod arch;
 mod conv;
 mod reg;
-#[cfg(any(feature = "time", feature = "process", target_arch = "x86"))]
+#[cfg(any(feature = "time", feature = "thread", target_arch = "x86"))]
 mod vdso;
-#[cfg(any(feature = "time", feature = "process", target_arch = "x86"))]
+#[cfg(any(feature = "time", feature = "thread", target_arch = "x86"))]
 mod vdso_wrappers;
 
 #[cfg(feature = "event")]
@@ -32,8 +32,8 @@ pub(crate) mod event;
         not(feature = "use-explicitly-provided-auxv"),
         any(
             feature = "param",
-            feature = "process",
             feature = "runtime",
+            feature = "thread",
             feature = "time",
             target_arch = "x86",
         )
@@ -47,14 +47,12 @@ pub(crate) mod io_uring;
 pub(crate) mod mm;
 #[cfg(feature = "mount")]
 pub(crate) mod mount;
-#[cfg(all(feature = "fs", not(feature = "mount")))]
-pub(crate) mod mount; // for deprecated mount functions in "fs"
 #[cfg(feature = "net")]
 pub(crate) mod net;
 #[cfg(any(
     feature = "param",
-    feature = "process",
     feature = "runtime",
+    feature = "thread",
     feature = "time",
     target_arch = "x86",
 ))]
@@ -91,7 +89,7 @@ pub(crate) mod fd {
 pub(crate) mod c;
 
 // Private modules used by multiple public modules.
-#[cfg(any(feature = "procfs", feature = "process", feature = "runtime"))]
+#[cfg(any(feature = "process", feature = "runtime"))]
 pub(crate) mod pid;
 #[cfg(any(feature = "process", feature = "thread"))]
 pub(crate) mod prctl;
