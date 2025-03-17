@@ -11,11 +11,12 @@
 
 [package]
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.60"
 name = "windows_aarch64_msvc"
-version = "0.52.6"
+version = "0.53.0"
 authors = ["Microsoft"]
 build = "build.rs"
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false

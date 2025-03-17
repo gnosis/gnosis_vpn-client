@@ -12,7 +12,7 @@
 [package]
 edition = "2018"
 name = "bpaf_derive"
-version = "0.5.16"
+version = "0.5.17"
 authors = ["Michael Baykov <manpacket@gmail.com>"]
 build = false
 autolib = false

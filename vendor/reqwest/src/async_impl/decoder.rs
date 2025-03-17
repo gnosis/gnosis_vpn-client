@@ -7,7 +7,7 @@ use std::fmt;
 ))]
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 #[cfg(any(
     feature = "gzip",
@@ -364,16 +364,14 @@ impl HttpBody for Decoder {
                 Poll::Ready(Err(e)) => Poll::Ready(Some(Err(crate::error::decode_io(e)))),
                 Poll::Pending => Poll::Pending,
             },
-            Inner::PlainText(ref mut body) => {
-                match futures_core::ready!(Pin::new(body).poll_frame(cx)) {
-                    Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
-                    Some(Err(err)) => Poll::Ready(Some(Err(crate::error::decode(err)))),
-                    None => Poll::Ready(None),
-                }
-            }
+            Inner::PlainText(ref mut body) => match ready!(Pin::new(body).poll_frame(cx)) {
+                Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
+                Some(Err(err)) => Poll::Ready(Some(Err(crate::error::decode(err)))),
+                None => Poll::Ready(None),
+            },
             #[cfg(feature = "gzip")]
             Inner::Gzip(ref mut decoder) => {
-                match futures_core::ready!(Pin::new(&mut *decoder).poll_next(cx)) {
+                match ready!(Pin::new(&mut *decoder).poll_next(cx)) {
                     Some(Ok(bytes)) => Poll::Ready(Some(Ok(Frame::data(bytes.freeze())))),
                     Some(Err(err)) => Poll::Ready(Some(Err(crate::error::decode_io(err)))),
                     None => {
@@ -387,7 +385,7 @@ impl HttpBody for Decoder {
             }
             #[cfg(feature = "brotli")]
             Inner::Brotli(ref mut decoder) => {
-                match futures_core::ready!(Pin::new(&mut *decoder).poll_next(cx)) {
+                match ready!(Pin::new(&mut *decoder).poll_next(cx)) {
                     Some(Ok(bytes)) => Poll::Ready(Some(Ok(Frame::data(bytes.freeze())))),
                     Some(Err(err)) => Poll::Ready(Some(Err(crate::error::decode_io(err)))),
                     None => {
@@ -401,7 +399,7 @@ impl HttpBody for Decoder {
             }
             #[cfg(feature = "zstd")]
             Inner::Zstd(ref mut decoder) => {
-                match futures_core::ready!(Pin::new(&mut *decoder).poll_next(cx)) {
+                match ready!(Pin::new(&mut *decoder).poll_next(cx)) {
                     Some(Ok(bytes)) => Poll::Ready(Some(Ok(Frame::data(bytes.freeze())))),
                     Some(Err(err)) => Poll::Ready(Some(Err(crate::error::decode_io(err)))),
                     None => {
@@ -415,7 +413,7 @@ impl HttpBody for Decoder {
             }
             #[cfg(feature = "deflate")]
             Inner::Deflate(ref mut decoder) => {
-                match futures_core::ready!(Pin::new(&mut *decoder).poll_next(cx)) {
+                match ready!(Pin::new(&mut *decoder).poll_next(cx)) {
                     Some(Ok(bytes)) => Poll::Ready(Some(Ok(Frame::data(bytes.freeze())))),
                     Some(Err(err)) => Poll::Ready(Some(Err(crate::error::decode_io(err)))),
                     None => {
@@ -459,7 +457,7 @@ fn poll_inner_should_be_empty(
     // loop in case of empty frames
     let mut inner = Pin::new(inner);
     loop {
-        match futures_core::ready!(inner.as_mut().poll_next(cx)) {
+        match ready!(inner.as_mut().poll_next(cx)) {
             // ignore any empty frames
             Some(Ok(bytes)) if bytes.is_empty() => continue,
             Some(Ok(_)) => {
@@ -497,17 +495,15 @@ impl Future for Pending {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         use futures_util::StreamExt;
 
-        match futures_core::ready!(Pin::new(&mut self.0).poll_peek(cx)) {
+        match ready!(Pin::new(&mut self.0).poll_peek(cx)) {
             Some(Ok(_)) => {
                 // fallthrough
             }
             Some(Err(_e)) => {
                 // error was just a ref, so we need to really poll to move it
-                return Poll::Ready(Err(futures_core::ready!(
-                    Pin::new(&mut self.0).poll_next(cx)
-                )
-                .expect("just peeked Some")
-                .unwrap_err()));
+                return Poll::Ready(Err(ready!(Pin::new(&mut self.0).poll_next(cx))
+                    .expect("just peeked Some")
+                    .unwrap_err()));
             }
             None => return Poll::Ready(Ok(Inner::PlainText(empty()))),
         };
@@ -526,7 +522,11 @@ impl Future for Pending {
             #[cfg(feature = "zstd")]
             DecoderType::Zstd => Poll::Ready(Ok(Inner::Zstd(Box::pin(
                 FramedRead::new(
-                    ZstdDecoder::new(StreamReader::new(_body)),
+                    {
+                        let mut d = ZstdDecoder::new(StreamReader::new(_body));
+                        d.multiple_members(true);
+                        d
+                    },
                     BytesCodec::new(),
                 )
                 .fuse(),
@@ -567,7 +567,7 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         loop {
-            return match futures_core::ready!(Pin::new(&mut self.0).poll_frame(cx)) {
+            return match ready!(Pin::new(&mut self.0).poll_frame(cx)) {
                 Some(Ok(frame)) => {
                     // skip non-data frames
                     if let Ok(buf) = frame.into_data() {
@@ -601,7 +601,7 @@ impl Accepts {
     }
     */
 
-    pub(super) fn as_str(&self) -> Option<&'static str> {
+    pub(super) const fn as_str(&self) -> Option<&'static str> {
         match (
             self.is_gzip(),
             self.is_brotli(),
@@ -627,7 +627,7 @@ impl Accepts {
         }
     }
 
-    fn is_gzip(&self) -> bool {
+    const fn is_gzip(&self) -> bool {
         #[cfg(feature = "gzip")]
         {
             self.gzip
@@ -639,7 +639,7 @@ impl Accepts {
         }
     }
 
-    fn is_brotli(&self) -> bool {
+    const fn is_brotli(&self) -> bool {
         #[cfg(feature = "brotli")]
         {
             self.brotli
@@ -651,7 +651,7 @@ impl Accepts {
         }
     }
 
-    fn is_zstd(&self) -> bool {
+    const fn is_zstd(&self) -> bool {
         #[cfg(feature = "zstd")]
         {
             self.zstd
@@ -663,7 +663,7 @@ impl Accepts {
         }
     }
 
-    fn is_deflate(&self) -> bool {
+    const fn is_deflate(&self) -> bool {
         #[cfg(feature = "deflate")]
         {
             self.deflate

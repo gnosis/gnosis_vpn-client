@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.19.0
+
+- Remove direct dependency on `cfg-if`. It's still in the tree, but we didn't really need to use it in this crate.
+- Add an unstable feature (`unstable-windows-keep-open-tempfile`) to test a potential fix to #339.
+
+## 3.18.0
+
+- Update `rustix` to 1.0.0.
+- Make `NamedTempFile::persist_noclobber` atomic on Apple operating systems. It's now atomic on MacOS, Windows, and Linux (depending on the OS version and filesystem used).
+
+## 3.17.1
+
+- Fix build with `windows-sys` 0.52. Unfortunately, we have no CI for older `windows-sys` versions at the moment...
+
+## 3.17.0
+
+- Make sure to use absolute paths in when creating unnamed temporary files (avoids a small race in the "immediate unlink" logic) and in `Builder::make_in` (when creating temporary files of arbitrary types).
+- Prevent a theoretical crash that could (maybe) happen when a temporary file is created from a drop function run in a TLS destructor. Nobody has actually reported a case of this happening in practice and I have been unable to create this scenario in a test.
+- When reseeding with `getrandom`, use platform (e.g., CPU) specific randomness sources where possible.
+- Clarify some documentation.
+- Unlink unnamed temporary files on windows _immediately_ when possible instead of waiting for the handle to be closed. We open files with "Unix" semantics, so this is generally possible.
+
 ## 3.16.0
 
 - Update `getrandom` to `0.3.0` (thanks to @paolobarbolini).

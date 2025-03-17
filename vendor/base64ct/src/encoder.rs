@@ -153,7 +153,7 @@ impl<'o, E: Encoding> Encoder<'o, E> {
 
     /// Perform Base64 encoding operation.
     fn perform_encode(&mut self, input: &[u8]) -> Result<usize, Error> {
-        let mut len = E::encode(input, self.remaining())?.as_bytes().len();
+        let mut len = E::encode(input, self.remaining())?.len();
 
         // Insert newline characters into the output as needed
         if let Some(line_wrapper) = &mut self.line_wrapper {
@@ -166,7 +166,7 @@ impl<'o, E: Encoding> Encoder<'o, E> {
 }
 
 #[cfg(feature = "std")]
-impl<'o, E: Encoding> io::Write for Encoder<'o, E> {
+impl<E: Encoding> io::Write for Encoder<'_, E> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.encode(buf)?;
         Ok(buf.len())
@@ -304,8 +304,9 @@ impl LineWrapper {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
-    use crate::{alphabet::Alphabet, test_vectors::*, Base64, Base64Unpadded, Encoder, LineEnding};
+    use crate::{Base64, Base64Unpadded, Encoder, LineEnding, alphabet::Alphabet, test_vectors::*};
 
     #[test]
     fn encode_padded() {

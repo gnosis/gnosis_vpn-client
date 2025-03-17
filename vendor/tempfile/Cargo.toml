@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.63"
 name = "tempfile"
-version = "3.16.0"
+version = "3.19.0"
 authors = [
     "Steven Allen <steven@stebalien.com>",
     "The Rust Project Developers",
@@ -37,6 +37,11 @@ keywords = [
 ]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Stebalien/tempfile"
+
+[features]
+default = ["getrandom"]
+nightly = []
+unstable-windows-keep-open-tempfile = []
 
 [lib]
 name = "tempfile"
@@ -62,9 +67,6 @@ path = "tests/tempdir.rs"
 name = "tempfile"
 path = "tests/tempfile.rs"
 
-[dependencies.cfg-if]
-version = "1"
-
 [dependencies.fastrand]
 version = "2.1.1"
 
@@ -76,12 +78,8 @@ default-features = false
 [dev-dependencies.doc-comment]
 version = "0.3"
 
-[features]
-default = ["getrandom"]
-nightly = []
-
 [target.'cfg(any(unix, target_os = "wasi"))'.dependencies.rustix]
-version = "0.38.39"
+version = "1.0.0"
 features = ["fs"]
 
 [target.'cfg(any(unix, windows, target_os = "wasi"))'.dependencies.getrandom]

@@ -46,7 +46,7 @@ where
 }
 
 /// Errors that can occur when deserializing a type.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct Error {
     inner: crate::edit::de::Error,
 }
@@ -87,6 +87,12 @@ impl std::fmt::Display for Error {
     }
 }
 
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
 impl std::error::Error for Error {}
 
 /// Deserialization TOML document
@@ -106,7 +112,7 @@ impl<'a> Deserializer<'a> {
 }
 
 #[cfg(feature = "parse")]
-impl<'de, 'a> serde::Deserializer<'de> for Deserializer<'a> {
+impl<'de> serde::Deserializer<'de> for Deserializer<'_> {
     type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -218,7 +224,7 @@ impl<'a> ValueDeserializer<'a> {
 }
 
 #[cfg(feature = "parse")]
-impl<'de, 'a> serde::Deserializer<'de> for ValueDeserializer<'a> {
+impl<'de> serde::Deserializer<'de> for ValueDeserializer<'_> {
     type Error = Error;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>

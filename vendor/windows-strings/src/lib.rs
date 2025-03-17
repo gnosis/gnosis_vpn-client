@@ -1,7 +1,4 @@
-/*!
-Learn more about Rust for Windows here: <https://github.com/microsoft/windows-rs>
-*/
-
+#![doc = include_str!("../readme.md")]
 #![cfg(windows)]
 #![allow(non_snake_case)]
 #![cfg_attr(
@@ -12,9 +9,6 @@ Learn more about Rust for Windows here: <https://github.com/microsoft/windows-rs
 
 extern crate alloc;
 use alloc::string::String;
-
-pub use windows_result::Result;
-use windows_result::*;
 
 mod bstr;
 pub use bstr::*;

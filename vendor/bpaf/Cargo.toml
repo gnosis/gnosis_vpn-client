@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.56"
 name = "bpaf"
-version = "0.9.16"
+version = "0.9.19"
 authors = ["Michael Baykov <manpacket@gmail.com>"]
 build = false
 include = [
@@ -52,6 +52,26 @@ rustdoc-args = [
     "--cfg",
     "docsrs",
     "--generate-link-to-definition",
+]
+
+[features]
+autocomplete = []
+batteries = []
+bright-color = ["color"]
+color = [
+    "supports-color",
+    "owo-colors",
+]
+derive = ["bpaf_derive"]
+docgen = []
+dull-color = ["color"]
+extradocs = []
+unstable-docs = [
+    "derive",
+    "extradocs",
+    "autocomplete",
+    "batteries",
+    "docgen",
 ]
 
 [lib]
@@ -235,7 +255,7 @@ name = "xorg"
 path = "examples/xorg.rs"
 
 [dependencies.bpaf_derive]
-version = "=0.5.16"
+version = "=0.5.17"
 optional = true
 
 [dependencies.owo-colors]
@@ -248,23 +268,3 @@ version = ">=2.0.0, <4.0"
 optional = true
 
 [dev-dependencies]
-
-[features]
-autocomplete = []
-batteries = []
-bright-color = ["color"]
-color = [
-    "supports-color",
-    "owo-colors",
-]
-derive = ["bpaf_derive"]
-docgen = []
-dull-color = ["color"]
-extradocs = []
-unstable-docs = [
-    "derive",
-    "extradocs",
-    "autocomplete",
-    "batteries",
-    "docgen",
-]

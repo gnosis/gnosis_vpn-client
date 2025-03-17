@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.70"
 name = "tokio"
-version = "1.43.0"
+version = "1.44.1"
 authors = ["Tokio Contributors <team@tokio.rs>"]
 build = false
 autobins = false
@@ -350,6 +350,10 @@ name = "process_issue_42"
 path = "tests/process_issue_42.rs"
 
 [[test]]
+name = "process_kill_after_wait"
+path = "tests/process_kill_after_wait.rs"
+
+[[test]]
 name = "process_kill_on_drop"
 path = "tests/process_kill_on_drop.rs"
 
@@ -388,6 +392,10 @@ path = "tests/rt_metrics.rs"
 [[test]]
 name = "rt_panic"
 path = "tests/rt_panic.rs"
+
+[[test]]
+name = "rt_poll_callbacks"
+path = "tests/rt_poll_callbacks.rs"
 
 [[test]]
 name = "rt_threaded"
@@ -460,6 +468,10 @@ path = "tests/sync_barrier.rs"
 [[test]]
 name = "sync_broadcast"
 path = "tests/sync_broadcast.rs"
+
+[[test]]
+name = "sync_broadcast_weak"
+path = "tests/sync_broadcast_weak.rs"
 
 [[test]]
 name = "sync_errors"
@@ -548,6 +560,10 @@ path = "tests/task_local_set.rs"
 [[test]]
 name = "task_panic"
 path = "tests/task_panic.rs"
+
+[[test]]
+name = "task_trace_self"
+path = "tests/task_trace_self.rs"
 
 [[test]]
 name = "task_yield_now"
@@ -662,7 +678,7 @@ name = "unwindsafe"
 path = "tests/unwindsafe.rs"
 
 [dependencies.bytes]
-version = "1.1.0"
+version = "1.2.1"
 optional = true
 
 [dependencies.mio]
@@ -687,6 +703,9 @@ version = "0.3"
 [dev-dependencies.futures]
 version = "0.3.0"
 features = ["async-await"]
+
+[dev-dependencies.futures-concurrency]
+version = "7.6.3"
 
 [dev-dependencies.mockall]
 version = "0.11.1"
@@ -831,4 +850,19 @@ version = "0.52"
 features = [
     "Win32_Foundation",
     "Win32_Security_Authorization",
+]
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = [
+    "cfg(fuzzing)",
+    "cfg(loom)",
+    "cfg(mio_unsupported_force_poll_poll)",
+    "cfg(tokio_allow_from_blocking_fd)",
+    "cfg(tokio_internal_mt_counters)",
+    "cfg(tokio_no_parking_lot)",
+    "cfg(tokio_no_tuning_tests)",
+    "cfg(tokio_taskdump)",
+    "cfg(tokio_unstable)",
 ]

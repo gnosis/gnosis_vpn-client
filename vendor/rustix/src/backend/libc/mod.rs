@@ -27,7 +27,7 @@ pub(crate) mod fd {
     pub trait AsRawFd {
         /// A version of [`as_raw_fd`] for use with Winsock API.
         ///
-        /// [`as_raw_fd`]: https://doc.rust-lang.org/stable/std/os/fd/trait.FromRawFd.html#tymethod.as_raw_fd
+        /// [`as_raw_fd`]: https://doc.rust-lang.org/stable/std/os/fd/trait.AsRawFd.html#tymethod.as_raw_fd
         fn as_raw_fd(&self) -> RawFd;
     }
     impl<T: AsRawSocket> AsRawFd for T {
@@ -43,7 +43,7 @@ pub(crate) mod fd {
     pub trait IntoRawFd {
         /// A version of [`into_raw_fd`] for use with Winsock API.
         ///
-        /// [`into_raw_fd`]: https://doc.rust-lang.org/stable/std/os/fd/trait.FromRawFd.html#tymethod.into_raw_fd
+        /// [`into_raw_fd`]: https://doc.rust-lang.org/stable/std/os/fd/trait.IntoRawFd.html#tymethod.into_raw_fd
         fn into_raw_fd(self) -> RawFd;
     }
     impl<T: IntoRawSocket> IntoRawFd for T {
@@ -79,11 +79,11 @@ pub(crate) mod fd {
     /// [`AsFd`]: https://doc.rust-lang.org/stable/std/os/fd/trait.AsFd.html
     pub trait AsFd {
         /// An `as_fd` function for Winsock, where an `Fd` is a `Socket`.
-        fn as_fd(&self) -> BorrowedFd;
+        fn as_fd(&self) -> BorrowedFd<'_>;
     }
     impl<T: AsSocket> AsFd for T {
         #[inline]
-        fn as_fd(&self) -> BorrowedFd {
+        fn as_fd(&self) -> BorrowedFd<'_> {
             self.as_socket()
         }
     }
@@ -111,16 +111,19 @@ pub(crate) mod io;
 #[cfg(linux_kernel)]
 #[cfg(feature = "io_uring")]
 pub(crate) mod io_uring;
-#[cfg(not(any(windows, target_os = "espidf", target_os = "vita", target_os = "wasi")))]
+#[cfg(not(any(
+    windows,
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "vita",
+    target_os = "wasi"
+)))]
 #[cfg(feature = "mm")]
 pub(crate) mod mm;
 #[cfg(linux_kernel)]
 #[cfg(feature = "mount")]
 pub(crate) mod mount;
-#[cfg(linux_kernel)]
-#[cfg(all(feature = "fs", not(feature = "mount")))]
-pub(crate) mod mount; // for deprecated mount functions in "fs"
-#[cfg(not(any(target_os = "redox", target_os = "wasi")))]
+#[cfg(not(target_os = "wasi"))]
 #[cfg(feature = "net")]
 pub(crate) mod net;
 #[cfg(not(any(windows, target_os = "espidf")))]
@@ -148,7 +151,7 @@ pub(crate) mod rand;
 #[cfg(not(target_os = "wasi"))]
 #[cfg(feature = "system")]
 pub(crate) mod system;
-#[cfg(not(any(windows, target_os = "vita")))]
+#[cfg(not(any(windows, target_os = "horizon", target_os = "vita")))]
 #[cfg(feature = "termios")]
 pub(crate) mod termios;
 #[cfg(not(windows))]
@@ -178,7 +181,7 @@ pub(crate) fn if_glibc_is_less_than_2_25() -> bool {
 }
 
 // Private modules used by multiple public modules.
-#[cfg(any(feature = "procfs", feature = "process", feature = "runtime"))]
+#[cfg(any(feature = "process", feature = "runtime"))]
 #[cfg(not(any(windows, target_os = "wasi")))]
 pub(crate) mod pid;
 #[cfg(any(feature = "process", feature = "thread"))]
@@ -188,6 +191,7 @@ pub(crate) mod prctl;
     windows,
     target_os = "android",
     target_os = "espidf",
+    target_os = "horizon",
     target_os = "vita",
     target_os = "wasi"
 )))]

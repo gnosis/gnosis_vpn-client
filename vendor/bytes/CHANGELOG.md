@@ -1,3 +1,23 @@
+# 1.10.1 (March 5th, 2025)
+
+### Fixed
+
+- Fix memory leak when using `to_vec` with `Bytes::from_owner` (#773)
+
+# 1.10.0 (February 3rd, 2025)
+
+### Added
+
+- Add feature to support platforms without atomic CAS (#467)
+- `try_get_*` methods for `Buf` trait (#753)
+- Implement `Buf::chunks_vectored` for `Take` (#617)
+- Implement `Buf::chunks_vectored` for `VecDeque<u8>` (#708)
+
+### Fixed
+
+- Remove incorrect guarantee for `chunks_vectored` (#754)
+- Ensure that tests pass under `panic=abort` (#749)
+
 # 1.9.0 (November 27, 2024)
 
 ### Added

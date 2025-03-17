@@ -1,13 +1,14 @@
-#![feature(test)]
-extern crate test;
+#[macro_use]
+extern crate bencher;
 
 use std::io::Write;
 use std::time::{Duration, UNIX_EPOCH};
 
+use bencher::Bencher;
+use chrono::{DateTime, Utc};
 use humantime::format_rfc3339;
 
-#[bench]
-fn rfc3339_humantime_seconds(b: &mut test::Bencher) {
+fn rfc3339_humantime_seconds(b: &mut Bencher) {
     let time = UNIX_EPOCH + Duration::new(1_483_228_799, 0);
     let mut buf = Vec::with_capacity(100);
     b.iter(|| {
@@ -16,17 +17,14 @@ fn rfc3339_humantime_seconds(b: &mut test::Bencher) {
     });
 }
 
-#[bench]
-fn rfc3339_chrono(b: &mut test::Bencher) {
-    use chrono::{DateTime, NaiveDateTime, Utc};
+fn rfc3339_chrono(b: &mut Bencher) {
+    use chrono::format::Fixed::*;
     use chrono::format::Item;
     use chrono::format::Item::*;
     use chrono::format::Numeric::*;
-    use chrono::format::Fixed::*;
     use chrono::format::Pad::*;
 
-    let time = DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp(1_483_228_799, 0), Utc);
+    let time = DateTime::<Utc>::from_timestamp(1_483_228_799, 0).unwrap();
     let mut buf = Vec::with_capacity(100);
 
     // formatting code from env_logger
@@ -47,10 +45,16 @@ fn rfc3339_chrono(b: &mut test::Bencher) {
         ]
     };
 
-
     b.iter(|| {
         buf.truncate(0);
-        write!(&mut buf, "{}", time.format_with_items(ITEMS.iter().cloned()))
-            .unwrap()
+        write!(
+            &mut buf,
+            "{}",
+            time.format_with_items(ITEMS.iter().cloned())
+        )
+        .unwrap()
     });
 }
+
+benchmark_group!(benches, rfc3339_humantime_seconds, rfc3339_chrono);
+benchmark_main!(benches);

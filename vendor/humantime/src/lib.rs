@@ -16,19 +16,18 @@
 //! [humantime-serde]: https://docs.rs/humantime-serde
 
 #![forbid(unsafe_code)]
-#![warn(missing_debug_implementations)]
-#![warn(missing_docs)]
+#![warn(missing_debug_implementations, missing_docs, unreachable_pub)]
 
+mod date;
 mod duration;
 mod wrapper;
-mod date;
 
-pub use self::duration::{parse_duration, Error as DurationError};
-pub use self::duration::{format_duration, FormattedDuration};
-pub use self::wrapper::{Duration, Timestamp};
-pub use self::date::{parse_rfc3339, parse_rfc3339_weak, Error as TimestampError};
+pub use self::date::Rfc3339Timestamp;
 pub use self::date::{
     format_rfc3339, format_rfc3339_micros, format_rfc3339_millis, format_rfc3339_nanos,
     format_rfc3339_seconds,
 };
-pub use self::date::{Rfc3339Timestamp};
+pub use self::date::{parse_rfc3339, parse_rfc3339_weak, Error as TimestampError};
+pub use self::duration::{format_duration, FormattedDuration};
+pub use self::duration::{parse_duration, Error as DurationError};
+pub use self::wrapper::{Duration, Timestamp};
