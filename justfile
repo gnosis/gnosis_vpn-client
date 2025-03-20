@@ -14,7 +14,7 @@ docker-run:
         --env ADDRESS=10.129.0.2 \
         --env PRIVATE_KEY=$(wg genkey) \
         --env SERVER_PUBLIC_KEY=$(wg genkey | wg pubkey) \
-        --publish 51820:51820/udp \
+        --publish 51822:51820/udp \
         --cap-add=NET_ADMIN \
         --name gnosis_vpn-client gnosis_vpn-client
 
