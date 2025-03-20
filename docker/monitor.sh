@@ -25,4 +25,8 @@ awk -v cont="$server_public_key" '{gsub(/PublicKey = <server public key>/, "Publ
 
 chmod 600 wgclient.conf
 wg-quick up ./wgclient.conf
-wait
+
+while true; do
+    wg show wgclient
+    sleep 10
+done

@@ -20,4 +20,4 @@ docker-run:
 
 # enter docker container interactively
 docker-enter:
-    docker exec --interactive --tty gnosis_vpn-server-dev bash
+    docker exec --interactive --tty gnosis_vpn-client bash
