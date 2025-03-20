@@ -23,8 +23,6 @@ awk -v cont="$address" '{gsub(/Address = <address>/, "Address = " cont); print}'
 awk -v cont="$private_key" '{gsub(/PrivateKey = <private key>/, "PrivateKey = " cont); print}' wgclient.conf > temp.conf && mv temp.conf wgclient.conf
 awk -v cont="$server_public_key" '{gsub(/PublicKey = <server public key>/, "PublicKey = " cont); print}' wgclient.conf > temp.conf && mv temp.conf wgclient.conf
 
-./gnosis_vpn-server --config-file ./config.toml serve --periodically-run-cleanup --sync-wg-interface &
-wait
 wg-quick up ./wgclient.conf
 while true; do
     wg show wgclient
