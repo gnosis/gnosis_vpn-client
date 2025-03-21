@@ -10,7 +10,7 @@ docker-build: build
 
 # run docker container detached
 docker-run:
-    docker run --rm --detach \
+    docker run --rm \
         --env ADDRESS=10.129.0.2 \
         --env PRIVATE_KEY=$(wg genkey) \
         --env SERVER_PUBLIC_KEY=$(wg genkey | wg pubkey) \

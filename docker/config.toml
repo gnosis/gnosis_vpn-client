@@ -1,7 +1,7 @@
 version = 1
 
 [hoprd_node]
-endpoint = "http://127.0.0.1:3011"
+endpoint = "http://host.docker.internal:3011"
 api_token = "e2e-API-token^^"
 internal_connection_port = 1422
 
