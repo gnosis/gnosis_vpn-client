@@ -1,0 +1,9 @@
+version = 1
+
+[hoprd_node]
+endpoint = "http://127.0.0.1:3011"
+api_token = "e2e-API-token^^"
+internal_connection_port = 1422
+
+[connection]
+destination = "12D3KooWHc2LPyvYGLJbHoQeJUBXBjDRfMY7msobsPoWj8rCAGHr"

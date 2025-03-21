@@ -23,9 +23,4 @@ awk -v cont="$priv_key" '{gsub(/PrivateKey = <private key>/, "PrivateKey = " con
 awk -v cont="$server_pub_key" '{gsub(/PublicKey = <server public key>/, "PublicKey = " cont); print}' wgclient.conf > temp.conf && mv temp.conf wgclient.conf
 
 chmod 600 wgclient.conf
-wg-quick up ./wgclient.conf
-
-while true; do
-    wg show wgclient
-    sleep 10
-done
+GNOSISVPN_CONFIG_PATH=./config.toml ./gnosis_vpn
