@@ -21,6 +21,4 @@ COPY ./monitor.sh monitor.sh
 # port handling
 EXPOSE 51820/udp
 
-WORKDIR /app
-
-CMD ["./monitor.sh"]
+CMD ["./wrapper.sh"]
