@@ -357,7 +357,11 @@ impl Core {
                         None => "<exitnode>".to_string(),
                     };
 
-                    format!("{} <-> {} <-> {}", en, path, xn)
+                    if path.is_empty() {
+                        format!("{} <-> {}", en, xn)
+                    } else {
+                        format!("{} <-> {} <-> {}", en, path, xn)
+                    }
                 };
 
                 // connect wireguard session if possible

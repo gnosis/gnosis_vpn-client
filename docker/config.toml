@@ -7,3 +7,6 @@ internal_connection_port = 1422
 
 [connection]
 destination = "12D3KooWHc2LPyvYGLJbHoQeJUBXBjDRfMY7msobsPoWj8rCAGHr"
+path.hop = 0
+target.host = "127.0.0.1"
+target.port = 51821
