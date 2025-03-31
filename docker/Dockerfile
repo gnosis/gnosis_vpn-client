@@ -16,7 +16,7 @@ COPY ./config.toml config.toml
 COPY ./wgclient.conf wgclient.conf
 COPY ./gnosis_vpn gnosis_vpn
 COPY ./gnosis_vpn-ctl gnosis_vpn-ctl
-COPY ./monitor.sh monitor.sh
+COPY ./wrapper.sh wrapper.sh
 
 # port handling
 EXPOSE 51820/udp

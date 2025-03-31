@@ -13,16 +13,17 @@ docker-run:
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    PRIVATE_KEY=$(if [ "{{ PRIVATE_KEY }}" = "" ]; then wg genkey; else echo "{{ PRIVATE_KEY }}"; fi)
-    SERVER_PUBLIC_KEY=$(if ["{{ SERVER_PUBLIC_KEY }}" = ""]; then wg genkey | wg pubkey; else echo "{{ SERVER_PUBLIC_KEY }}"; fi)
+    privkey=$(if [ "${PRIVATE_KEY:-}" = "" ]; then wg genkey; else echo "${PRIVATE_KEY}"; fi)
+    server_pub_key=$(if [ "${SERVER_PUBLIC_KEY:-}" = "" ]; then wg genkey | wg pubkey; \
+            else echo "${SERVER_PUBLIC_KEY}"; fi)
 
     docker run --rm --detach \
-        --env ADDRESS={{ ADDRESS }} \
-        --env PRIVATE_KEY=$PRIVATE_KEY \
-        --env SERVER_PUBLIC_KEY=$SERVER_PUBLIC_KEY \
-        --env DESTINATION_PEER_ID={{ DESTINATION_PEER_ID }} \
-        --env API_PORT={{ API_PORT }} \
-        --env API_TOKEN={{ API_TOKEN }} \
+        --env ADDRESS=${ADDRESS} \
+        --env PRIVATE_KEY=${priv_key} \
+        --env SERVER_PUBLIC_KEY=${server_pub_key} \
+        --env DESTINATION_PEER_ID=${DESTINATION_PEER_ID} \
+        --env API_PORT=${API_PORT} \
+        --env API_TOKEN=${API_TOKEN} \
         --publish 51822:51820/udp \
         --cap-add=NET_ADMIN \
         --add-host=host.docker.internal:host-gateway \
