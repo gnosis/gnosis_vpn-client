@@ -1,11 +1,11 @@
 version = 1
 
 [hoprd_node]
-endpoint = http://host.docker.internal:<api port>
-api_token = <api token>
+endpoint = "http://host.docker.internal:<api port>"
+api_token = "<api token>"
 
 [connection]
-destination = <destination peer id>
+destination = "<destination peer id>"
 listen_host = "0.0.0.0:1422"
 path.hop = 0
 target.host = "127.0.0.1"

@@ -13,7 +13,7 @@ docker-run:
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    privkey=$(if [ "${PRIVATE_KEY:-}" = "" ]; then wg genkey; else echo "${PRIVATE_KEY}"; fi)
+    priv_key=$(if [ "${PRIVATE_KEY:-}" = "" ]; then wg genkey; else echo "${PRIVATE_KEY}"; fi)
     server_pub_key=$(if [ "${SERVER_PUBLIC_KEY:-}" = "" ]; then wg genkey | wg pubkey; \
             else echo "${SERVER_PUBLIC_KEY}"; fi)
 

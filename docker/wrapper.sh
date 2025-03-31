@@ -43,9 +43,9 @@ awk -v cont="$ip" '{gsub(/Address = <address>/, "Address = " cont); print}' wgcl
 awk -v cont="$priv_key" '{gsub(/PrivateKey = <private key>/, "PrivateKey = " cont); print}' wgclient.conf > temp.conf && mv temp.conf wgclient.conf
 awk -v cont="$server_pub_key" '{gsub(/PublicKey = <server public key>/, "PublicKey = " cont); print}' wgclient.conf > temp.conf && mv temp.conf wgclient.conf
 
-awk -v cont="$port" '{gsub(/endpoint = http:\/\/host.docker.internal:<api port>/, "endpoint = http://host.docker.internal:" cont); print}' config.toml > temp.toml && mv temp.toml config.toml
-awk -v cont="$token" '{gsub(/api_token = <api token>/, "api_token = " cont); print}' config.toml > temp.toml && mv temp.toml config.toml
-awk -v cont="$dest" '{gsub(/destination = <destination peer id>/, "destination = " cont); print}' config.toml > temp.toml && mv temp.toml config.toml
+awk -v cont="$port" '{gsub(/endpoint = "http:\/\/host.docker.internal:<api port>"/, "endpoint = \"http://host.docker.internal:" cont "\""); print}' config.toml > temp.toml && mv temp.toml config.toml
+awk -v cont="$token" '{gsub(/api_token = "<api token>"/, "api_token = \"" cont "\""); print}' config.toml > temp.toml && mv temp.toml config.toml
+awk -v cont="$dest" '{gsub(/destination = "<destination peer id>"/, "destination = \"" cont "\""); print}' config.toml > temp.toml && mv temp.toml config.toml
 
 chmod 600 wgclient.conf
 GNOSISVPN_CONFIG_PATH=./config.toml ./gnosis_vpn
