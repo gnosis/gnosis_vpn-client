@@ -33,6 +33,7 @@ pub struct InterfaceInfo {
     pub private_key: String,
     pub address: String,
     pub allowed_ips: Option<String>,
+    pub listen_port: Option<u16>,
 }
 
 #[derive(Debug)]

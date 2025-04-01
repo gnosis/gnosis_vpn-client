@@ -380,6 +380,7 @@ impl Core {
                         private_key: privkey.clone(),
                         address: wg_conf.address.clone(),
                         allowed_ips: wg_conf.allowed_ips.clone(),
+                        listen_port: wg_conf.listen_port,
                     };
                     let info = wireguard::ConnectSession {
                         interface: interface_info,

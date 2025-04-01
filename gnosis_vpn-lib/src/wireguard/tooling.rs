@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::config;
 use crate::dirs;
 use crate::wireguard::{ConnectSession, Error, /*VerifySession,*/ WireGuard};
 
@@ -158,11 +159,13 @@ impl ConnectSession {
                     + ".0.0/9"
             }
         };
+        let listen_port = self.interface.listen_port.unwrap_or(config::default_listen_port());
 
         format!(
             "[Interface]
 PrivateKey = {private_key}
 Address = {address}
+ListenPort = {listen_port}
 
 [Peer]
 PublicKey = {public_key}
@@ -174,7 +177,8 @@ PersistentKeepalive = 30
             address = self.interface.address,
             public_key = self.peer.public_key,
             endpoint = self.peer.endpoint,
-            allowed_ips = allowed_ips
+            allowed_ips = allowed_ips,
+            listen_port = listen_port,
         )
     }
 }
