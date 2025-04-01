@@ -13,7 +13,6 @@ WORKDIR /app
 
 # add local files
 COPY ./config.toml config.toml
-COPY ./wgclient.conf wgclient.conf
 COPY ./gnosis_vpn gnosis_vpn
 COPY ./gnosis_vpn-ctl gnosis_vpn-ctl
 COPY ./wrapper.sh wrapper.sh
