@@ -10,3 +10,8 @@ listen_host = "0.0.0.0:1422"
 path.hop = 0
 target.host = "127.0.0.1"
 target.port = 51821
+
+[wireguard]
+address = "<wg address>"
+server_public_key = "<server public key>"
+private_key = "<client private key>"
