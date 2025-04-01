@@ -165,7 +165,3 @@ pub fn default_session_target_host() -> String {
 pub fn default_session_target_port() -> u16 {
     51820
 }
-
-pub fn default_listen_port() -> u16 {
-    51820
-}
