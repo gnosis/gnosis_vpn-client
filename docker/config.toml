@@ -15,3 +15,4 @@ target.port = 51821
 address = "<wg address>"
 server_public_key = "<server public key>"
 private_key = "<client private key>"
+listen_port = <listen port>

@@ -16,6 +16,7 @@ docker-run:
     priv_key=$(if [ "${PRIVATE_KEY:-}" = "" ]; then wg genkey; else echo "${PRIVATE_KEY}"; fi)
     server_pub_key=$(if [ "${SERVER_PUBLIC_KEY:-}" = "" ]; then wg genkey | wg pubkey; \
             else echo "${SERVER_PUBLIC_KEY}"; fi)
+    listen_port=$(if [ "${LISTEN_PORT:-}" = "" ]; then echo 51820; else echo "${LISTEN_PORT}"; fi)
 
     docker run --rm --detach \
         --env ADDRESS=${ADDRESS} \
@@ -24,6 +25,7 @@ docker-run:
         --env DESTINATION_PEER_ID=${DESTINATION_PEER_ID} \
         --env API_PORT=${API_PORT} \
         --env API_TOKEN=${API_TOKEN} \
+        --env LISTEN_PORT=${listen_port} \
         --publish 51822:51820/udp \
         --cap-add=NET_ADMIN \
         --add-host=host.docker.internal:host-gateway \
