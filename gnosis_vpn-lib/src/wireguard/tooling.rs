@@ -3,7 +3,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use crate::config;
 use crate::dirs;
 use crate::wireguard::{ConnectSession, Error, /*VerifySession,*/ WireGuard};
 
