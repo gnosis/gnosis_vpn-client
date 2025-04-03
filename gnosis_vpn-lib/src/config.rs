@@ -43,6 +43,7 @@ pub struct WireGuardConfig {
     pub allowed_ips: Option<String>,
     pub preshared_key: Option<String>,
     pub private_key: Option<String>,
+    pub listen_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

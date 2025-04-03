@@ -74,9 +74,11 @@ internal_connection_port = 1422
 # server_public_key = "<wg server public peer id>"
 
 # # [OPTIONAL] determine which traffic will be routed through the VPN.
-# # Defaults to the smallest subnet derivable from the subnet (e.g., `x.x.x.0/24`).
-# # allowed_ips = "10.34.0.0/24"
+# # Defaults to internal subnet derivable from address (e.g., `x.x.0.0/9`).
+# allowed_ips = "10.34.0.0/24"
+# # [OPTIONAL] interface listen port for incoming connections; defaults to 51820.
+# listen_port = 51820
 # # [OPTIONAL] private WireGuard key - set this if you want to skip automatic key generation and provide your own private key.
-# # private_key = "<wg private key>"
+# private_key = "<wg private key>"
 # # [OPTIONAL] preshared server key - if the server provides this, set it here.
-# # preshared_key = "<wg preshared key>"
+# preshared_key = "<wg preshared key>"

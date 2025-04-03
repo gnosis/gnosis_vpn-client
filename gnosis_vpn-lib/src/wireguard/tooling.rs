@@ -158,11 +158,17 @@ impl ConnectSession {
                     + ".0.0/9"
             }
         };
+        let listen_port_line = self
+            .interface
+            .listen_port
+            .map(|port| format!("ListenPort = {}\n", port))
+            .unwrap_or_default();
 
         format!(
             "[Interface]
 PrivateKey = {private_key}
 Address = {address}
+{listen_port_line}
 
 [Peer]
 PublicKey = {public_key}
@@ -174,7 +180,8 @@ PersistentKeepalive = 30
             address = self.interface.address,
             public_key = self.peer.public_key,
             endpoint = self.peer.endpoint,
-            allowed_ips = allowed_ips
+            allowed_ips = allowed_ips,
+            listen_port_line = listen_port_line,
         )
     }
 }

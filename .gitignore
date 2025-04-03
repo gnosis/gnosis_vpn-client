@@ -9,9 +9,12 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
-.direnv/
-gnosisvpn-ctl.log.*
-
 # make sure anything which is vendored is copied
 !/vendor/**/*
-result*
+
+# repo specific
+.direnv/
+/result*
+docker/gnosis_vpn
+docker/gnosis_vpn-ctl
+gnosisvpn-ctl.log.*

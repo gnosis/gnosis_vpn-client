@@ -357,7 +357,11 @@ impl Core {
                         None => "<exitnode>".to_string(),
                     };
 
-                    format!("{} <-> {} <-> {}", en, path, xn)
+                    if path.is_empty() {
+                        format!("{} <-> {}", en, xn)
+                    } else {
+                        format!("{} <-> {} <-> {}", en, path, xn)
+                    }
                 };
 
                 // connect wireguard session if possible
@@ -376,6 +380,7 @@ impl Core {
                         private_key: privkey.clone(),
                         address: wg_conf.address.clone(),
                         allowed_ips: wg_conf.allowed_ips.clone(),
+                        listen_port: wg_conf.listen_port,
                     };
                     let info = wireguard::ConnectSession {
                         interface: interface_info,
