@@ -129,17 +129,11 @@ safety_comment! {
     ///   `UnsafeCell`s exactly when `T` does.
     /// - `TryFromBytes`: `Unalign<T>` has the same the same bit validity as
     ///   `T`, so `T::is_bit_valid` is a sound implementation of `is_bit_valid`.
-    ///   Furthermore:
-    ///   - Since `T` and `Unalign<T>` have the same layout, they have the same
-    ///     size (as required by `unsafe_impl!`).
-    ///   - Since `T` and `Unalign<T>` have the same fields, they have
-    ///     `UnsafeCell`s at the same byte ranges (as required by
-    ///     `unsafe_impl!`).
     impl_or_verify!(T => Unaligned for Unalign<T>);
     impl_or_verify!(T: Immutable => Immutable for Unalign<T>);
     impl_or_verify!(
         T: TryFromBytes => TryFromBytes for Unalign<T>;
-        |c: Maybe<T>| T::is_bit_valid(c)
+        |c| T::is_bit_valid(c.transmute())
     );
     impl_or_verify!(T: FromZeros => FromZeros for Unalign<T>);
     impl_or_verify!(T: FromBytes => FromBytes for Unalign<T>);
@@ -188,7 +182,7 @@ impl<T> Unalign<T> {
     /// may prefer [`Deref::deref`], which is infallible.
     #[inline(always)]
     pub fn try_deref(&self) -> Result<&T, AlignmentError<&Self, T>> {
-        let inner = Ptr::from_ref(self).transparent_wrapper_into_inner();
+        let inner = Ptr::from_ref(self).transmute();
         match inner.bikeshed_try_into_aligned() {
             Ok(aligned) => Ok(aligned.as_ref()),
             Err(err) => Err(err.map_src(|src| src.into_unalign().as_ref())),
@@ -205,7 +199,7 @@ impl<T> Unalign<T> {
     /// callers may prefer [`DerefMut::deref_mut`], which is infallible.
     #[inline(always)]
     pub fn try_deref_mut(&mut self) -> Result<&mut T, AlignmentError<&mut Self, T>> {
-        let inner = Ptr::from_mut(self).transparent_wrapper_into_inner();
+        let inner = Ptr::from_mut(self).transmute::<_, _, (_, (_, _))>();
         match inner.bikeshed_try_into_aligned() {
             Ok(aligned) => Ok(aligned.as_mut()),
             Err(err) => Err(err.map_src(|src| src.into_unalign().as_mut())),
@@ -394,14 +388,14 @@ impl<T: Unaligned> Deref for Unalign<T> {
 
     #[inline(always)]
     fn deref(&self) -> &T {
-        Ptr::from_ref(self).transparent_wrapper_into_inner().bikeshed_recall_aligned().as_ref()
+        Ptr::from_ref(self).transmute().bikeshed_recall_aligned().as_ref()
     }
 }
 
 impl<T: Unaligned> DerefMut for Unalign<T> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
-        Ptr::from_mut(self).transparent_wrapper_into_inner().bikeshed_recall_aligned().as_mut()
+        Ptr::from_mut(self).transmute::<_, _, (_, (_, _))>().bikeshed_recall_aligned().as_mut()
     }
 }
 

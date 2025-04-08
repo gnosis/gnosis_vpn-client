@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.64.0"
 name = "reqwest"
-version = "0.12.14"
+version = "0.12.15"
 authors = ["Sean McArthur <sean@seanmonstar.com>"]
 build = false
 autolib = false
@@ -201,6 +201,10 @@ path = "examples/form.rs"
 [[example]]
 name = "h3_simple"
 path = "examples/h3_simple.rs"
+required-features = [
+    "http3",
+    "rustls-tls",
+]
 
 [[example]]
 name = "json_dynamic"
@@ -385,11 +389,11 @@ version = "0.4"
 optional = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.h3]
-version = "0.0.6"
+version = "0.0.7"
 optional = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.h3-quinn]
-version = "0.0.7"
+version = "0.0.9"
 optional = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.hickory-resolver]

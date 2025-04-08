@@ -6,16 +6,18 @@ use core::ops::Deref;
 
 use pki_types::ServerName;
 
+use super::ResolvesClientCert;
+use super::Tls12Resumption;
 #[cfg(feature = "tls12")]
 use super::tls12;
-use super::Tls12Resumption;
+use crate::SupportedCipherSuite;
 #[cfg(feature = "logging")]
 use crate::bs_debug;
 use crate::check::inappropriate_handshake_message;
 use crate::client::client_conn::ClientConnectionData;
 use crate::client::common::ClientHelloDetails;
 use crate::client::ech::EchState;
-use crate::client::{tls13, ClientConfig, EchMode, EchStatus};
+use crate::client::{ClientConfig, EchMode, EchStatus, tls13};
 use crate::common_state::{CommonState, HandshakeKind, KxState, State};
 use crate::conn::ConnectionRandoms;
 use crate::crypto::{ActiveKeyExchange, KeyExchangeAlgorithm};
@@ -36,7 +38,7 @@ use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
 use crate::sync::Arc;
 use crate::tls13::key_schedule::KeyScheduleEarly;
-use crate::SupportedCipherSuite;
+use crate::verify::ServerCertVerifier;
 
 pub(super) type NextState<'a> = Box<dyn State<ClientConnectionData> + 'a>;
 pub(super) type NextStateOrError<'a> = Result<NextState<'a>, Error>;
@@ -64,6 +66,9 @@ fn find_session(
 
             #[cfg(not(feature = "tls12"))]
             None
+        })
+        .and_then(|resuming| {
+            resuming.compatible_config(&config.verifier, &config.client_auth_cert_resolver)
         })
         .and_then(|resuming| {
             let now = config
@@ -119,25 +124,27 @@ pub(super) fn start_handshake(
         None
     };
 
-    let session_id = if let Some(_resuming) = &mut resuming {
-        debug!("Resuming session");
-
-        match &mut _resuming.value {
-            #[cfg(feature = "tls12")]
-            ClientSessionValue::Tls12(inner) => {
-                // If we have a ticket, we use the sessionid as a signal that
-                // we're  doing an abbreviated handshake.  See section 3.4 in
-                // RFC5077.
-                if !inner.ticket().0.is_empty() {
-                    inner.session_id = SessionId::random(config.provider.secure_random)?;
+    let session_id = match &mut resuming {
+        Some(_resuming) => {
+            debug!("Resuming session");
+            match &mut _resuming.value {
+                #[cfg(feature = "tls12")]
+                ClientSessionValue::Tls12(inner) => {
+                    // If we have a ticket, we use the sessionid as a signal that
+                    // we're  doing an abbreviated handshake.  See section 3.4 in
+                    // RFC5077.
+                    if !inner.ticket().0.is_empty() {
+                        inner.session_id = SessionId::random(config.provider.secure_random)?;
+                    }
+                    Some(inner.session_id)
                 }
-                Some(inner.session_id)
+                _ => None,
             }
-            _ => None,
         }
-    } else {
-        debug!("Not resuming any session");
-        None
+        _ => {
+            debug!("Not resuming any session");
+            None
+        }
     };
 
     // https://tools.ietf.org/html/rfc8446#appendix-D.4
@@ -905,6 +912,23 @@ impl State<ClientConnectionData> for ExpectServerHello {
             }
             #[cfg(feature = "tls12")]
             SupportedCipherSuite::Tls12(suite) => {
+                // If we didn't have an input session to resume, and we sent a session ID,
+                // that implies we sent a TLS 1.3 legacy_session_id for compatibility purposes.
+                // In this instance since we're now continuing a TLS 1.2 handshake the server
+                // should not have echoed it back: it's a randomly generated session ID it couldn't
+                // have known.
+                if self.input.resuming.is_none()
+                    && !self.input.session_id.is_empty()
+                    && self.input.session_id == server_hello.session_id
+                {
+                    return Err({
+                        cx.common.send_fatal_alert(
+                            AlertDescription::IllegalParameter,
+                            PeerMisbehaved::ServerEchoedCompatibilitySessionId,
+                        )
+                    });
+                }
+
                 let resuming_session = self
                     .input
                     .resuming
@@ -1224,6 +1248,22 @@ impl ClientSessionValue {
             Self::Tls13(v) => Some(v),
             #[cfg(feature = "tls12")]
             Self::Tls12(_) => None,
+        }
+    }
+
+    fn compatible_config(
+        self,
+        server_cert_verifier: &Arc<dyn ServerCertVerifier>,
+        client_creds: &Arc<dyn ResolvesClientCert>,
+    ) -> Option<Self> {
+        match &self {
+            Self::Tls13(v) => v
+                .compatible_config(server_cert_verifier, client_creds)
+                .then_some(self),
+            #[cfg(feature = "tls12")]
+            Self::Tls12(v) => v
+                .compatible_config(server_cert_verifier, client_creds)
+                .then_some(self),
         }
     }
 }

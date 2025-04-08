@@ -302,7 +302,7 @@
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
 ))]
-#![cfg_attr(not(any(test, feature = "std")), no_std)]
+#![cfg_attr(not(any(test, kani, feature = "std")), no_std)]
 #![cfg_attr(
     all(feature = "simd-nightly", any(target_arch = "x86", target_arch = "x86_64")),
     feature(stdarch_x86_avx512)
@@ -357,7 +357,7 @@ pub use crate::r#ref::*;
 pub use crate::wrappers::*;
 
 use core::{
-    cell::UnsafeCell,
+    cell::{Cell, UnsafeCell},
     cmp::Ordering,
     fmt::{self, Debug, Display, Formatter},
     hash::Hasher,
@@ -377,17 +377,17 @@ use std::io;
 
 use crate::pointer::invariant::{self, BecauseExclusive};
 
-#[cfg(any(feature = "alloc", test))]
+#[cfg(any(feature = "alloc", test, kani))]
 extern crate alloc;
 #[cfg(any(feature = "alloc", test))]
 use alloc::{boxed::Box, vec::Vec};
 
-#[cfg(any(feature = "alloc", test, kani))]
+#[cfg(any(feature = "alloc", test))]
 use core::alloc::Layout;
 
 // Used by `TryFromBytes::is_bit_valid`.
 #[doc(hidden)]
-pub use crate::pointer::{invariant::BecauseImmutable, Maybe, MaybeAligned, Ptr};
+pub use crate::pointer::{invariant::BecauseImmutable, Maybe, Ptr};
 // Used by `KnownLayout`.
 #[doc(hidden)]
 pub use crate::layout::*;
@@ -871,7 +871,7 @@ impl PointerMetadata for usize {
 
 // SAFETY: Delegates safety to `DstLayout::for_slice`.
 unsafe impl<T> KnownLayout for [T] {
-    #[allow(clippy::missing_inline_in_public_items)]
+    #[allow(clippy::missing_inline_in_public_items, dead_code)]
     #[cfg_attr(
         all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
         coverage(off)
@@ -983,29 +983,27 @@ impl_known_layout!(const N: usize, T => [T; N]);
 
 safety_comment! {
     /// SAFETY:
-    /// `str`, `ManuallyDrop<[T]>` [1], and `UnsafeCell<T>` [2] have the same
-    /// representations as `[u8]`, `[T]`, and `T` repsectively. `str` has
-    /// different bit validity than `[u8]`, but that doesn't affect the
-    /// soundness of this impl.
+    /// `str` has the same representation as `[u8]`. `ManuallyDrop<T>` [1],
+    /// `UnsafeCell<T>` [2], and `Cell<T>` [3] have the same representation as
+    /// `T`.
     ///
-    /// [1] Per https://doc.rust-lang.org/nightly/core/mem/struct.ManuallyDrop.html:
+    /// [1] Per https://doc.rust-lang.org/1.85.0/std/mem/struct.ManuallyDrop.html:
     ///
     ///   `ManuallyDrop<T>` is guaranteed to have the same layout and bit
     ///   validity as `T`
     ///
-    /// [2] Per https://doc.rust-lang.org/core/cell/struct.UnsafeCell.html#memory-layout:
+    /// [2] Per https://doc.rust-lang.org/1.85.0/core/cell/struct.UnsafeCell.html#memory-layout:
     ///
     ///   `UnsafeCell<T>` has the same in-memory representation as its inner
     ///   type `T`.
     ///
-    /// TODO(#429):
-    /// -  Add quotes from docs.
-    /// -  Once [1] (added in
-    /// https://github.com/rust-lang/rust/pull/115522) is available on stable,
-    /// quote the stable docs instead of the nightly docs.
+    /// [3] Per https://doc.rust-lang.org/1.85.0/core/cell/struct.Cell.html#memory-layout:
+    ///
+    ///   `Cell<T>` has the same in-memory representation as `T`.
     unsafe_impl_known_layout!(#[repr([u8])] str);
     unsafe_impl_known_layout!(T: ?Sized + KnownLayout => #[repr(T)] ManuallyDrop<T>);
     unsafe_impl_known_layout!(T: ?Sized + KnownLayout => #[repr(T)] UnsafeCell<T>);
+    unsafe_impl_known_layout!(T: ?Sized + KnownLayout => #[repr(T)] Cell<T>);
 }
 
 safety_comment! {
@@ -2843,24 +2841,43 @@ unsafe fn try_read_from<S, T: TryFromBytes>(
     // We use `from_mut` despite not mutating via `c_ptr` so that we don't need
     // to add a `T: Immutable` bound.
     let c_ptr = Ptr::from_mut(&mut candidate);
-    let c_ptr = c_ptr.transparent_wrapper_into_inner();
     // SAFETY: `c_ptr` has no uninitialized sub-ranges because it derived from
-    // `candidate`, which the caller promises is entirely initialized.
+    // `candidate`, which the caller promises is entirely initialized. Since
+    // `candidate` is a `MaybeUninit`, it has no validity requirements, and so
+    // no values written to an `Initialized` `c_ptr` can violate its validity.
+    // Since `c_ptr` has `Exclusive` aliasing, no mutations may happen except
+    // via `c_ptr` so long as it is live, so we don't need to worry about the
+    // fact that `c_ptr` may have more restricted validity than `candidate`.
     let c_ptr = unsafe { c_ptr.assume_validity::<invariant::Initialized>() };
+    let c_ptr = c_ptr.transmute();
 
-    // This call may panic. If that happens, it doesn't cause any soundness
-    // issues, as we have not generated any invalid state which we need to
-    // fix before returning.
+    // Since we don't have `T: KnownLayout`, we hack around that by using
+    // `Wrapping<T>`, which implements `KnownLayout` even if `T` doesn't.
     //
-    // Note that one panic or post-monomorphization error condition is
-    // calling `try_into_valid` (and thus `is_bit_valid`) with a shared
-    // pointer when `Self: !Immutable`. Since `Self: Immutable`, this panic
-    // condition will not happen.
-    if !T::is_bit_valid(c_ptr.forget_aligned()) {
+    // This call may panic. If that happens, it doesn't cause any soundness
+    // issues, as we have not generated any invalid state which we need to fix
+    // before returning.
+    //
+    // Note that one panic or post-monomorphization error condition is calling
+    // `try_into_valid` (and thus `is_bit_valid`) with a shared pointer when
+    // `Self: !Immutable`. Since `Self: Immutable`, this panic condition will
+    // not happen.
+    if !Wrapping::<T>::is_bit_valid(c_ptr.forget_aligned()) {
         return Err(ValidityError::new(source).into());
     }
 
-    // SAFETY: We just validated that `candidate` contains a valid `T`.
+    fn _assert_same_size_and_validity<T>()
+    where
+        Wrapping<T>: pointer::TransmuteFrom<T, invariant::Valid, invariant::Valid>,
+        T: pointer::TransmuteFrom<Wrapping<T>, invariant::Valid, invariant::Valid>,
+    {
+    }
+
+    _assert_same_size_and_validity::<T>();
+
+    // SAFETY: We just validated that `candidate` contains a valid
+    // `Wrapping<T>`, which has the same size and bit validity as `T`, as
+    // guaranteed by the preceding type assertion.
     Ok(unsafe { candidate.assume_init() })
 }
 
@@ -3547,7 +3564,7 @@ pub unsafe trait FromBytes: FromZeros {
     {
         static_assert_dst_is_not_zst!(Self);
         match Ptr::from_ref(source).try_cast_into_no_leftover::<_, BecauseImmutable>(None) {
-            Ok(ptr) => Ok(ptr.bikeshed_recall_valid().as_ref()),
+            Ok(ptr) => Ok(ptr.recall_validity().as_ref()),
             Err(err) => Err(err.map_src(|src| src.as_ref())),
         }
     }
@@ -3783,7 +3800,7 @@ pub unsafe trait FromBytes: FromZeros {
     {
         static_assert_dst_is_not_zst!(Self);
         match Ptr::from_mut(source).try_cast_into_no_leftover::<_, BecauseExclusive>(None) {
-            Ok(ptr) => Ok(ptr.bikeshed_recall_valid().as_mut()),
+            Ok(ptr) => Ok(ptr.recall_validity().as_mut()),
             Err(err) => Err(err.map_src(|src| src.as_mut())),
         }
     }
@@ -4022,7 +4039,7 @@ pub unsafe trait FromBytes: FromZeros {
         let source = Ptr::from_ref(source);
         let maybe_slf = source.try_cast_into_no_leftover::<_, BecauseImmutable>(Some(count));
         match maybe_slf {
-            Ok(slf) => Ok(slf.bikeshed_recall_valid().as_ref()),
+            Ok(slf) => Ok(slf.recall_validity().as_ref()),
             Err(err) => Err(err.map_src(|s| s.as_ref())),
         }
     }
@@ -4253,7 +4270,9 @@ pub unsafe trait FromBytes: FromZeros {
         let source = Ptr::from_mut(source);
         let maybe_slf = source.try_cast_into_no_leftover::<_, BecauseImmutable>(Some(count));
         match maybe_slf {
-            Ok(slf) => Ok(slf.bikeshed_recall_valid().as_mut()),
+            Ok(slf) => Ok(slf
+                .recall_validity::<_, (_, (_, (BecauseExclusive, BecauseExclusive)))>()
+                .as_mut()),
             Err(err) => Err(err.map_src(|s| s.as_mut())),
         }
     }
@@ -4603,7 +4622,12 @@ pub unsafe trait FromBytes: FromZeros {
 
         let ptr = Ptr::from_mut(&mut buf);
         // SAFETY: After `buf.zero()`, `buf` consists entirely of initialized,
-        // zeroed bytes.
+        // zeroed bytes. Since `MaybeUninit` has no validity requirements, `ptr`
+        // cannot be used to write values which will violate `buf`'s bit
+        // validity. Since `ptr` has `Exclusive` aliasing, nothing other than
+        // `ptr` may be used to mutate `ptr`'s referent, and so its bit validity
+        // cannot be violated even though `buf` may have more permissive bit
+        // validity than `ptr`.
         let ptr = unsafe { ptr.assume_validity::<invariant::Initialized>() };
         let ptr = ptr.as_bytes::<BecauseExclusive>();
         src.read_exact(ptr.as_mut())?;
@@ -4706,7 +4730,7 @@ fn ref_from_prefix_suffix<T: FromBytes + KnownLayout + Immutable + ?Sized>(
     let (slf, prefix_suffix) = Ptr::from_ref(source)
         .try_cast_into::<_, BecauseImmutable>(cast_type, meta)
         .map_err(|err| err.map_src(|s| s.as_ref()))?;
-    Ok((slf.bikeshed_recall_valid().as_ref(), prefix_suffix.as_ref()))
+    Ok((slf.recall_validity().as_ref(), prefix_suffix.as_ref()))
 }
 
 /// Interprets the given affix of the given bytes as a `&mut Self` without
@@ -4718,7 +4742,7 @@ fn ref_from_prefix_suffix<T: FromBytes + KnownLayout + Immutable + ?Sized>(
 /// If there are insufficient bytes, or if that affix of `source` is not
 /// appropriately aligned, this returns `Err`.
 #[inline(always)]
-fn mut_from_prefix_suffix<T: FromBytes + KnownLayout + ?Sized>(
+fn mut_from_prefix_suffix<T: FromBytes + IntoBytes + KnownLayout + ?Sized>(
     source: &mut [u8],
     meta: Option<T::PointerMetadata>,
     cast_type: CastType,
@@ -4726,7 +4750,7 @@ fn mut_from_prefix_suffix<T: FromBytes + KnownLayout + ?Sized>(
     let (slf, prefix_suffix) = Ptr::from_mut(source)
         .try_cast_into::<_, BecauseExclusive>(cast_type, meta)
         .map_err(|err| err.map_src(|s| s.as_mut()))?;
-    Ok((slf.bikeshed_recall_valid().as_mut(), prefix_suffix.as_mut()))
+    Ok((slf.recall_validity().as_mut(), prefix_suffix.as_mut()))
 }
 
 /// Analyzes whether a type is [`IntoBytes`].
@@ -6613,245 +6637,6 @@ mod tests {
                 <[u16]>::new_box_zeroed_with_elems((max / mem::size_of::<u16>()) + 1),
                 Err(AllocError)
             );
-        }
-    }
-}
-
-#[cfg(kani)]
-mod proofs {
-    use super::*;
-
-    impl kani::Arbitrary for DstLayout {
-        fn any() -> Self {
-            let align: NonZeroUsize = kani::any();
-            let size_info: SizeInfo = kani::any();
-
-            kani::assume(align.is_power_of_two());
-            kani::assume(align < DstLayout::THEORETICAL_MAX_ALIGN);
-
-            // For testing purposes, we most care about instantiations of
-            // `DstLayout` that can correspond to actual Rust types. We use
-            // `Layout` to verify that our `DstLayout` satisfies the validity
-            // conditions of Rust layouts.
-            kani::assume(
-                match size_info {
-                    SizeInfo::Sized { size } => Layout::from_size_align(size, align.get()),
-                    SizeInfo::SliceDst(TrailingSliceLayout { offset, elem_size: _ }) => {
-                        // `SliceDst`` cannot encode an exact size, but we know
-                        // it is at least `offset` bytes.
-                        Layout::from_size_align(offset, align.get())
-                    }
-                }
-                .is_ok(),
-            );
-
-            Self { align: align, size_info: size_info }
-        }
-    }
-
-    impl kani::Arbitrary for SizeInfo {
-        fn any() -> Self {
-            let is_sized: bool = kani::any();
-
-            match is_sized {
-                true => {
-                    let size: usize = kani::any();
-
-                    kani::assume(size <= isize::MAX as _);
-
-                    SizeInfo::Sized { size }
-                }
-                false => SizeInfo::SliceDst(kani::any()),
-            }
-        }
-    }
-
-    impl kani::Arbitrary for TrailingSliceLayout {
-        fn any() -> Self {
-            let elem_size: usize = kani::any();
-            let offset: usize = kani::any();
-
-            kani::assume(elem_size < isize::MAX as _);
-            kani::assume(offset < isize::MAX as _);
-
-            TrailingSliceLayout { elem_size, offset }
-        }
-    }
-
-    #[kani::proof]
-    fn prove_dst_layout_extend() {
-        use crate::util::{max, min, padding_needed_for};
-
-        let base: DstLayout = kani::any();
-        let field: DstLayout = kani::any();
-        let packed: Option<NonZeroUsize> = kani::any();
-
-        if let Some(max_align) = packed {
-            kani::assume(max_align.is_power_of_two());
-            kani::assume(base.align <= max_align);
-        }
-
-        // The base can only be extended if it's sized.
-        kani::assume(matches!(base.size_info, SizeInfo::Sized { .. }));
-        let base_size = if let SizeInfo::Sized { size } = base.size_info {
-            size
-        } else {
-            unreachable!();
-        };
-
-        // Under the above conditions, `DstLayout::extend` will not panic.
-        let composite = base.extend(field, packed);
-
-        // The field's alignment is clamped by `max_align` (i.e., the
-        // `packed` attribute, if any) [1].
-        //
-        // [1] Per https://doc.rust-lang.org/reference/type-layout.html#the-alignment-modifiers:
-        //
-        //   The alignments of each field, for the purpose of positioning
-        //   fields, is the smaller of the specified alignment and the
-        //   alignment of the field's type.
-        let field_align = min(field.align, packed.unwrap_or(DstLayout::THEORETICAL_MAX_ALIGN));
-
-        // The struct's alignment is the maximum of its previous alignment and
-        // `field_align`.
-        assert_eq!(composite.align, max(base.align, field_align));
-
-        // Compute the minimum amount of inter-field padding needed to
-        // satisfy the field's alignment, and offset of the trailing field.
-        // [1]
-        //
-        // [1] Per https://doc.rust-lang.org/reference/type-layout.html#the-alignment-modifiers:
-        //
-        //   Inter-field padding is guaranteed to be the minimum required in
-        //   order to satisfy each field's (possibly altered) alignment.
-        let padding = padding_needed_for(base_size, field_align);
-        let offset = base_size + padding;
-
-        // For testing purposes, we'll also construct `alloc::Layout`
-        // stand-ins for `DstLayout`, and show that `extend` behaves
-        // comparably on both types.
-        let base_analog = Layout::from_size_align(base_size, base.align.get()).unwrap();
-
-        match field.size_info {
-            SizeInfo::Sized { size: field_size } => {
-                if let SizeInfo::Sized { size: composite_size } = composite.size_info {
-                    // If the trailing field is sized, the resulting layout will
-                    // be sized. Its size will be the sum of the preceding
-                    // layout, the size of the new field, and the size of
-                    // inter-field padding between the two.
-                    assert_eq!(composite_size, offset + field_size);
-
-                    let field_analog =
-                        Layout::from_size_align(field_size, field_align.get()).unwrap();
-
-                    if let Ok((actual_composite, actual_offset)) = base_analog.extend(field_analog)
-                    {
-                        assert_eq!(actual_offset, offset);
-                        assert_eq!(actual_composite.size(), composite_size);
-                        assert_eq!(actual_composite.align(), composite.align.get());
-                    } else {
-                        // An error here reflects that composite of `base`
-                        // and `field` cannot correspond to a real Rust type
-                        // fragment, because such a fragment would violate
-                        // the basic invariants of a valid Rust layout. At
-                        // the time of writing, `DstLayout` is a little more
-                        // permissive than `Layout`, so we don't assert
-                        // anything in this branch (e.g., unreachability).
-                    }
-                } else {
-                    panic!("The composite of two sized layouts must be sized.")
-                }
-            }
-            SizeInfo::SliceDst(TrailingSliceLayout {
-                offset: field_offset,
-                elem_size: field_elem_size,
-            }) => {
-                if let SizeInfo::SliceDst(TrailingSliceLayout {
-                    offset: composite_offset,
-                    elem_size: composite_elem_size,
-                }) = composite.size_info
-                {
-                    // The offset of the trailing slice component is the sum
-                    // of the offset of the trailing field and the trailing
-                    // slice offset within that field.
-                    assert_eq!(composite_offset, offset + field_offset);
-                    // The elem size is unchanged.
-                    assert_eq!(composite_elem_size, field_elem_size);
-
-                    let field_analog =
-                        Layout::from_size_align(field_offset, field_align.get()).unwrap();
-
-                    if let Ok((actual_composite, actual_offset)) = base_analog.extend(field_analog)
-                    {
-                        assert_eq!(actual_offset, offset);
-                        assert_eq!(actual_composite.size(), composite_offset);
-                        assert_eq!(actual_composite.align(), composite.align.get());
-                    } else {
-                        // An error here reflects that composite of `base`
-                        // and `field` cannot correspond to a real Rust type
-                        // fragment, because such a fragment would violate
-                        // the basic invariants of a valid Rust layout. At
-                        // the time of writing, `DstLayout` is a little more
-                        // permissive than `Layout`, so we don't assert
-                        // anything in this branch (e.g., unreachability).
-                    }
-                } else {
-                    panic!("The extension of a layout with a DST must result in a DST.")
-                }
-            }
-        }
-    }
-
-    #[kani::proof]
-    #[kani::should_panic]
-    fn prove_dst_layout_extend_dst_panics() {
-        let base: DstLayout = kani::any();
-        let field: DstLayout = kani::any();
-        let packed: Option<NonZeroUsize> = kani::any();
-
-        if let Some(max_align) = packed {
-            kani::assume(max_align.is_power_of_two());
-            kani::assume(base.align <= max_align);
-        }
-
-        kani::assume(matches!(base.size_info, SizeInfo::SliceDst(..)));
-
-        let _ = base.extend(field, packed);
-    }
-
-    #[kani::proof]
-    fn prove_dst_layout_pad_to_align() {
-        use crate::util::padding_needed_for;
-
-        let layout: DstLayout = kani::any();
-
-        let padded: DstLayout = layout.pad_to_align();
-
-        // Calling `pad_to_align` does not alter the `DstLayout`'s alignment.
-        assert_eq!(padded.align, layout.align);
-
-        if let SizeInfo::Sized { size: unpadded_size } = layout.size_info {
-            if let SizeInfo::Sized { size: padded_size } = padded.size_info {
-                // If the layout is sized, it will remain sized after padding is
-                // added. Its sum will be its unpadded size and the size of the
-                // trailing padding needed to satisfy its alignment
-                // requirements.
-                let padding = padding_needed_for(unpadded_size, layout.align);
-                assert_eq!(padded_size, unpadded_size + padding);
-
-                // Prove that calling `DstLayout::pad_to_align` behaves
-                // identically to `Layout::pad_to_align`.
-                let layout_analog =
-                    Layout::from_size_align(unpadded_size, layout.align.get()).unwrap();
-                let padded_analog = layout_analog.pad_to_align();
-                assert_eq!(padded_analog.align(), layout.align.get());
-                assert_eq!(padded_analog.size(), padded_size);
-            } else {
-                panic!("The padding of a sized layout must result in a sized layout.")
-            }
-        } else {
-            // If the layout is a DST, padding cannot be statically added.
-            assert_eq!(padded.size_info, layout.size_info);
         }
     }
 }

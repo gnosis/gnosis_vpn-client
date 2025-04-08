@@ -8,7 +8,7 @@
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{parse_quote, DataEnum, Error, Fields, Generics, Ident};
+use syn::{parse_quote, DataEnum, Error, Fields, Generics, Ident, Path};
 
 use crate::{derive_try_from_bytes_inner, repr::EnumRepr, Trait};
 
@@ -102,6 +102,7 @@ fn generate_variant_structs(
     enum_name: &Ident,
     generics: &Generics,
     data: &DataEnum,
+    zerocopy_crate: &Path,
 ) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
@@ -134,8 +135,9 @@ fn generate_variant_structs(
 
         // We do this rather than emitting `#[derive(::zerocopy::TryFromBytes)]`
         // because that is not hygienic, and this is also more performant.
-        let try_from_bytes_impl = derive_try_from_bytes_inner(&variant_struct, Trait::TryFromBytes)
-            .expect("derive_try_from_bytes_inner should not fail on synthesized type");
+        let try_from_bytes_impl =
+            derive_try_from_bytes_inner(&variant_struct, Trait::TryFromBytes, zerocopy_crate)
+                .expect("derive_try_from_bytes_inner should not fail on synthesized type");
 
         Some(quote! {
             #variant_struct
@@ -212,8 +214,9 @@ pub(crate) fn derive_is_bit_valid(
     repr: &EnumRepr,
     generics: &Generics,
     data: &DataEnum,
+    zerocopy_crate: &Path,
 ) -> Result<TokenStream, Error> {
-    let trait_path = Trait::TryFromBytes.crate_path();
+    let trait_path = Trait::TryFromBytes.crate_path(zerocopy_crate);
     let tag_enum = generate_tag_enum(repr, data);
     let tag_consts = generate_tag_consts(data);
 
@@ -228,7 +231,7 @@ pub(crate) fn derive_is_bit_valid(
         ));
     };
 
-    let variant_structs = generate_variant_structs(enum_ident, generics, data);
+    let variant_structs = generate_variant_structs(enum_ident, generics, data, zerocopy_crate);
     let variants_union = generate_variants_union(generics, data);
 
     let (_, ty_generics, _) = generics.split_for_impl();
@@ -260,8 +263,8 @@ pub(crate) fn derive_is_bit_valid(
                     //   original type.
                     let variant = unsafe {
                         variants.cast_unsized_unchecked(
-                            |p: *mut ___ZerocopyVariants #ty_generics| {
-                                p as *mut #variant_struct_ident #ty_generics
+                            |p: core_reexport::ptr::NonNull<___ZerocopyVariants #ty_generics>| {
+                                p.cast::<#variant_struct_ident #ty_generics>()
                             }
                         )
                     };
@@ -283,16 +286,16 @@ pub(crate) fn derive_is_bit_valid(
         // check the bit validity of each field of the corresponding variant.
         // Thus, this is a sound implementation of `is_bit_valid`.
         fn is_bit_valid<___ZerocopyAliasing>(
-            mut candidate: ::zerocopy::Maybe<'_, Self, ___ZerocopyAliasing>,
-        ) -> ::zerocopy::util::macro_util::core_reexport::primitive::bool
+            mut candidate: #zerocopy_crate::Maybe<'_, Self, ___ZerocopyAliasing>,
+        ) -> #zerocopy_crate::util::macro_util::core_reexport::primitive::bool
         where
-            ___ZerocopyAliasing: ::zerocopy::pointer::invariant::Reference,
+            ___ZerocopyAliasing: #zerocopy_crate::pointer::invariant::Reference,
         {
-            use ::zerocopy::util::macro_util::core_reexport;
+            use #zerocopy_crate::util::macro_util::core_reexport;
 
             #tag_enum
 
-            type ___ZerocopyTagPrimitive = ::zerocopy::util::macro_util::SizeToTag<
+            type ___ZerocopyTagPrimitive = #zerocopy_crate::util::macro_util::SizeToTag<
                 { core_reexport::mem::size_of::<___ZerocopyTag>() },
             >;
 
@@ -321,15 +324,15 @@ pub(crate) fn derive_is_bit_valid(
                 // - There are no `UnsafeCell`s in the tag because it is a
                 //   primitive integer.
                 let tag_ptr = unsafe {
-                    candidate.reborrow().cast_unsized_unchecked(|p: *mut Self| {
-                        p as *mut ___ZerocopyTagPrimitive
+                    candidate.reborrow().cast_unsized_unchecked(|p: core_reexport::ptr::NonNull<Self>| {
+                        p.cast::<___ZerocopyTagPrimitive>()
                     })
                 };
                 // SAFETY: `tag_ptr` is casted from `candidate`, whose referent
                 // is `Initialized`. Since we have not written uninitialized
                 // bytes into the referent, `tag_ptr` is also `Initialized`.
                 let tag_ptr = unsafe { tag_ptr.assume_initialized() };
-                tag_ptr.bikeshed_recall_valid().read_unaligned::<::zerocopy::BecauseImmutable>()
+                tag_ptr.recall_validity().read_unaligned::<#zerocopy_crate::BecauseImmutable>()
             };
 
             // SAFETY:
@@ -343,8 +346,8 @@ pub(crate) fn derive_is_bit_valid(
             //   original enum, and so preserves the locations of any
             //   `UnsafeCell`s.
             let raw_enum = unsafe {
-                candidate.cast_unsized_unchecked(|p: *mut Self| {
-                    p as *mut ___ZerocopyRawEnum #ty_generics
+                candidate.cast_unsized_unchecked(|p: core_reexport::ptr::NonNull<Self>| {
+                    p.cast::<___ZerocopyRawEnum #ty_generics>()
                 })
             };
             // SAFETY: `cast_unsized_unchecked` removes the initialization
@@ -361,8 +364,13 @@ pub(crate) fn derive_is_bit_valid(
             //   subfield pointer just points to a smaller portion of the
             //   overall struct.
             let variants = unsafe {
-                raw_enum.cast_unsized_unchecked(|p: *mut ___ZerocopyRawEnum #ty_generics| {
-                    core_reexport::ptr::addr_of_mut!((*p).variants)
+                raw_enum.cast_unsized_unchecked(|p: core_reexport::ptr::NonNull<___ZerocopyRawEnum #ty_generics>| {
+                    let p = p.as_ptr();
+                    let ptr = core_reexport::ptr::addr_of_mut!((*p).variants);
+                    // SAFETY: `ptr` is a projection into `p`, which is
+                    // `NonNull`, and guaranteed not to wrap around the address
+                    // space. Thus, `ptr` cannot be null.
+                    unsafe { core_reexport::ptr::NonNull::new_unchecked(ptr) }
                 })
             };
 

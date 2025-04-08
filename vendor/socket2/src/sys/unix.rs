@@ -22,6 +22,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
         target_os = "macos",
         target_os = "tvos",
         target_os = "watchos",
+        target_os = "illumos",
+        target_os = "solaris",
     )
 ))]
 use std::num::NonZeroU32;
@@ -122,6 +124,23 @@ pub(crate) use libc::SO_OOBINLINE;
 // Used in `Socket`.
 #[cfg(not(target_os = "nto"))]
 pub(crate) use libc::ipv6_mreq as Ipv6Mreq;
+#[cfg(all(
+    feature = "all",
+    not(any(
+        target_os = "dragonfly",
+        target_os = "fuchsia",
+        target_os = "hurd",
+        target_os = "illumos",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "solaris",
+        target_os = "haiku",
+        target_os = "espidf",
+        target_os = "vita",
+    ))
+))]
+pub(crate) use libc::IPV6_RECVHOPLIMIT;
 #[cfg(not(any(
     target_os = "dragonfly",
     target_os = "fuchsia",
@@ -2059,6 +2078,8 @@ impl crate::Socket {
             target_os = "macos",
             target_os = "tvos",
             target_os = "watchos",
+            target_os = "illumos",
+            target_os = "solaris",
         )
     ))]
     #[cfg_attr(
@@ -2097,6 +2118,8 @@ impl crate::Socket {
             target_os = "macos",
             target_os = "tvos",
             target_os = "watchos",
+            target_os = "illumos",
+            target_os = "solaris",
         )
     ))]
     #[cfg_attr(
@@ -2130,6 +2153,8 @@ impl crate::Socket {
             target_os = "macos",
             target_os = "tvos",
             target_os = "watchos",
+            target_os = "illumos",
+            target_os = "solaris",
         )
     ))]
     #[cfg_attr(
@@ -2193,6 +2218,8 @@ impl crate::Socket {
             target_os = "macos",
             target_os = "tvos",
             target_os = "watchos",
+            target_os = "illumos",
+            target_os = "solaris",
         )
     ))]
     #[cfg_attr(

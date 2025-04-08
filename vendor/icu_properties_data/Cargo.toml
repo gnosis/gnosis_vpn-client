@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.67"
 name = "icu_properties_data"
-version = "1.5.0"
+version = "1.5.1"
 authors = ["The ICU4X Project Developers"]
 include = [
     "data/**/*",
@@ -24,6 +24,7 @@ include = [
     "Cargo.toml",
     "LICENSE",
     "README.md",
+    "build.rs",
 ]
 description = "Data for the icu_properties crate"
 homepage = "https://icu4x.unicode.org"
@@ -33,7 +34,7 @@ license = "Unicode-3.0"
 repository = "https://github.com/unicode-org/icu4x"
 
 [package.metadata.sources.cldr]
-tagged = "45.0.0"
+tagged = "46.0.0-BETA2"
 
 [package.metadata.sources.icuexport]
 tagged = "icu4x/2024-05-16/75.x"

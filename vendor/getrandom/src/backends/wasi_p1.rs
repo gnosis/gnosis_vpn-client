@@ -11,6 +11,7 @@ extern "C" {
     fn random_get(arg0: i32, arg1: i32) -> i32;
 }
 
+#[inline]
 pub fn fill_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
     // Based on the wasi code:
     // https://docs.rs/wasi/0.11.0+wasi-snapshot-preview1/src/wasi/lib_generated.rs.html#2046-2062
@@ -20,11 +21,6 @@ pub fn fill_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
     let ret = unsafe { random_get(dest.as_mut_ptr() as i32, dest.len() as i32) };
     match ret {
         0 => Ok(()),
-        code => {
-            let err = u32::try_from(code)
-                .map(Error::from_os_error)
-                .unwrap_or(Error::UNEXPECTED);
-            Err(err)
-        }
+        code => Err(Error::from_neg_error_code(code)),
     }
 }

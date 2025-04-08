@@ -12,11 +12,11 @@
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#![cfg(all(feature = "alloc", any(feature = "ring", feature = "aws_lc_rs")))]
+#![cfg(all(feature = "alloc", any(feature = "ring", feature = "aws-lc-rs")))]
 
 use core::time::Duration;
 use pki_types::{CertificateDer, UnixTime};
-use webpki::{anchor_from_trusted_cert, KeyUsage};
+use webpki::{KeyUsage, anchor_from_trusted_cert};
 
 fn check_cert(ee: &[u8], ca: &[u8]) -> Result<(), webpki::Error> {
     let ca = CertificateDer::from(ca);

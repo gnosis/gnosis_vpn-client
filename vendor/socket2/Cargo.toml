@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.63"
 name = "socket2"
-version = "0.5.8"
+version = "0.5.9"
 authors = [
     "Alex Crichton <alex@alexcrichton.com>",
     "Thomas de Zeeuw <thomasdezeeuw@gmail.com>",
@@ -76,15 +76,15 @@ targets = [
 [package.metadata.playground]
 features = ["all"]
 
+[features]
+all = []
+
 [lib]
 name = "socket2"
 path = "src/lib.rs"
 
-[features]
-all = []
-
 [target."cfg(unix)".dependencies.libc]
-version = "0.2.150"
+version = "0.2.171"
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.52"

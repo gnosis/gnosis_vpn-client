@@ -8,13 +8,13 @@ use pki_types::{SignatureVerificationAlgorithm, UnixTime};
 
 use crate::cert::lenient_certificate_serial_number;
 use crate::crl::crl_signature_err;
-use crate::der::{self, DerIterator, FromDer, Tag, CONSTRUCTED, CONTEXT_SPECIFIC};
+use crate::der::{self, CONSTRUCTED, CONTEXT_SPECIFIC, DerIterator, FromDer, Tag};
 use crate::error::{DerTypeId, Error};
 use crate::public_values_eq;
 use crate::signed_data::{self, SignedData};
 use crate::subject_name::GeneralName;
 use crate::verify_cert::{Budget, PathNode, Role};
-use crate::x509::{remember_extension, set_extension_once, DistributionPointName, Extension};
+use crate::x509::{DistributionPointName, Extension, remember_extension, set_extension_once};
 
 /// A RFC 5280[^1] profile Certificate Revocation List (CRL).
 ///
@@ -43,7 +43,7 @@ impl<'a> From<BorrowedCertRevocationList<'a>> for CertRevocationList<'a> {
     }
 }
 
-impl<'a> CertRevocationList<'a> {
+impl CertRevocationList<'_> {
     /// Return the DER encoded issuer of the CRL.
     pub fn issuer(&self) -> &[u8] {
         match self {
@@ -150,7 +150,7 @@ impl<'a> CertRevocationList<'a> {
         };
 
         if time >= next_update {
-            return Err(Error::CrlExpired);
+            return Err(Error::CrlExpired { time, next_update });
         }
 
         Ok(())
@@ -653,7 +653,7 @@ impl<'a> IssuingDistributionPoint<'a> {
                     UniformResourceIdentifier(other_uri)
                         if uri.as_slice_less_safe() == other_uri.as_slice_less_safe() =>
                     {
-                        return true
+                        return true;
                     }
                     _ => continue,
                 }
@@ -1254,8 +1254,10 @@ mod tests {
         let crl = CertRevocationList::from(BorrowedCertRevocationList::from_der(&crl[..]).unwrap());
         //  Friday, February 2, 2024 8:26:19 PM GMT
         let time = UnixTime::since_unix_epoch(Duration::from_secs(1_706_905_579));
-
-        assert!(matches!(crl.check_expiration(time), Err(Error::CrlExpired)));
+        assert!(matches!(
+            crl.check_expiration(time),
+            Err(Error::CrlExpired { .. })
+        ));
     }
 
     #[test]

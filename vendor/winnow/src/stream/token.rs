@@ -51,6 +51,15 @@ where
         let start = self.initial.checkpoint();
         self.input.reset(&start);
     }
+
+    /// Iterate over consumed tokens starting with the last emitted
+    ///
+    /// This is intended to help build up appropriate context when reporting errors.
+    #[inline]
+    pub fn previous_tokens(&self) -> impl Iterator<Item = &'t T> {
+        let offset = self.input.offset_from(&self.initial);
+        self.initial[0..offset].iter().rev()
+    }
 }
 
 /// Track locations by implementing [`Location`] on the Token.
@@ -144,8 +153,18 @@ where
         self.input.next_slice(offset)
     }
     #[inline(always)]
+    unsafe fn next_slice_unchecked(&mut self, offset: usize) -> Self::Slice {
+        // SAFETY: Passing up invariants
+        unsafe { self.input.next_slice_unchecked(offset) }
+    }
+    #[inline(always)]
     fn peek_slice(&self, offset: usize) -> Self::Slice {
         self.input.peek_slice(offset)
+    }
+    #[inline(always)]
+    unsafe fn peek_slice_unchecked(&self, offset: usize) -> Self::Slice {
+        // SAFETY: Passing up invariants
+        unsafe { self.input.peek_slice_unchecked(offset) }
     }
 
     #[inline(always)]

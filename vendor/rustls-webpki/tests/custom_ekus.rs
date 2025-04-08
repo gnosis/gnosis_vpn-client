@@ -1,9 +1,9 @@
-#![cfg(all(feature = "alloc", any(feature = "ring", feature = "aws_lc_rs")))]
+#![cfg(all(feature = "alloc", any(feature = "ring", feature = "aws-lc-rs")))]
 
 use core::time::Duration;
 
 use pki_types::{CertificateDer, UnixTime};
-use webpki::{anchor_from_trusted_cert, KeyUsage};
+use webpki::{KeyUsage, anchor_from_trusted_cert};
 
 fn check_cert(
     ee: &[u8],
@@ -43,7 +43,7 @@ pub fn verify_custom_eku_mdoc() {
 
     let eku_mdoc = KeyUsage::required(&[40, 129, 140, 93, 5, 1, 2]);
     check_cert(ee, ca, eku_mdoc, time, Ok(()));
-    check_cert(ee, ca, KeyUsage::server_auth(), time, err);
+    check_cert(ee, ca, KeyUsage::server_auth(), time, err.clone());
     check_cert(ee, ca, eku_mdoc, time, Ok(()));
     check_cert(ee, ca, KeyUsage::server_auth(), time, err);
 }

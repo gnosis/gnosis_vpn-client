@@ -605,7 +605,7 @@ bitflags! {
         const ECHOCTL = c::ECHOCTL;
 
         /// `ECHOPRT`
-        #[cfg(not(any(target_os = "nto", target_os = "redox")))]
+        #[cfg(not(any(target_os = "cygwin", target_os = "nto", target_os = "redox")))]
         const ECHOPRT = c::ECHOPRT;
 
         /// `ECHOKE`
@@ -617,11 +617,17 @@ bitflags! {
         const FLUSHO = c::FLUSHO;
 
         /// `PENDIN`
-        #[cfg(not(any(target_os = "nto", target_os = "redox")))]
+        #[cfg(not(any(target_os = "cygwin", target_os = "nto", target_os = "redox")))]
         const PENDIN = c::PENDIN;
 
         /// `EXTPROC`
-        #[cfg(not(any(target_os = "aix", target_os = "haiku", target_os = "nto", target_os = "redox")))]
+        #[cfg(not(any(
+            target_os = "aix",
+            target_os = "cygwin",
+            target_os = "haiku",
+            target_os = "nto",
+            target_os = "redox",
+        )))]
         const EXTPROC = c::EXTPROC;
 
         /// `ISIG`
@@ -950,6 +956,7 @@ pub mod speed {
                 target_arch = "sparc64",
                 bsd,
                 target_os = "aix",
+                target_os = "cygwin",
                 target_os = "haiku",
                 target_os = "nto",
                 target_os = "solaris",
@@ -960,6 +967,7 @@ pub mod speed {
                 target_arch = "sparc64",
                 bsd,
                 target_os = "aix",
+                target_os = "cygwin",
                 target_os = "haiku",
                 target_os = "nto",
                 target_os = "solaris",
@@ -1087,6 +1095,7 @@ pub mod speed {
                 target_arch = "sparc64",
                 bsd,
                 target_os = "aix",
+                target_os = "cygwin",
                 target_os = "haiku",
                 target_os = "nto",
                 target_os = "solaris",
@@ -1097,6 +1106,7 @@ pub mod speed {
                 target_arch = "sparc64",
                 bsd,
                 target_os = "aix",
+                target_os = "cygwin",
                 target_os = "haiku",
                 target_os = "nto",
                 target_os = "solaris",
@@ -1555,9 +1565,10 @@ mod tests {
     #[test]
     #[cfg(not(any(
         solarish,
+        target_os = "cygwin",
         target_os = "emscripten",
         target_os = "haiku",
-        target_os = "redox"
+        target_os = "redox",
     )))]
     fn termios_legacy() {
         // Check that our doc aliases above are correct.
