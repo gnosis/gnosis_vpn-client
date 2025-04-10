@@ -8,3 +8,4 @@ pub mod state;
 pub mod wireguard;
 
 mod dirs;
+mod remote_data;
