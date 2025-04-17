@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "prCreation": "not-pending",
+  "prCreation": "immediate",
   "extends": [
     "schedule:earlyMondays",
     "config:recommended",
