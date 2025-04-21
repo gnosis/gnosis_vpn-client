@@ -2,7 +2,6 @@
   "enabled": true,
   "prCreation": "immediate",
   "extends": [
-    "schedule:earlyMondays",
     "config:recommended",
     ":disableDependencyDashboard"
   ],
