@@ -71,7 +71,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
       - name: Use Nix Cache
-        uses: cachix/cachix-action@v15
+        uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
