@@ -52,7 +52,7 @@ jobs:
           google-credentials: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
           install-sdk: "true"
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v31
       - name: Setup environment variables
         id: environment
         run: |
