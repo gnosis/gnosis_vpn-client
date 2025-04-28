@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "prCreation": "immediate",
+  "prCreation": "not-pending",
   "extends": [
     "config:recommended",
     ":disableDependencyDashboard"
