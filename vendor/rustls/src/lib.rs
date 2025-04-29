@@ -21,10 +21,10 @@
 //! to a wider set of architectures and environments, or compliance requirements.  See the
 //! [`crypto::CryptoProvider`] documentation for more details.
 //!
-//! Specifying `default-features = false` when depending on rustls will remove the
+//! Specifying `default-features = false` when depending on rustls will remove the implicit
 //! dependency on aws-lc-rs.
 //!
-//! Rustls requires Rust 1.63 or later. It has an optional dependency on zlib-rs which requires 1.75 or later.
+//! Rustls requires Rust 1.71 or later. It has an optional dependency on zlib-rs which requires 1.75 or later.
 //!
 //! [ring-target-platforms]: https://github.com/briansmith/ring/blob/2e8363b433fa3b3962c877d9ed2e9145612f3160/include/ring-core/target.h#L18-L64
 //! [`crypto::CryptoProvider`]: crate::crypto::CryptoProvider
@@ -80,14 +80,13 @@
 //!
 //! #### Custom provider
 //!
-//! We also provide a simple example of writing your own provider in the [`custom-provider`]
-//! example. This example implements a minimal provider using parts of the [`RustCrypto`]
-//! ecosystem.
+//! We also provide a simple example of writing your own provider in the [custom provider example].
+//! This example implements a minimal provider using parts of the [`RustCrypto`] ecosystem.
 //!
 //! See the [Making a custom CryptoProvider] section of the documentation for more information
 //! on this topic.
 //!
-//! [`custom-provider`]: https://github.com/rustls/rustls/tree/main/provider-example/
+//! [custom provider example]: https://github.com/rustls/rustls/tree/main/provider-example/
 //! [`RustCrypto`]: https://github.com/RustCrypto
 //! [Making a custom CryptoProvider]: https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html#making-a-custom-cryptoprovider
 //!
@@ -266,6 +265,10 @@
 //!
 //! [`mio`]: https://docs.rs/mio/latest/mio/
 //!
+//! # Manual
+//!
+//! The [rustls manual](crate::manual) explains design decisions and includes how-to guidance.
+//!
 //! # Crate features
 //! Here's a list of what features are exposed by the rustls crate and what
 //! they mean.
@@ -325,7 +328,7 @@
 
 // Require docs for public APIs, deny unsafe code, etc.
 #![forbid(unsafe_code, unused_must_use)]
-#![cfg_attr(not(any(read_buf, bench)), forbid(unstable_features))]
+#![cfg_attr(not(any(read_buf, bench, coverage_nightly)), forbid(unstable_features))]
 #![warn(
     clippy::alloc_instead_of_core,
     clippy::clone_on_ref_ptr,
@@ -361,6 +364,10 @@
 )]
 // Enable documentation for all features on docs.rs
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+// Enable coverage() attr for nightly coverage builds, see
+// <https://github.com/rust-lang/rust/issues/84605>
+// (`coverage_nightly` is a cfg set by `cargo-llvm-cov`)
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 // XXX: Because of https://github.com/rust-lang/rust/issues/54726, we cannot
 // write `#![rustversion::attr(nightly, feature(read_buf))]` here. Instead,
 // build.rs set `read_buf` for (only) Rust Nightly to get the same effect.
@@ -409,11 +416,13 @@ mod log {
 mod test_macros;
 
 /// This internal `sync` module aliases the `Arc` implementation to allow downstream forks
-/// of rustls targetting architectures without atomic pointers to replace the implementation
+/// of rustls targeting architectures without atomic pointers to replace the implementation
 /// with another implementation such as `portable_atomic_util::Arc` in one central location.
 mod sync {
     #[allow(clippy::disallowed_types)]
     pub(crate) type Arc<T> = alloc::sync::Arc<T>;
+    #[allow(clippy::disallowed_types)]
+    pub(crate) type Weak<T> = alloc::sync::Weak<T>;
 }
 
 #[macro_use]
@@ -467,8 +476,8 @@ pub mod internal {
         }
         pub mod enums {
             pub use crate::msgs::enums::{
-                AlertLevel, CertificateType, Compression, EchVersion, HpkeAead, HpkeKdf, HpkeKem,
-                NamedGroup,
+                AlertLevel, CertificateType, Compression, EchVersion, ExtensionType, HpkeAead,
+                HpkeKdf, HpkeKem, NamedGroup,
             };
         }
         pub mod fragmenter {
@@ -526,12 +535,12 @@ pub mod internal {
 /// [`unbuffered-client`]: https://github.com/rustls/rustls/blob/main/examples/src/bin/unbuffered-client.rs
 /// [`unbuffered-server`]: https://github.com/rustls/rustls/blob/main/examples/src/bin/unbuffered-server.rs
 pub mod unbuffered {
+    pub use crate::conn::UnbufferedConnectionCommon;
     pub use crate::conn::unbuffered::{
         AppDataRecord, ConnectionState, EncodeError, EncodeTlsData, EncryptError,
         InsufficientSizeError, ReadEarlyData, ReadTraffic, TransmitTlsData, UnbufferedStatus,
         WriteTraffic,
     };
-    pub use crate::conn::UnbufferedConnectionCommon;
 }
 
 // The public interface is:
@@ -567,7 +576,7 @@ pub use crate::ticketer::TicketSwitcher;
 pub use crate::tls12::Tls12CipherSuite;
 pub use crate::tls13::Tls13CipherSuite;
 pub use crate::verify::DigitallySignedStruct;
-pub use crate::versions::{SupportedProtocolVersion, ALL_VERSIONS, DEFAULT_VERSIONS};
+pub use crate::versions::{ALL_VERSIONS, DEFAULT_VERSIONS, SupportedProtocolVersion};
 pub use crate::webpki::RootCertStore;
 
 /// Items for use in a client.
@@ -603,8 +612,8 @@ pub mod client {
 
     pub use crate::msgs::persist::{Tls12ClientSessionValue, Tls13ClientSessionValue};
     pub use crate::webpki::{
-        verify_server_cert_signed_by_trust_anchor, verify_server_name, ServerCertVerifierBuilder,
-        VerifierBuilderError, WebPkiServerVerifier,
+        ServerCertVerifierBuilder, VerifierBuilderError, WebPkiServerVerifier,
+        verify_server_cert_signed_by_trust_anchor, verify_server_name,
     };
 }
 
@@ -692,12 +701,12 @@ pub(crate) mod polyfill;
 #[cfg(any(feature = "std", feature = "hashbrown"))]
 mod hash_map {
     #[cfg(feature = "std")]
-    pub(crate) use std::collections::hash_map::Entry;
-    #[cfg(feature = "std")]
     pub(crate) use std::collections::HashMap;
+    #[cfg(feature = "std")]
+    pub(crate) use std::collections::hash_map::Entry;
 
     #[cfg(all(not(feature = "std"), feature = "hashbrown"))]
-    pub(crate) use hashbrown::hash_map::Entry;
-    #[cfg(all(not(feature = "std"), feature = "hashbrown"))]
     pub(crate) use hashbrown::HashMap;
+    #[cfg(all(not(feature = "std"), feature = "hashbrown"))]
+    pub(crate) use hashbrown::hash_map::Entry;
 }

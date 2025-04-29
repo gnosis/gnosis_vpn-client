@@ -12,20 +12,20 @@
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#![cfg(any(feature = "ring", feature = "aws_lc_rs"))]
+#![cfg(any(feature = "ring", feature = "aws-lc-rs"))]
 
 use core::time::Duration;
 
 use pki_types::{CertificateDer, SignatureVerificationAlgorithm, UnixTime};
 use webpki::{
-    anchor_from_trusted_cert, KeyUsage, RevocationCheckDepth, RevocationOptions,
-    RevocationOptionsBuilder, UnknownStatusPolicy,
+    KeyUsage, RevocationCheckDepth, RevocationOptions, RevocationOptionsBuilder,
+    UnknownStatusPolicy, anchor_from_trusted_cert,
 };
 
 static ALGS: &[&dyn SignatureVerificationAlgorithm] = &[
     #[cfg(feature = "ring")]
     webpki::ring::ECDSA_P256_SHA256,
-    #[cfg(feature = "aws_lc_rs")]
+    #[cfg(feature = "aws-lc-rs")]
     webpki::aws_lc_rs::ECDSA_P256_SHA256,
 ];
 
@@ -1662,7 +1662,10 @@ fn expired_crl_enforce_expiration() {
     let revocation = Some(builder.build());
     assert_eq!(
         check_cert(ee, intermediates, ca, revocation),
-        Err(webpki::Error::CrlExpired)
+        Err(webpki::Error::CrlExpired {
+            time: UnixTime::since_unix_epoch(Duration::from_secs(0x1fed_f00d)),
+            next_update: UnixTime::since_unix_epoch(Duration::from_secs(0x1fed_f00d - 10)),
+        })
     );
 }
 
@@ -1691,6 +1694,9 @@ fn expired_crl_enforce_expiration_owned() {
     let revocation = Some(builder.build());
     assert_eq!(
         check_cert(ee, intermediates, ca, revocation),
-        Err(webpki::Error::CrlExpired)
+        Err(webpki::Error::CrlExpired {
+            time: UnixTime::since_unix_epoch(Duration::from_secs(0x1fed_f00d)),
+            next_update: UnixTime::since_unix_epoch(Duration::from_secs(0x1fed_f00d - 10)),
+        })
     );
 }

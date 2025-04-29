@@ -174,6 +174,7 @@ pub fn sethostname(name: &[u8]) -> io::Result<()> {
 /// [Linux]: https://man7.org/linux/man-pages/man2/setdomainname.2.html
 /// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=setdomainname&sektion=3
 #[cfg(not(any(
+    target_os = "cygwin",
     target_os = "emscripten",
     target_os = "espidf",
     target_os = "haiku",
@@ -182,7 +183,7 @@ pub fn sethostname(name: &[u8]) -> io::Result<()> {
     target_os = "redox",
     target_os = "solaris",
     target_os = "vita",
-    target_os = "wasi"
+    target_os = "wasi",
 )))]
 #[inline]
 pub fn setdomainname(name: &[u8]) -> io::Result<()> {
@@ -197,9 +198,11 @@ pub fn setdomainname(name: &[u8]) -> io::Result<()> {
 pub enum RebootCommand {
     /// Disables the Ctrl-Alt-Del keystroke.
     ///
-    /// When disabled, the keystroke will send a [`Signal::INT`] to pid 1.
+    /// When disabled, the keystroke will send a [`Signal::INT`] to
+    /// [`Pid::INIT`].
     ///
     /// [`Signal::INT`]: crate::process::Signal::INT
+    /// [`Pid::INIT`]: crate::process::Pid::INIT
     CadOff = c::LINUX_REBOOT_CMD_CAD_OFF,
     /// Enables the Ctrl-Alt-Del keystroke.
     ///

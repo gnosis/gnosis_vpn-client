@@ -6,6 +6,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.20](https://github.com/rust-lang/cc-rs/compare/cc-v1.2.19...cc-v1.2.20) - 2025-04-25
+
+### Other
+
+- Regenerate target info ([#1461](https://github.com/rust-lang/cc-rs/pull/1461))
+- Fix parser.rs on latest rustc nightly ([#1459](https://github.com/rust-lang/cc-rs/pull/1459))
+
+## [1.2.19](https://github.com/rust-lang/cc-rs/compare/cc-v1.2.18...cc-v1.2.19) - 2025-04-11
+
+### Other
+
+- Fix musl compilation: Add musl as a prefix fallback ([#1455](https://github.com/rust-lang/cc-rs/pull/1455))
+
+## [1.2.18](https://github.com/rust-lang/cc-rs/compare/cc-v1.2.17...cc-v1.2.18) - 2025-04-04
+
+### Other
+
+- Regenerate target info ([#1450](https://github.com/rust-lang/cc-rs/pull/1450))
+- Use `std::thread::available_parallelism` for determining the default number of jobs ([#1447](https://github.com/rust-lang/cc-rs/pull/1447))
+- Fix mips64-openwrt-linux-musl parsing ([#1449](https://github.com/rust-lang/cc-rs/pull/1449))
+- Use compiler prefix `x86_64-linux-musl` ([#1443](https://github.com/rust-lang/cc-rs/pull/1443))
+
+## [1.2.17](https://github.com/rust-lang/cc-rs/compare/cc-v1.2.16...cc-v1.2.17) - 2025-03-21
+
+### Other
+
+- Regenerate target info ([#1439](https://github.com/rust-lang/cc-rs/pull/1439))
+- Regenerate windows sys bindings ([#1437](https://github.com/rust-lang/cc-rs/pull/1437))
+- Fix wasm32-wali-linux-musl target parsing ([#1434](https://github.com/rust-lang/cc-rs/pull/1434))
+- Parse `rustc` target names ([#1413](https://github.com/rust-lang/cc-rs/pull/1413))
+- Regenerate target info ([#1429](https://github.com/rust-lang/cc-rs/pull/1429))
+- Added base support for `wasm32-wali-linux-musl` target ([#1373](https://github.com/rust-lang/cc-rs/pull/1373))
+
 ## [1.2.16](https://github.com/rust-lang/cc-rs/compare/cc-v1.2.15...cc-v1.2.16) - 2025-02-28
 
 ### Fixed

@@ -7,471 +7,19 @@
 // those terms.
 
 #[macro_use]
-mod macros;
+pub(crate) mod macros;
 
 #[doc(hidden)]
 pub mod macro_util;
 
 use core::{
-    cell::UnsafeCell,
     marker::PhantomData,
-    mem::{self, ManuallyDrop, MaybeUninit},
-    num::{NonZeroUsize, Wrapping},
+    mem::{self, ManuallyDrop},
+    num::NonZeroUsize,
     ptr::NonNull,
 };
 
-use crate::{
-    error::AlignmentError,
-    pointer::invariant::{self, Invariants},
-    Unalign,
-};
-
-/// A type which has the same layout as the type it wraps.
-///
-/// # Safety
-///
-/// `T: TransparentWrapper` implies that `T` has the same size as [`T::Inner`].
-/// Further, `T: TransparentWrapper<I>` implies that:
-/// - If `T::UnsafeCellVariance = Covariant`, then `T` has `UnsafeCell`s
-///   covering the same byte ranges as `T::Inner`.
-/// - If a `T` pointer satisfies the alignment invariant `I::Alignment`, then
-///   that same pointer, cast to `T::Inner`, satisfies the alignment invariant
-///   `<T::AlignmentVariance as AlignmentVariance<I::Alignment>>::Applied`.
-/// - If a `T` pointer satisfies the validity invariant `I::Validity`, then that
-///   same pointer, cast to `T::Inner`, satisfies the validity invariant
-///   `<T::ValidityVariance as ValidityVariance<I::Validity>>::Applied`.
-///
-/// [`T::Inner`]: TransparentWrapper::Inner
-/// [`UnsafeCell`]: core::cell::UnsafeCell
-/// [`T::AlignmentVariance`]: TransparentWrapper::AlignmentVariance
-/// [`T::ValidityVariance`]: TransparentWrapper::ValidityVariance
-#[doc(hidden)]
-pub unsafe trait TransparentWrapper<I: Invariants> {
-    type Inner: ?Sized;
-
-    type UnsafeCellVariance;
-    type AlignmentVariance: AlignmentVariance<I::Alignment>;
-    type ValidityVariance: ValidityVariance<I::Validity>;
-
-    /// Casts a wrapper pointer to an inner pointer.
-    ///
-    /// # Safety
-    ///
-    /// The resulting pointer has the same address and provenance as `ptr`, and
-    /// addresses the same number of bytes.
-    fn cast_into_inner(ptr: *mut Self) -> *mut Self::Inner;
-
-    /// Casts an inner pointer to a wrapper pointer.
-    ///
-    /// # Safety
-    ///
-    /// The resulting pointer has the same address and provenance as `ptr`, and
-    /// addresses the same number of bytes.
-    fn cast_from_inner(ptr: *mut Self::Inner) -> *mut Self;
-}
-
-#[allow(unreachable_pub)]
-#[doc(hidden)]
-pub trait AlignmentVariance<I: invariant::Alignment> {
-    type Applied: invariant::Alignment;
-}
-
-#[allow(unreachable_pub)]
-#[doc(hidden)]
-pub trait ValidityVariance<I: invariant::Validity> {
-    type Applied: invariant::Validity;
-}
-
-#[doc(hidden)]
-#[allow(missing_copy_implementations, missing_debug_implementations)]
-pub enum Covariant {}
-
-impl<I: invariant::Alignment> AlignmentVariance<I> for Covariant {
-    type Applied = I;
-}
-
-impl<I: invariant::Validity> ValidityVariance<I> for Covariant {
-    type Applied = I;
-}
-
-#[doc(hidden)]
-#[allow(missing_copy_implementations, missing_debug_implementations)]
-pub enum Invariant {}
-
-impl<I: invariant::Alignment> AlignmentVariance<I> for Invariant {
-    type Applied = invariant::Unaligned;
-}
-
-impl<I: invariant::Validity> ValidityVariance<I> for Invariant {
-    type Applied = invariant::Uninit;
-}
-
-// SAFETY:
-// - Per [1], `MaybeUninit<T>` has the same size as `T`.
-// - See inline comments for other safety justifications.
-//
-// [1] Per https://doc.rust-lang.org/1.81.0/std/mem/union.MaybeUninit.html#layout-1:
-//
-//   `MaybeUninit<T>` is guaranteed to have the same size, alignment, and ABI as
-//   `T`
-unsafe impl<T, I: Invariants> TransparentWrapper<I> for MaybeUninit<T> {
-    type Inner = T;
-
-    // SAFETY: `MaybeUninit<T>` has `UnsafeCell`s covering the same byte ranges
-    // as `Inner = T`. This is not explicitly documented, but it can be
-    // inferred. Per [1] in the preceding safety comment, `MaybeUninit<T>` has
-    // the same size as `T`. Further, note the signature of
-    // `MaybeUninit::assume_init_ref` [2]:
-    //
-    //   pub unsafe fn assume_init_ref(&self) -> &T
-    //
-    // If the argument `&MaybeUninit<T>` and the returned `&T` had `UnsafeCell`s
-    // at different offsets, this would be unsound. Its existence is proof that
-    // this is not the case.
-    //
-    // [2] https://doc.rust-lang.org/1.81.0/std/mem/union.MaybeUninit.html#method.assume_init_ref
-    type UnsafeCellVariance = Covariant;
-    // SAFETY: Per [1], `MaybeUninit<T>` has the same layout as `T`, and thus
-    // has the same alignment as `T`.
-    //
-    // [1] Per https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#layout-1:
-    //
-    //   `MaybeUninit<T>` is guaranteed to have the same size, alignment, and
-    //   ABI as `T`.
-    type AlignmentVariance = Covariant;
-    // SAFETY: `MaybeUninit` has no validity invariants. Thus, a valid
-    // `MaybeUninit<T>` is not necessarily a valid `T`.
-    type ValidityVariance = Invariant;
-
-    #[inline(always)]
-    fn cast_into_inner(ptr: *mut MaybeUninit<T>) -> *mut T {
-        // SAFETY: Per [1] (from comment above), `MaybeUninit<T>` has the same
-        // layout as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        ptr.cast::<T>()
-    }
-
-    #[inline(always)]
-    fn cast_from_inner(ptr: *mut T) -> *mut MaybeUninit<T> {
-        // SAFETY: Per [1] (from comment above), `MaybeUninit<T>` has the same
-        // layout as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        ptr.cast::<MaybeUninit<T>>()
-    }
-}
-
-// SAFETY:
-// - Per [1], `ManuallyDrop<T>` has the same size as `T`.
-// - See inline comments for other safety justifications.
-//
-// [1] Per https://doc.rust-lang.org/1.81.0/std/mem/struct.ManuallyDrop.html:
-//
-//   `ManuallyDrop<T>` is guaranteed to have the same layout and bit validity as
-//   `T`
-unsafe impl<T: ?Sized, I: Invariants> TransparentWrapper<I> for ManuallyDrop<T> {
-    type Inner = T;
-
-    // SAFETY: Per [1], `ManuallyDrop<T>` has `UnsafeCell`s covering the same
-    // byte ranges as `Inner = T`.
-    //
-    // [1] Per https://doc.rust-lang.org/1.81.0/std/mem/struct.ManuallyDrop.html:
-    //
-    //   `ManuallyDrop<T>` is guaranteed to have the same layout and bit
-    //   validity as `T`, and is subject to the same layout optimizations as
-    //   `T`. As a consequence, it has no effect on the assumptions that the
-    //   compiler makes about its contents.
-    type UnsafeCellVariance = Covariant;
-    // SAFETY: Per [1], `ManuallyDrop<T>` has the same layout as `T`, and thus
-    // has the same alignment as `T`.
-    //
-    // [1] Per https://doc.rust-lang.org/nightly/core/mem/struct.ManuallyDrop.html:
-    //
-    //   `ManuallyDrop<T>` is guaranteed to have the same layout and bit
-    //   validity as `T`
-    type AlignmentVariance = Covariant;
-
-    // SAFETY: Per [1] (from comment above), `ManuallyDrop<T>` has the same bit
-    // validity as `T`.
-    type ValidityVariance = Covariant;
-
-    #[inline(always)]
-    fn cast_into_inner(ptr: *mut ManuallyDrop<T>) -> *mut T {
-        // SAFETY: Per [1] (from comment above), `ManuallyDrop<T>` has the same
-        // layout as `T`. Thus, this cast preserves size even if `T` is unsized.
-        //
-        // This cast trivially preserves provenance.
-        #[allow(clippy::as_conversions)]
-        return ptr as *mut T;
-    }
-
-    #[inline(always)]
-    fn cast_from_inner(ptr: *mut T) -> *mut ManuallyDrop<T> {
-        // SAFETY: Per [1] (from comment above), `ManuallyDrop<T>` has the same
-        // layout as `T`. Thus, this cast preserves size even if `T` is unsized.
-        //
-        // This cast trivially preserves provenance.
-        #[allow(clippy::as_conversions)]
-        return ptr as *mut ManuallyDrop<T>;
-    }
-}
-
-// SAFETY:
-// - Per [1], `Wrapping<T>` has the same size as `T`.
-// - See inline comments for other safety justifications.
-//
-// [1] Per https://doc.rust-lang.org/1.81.0/std/num/struct.Wrapping.html#layout-1:
-//
-//   `Wrapping<T>` is guaranteed to have the same layout and ABI as `T`.
-unsafe impl<T, I: Invariants> TransparentWrapper<I> for Wrapping<T> {
-    type Inner = T;
-
-    // SAFETY: Per [1], `Wrapping<T>` has the same layout as `T`. Since its
-    // single field (of type `T`) is public, it would be a breaking change to
-    // add or remove fields. Thus, we know that `Wrapping<T>` contains a `T` (as
-    // opposed to just having the same size and alignment as `T`) with no pre-
-    // or post-padding. Thus, `Wrapping<T>` must have `UnsafeCell`s covering the
-    // same byte ranges as `Inner = T`.
-    //
-    // [1] Per https://doc.rust-lang.org/1.81.0/std/num/struct.Wrapping.html#layout-1:
-    //
-    //   `Wrapping<T>` is guaranteed to have the same layout and ABI as `T`.
-    type UnsafeCellVariance = Covariant;
-    // SAFETY: Per [1], `Wrapping<T>` has the same layout as `T`, and thus has
-    // the same alignment as `T`.
-    //
-    // [1] Per https://doc.rust-lang.org/core/num/struct.Wrapping.html#layout-1:
-    //
-    //   `Wrapping<T>` is guaranteed to have the same layout and ABI as `T`.
-    type AlignmentVariance = Covariant;
-
-    // SAFETY: `Wrapping<T>` has only one field, which is `pub` [2]. We are also
-    // guaranteed per [1] (from the comment above) that `Wrapping<T>` has the
-    // same layout as `T`. The only way for both of these to be true
-    // simultaneously is for `Wrapping<T>` to have the same bit validity as `T`.
-    // In particular, in order to change the bit validity, one of the following
-    // would need to happen:
-    // - `Wrapping` could change its `repr`, but this would violate the layout
-    //   guarantee.
-    // - `Wrapping` could add or change its fields, but this would be a
-    //   stability-breaking change.
-    //
-    // [2] https://doc.rust-lang.org/core/num/struct.Wrapping.html
-    type ValidityVariance = Covariant;
-
-    #[inline(always)]
-    fn cast_into_inner(ptr: *mut Wrapping<T>) -> *mut T {
-        // SAFETY: Per [1] (from comment above), `Wrapping<T>` has the same
-        // layout as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        ptr.cast::<T>()
-    }
-
-    #[inline(always)]
-    fn cast_from_inner(ptr: *mut T) -> *mut Wrapping<T> {
-        // SAFETY: Per [1] (from comment above), `Wrapping<T>` has the same
-        // layout as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        ptr.cast::<Wrapping<T>>()
-    }
-}
-
-// SAFETY:
-// - Per [1], `UnsafeCell<T>` has the same size as `T`.
-// - See inline comments for other safety justifications.
-//
-// [1] Per https://doc.rust-lang.org/1.81.0/core/cell/struct.UnsafeCell.html#memory-layout:
-//
-//   `UnsafeCell<T>` has the same in-memory representation as its inner type
-//   `T`.
-unsafe impl<T: ?Sized, I: Invariants> TransparentWrapper<I> for UnsafeCell<T> {
-    type Inner = T;
-
-    // SAFETY: Since we set this to `Invariant`, we make no safety claims.
-    type UnsafeCellVariance = Invariant;
-
-    // SAFETY: Per [1] (from comment on impl), `Unalign<T>` has the same
-    // representation as `T`, and thus has the same alignment as `T`.
-    type AlignmentVariance = Covariant;
-
-    // SAFETY: Per [1], `Unalign<T>` has the same bit validity as `T`.
-    // Technically the term "representation" doesn't guarantee this, but the
-    // subsequent sentence in the documentation makes it clear that this is the
-    // intention.
-    //
-    // [1] Per https://doc.rust-lang.org/1.81.0/core/cell/struct.UnsafeCell.html#memory-layout:
-    //
-    //   `UnsafeCell<T>` has the same in-memory representation as its inner type
-    //   `T`. A consequence of this guarantee is that it is possible to convert
-    //   between `T` and `UnsafeCell<T>`.
-    type ValidityVariance = Covariant;
-
-    #[inline(always)]
-    fn cast_into_inner(ptr: *mut UnsafeCell<T>) -> *mut T {
-        // SAFETY: Per [1] (from comment above), `UnsafeCell<T>` has the same
-        // representation as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        #[allow(clippy::as_conversions)]
-        return ptr as *mut T;
-    }
-
-    #[inline(always)]
-    fn cast_from_inner(ptr: *mut T) -> *mut UnsafeCell<T> {
-        // SAFETY: Per [1] (from comment above), `UnsafeCell<T>` has the same
-        // representation as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        #[allow(clippy::as_conversions)]
-        return ptr as *mut UnsafeCell<T>;
-    }
-}
-
-// SAFETY: `Unalign<T>` promises to have the same size as `T`.
-//
-// See inline comments for other safety justifications.
-unsafe impl<T, I: Invariants> TransparentWrapper<I> for Unalign<T> {
-    type Inner = T;
-
-    // SAFETY: `Unalign<T>` promises to have `UnsafeCell`s covering the same
-    // byte ranges as `Inner = T`.
-    type UnsafeCellVariance = Covariant;
-
-    // SAFETY: Since `Unalign<T>` promises to have alignment 1 regardless of
-    // `T`'s alignment. Thus, an aligned pointer to `Unalign<T>` is not
-    // necessarily an aligned pointer to `T`.
-    type AlignmentVariance = Invariant;
-
-    // SAFETY: `Unalign<T>` promises to have the same validity as `T`.
-    type ValidityVariance = Covariant;
-
-    #[inline(always)]
-    fn cast_into_inner(ptr: *mut Unalign<T>) -> *mut T {
-        // SAFETY: Per the safety comment on the impl block, `Unalign<T>` has
-        // the size as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        ptr.cast::<T>()
-    }
-
-    #[inline(always)]
-    fn cast_from_inner(ptr: *mut T) -> *mut Unalign<T> {
-        // SAFETY: Per the safety comment on the impl block, `Unalign<T>` has
-        // the size as `T`. Thus, this cast preserves size.
-        //
-        // This cast trivially preserves provenance.
-        ptr.cast::<Unalign<T>>()
-    }
-}
-
-/// Implements `TransparentWrapper` for an atomic type.
-///
-/// # Safety
-///
-/// The caller promises that `$atomic` is an atomic type whose natie equivalent
-/// is `$native`.
-#[cfg(all(
-    zerocopy_target_has_atomics_1_60_0,
-    any(
-        target_has_atomic = "8",
-        target_has_atomic = "16",
-        target_has_atomic = "32",
-        target_has_atomic = "64",
-        target_has_atomic = "ptr"
-    )
-))]
-macro_rules! unsafe_impl_transparent_wrapper_for_atomic {
-    ($(#[$attr:meta])* $(,)?) => {};
-    ($(#[$attr:meta])* $atomic:ty [$native:ty], $($atomics:ty [$natives:ty]),* $(,)?) => {
-        $(#[$attr])*
-        // SAFETY: See safety comment in next match arm.
-        unsafe impl<I: crate::invariant::Invariants> crate::util::TransparentWrapper<I> for $atomic {
-            unsafe_impl_transparent_wrapper_for_atomic!(@inner $atomic [$native]);
-        }
-        unsafe_impl_transparent_wrapper_for_atomic!($(#[$attr])* $($atomics [$natives],)*);
-    };
-    ($(#[$attr:meta])* $tyvar:ident => $atomic:ty [$native:ty]) => {
-        // We implement for `$atomic` and set `Inner = $native`. The caller has
-        // promised that `$atomic` and `$native` are an atomic type and its
-        // native counterpart, respectively. Per [1], `$atomic` and `$native`
-        // have the same size.
-        //
-        // [1] Per (for example) https://doc.rust-lang.org/1.81.0/std/sync/atomic/struct.AtomicU64.html:
-        //
-        //   This type has the same size and bit validity as the underlying
-        //   integer type
-        $(#[$attr])*
-        unsafe impl<$tyvar, I: crate::invariant::Invariants> crate::util::TransparentWrapper<I> for $atomic {
-            unsafe_impl_transparent_wrapper_for_atomic!(@inner $atomic [$native]);
-        }
-    };
-    (@inner $atomic:ty [$native:ty]) => {
-        type Inner = UnsafeCell<$native>;
-
-        // SAFETY: It is "obvious" that each atomic type contains a single
-        // `UnsafeCell` that covers all bytes of the type, but we can also prove
-        // it:
-        // - Since `$atomic` provides an API which permits loading and storing
-        //   values of type `$native` via a `&self` (shared) reference, *some*
-        //   interior mutation must be happening, and interior mutation can only
-        //   happen via `UnsafeCell`. Further, there must be enough bytes in
-        //   `$atomic` covered by an `UnsafeCell` to hold every possible value
-        //   of `$native`.
-        // - Per [1], `$atomic` has the same size as `$native`. This on its own
-        //   isn't enough: it would still be possible for `$atomic` to store
-        //   `$native` using a compact representation (for `$native` types for
-        //   which some bit patterns are illegal). However, this is ruled out by
-        //   the fact that `$atomic` has the same bit validity as `$native` [1].
-        //   Thus, we can conclude that every byte of `$atomic` must be covered
-        //   by an `UnsafeCell`.
-        //
-        // Thus, every byte of `$atomic` is covered by an `UnsafeCell`, and we
-        // set `type Inner = UnsafeCell<$native>`. Thus, `Self` and
-        // `Self::Inner` have `UnsafeCell`s covering the same byte ranges.
-        //
-        // [1] Per (for example) https://doc.rust-lang.org/1.81.0/std/sync/atomic/struct.AtomicU64.html:
-        //
-        //   This type has the same size and bit validity as the underlying
-        //   integer type
-        type UnsafeCellVariance = crate::util::Covariant;
-
-        // SAFETY: No safety justification is required for an invariant
-        // variance.
-        type AlignmentVariance = crate::util::Invariant;
-
-        // SAFETY: Per [1], all atomic types have the same bit validity as their
-        // native counterparts. The caller has promised that `$atomic` and
-        // `$native` are an atomic type and its native counterpart,
-        // respectively.
-        //
-        // [1] Per (for example) https://doc.rust-lang.org/1.81.0/std/sync/atomic/struct.AtomicU64.html:
-        //
-        //   This type has the same size and bit validity as the underlying
-        //   integer type
-        type ValidityVariance = crate::util::Covariant;
-
-        #[inline(always)]
-        fn cast_into_inner(ptr: *mut $atomic) -> *mut UnsafeCell<$native> {
-            // SAFETY: Per [1] (from comment on impl block), `$atomic` has the
-            // same size as `$native`. Thus, this cast preserves size.
-            //
-            // This cast trivially preserves provenance.
-            ptr.cast::<UnsafeCell<$native>>()
-        }
-
-        #[inline(always)]
-        fn cast_from_inner(ptr: *mut UnsafeCell<$native>) -> *mut $atomic {
-            // SAFETY: Per [1] (from comment on impl block), `$atomic` has the
-            // same size as `$native`. Thus, this cast preserves size.
-            //
-            // This cast trivially preserves provenance.
-            ptr.cast::<$atomic>()
-        }
-    };
-}
+use super::*;
 
 /// Like [`PhantomData`], but [`Send`] and [`Sync`] regardless of whether the
 /// wrapped `T` is.
@@ -528,9 +76,10 @@ impl<T: ?Sized> AsAddress for NonNull<T> {
 impl<T: ?Sized> AsAddress for *const T {
     #[inline(always)]
     fn addr(self) -> usize {
-        // TODO(#181), TODO(https://github.com/rust-lang/rust/issues/95228): Use
-        // `.addr()` instead of `as usize` once it's stable, and get rid of this
-        // `allow`. Currently, `as usize` is the only way to accomplish this.
+        // FIXME(#181), FIXME(https://github.com/rust-lang/rust/issues/95228):
+        // Use `.addr()` instead of `as usize` once it's stable, and get rid of
+        // this `allow`. Currently, `as usize` is the only way to accomplish
+        // this.
         #[allow(clippy::as_conversions)]
         #[cfg_attr(
             __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS,
@@ -568,7 +117,21 @@ pub(crate) fn validate_aligned_to<T: AsAddress, U>(t: T) -> Result<(), Alignment
 ///
 /// This function assumes that align is a power of two; there are no guarantees
 /// on the answer it gives if this is not the case.
+#[cfg_attr(
+    kani,
+    kani::requires(len <= isize::MAX as usize),
+    kani::requires(align.is_power_of_two()),
+    kani::ensures(|&p| (len + p) % align.get() == 0),
+    // Ensures that we add the minimum required padding.
+    kani::ensures(|&p| p < align.get()),
+)]
 pub(crate) const fn padding_needed_for(len: usize, align: NonZeroUsize) -> usize {
+    #[cfg(kani)]
+    #[kani::proof_for_contract(padding_needed_for)]
+    fn proof() {
+        padding_needed_for(kani::any(), kani::any());
+    }
+
     // Abstractly, we want to compute:
     //   align - (len % align).
     // Handling the case where len%align is 0.
@@ -630,10 +193,27 @@ pub(crate) const fn padding_needed_for(len: usize, align: NonZeroUsize) -> usize
 /// May panic if `align` is not a power of two. Even if it doesn't panic in this
 /// case, it will produce nonsense results.
 #[inline(always)]
+#[cfg_attr(
+    kani,
+    kani::requires(align.is_power_of_two()),
+    kani::ensures(|&m| m <= n && m % align.get() == 0),
+    // Guarantees that `m` is the *largest* value such that `m % align == 0`.
+    kani::ensures(|&m| {
+        // If this `checked_add` fails, then the next multiple would wrap
+        // around, which trivially satisfies the "largest value" requirement.
+        m.checked_add(align.get()).map(|next_mul| next_mul > n).unwrap_or(true)
+    })
+)]
 pub(crate) const fn round_down_to_next_multiple_of_alignment(
     n: usize,
     align: NonZeroUsize,
 ) -> usize {
+    #[cfg(kani)]
+    #[kani::proof_for_contract(round_down_to_next_multiple_of_alignment)]
+    fn proof() {
+        round_down_to_next_multiple_of_alignment(kani::any(), kani::any());
+    }
+
     let align = align.get();
     #[cfg(zerocopy_panic_in_const_and_vec_try_reserve_1_57_0)]
     debug_assert!(align.is_power_of_two());
@@ -739,14 +319,10 @@ pub(crate) const unsafe fn transmute_unchecked<Src, Dst>(src: Src) -> Dst {
 pub(crate) unsafe fn new_box<T>(
     meta: T::PointerMetadata,
     allocate: unsafe fn(core::alloc::Layout) -> *mut u8,
-) -> Result<alloc::boxed::Box<T>, crate::error::AllocError>
+) -> Result<alloc::boxed::Box<T>, AllocError>
 where
     T: ?Sized + crate::KnownLayout,
 {
-    use crate::error::AllocError;
-    use crate::PointerMetadata;
-    use core::alloc::Layout;
-
     let size = match meta.size_for_metadata(T::LAYOUT) {
         Some(size) => size,
         None => return Err(AllocError),
@@ -758,14 +334,14 @@ where
     // alignment, overflow `isize`) are not rejected, which can cause undefined
     // behavior. See #64 for details.
     //
-    // TODO(#67): Once our MSRV is > 1.64.0, remove this assertion.
+    // FIXME(#67): Once our MSRV is > 1.64.0, remove this assertion.
     #[allow(clippy::as_conversions)]
     let max_alloc = (isize::MAX as usize).saturating_sub(align);
     if size > max_alloc {
         return Err(AllocError);
     }
 
-    // TODO(https://github.com/rust-lang/rust/issues/55724): Use
+    // FIXME(https://github.com/rust-lang/rust/issues/55724): Use
     // `Layout::repeat` once it's stabilized.
     let layout = Layout::from_size_align(size, align).or(Err(AllocError))?;
 
@@ -803,7 +379,7 @@ where
         // zero, but it does require a non-null dangling pointer for its
         // allocation.
         //
-        // TODO(https://github.com/rust-lang/rust/issues/95228): Use
+        // FIXME(https://github.com/rust-lang/rust/issues/95228): Use
         // `std::ptr::without_provenance` once it's stable. That may optimize
         // better. As written, Rust may assume that this consumes "exposed"
         // provenance, and thus Rust may have to assume that this may consume
@@ -813,7 +389,7 @@ where
 
     let ptr = T::raw_from_ptr_len(ptr, meta);
 
-    // TODO(#429): Add a "SAFETY" comment and remove this `allow`. Make sure to
+    // FIXME(#429): Add a "SAFETY" comment and remove this `allow`. Make sure to
     // include a justification that `ptr.as_ptr()` is validly-aligned in the ZST
     // case (in which we manually construct a dangling pointer) and to justify
     // why `Box` is safe to drop (it's because `allocate` uses the system
@@ -822,12 +398,193 @@ where
     Ok(unsafe { alloc::boxed::Box::from_raw(ptr.as_ptr()) })
 }
 
+mod len_of {
+    use super::*;
+
+    /// A witness type for metadata of a valid instance of `&T`.
+    pub(crate) struct MetadataOf<T: ?Sized + KnownLayout> {
+        /// # Safety
+        ///
+        /// The size of an instance of `&T` with the given metadata is not
+        /// larger than `isize::MAX`.
+        meta: T::PointerMetadata,
+        _p: PhantomData<T>,
+    }
+
+    impl<T: ?Sized + KnownLayout> Copy for MetadataOf<T> {}
+    impl<T: ?Sized + KnownLayout> Clone for MetadataOf<T> {
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<T: ?Sized> MetadataOf<T>
+    where
+        T: KnownLayout,
+    {
+        /// Returns `None` if `meta` is greater than `t`'s metadata.
+        #[inline(always)]
+        pub(crate) fn new_in_bounds(t: &T, meta: usize) -> Option<Self>
+        where
+            T: KnownLayout<PointerMetadata = usize>,
+        {
+            if meta <= Ptr::from_ref(t).len() {
+                // SAFETY: We have checked that `meta` is not greater than `t`'s
+                // metadata, which, by invariant on `&T`, addresses no more than
+                // `isize::MAX` bytes [1][2].
+                //
+                // [1] Per https://doc.rust-lang.org/1.85.0/std/primitive.reference.html#safety:
+                //
+                //    For all types, `T: ?Sized`, and for all `t: &T` or `t:
+                //    &mut T`, when such values cross an API boundary, the
+                //    following invariants must generally be upheld:
+                //
+                //    * `t` is non-null
+                //    * `t` is aligned to `align_of_val(t)`
+                //    * if `size_of_val(t) > 0`, then `t` is dereferenceable for
+                //      `size_of_val(t)` many bytes
+                //
+                //    If `t` points at address `a`, being "dereferenceable" for
+                //    N bytes means that the memory range `[a, a + N)` is all
+                //    contained within a single allocated object.
+                //
+                // [2] Per https://doc.rust-lang.org/1.85.0/std/ptr/index.html#allocated-object:
+                //
+                //    For any allocated object with `base` address, `size`, and
+                //    a set of `addresses`, the following are guaranteed:
+                //    - For all addresses `a` in `addresses`, `a` is in the
+                //      range `base .. (base + size)` (note that this requires
+                //      `a < base + size`, not `a <= base + size`)
+                //    - `base` is not equal to [`null()`] (i.e., the address
+                //      with the numerical value 0)
+                //    - `base + size <= usize::MAX`
+                //    - `size <= isize::MAX`
+                Some(unsafe { Self::new_unchecked(meta) })
+            } else {
+                None
+            }
+        }
+
+        /// # Safety
+        ///
+        /// The size of an instance of `&T` with the given metadata is not
+        /// larger than `isize::MAX`.
+        pub(crate) unsafe fn new_unchecked(meta: T::PointerMetadata) -> Self {
+            // SAFETY: The caller has promised that the size of an instance of
+            // `&T` with the given metadata is not larger than `isize::MAX`.
+            Self { meta, _p: PhantomData }
+        }
+
+        pub(crate) fn get(&self) -> T::PointerMetadata
+        where
+            T::PointerMetadata: Copy,
+        {
+            self.meta
+        }
+
+        #[inline]
+        pub(crate) fn padding_needed_for(&self) -> usize
+        where
+            T: KnownLayout<PointerMetadata = usize>,
+        {
+            let trailing_slice_layout = crate::trailing_slice_layout::<T>();
+            // SAFETY: By invariant on `self`, a `&T` with metadata `self.meta`
+            // describes an object of size `<= isize::MAX`. This computes the
+            // size of such a `&T` without any trailing padding, and so neither
+            // the multiplication nor the addition will overflow.
+            //
+            // FIXME(#67): Remove this allow. See NumExt for more details.
+            #[allow(unstable_name_collisions, clippy::incompatible_msrv)]
+            let unpadded_size = unsafe {
+                let trailing_size = self.meta.unchecked_mul(trailing_slice_layout.elem_size);
+                trailing_size.unchecked_add(trailing_slice_layout.offset)
+            };
+
+            util::padding_needed_for(unpadded_size, T::LAYOUT.align)
+        }
+
+        #[inline(always)]
+        pub(crate) fn validate_cast_and_convert_metadata(
+            addr: usize,
+            bytes_len: MetadataOf<[u8]>,
+            cast_type: CastType,
+            meta: Option<T::PointerMetadata>,
+        ) -> Result<(MetadataOf<T>, MetadataOf<[u8]>), MetadataCastError> {
+            let layout = match meta {
+                None => T::LAYOUT,
+                // This can return `None` if the metadata describes an object
+                // which can't fit in an `isize`.
+                Some(meta) => {
+                    let size = match meta.size_for_metadata(T::LAYOUT) {
+                        Some(size) => size,
+                        None => return Err(MetadataCastError::Size),
+                    };
+                    DstLayout { align: T::LAYOUT.align, size_info: crate::SizeInfo::Sized { size } }
+                }
+            };
+            // Lemma 0: By contract on `validate_cast_and_convert_metadata`, if
+            // the result is `Ok(..)`, then a `&T` with `elems` trailing slice
+            // elements is no larger in size than `bytes_len.get()`.
+            let (elems, split_at) =
+                layout.validate_cast_and_convert_metadata(addr, bytes_len.get(), cast_type)?;
+            let elems = T::PointerMetadata::from_elem_count(elems);
+
+            // For a slice DST type, if `meta` is `Some(elems)`, then we
+            // synthesize `layout` to describe a sized type whose size is equal
+            // to the size of the instance that we are asked to cast. For sized
+            // types, `validate_cast_and_convert_metadata` returns `elems == 0`.
+            // Thus, in this case, we need to use the `elems` passed by the
+            // caller, not the one returned by
+            // `validate_cast_and_convert_metadata`.
+            //
+            // Lemma 1: A `&T` with `elems` trailing slice elements is no larger
+            // in size than `bytes_len.get()`. Proof:
+            // - If `meta` is `None`, then `elems` satisfies this condition by
+            //   Lemma 0.
+            // - If `meta` is `Some(meta)`, then `layout` describes an object
+            //   whose size is equal to the size of an `&T` with `meta`
+            //   metadata. By Lemma 0, that size is not larger than
+            //   `bytes_len.get()`.
+            //
+            // Lemma 2: A `&T` with `elems` trailing slice elements is no larger
+            // than `isize::MAX` bytes. Proof: By Lemma 1, a `&T` with metadata
+            // `elems` is not larger in size than `bytes_len.get()`. By
+            // invariant on `MetadataOf<[u8]>`, a `&[u8]` with metadata
+            // `bytes_len` is not larger than `isize::MAX`. Because
+            // `size_of::<u8>()` is `1`, a `&[u8]` with metadata `bytes_len` has
+            // size `bytes_len.get()` bytes. Therefore, a `&T` with metadata
+            // `elems` has size not larger than `isize::MAX`.
+            let elems = meta.unwrap_or(elems);
+
+            // SAFETY: See Lemma 2.
+            let elems = unsafe { MetadataOf::new_unchecked(elems) };
+
+            // SAFETY: Let `size` be the size of a `&T` with metadata `elems`.
+            // By post-condition on `validate_cast_and_convert_metadata`, one of
+            // the following conditions holds:
+            // - `split_at == size`, in which case, by Lemma 2, `split_at <=
+            //   isize::MAX`. Since `size_of::<u8>() == 1`, a `[u8]` with
+            //   `split_at` elems has size not larger than `isize::MAX`.
+            // - `split_at == bytes_len - size`. Since `bytes_len:
+            //   MetadataOf<u8>`, and since `size` is non-negative, `split_at`
+            //   addresses no more bytes than `bytes_len` does. Since
+            //   `bytes_len: MetadataOf<u8>`, `bytes_len` describes a `[u8]`
+            //   which has no more than `isize::MAX` bytes, and thus so does
+            //   `split_at`.
+            let split_at = unsafe { MetadataOf::<[u8]>::new_unchecked(split_at) };
+            Ok((elems, split_at))
+        }
+    }
+}
+
+pub(crate) use len_of::MetadataOf;
+
 /// Since we support multiple versions of Rust, there are often features which
 /// have been stabilized in the most recent stable release which do not yet
 /// exist (stably) on our MSRV. This module provides polyfills for those
 /// features so that we can write more "modern" code, and just remove the
 /// polyfill once our MSRV supports the corresponding feature. Without this,
-/// we'd have to write worse/more verbose code and leave TODO comments sprinkled
+/// we'd have to write worse/more verbose code and leave FIXME comments sprinkled
 /// throughout the codebase to update to the new pattern once it's stabilized.
 ///
 /// Each trait is imported as `_` at the crate root; each polyfill should "just
@@ -842,7 +599,7 @@ pub(crate) mod polyfills {
     // toolchain versions, `ptr.slice_from_raw_parts()` resolves to the inherent
     // method rather than to this trait, and so this trait is considered unused.
     //
-    // TODO(#67): Once our MSRV is 1.70, remove this.
+    // FIXME(#67): Once our MSRV is 1.70, remove this.
     #[allow(unused)]
     pub(crate) trait NonNullExt<T> {
         fn slice_from_raw_parts(data: Self, len: usize) -> NonNull<[T]>;
@@ -871,7 +628,7 @@ pub(crate) mod polyfills {
     // toolchain versions, `ptr.slice_from_raw_parts()` resolves to the inherent
     // method rather than to this trait, and so this trait is considered unused.
     //
-    // TODO(#67): Once our MSRV is high enough, remove this.
+    // FIXME(#67): Once our MSRV is high enough, remove this.
     #[allow(unused)]
     pub(crate) trait NumExt {
         /// Subtract without checking for underflow.
@@ -880,6 +637,20 @@ pub(crate) mod polyfills {
         ///
         /// The caller promises that the subtraction will not underflow.
         unsafe fn unchecked_sub(self, rhs: Self) -> Self;
+
+        /// Add without checking for overflow.
+        ///
+        /// # Safety
+        ///
+        /// The caller promises that the addition will not overflow.
+        unsafe fn unchecked_add(self, rhs: Self) -> Self;
+
+        /// Multiply without checking for overflow.
+        ///
+        /// # Safety
+        ///
+        /// The caller promises that the multiplication will not overflow.
+        unsafe fn unchecked_mul(self, rhs: Self) -> Self;
     }
 
     impl NumExt for usize {
@@ -897,6 +668,44 @@ pub(crate) mod polyfills {
                 None => {
                     // SAFETY: The caller promises that the subtraction will not
                     // underflow.
+                    unsafe { core::hint::unreachable_unchecked() }
+                }
+            }
+        }
+
+        // NOTE on coverage: this will never be tested in nightly since it's a
+        // polyfill for a feature which has been stabilized on our nightly
+        // toolchain.
+        #[cfg_attr(
+            all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
+            coverage(off)
+        )]
+        #[inline(always)]
+        unsafe fn unchecked_add(self, rhs: usize) -> usize {
+            match self.checked_add(rhs) {
+                Some(x) => x,
+                None => {
+                    // SAFETY: The caller promises that the addition will not
+                    // overflow.
+                    unsafe { core::hint::unreachable_unchecked() }
+                }
+            }
+        }
+
+        // NOTE on coverage: this will never be tested in nightly since it's a
+        // polyfill for a feature which has been stabilized on our nightly
+        // toolchain.
+        #[cfg_attr(
+            all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
+            coverage(off)
+        )]
+        #[inline(always)]
+        unsafe fn unchecked_mul(self, rhs: usize) -> usize {
+            match self.checked_mul(rhs) {
+                Some(x) => x,
+                None => {
+                    // SAFETY: The caller promises that the multiplication will
+                    // not overflow.
                     unsafe { core::hint::unreachable_unchecked() }
                 }
             }
@@ -1022,55 +831,5 @@ mod tests {
     #[should_panic]
     fn test_round_down_to_next_multiple_of_alignment_zerocopy_panic_in_const_and_vec_try_reserve() {
         round_down_to_next_multiple_of_alignment(0, NonZeroUsize::new(3).unwrap());
-    }
-}
-
-#[cfg(kani)]
-mod proofs {
-    use super::*;
-
-    #[kani::proof]
-    fn prove_round_down_to_next_multiple_of_alignment() {
-        fn model_impl(n: usize, align: NonZeroUsize) -> usize {
-            assert!(align.get().is_power_of_two());
-            let mul = n / align.get();
-            mul * align.get()
-        }
-
-        let align: NonZeroUsize = kani::any();
-        kani::assume(align.get().is_power_of_two());
-        let n: usize = kani::any();
-
-        let expected = model_impl(n, align);
-        let actual = round_down_to_next_multiple_of_alignment(n, align);
-        assert_eq!(expected, actual, "round_down_to_next_multiple_of_alignment({}, {})", n, align);
-    }
-
-    // Restricted to nightly since we use the unstable `usize::next_multiple_of`
-    // in our model implementation.
-    #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
-    #[kani::proof]
-    fn prove_padding_needed_for() {
-        fn model_impl(len: usize, align: NonZeroUsize) -> usize {
-            let padded = len.next_multiple_of(align.get());
-            let padding = padded - len;
-            padding
-        }
-
-        let align: NonZeroUsize = kani::any();
-        kani::assume(align.get().is_power_of_two());
-        let len: usize = kani::any();
-        // Constrain `len` to valid Rust lengths, since our model implementation
-        // isn't robust to overflow.
-        kani::assume(len <= isize::MAX as usize);
-        kani::assume(align.get() < 1 << 29);
-
-        let expected = model_impl(len, align);
-        let actual = padding_needed_for(len, align);
-        assert_eq!(expected, actual, "padding_needed_for({}, {})", len, align);
-
-        let padded_len = actual + len;
-        assert_eq!(padded_len % align, 0);
-        assert!(padded_len / align >= len / align);
     }
 }

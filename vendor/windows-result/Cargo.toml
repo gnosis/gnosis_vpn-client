@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.74"
 name = "windows-result"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Microsoft"]
 build = false
 autolib = false
@@ -40,7 +40,8 @@ name = "windows_result"
 path = "src/lib.rs"
 
 [dependencies.windows-link]
-version = "0.1.0"
+version = "0.1.1"
+default-features = false
 
 [lints.rust]
 missing_docs = "warn"

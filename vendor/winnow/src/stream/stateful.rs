@@ -137,8 +137,18 @@ impl<I: Stream, S: crate::lib::std::fmt::Debug> Stream for Stateful<I, S> {
         self.input.next_slice(offset)
     }
     #[inline(always)]
+    unsafe fn next_slice_unchecked(&mut self, offset: usize) -> Self::Slice {
+        // SAFETY: Passing up invariants
+        unsafe { self.input.next_slice_unchecked(offset) }
+    }
+    #[inline(always)]
     fn peek_slice(&self, offset: usize) -> Self::Slice {
         self.input.peek_slice(offset)
+    }
+    #[inline(always)]
+    unsafe fn peek_slice_unchecked(&self, offset: usize) -> Self::Slice {
+        // SAFETY: Passing up invariants
+        unsafe { self.input.peek_slice_unchecked(offset) }
     }
 
     #[inline(always)]
@@ -152,7 +162,7 @@ impl<I: Stream, S: crate::lib::std::fmt::Debug> Stream for Stateful<I, S> {
 
     #[inline(always)]
     fn raw(&self) -> &dyn crate::lib::std::fmt::Debug {
-        &self.input
+        self.input.raw()
     }
 }
 

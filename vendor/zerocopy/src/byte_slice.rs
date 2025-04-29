@@ -194,15 +194,15 @@ pub unsafe trait IntoByteSliceMut<'a>: IntoByteSlice<'a> + ByteSliceMut {
     fn into_byte_slice_mut(self) -> &'a mut [u8];
 }
 
-// TODO(#429): Add a "SAFETY" comment and remove this `allow`.
+// FIXME(#429): Add a "SAFETY" comment and remove this `allow`.
 #[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl ByteSlice for &[u8] {}
 
-// TODO(#429): Add a "SAFETY" comment and remove this `allow`.
+// FIXME(#429): Add a "SAFETY" comment and remove this `allow`.
 #[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl CopyableByteSlice for &[u8] {}
 
-// TODO(#429): Add a "SAFETY" comment and remove this `allow`.
+// FIXME(#429): Add a "SAFETY" comment and remove this `allow`.
 #[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl CloneableByteSlice for &[u8] {}
 
@@ -229,7 +229,7 @@ unsafe impl<'a> IntoByteSlice<'a> for &'a [u8] {
     }
 }
 
-// TODO(#429): Add a "SAFETY" comment and remove this `allow`.
+// FIXME(#429): Add a "SAFETY" comment and remove this `allow`.
 #[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl ByteSlice for &mut [u8] {}
 
@@ -254,8 +254,8 @@ unsafe impl SplitByteSlice for &mut [u8] {
         // SAFETY: By contract on caller, `mid` is not greater than
         // `self.len()`.
         //
-        // TODO(#67): Remove this allow. See NumExt for more details.
-        #[allow(unstable_name_collisions, clippy::incompatible_msrv)]
+        // FIXME(#67): Remove this allow. See NumExt for more details.
+        #[allow(unstable_name_collisions)]
         let r_len = unsafe { self.len().unchecked_sub(mid) };
 
         // SAFETY: These invocations of `from_raw_parts_mut` satisfy its
@@ -314,7 +314,7 @@ unsafe impl<'a> IntoByteSliceMut<'a> for &'a mut [u8] {
     }
 }
 
-// TODO(#429): Add a "SAFETY" comment and remove this `allow`.
+// FIXME(#429): Add a "SAFETY" comment and remove this `allow`.
 #[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl ByteSlice for cell::Ref<'_, [u8]> {}
 
@@ -334,7 +334,7 @@ unsafe impl SplitByteSlice for cell::Ref<'_, [u8]> {
     }
 }
 
-// TODO(#429): Add a "SAFETY" comment and remove this `allow`.
+// FIXME(#429): Add a "SAFETY" comment and remove this `allow`.
 #[allow(clippy::undocumented_unsafe_blocks)]
 unsafe impl ByteSlice for cell::RefMut<'_, [u8]> {}
 
@@ -351,5 +351,48 @@ unsafe impl SplitByteSlice for cell::RefMut<'_, [u8]> {
             unsafe {
                 SplitByteSlice::split_at_unchecked(slice, mid)
             })
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    fn any_vec() -> Vec<u8> {
+        let len = kani::any();
+        kani::assume(len <= isize::MAX as usize);
+        vec![0u8; len]
+    }
+
+    #[kani::proof]
+    fn prove_split_at_unchecked() {
+        let v = any_vec();
+        let slc = v.as_slice();
+        let mid = kani::any();
+        kani::assume(mid <= slc.len());
+        let (l, r) = unsafe { slc.split_at_unchecked(mid) };
+        assert_eq!(l.len() + r.len(), slc.len());
+
+        let slc: *const _ = slc;
+        let l: *const _ = l;
+        let r: *const _ = r;
+
+        assert_eq!(slc.cast::<u8>(), l.cast::<u8>());
+        assert_eq!(unsafe { slc.cast::<u8>().add(mid) }, r.cast::<u8>());
+
+        let mut v = any_vec();
+        let slc = v.as_mut_slice();
+        let len = slc.len();
+        let mid = kani::any();
+        kani::assume(mid <= slc.len());
+        let (l, r) = unsafe { slc.split_at_unchecked(mid) };
+        assert_eq!(l.len() + r.len(), len);
+
+        let l: *mut _ = l;
+        let r: *mut _ = r;
+        let slc: *mut _ = slc;
+
+        assert_eq!(slc.cast::<u8>(), l.cast::<u8>());
+        assert_eq!(unsafe { slc.cast::<u8>().add(mid) }, r.cast::<u8>());
     }
 }

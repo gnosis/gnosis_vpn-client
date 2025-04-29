@@ -13,9 +13,10 @@
 edition = "2021"
 rust-version = "1.70"
 name = "tokio-util"
-version = "0.7.14"
+version = "0.7.15"
 authors = ["Tokio Contributors <team@tokio.rs>"]
 build = false
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -46,6 +47,37 @@ rustdoc-args = [
 
 [package.metadata.playground]
 features = ["full"]
+
+[features]
+__docs_rs = ["futures-util"]
+codec = []
+compat = ["futures-io"]
+default = []
+full = [
+    "codec",
+    "compat",
+    "io-util",
+    "time",
+    "net",
+    "rt",
+]
+io = []
+io-util = [
+    "io",
+    "tokio/rt",
+    "tokio/io-util",
+]
+net = ["tokio/net"]
+rt = [
+    "tokio/rt",
+    "tokio/sync",
+    "futures-util",
+    "hashbrown",
+]
+time = [
+    "tokio/time",
+    "slab",
+]
 
 [lib]
 name = "tokio_util"
@@ -210,39 +242,9 @@ version = "0.1"
 [dev-dependencies.tokio-test]
 version = "0.4.0"
 
-[features]
-__docs_rs = ["futures-util"]
-codec = []
-compat = ["futures-io"]
-default = []
-full = [
-    "codec",
-    "compat",
-    "io-util",
-    "time",
-    "net",
-    "rt",
-]
-io = []
-io-util = [
-    "io",
-    "tokio/rt",
-    "tokio/io-util",
-]
-net = ["tokio/net"]
-rt = [
-    "tokio/rt",
-    "tokio/sync",
-    "futures-util",
-    "hashbrown",
-]
-time = [
-    "tokio/time",
-    "slab",
-]
-
 [target."cfg(tokio_unstable)".dependencies.hashbrown]
-version = "0.14.0"
+version = "0.15.0"
+features = ["raw-entry"]
 optional = true
 default-features = false
 

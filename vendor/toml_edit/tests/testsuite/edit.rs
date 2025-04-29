@@ -1026,3 +1026,242 @@ name = "test.swf"
 "#]]
     );
 }
+
+#[test]
+fn table_into_inline() {
+    let toml = r#"
+[table]
+string = "value"
+array = [1, 2, 3]
+inline = { "1" = 1, "2" = 2 }
+
+[table.child]
+other = "world"
+"#;
+    let mut doc = toml.parse::<DocumentMut>().unwrap();
+
+    doc.get_mut("table").unwrap().make_value();
+
+    let actual = doc.to_string();
+    // `table=` is because we didn't re-format the table key, only the value
+    assert_data_eq!(actual, str![[r#"
+table= { string = "value", array = [1, 2, 3], inline = { "1" = 1, "2" = 2 }, child = { other = "world" } }
+
+"#]].raw());
+}
+
+#[test]
+fn inline_table_to_table() {
+    let toml = r#"table = { string = "value", array = [1, 2, 3], inline = { "1" = 1, "2" = 2 }, child = { other = "world" } }
+"#;
+    let mut doc = toml.parse::<DocumentMut>().unwrap();
+
+    let t = doc.remove("table").unwrap();
+    let t = match t {
+        Item::Value(Value::InlineTable(t)) => t,
+        _ => unreachable!("Unexpected {:?}", t),
+    };
+    let t = t.into_table();
+    doc.insert("table", Item::Table(t));
+
+    let actual = doc.to_string();
+    assert_data_eq!(
+        actual,
+        str![[r#"
+[table]
+string = "value"
+array = [1, 2, 3]
+inline = { "1" = 1, "2" = 2 }
+child = { other = "world" }
+
+"#]]
+        .raw()
+    );
+}
+
+#[test]
+fn array_of_tables_to_array() {
+    let toml = r#"
+[[table]]
+string = "value"
+array = [1, 2, 3]
+inline = { "1" = 1, "2" = 2 }
+
+[table.child]
+other = "world"
+
+[[table]]
+string = "value"
+array = [1, 2, 3]
+inline = { "1" = 1, "2" = 2 }
+
+[table.child]
+other = "world"
+"#;
+    let mut doc = toml.parse::<DocumentMut>().unwrap();
+
+    doc.get_mut("table").unwrap().make_value();
+
+    let actual = doc.to_string();
+    // `table=` is because we didn't re-format the table key, only the value
+    assert_data_eq!(actual, str![[r#"
+table= [{ string = "value", array = [1, 2, 3], inline = { "1" = 1, "2" = 2 }, child = { other = "world" } }, { string = "value", array = [1, 2, 3], inline = { "1" = 1, "2" = 2 }, child = { other = "world" } }]
+
+"#]].raw());
+}
+
+#[test]
+fn test_key_from_str() {
+    macro_rules! test_key {
+        ($s:expr, $expected:expr) => {{
+            let key = $s.parse::<Key>();
+            match key {
+                Ok(key) => assert_eq!($expected, key.get(), ""),
+                Err(err) => panic!("failed with {err}"),
+            }
+        }};
+    }
+
+    test_key!("a", "a");
+    test_key!(r#"'hello key'"#, "hello key");
+    test_key!(
+        r#""Jos\u00E9\U000A0000\n\t\r\f\b\"""#,
+        "Jos\u{00E9}\u{A0000}\n\t\r\u{c}\u{8}\""
+    );
+    test_key!("\"\"", "");
+    test_key!("\"'hello key'bla\"", "'hello key'bla");
+    test_key!(
+        "'C:\\Users\\appveyor\\AppData\\Local\\Temp\\1\\cargo-edit-test.YizxPxxElXn9'",
+        "C:\\Users\\appveyor\\AppData\\Local\\Temp\\1\\cargo-edit-test.YizxPxxElXn9"
+    );
+}
+
+#[test]
+fn despan_keys() {
+    let mut doc = r#"aaaaaa = 1"#.parse::<DocumentMut>().unwrap();
+    let key = "bbb".parse::<Key>().unwrap();
+    let table = doc.as_table_mut();
+    table.insert_formatted(
+        &key,
+        Item::Value(Value::Integer(toml_edit::Formatted::new(2))),
+    );
+
+    assert_eq!(doc.to_string(), "aaaaaa = 1\nbbb = 2\n");
+}
+
+#[test]
+fn key_repr_roundtrip() {
+    assert_key_repr_roundtrip(r#""""#, str![[r#""""#]]);
+    assert_key_repr_roundtrip(r#""a""#, str![[r#""a""#]]);
+
+    assert_key_repr_roundtrip(r#""tab \t tab""#, str![[r#""tab \t tab""#]]);
+    assert_key_repr_roundtrip(r#""lf \n lf""#, str![[r#""lf \n lf""#]]);
+    assert_key_repr_roundtrip(r#""crlf \r\n crlf""#, str![[r#""crlf \r\n crlf""#]]);
+    assert_key_repr_roundtrip(r#""bell \b bell""#, str![[r#""bell \b bell""#]]);
+    assert_key_repr_roundtrip(r#""feed \f feed""#, str![[r#""feed \f feed""#]]);
+    assert_key_repr_roundtrip(
+        r#""backslash \\ backslash""#,
+        str![[r#""backslash \\ backslash""#]],
+    );
+
+    assert_key_repr_roundtrip(r#""squote ' squote""#, str![[r#""squote ' squote""#]]);
+    assert_key_repr_roundtrip(
+        r#""triple squote ''' triple squote""#,
+        str![[r#""triple squote ''' triple squote""#]],
+    );
+    assert_key_repr_roundtrip(r#""end squote '""#, str![[r#""end squote '""#]]);
+
+    assert_key_repr_roundtrip(r#""quote \" quote""#, str![[r#""quote \" quote""#]]);
+    assert_key_repr_roundtrip(
+        r#""triple quote \"\"\" triple quote""#,
+        str![[r#""triple quote \"\"\" triple quote""#]],
+    );
+    assert_key_repr_roundtrip(r#""end quote \"""#, str![[r#""end quote \"""#]]);
+    assert_key_repr_roundtrip(
+        r#""quoted \"content\" quoted""#,
+        str![[r#""quoted \"content\" quoted""#]],
+    );
+    assert_key_repr_roundtrip(
+        r#""squoted 'content' squoted""#,
+        str![[r#""squoted 'content' squoted""#]],
+    );
+    assert_key_repr_roundtrip(
+        r#""mixed quoted \"start\" 'end'' mixed quote""#,
+        str![[r#""mixed quoted \"start\" 'end'' mixed quote""#]],
+    );
+}
+
+#[track_caller]
+fn assert_key_repr_roundtrip(input: &str, expected: impl IntoData) {
+    let value: Key = input.parse().unwrap();
+    let actual = value.to_string();
+    let _: Key = actual.parse().unwrap_or_else(|_err| {
+        panic!(
+            "invalid `Key`:
+```
+{actual}
+```
+"
+        )
+    });
+    assert_data_eq!(actual, expected.raw());
+}
+
+#[test]
+fn key_value_roundtrip() {
+    assert_key_value_roundtrip(r#""""#, str![[r#""""#]]);
+    assert_key_value_roundtrip(r#""a""#, str!["a"]);
+
+    assert_key_value_roundtrip(r#""tab \t tab""#, str![[r#""tab \t tab""#]]);
+    assert_key_value_roundtrip(r#""lf \n lf""#, str![[r#""lf \n lf""#]]);
+    assert_key_value_roundtrip(r#""crlf \r\n crlf""#, str![[r#""crlf \r\n crlf""#]]);
+    assert_key_value_roundtrip(r#""bell \b bell""#, str![[r#""bell \b bell""#]]);
+    assert_key_value_roundtrip(r#""feed \f feed""#, str![[r#""feed \f feed""#]]);
+    assert_key_value_roundtrip(
+        r#""backslash \\ backslash""#,
+        str![[r#"'backslash \ backslash'"#]],
+    );
+
+    assert_key_value_roundtrip(r#""squote ' squote""#, str![[r#""squote ' squote""#]]);
+    assert_key_value_roundtrip(
+        r#""triple squote ''' triple squote""#,
+        str![[r#""triple squote ''' triple squote""#]],
+    );
+    assert_key_value_roundtrip(r#""end squote '""#, str![[r#""end squote '""#]]);
+
+    assert_key_value_roundtrip(r#""quote \" quote""#, str![[r#"'quote " quote'"#]]);
+    assert_key_value_roundtrip(
+        r#""triple quote \"\"\" triple quote""#,
+        str![[r#"'triple quote """ triple quote'"#]],
+    );
+    assert_key_value_roundtrip(r#""end quote \"""#, str![[r#"'end quote "'"#]]);
+    assert_key_value_roundtrip(
+        r#""quoted \"content\" quoted""#,
+        str![[r#"'quoted "content" quoted'"#]],
+    );
+    assert_key_value_roundtrip(
+        r#""squoted 'content' squoted""#,
+        str![[r#""squoted 'content' squoted""#]],
+    );
+    assert_key_value_roundtrip(
+        r#""mixed quoted \"start\" 'end'' mixed quote""#,
+        str![[r#""mixed quoted \"start\" 'end'' mixed quote""#]],
+    );
+}
+
+#[track_caller]
+fn assert_key_value_roundtrip(input: &str, expected: impl IntoData) {
+    let value: Key = input.parse().unwrap();
+    let value = Key::new(value.get()); // Remove repr
+    let actual = value.to_string();
+    let _: Key = actual.parse().unwrap_or_else(|_err| {
+        panic!(
+            "invalid `Key`:
+```
+{actual}
+```
+"
+        )
+    });
+    assert_data_eq!(actual, expected.raw());
+}
