@@ -74,6 +74,8 @@ const DEFAULT_NO_ARGS_TEMPLATE: &str = "\
 {usage-heading} {usage}{after-help}\
     ";
 
+const SHORT_SIZE: usize = 4; // See `fn short` for the 4
+
 /// Help template writer
 ///
 /// Wraps a writer stream providing different methods to generate help for `clap` objects.
@@ -478,7 +480,13 @@ impl HelpTemplate<'_, '_> {
             should_show_arg(self.use_long, arg)
         }) {
             if longest_filter(arg) {
-                longest = longest.max(display_width(&arg.to_string()));
+                let width = display_width(&arg.to_string());
+                let actual_width = if arg.is_positional() {
+                    width
+                } else {
+                    width + SHORT_SIZE
+                };
+                longest = longest.max(actual_width);
                 debug!(
                     "HelpTemplate::write_args: arg={:?} longest={}",
                     arg.get_id(),
@@ -567,7 +575,7 @@ impl HelpTemplate<'_, '_> {
             debug!("HelpTemplate::align_to_about: printing long help so skip alignment");
             0
         } else if !arg.is_positional() {
-            let self_len = display_width(&arg.to_string());
+            let self_len = display_width(&arg.to_string()) + SHORT_SIZE;
             // Since we're writing spaces from the tab point we first need to know if we
             // had a long and short, or just short
             let padding = if arg.get_long().is_some() {
@@ -620,10 +628,8 @@ impl HelpTemplate<'_, '_> {
 
         let spaces = if next_line_help {
             TAB.len() + NEXT_LINE_INDENT.len()
-        } else if arg.map(|a| a.is_positional()).unwrap_or(true) {
-            longest + TAB_WIDTH * 2
         } else {
-            longest + TAB_WIDTH * 2 + 4 // See `fn short` for the 4
+            longest + TAB_WIDTH * 2
         };
         let trailing_indent = spaces; // Don't indent any further than the first line is indented
         let trailing_indent = self.get_spaces(trailing_indent);
@@ -724,11 +730,7 @@ impl HelpTemplate<'_, '_> {
                 .or_else(|| arg.get_long_help())
                 .unwrap_or_default();
             let h_w = h.display_width() + display_width(spec_vals);
-            let taken = if arg.is_positional() {
-                longest + TAB_WIDTH * 2
-            } else {
-                longest + TAB_WIDTH * 2 + 4 // See `fn short` for the 4
-            };
+            let taken = longest + TAB_WIDTH * 2;
             self.term_w >= taken
                 && (taken as f32 / self.term_w as f32) > 0.40
                 && h_w > (self.term_w - taken)
@@ -880,9 +882,17 @@ impl HelpTemplate<'_, '_> {
                 .or_else(|| subcommand.get_long_about())
                 .unwrap_or_default();
 
-            let _ = write!(self.writer, "{header}{heading}:{header:#}\n",);
+            let _ = write!(self.writer, "{header}{heading}:{header:#}",);
             if !about.is_empty() {
-                let _ = write!(self.writer, "{about}\n",);
+                let _ = write!(self.writer, "\n{about}",);
+            }
+
+            let args = subcommand
+                .get_arguments()
+                .filter(|arg| should_show_arg(self.use_long, arg) && !arg.is_global_set())
+                .collect::<Vec<_>>();
+            if !args.is_empty() {
+                self.writer.push_str("\n");
             }
 
             let mut sub_help = HelpTemplate {
@@ -894,10 +904,6 @@ impl HelpTemplate<'_, '_> {
                 term_w: self.term_w,
                 use_long: self.use_long,
             };
-            let args = subcommand
-                .get_arguments()
-                .filter(|arg| should_show_arg(self.use_long, arg) && !arg.is_global_set())
-                .collect::<Vec<_>>();
             sub_help.write_args(&args, heading, option_sort_key);
             if subcommand.is_flatten_help_set() {
                 sub_help.write_flat_subcommands(subcommand, first);

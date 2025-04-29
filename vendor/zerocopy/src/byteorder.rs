@@ -489,19 +489,19 @@ example of how it can be used for parsing UDP packets.
         #[cfg(not(any(feature = "derive", test)))]
         impl_known_layout!(O => $name<O>);
 
-        safety_comment! {
-            /// SAFETY:
-            /// `$name<O>` is `repr(transparent)`, and so it has the same layout
-            /// as its only non-zero field, which is a `u8` array. `u8` arrays
-            /// are `Immutable`, `TryFromBytes`, `FromZeros`, `FromBytes`,
-            /// `IntoBytes`, and `Unaligned`.
+        #[allow(unused_unsafe)] // Unused when `feature = "derive"`.
+        // SAFETY: `$name<O>` is `repr(transparent)`, and so it has the same
+        // layout as its only non-zero field, which is a `u8` array. `u8` arrays
+        // are `Immutable`, `TryFromBytes`, `FromZeros`, `FromBytes`,
+        // `IntoBytes`, and `Unaligned`.
+        const _: () = unsafe {
             impl_or_verify!(O => Immutable for $name<O>);
             impl_or_verify!(O => TryFromBytes for $name<O>);
             impl_or_verify!(O => FromZeros for $name<O>);
             impl_or_verify!(O => FromBytes for $name<O>);
             impl_or_verify!(O => IntoBytes for $name<O>);
             impl_or_verify!(O => Unaligned for $name<O>);
-        }
+        };
 
         impl<O> Default for $name<O> {
             #[inline(always)]
@@ -868,7 +868,7 @@ define_type!(
     []
 );
 
-// TODO(https://github.com/rust-lang/rust/issues/72447): Use the endianness
+// FIXME(https://github.com/rust-lang/rust/issues/72447): Use the endianness
 // conversion methods directly once those are const-stable.
 macro_rules! define_float_conversion {
     ($ty:ty, $bits:ident, $bytes:expr, $mod:ident) => {

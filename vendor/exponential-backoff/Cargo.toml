@@ -12,9 +12,10 @@
 [package]
 edition = "2021"
 name = "exponential-backoff"
-version = "2.0.0"
+version = "2.1.0"
 authors = ["Yoshua Wuyts <yoshuawuyts@gmail.com>"]
 build = false
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false

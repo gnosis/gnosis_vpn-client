@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.66"
 name = "toml_edit"
-version = "0.22.24"
+version = "0.22.26"
 authors = [
     "Andronik Ordian <write@reusable.software>",
     "Ed Page <eopage@gmail.com>",
@@ -100,7 +100,7 @@ default = [
     "parse",
     "display",
 ]
-display = []
+display = ["dep:toml_write"]
 parse = ["dep:winnow"]
 perf = ["dep:kstring"]
 serde = [
@@ -124,10 +124,21 @@ required-features = [
 ]
 
 [[test]]
+name = "compliance"
+path = "tests/compliance/main.rs"
+required-features = [
+    "parse",
+    "display",
+]
+
+[[test]]
 name = "decoder_compliance"
 path = "tests/decoder_compliance.rs"
 harness = false
-required-features = ["parse"]
+required-features = [
+    "parse",
+    "display",
+]
 
 [[test]]
 name = "encoder_compliance"
@@ -139,12 +150,12 @@ required-features = [
 ]
 
 [[test]]
-name = "invalid"
-path = "tests/invalid.rs"
-harness = false
+name = "serde"
+path = "tests/serde/main.rs"
 required-features = [
     "parse",
     "display",
+    "serde",
 ]
 
 [[test]]
@@ -174,17 +185,22 @@ features = ["serde"]
 optional = true
 
 [dependencies.toml_datetime]
-version = "0.6.8"
+version = "0.6.9"
 
-[dependencies.winnow]
-version = "0.7.0"
+[dependencies.toml_write]
+version = "0.1.1"
 optional = true
 
-[dev-dependencies.libtest-mimic]
-version = "0.7.2"
+[dependencies.winnow]
+version = "0.7.6"
+optional = true
 
 [dev-dependencies.proptest]
 version = "1.5.0"
+
+[dev-dependencies.serde]
+version = "1.0.199"
+features = ["derive"]
 
 [dev-dependencies.serde_json]
 version = "1.0.116"
@@ -193,10 +209,14 @@ version = "1.0.116"
 version = "0.6.0"
 
 [dev-dependencies.toml-test-data]
-version = "1.11.0"
+version = "2.3.0"
 
 [dev-dependencies.toml-test-harness]
-version = "0.4.8"
+version = "1.3.0"
+features = ["snapshot"]
+
+[dev-dependencies.walkdir]
+version = "2.5.0"
 
 [lints.clippy]
 bool_assert_comparison = "allow"

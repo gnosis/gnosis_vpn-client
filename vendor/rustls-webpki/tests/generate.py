@@ -286,6 +286,16 @@ def generate_tls_server_cert_test(
 
     valid_names_str: str = ", ".join('"' + name + '"' for name in valid_names)
     invalid_names_str: str = ", ".join('"' + name + '"' for name in invalid_names)
+    presented_names_str: str = ""
+    for san in sans if sans is not None else []:
+        if presented_names_str:
+            presented_names_str += ", "
+        if isinstance(san, x509.DNSName):
+            presented_names_str += f'"DnsName(\\"{san.value}\\")"'
+        elif isinstance(san, x509.IPAddress):
+            presented_names_str += f'"IpAddress({san.value})"'
+
+    ip_addr_sans = all(isinstance(san, x509.IPAddress) for san in (sans or []))
 
     print(
         """
@@ -294,7 +304,7 @@ fn %(test_name)s() {
     let ee = include_bytes!("%(ee_cert_path)s");
     let ca = include_bytes!("%(ca_cert_path)s");
     assert_eq!(
-        check_cert(ee, ca, &[%(valid_names_str)s], &[%(invalid_names_str)s]),
+        check_cert(ee, ca, &[%(valid_names_str)s], &[%(invalid_names_str)s], &[%(presented_names_str)s]),
         %(expected)s
     );
 }"""
@@ -561,9 +571,9 @@ def signatures(force: bool) -> None:
     }
 
     feature_gates = {
-        "ECDSA_P521_SHA256": 'all(not(feature = "ring"), feature = "aws_lc_rs")',
-        "ECDSA_P521_SHA384": 'all(not(feature = "ring"), feature = "aws_lc_rs")',
-        "ECDSA_P521_SHA512": 'all(not(feature = "ring"), feature = "aws_lc_rs")',
+        "ECDSA_P521_SHA256": 'all(not(feature = "ring"), feature = "aws-lc-rs")',
+        "ECDSA_P521_SHA384": 'all(not(feature = "ring"), feature = "aws-lc-rs")',
+        "ECDSA_P521_SHA512": 'all(not(feature = "ring"), feature = "aws-lc-rs")',
     }
 
     rsa_types: list[str] = [
@@ -2236,6 +2246,12 @@ def client_auth_revocation(force: bool) -> None:
         )
 
         # Providing a CRL that's expired should error if the expiration policy is set to enforce.
+        expected_error = """
+        CrlExpired {
+          time: UnixTime::since_unix_epoch(Duration::from_secs(0x1fed_f00d)),
+          next_update: UnixTime::since_unix_epoch(Duration::from_secs(0x1fed_f00d - 10)),
+        }
+        """
         _revocation_test(
             test_name=test_name,
             chain=no_ku_chain,
@@ -2243,7 +2259,7 @@ def client_auth_revocation(force: bool) -> None:
             depth=ChainDepth.CHAIN,
             policy=StatusRequirement.ALLOW_UNKNOWN,
             expiration=ExpirationPolicy.ENFORCE,
-            expected_error="CrlExpired",
+            expected_error=expected_error,
         )
 
     with trim_top("client_auth_revocation.rs") as output:

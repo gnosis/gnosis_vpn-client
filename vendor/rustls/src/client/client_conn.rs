@@ -7,6 +7,8 @@ use pki_types::{ServerName, UnixTime};
 
 use super::handy::NoClientSessionStorage;
 use super::hs;
+#[cfg(feature = "std")]
+use crate::WantsVerifier;
 use crate::builder::ConfigBuilder;
 use crate::client::{EchMode, EchStatus};
 use crate::common_state::{CommonState, Protocol, Side};
@@ -18,17 +20,15 @@ use crate::log::trace;
 use crate::msgs::enums::NamedGroup;
 use crate::msgs::handshake::ClientExtension;
 use crate::msgs::persist;
-use crate::suites::SupportedCipherSuite;
+use crate::suites::{ExtractedSecrets, SupportedCipherSuite};
 use crate::sync::Arc;
 #[cfg(feature = "std")]
 use crate::time_provider::DefaultTimeProvider;
 use crate::time_provider::TimeProvider;
 use crate::unbuffered::{EncryptError, TransmitTlsData};
-#[cfg(feature = "std")]
-use crate::WantsVerifier;
-use crate::{compress, sign, verify, versions, KeyLog, WantsVersions};
 #[cfg(doc)]
-use crate::{crypto, DistinguishedName};
+use crate::{DistinguishedName, crypto};
+use crate::{KeyLog, WantsVersions, compress, sign, verify, versions};
 
 /// A trait for the ability to store client session data, so that sessions
 /// can be resumed in future connections.
@@ -166,6 +166,22 @@ pub struct ClientConfig {
     pub alpn_protocols: Vec<Vec<u8>>,
 
     /// How and when the client can resume a previous session.
+    ///
+    /// # Sharing `resumption` between `ClientConfig`s
+    /// In a program using many `ClientConfig`s it may improve resumption rates
+    /// (which has a significant impact on connection performance) if those
+    /// configs share a single `Resumption`.
+    ///
+    /// However, resumption is only allowed between two `ClientConfig`s if their
+    /// `client_auth_cert_resolver` (ie, potential client authentication credentials)
+    /// and `verifier` (ie, server certificate verification settings) are
+    /// the same (according to `Arc::ptr_eq`).
+    ///
+    /// To illustrate, imagine two `ClientConfig`s `A` and `B`.  `A` fully validates
+    /// the server certificate, `B` does not.  If `A` and `B` shared a resumption store,
+    /// it would be possible for a session originated by `B` to be inserted into the
+    /// store, and then resumed by `A`.  This would give a false impression to the user
+    /// of `A` that the server certificate is fully validated.
     pub resumption: Resumption,
 
     /// The maximum size of plaintext input to be emitted in a single TLS record.
@@ -511,8 +527,8 @@ pub enum Tls12Resumption {
 
 /// Container for unsafe APIs
 pub(super) mod danger {
-    use super::verify::ServerCertVerifier;
     use super::ClientConfig;
+    use super::verify::ServerCertVerifier;
     use crate::sync::Arc;
 
     /// Accessor for dangerous configuration options.
@@ -618,13 +634,13 @@ mod connection {
     use pki_types::ServerName;
 
     use super::ClientConnectionData;
+    use crate::ClientConfig;
     use crate::client::EchStatus;
     use crate::common_state::Protocol;
     use crate::conn::{ConnectionCommon, ConnectionCore};
     use crate::error::Error;
     use crate::suites::ExtractedSecrets;
     use crate::sync::Arc;
-    use crate::ClientConfig;
 
     /// Stub that implements io::Write and dispatches to `write_early_data`.
     pub struct WriteEarlyData<'a> {
@@ -846,6 +862,12 @@ impl UnbufferedClientConnection {
         Ok(Self {
             inner: ConnectionCore::for_client(config, name, Vec::new(), Protocol::Tcp)?.into(),
         })
+    }
+
+    /// Extract secrets, so they can be used when configuring kTLS, for example.
+    /// Should be used with care as it exposes secret key material.
+    pub fn dangerous_extract_secrets(self) -> Result<ExtractedSecrets, Error> {
+        self.inner.dangerous_extract_secrets()
     }
 }
 

@@ -27,9 +27,9 @@ use crate::msgs::handshake::{
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
 use crate::server::common::ActiveCertifiedKey;
-use crate::server::{tls13, ClientHello, ServerConfig};
+use crate::server::{ClientHello, ServerConfig, tls13};
 use crate::sync::Arc;
-use crate::{suites, SupportedCipherSuite};
+use crate::{SupportedCipherSuite, suites};
 
 pub(super) type NextState<'a> = Box<dyn State<ServerConnectionData> + 'a>;
 pub(super) type NextStateOrError<'a> = Result<NextState<'a>, Error>;
@@ -92,7 +92,7 @@ impl ExtensionProcessing {
                 .iter()
                 .find(|protocol| their_protocols.contains(&protocol.as_slice()))
                 .cloned();
-            if let Some(ref selected_protocol) = cx.common.alpn_protocol {
+            if let Some(selected_protocol) = &cx.common.alpn_protocol {
                 debug!("Chosen ALPN protocol {:?}", selected_protocol);
                 self.exts
                     .push(ServerExtension::make_alpn(&[selected_protocol]));

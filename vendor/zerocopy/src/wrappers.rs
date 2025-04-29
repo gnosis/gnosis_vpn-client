@@ -119,32 +119,27 @@ pub struct Unalign<T>(T);
 // `KnownLayout` impl bounded on `T: KnownLayout.` This is overly restrictive.
 impl_known_layout!(T => Unalign<T>);
 
-safety_comment! {
-    /// SAFETY:
-    /// - `Unalign<T>` promises to have alignment 1, and so we don't require
-    ///   that `T: Unaligned`.
-    /// - `Unalign<T>` has the same bit validity as `T`, and so it is
-    ///   `FromZeros`, `FromBytes`, or `IntoBytes` exactly when `T` is as well.
-    /// - `Immutable`: `Unalign<T>` has the same fields as `T`, so it contains
-    ///   `UnsafeCell`s exactly when `T` does.
-    /// - `TryFromBytes`: `Unalign<T>` has the same the same bit validity as
-    ///   `T`, so `T::is_bit_valid` is a sound implementation of `is_bit_valid`.
-    ///   Furthermore:
-    ///   - Since `T` and `Unalign<T>` have the same layout, they have the same
-    ///     size (as required by `unsafe_impl!`).
-    ///   - Since `T` and `Unalign<T>` have the same fields, they have
-    ///     `UnsafeCell`s at the same byte ranges (as required by
-    ///     `unsafe_impl!`).
+// SAFETY:
+// - `Unalign<T>` promises to have alignment 1, and so we don't require that `T:
+//   Unaligned`.
+// - `Unalign<T>` has the same bit validity as `T`, and so it is `FromZeros`,
+//   `FromBytes`, or `IntoBytes` exactly when `T` is as well.
+// - `Immutable`: `Unalign<T>` has the same fields as `T`, so it contains
+//   `UnsafeCell`s exactly when `T` does.
+// - `TryFromBytes`: `Unalign<T>` has the same the same bit validity as `T`, so
+//   `T::is_bit_valid` is a sound implementation of `is_bit_valid`.
+#[allow(unused_unsafe)] // Unused when `feature = "derive"`.
+const _: () = unsafe {
     impl_or_verify!(T => Unaligned for Unalign<T>);
     impl_or_verify!(T: Immutable => Immutable for Unalign<T>);
     impl_or_verify!(
         T: TryFromBytes => TryFromBytes for Unalign<T>;
-        |c: Maybe<T>| T::is_bit_valid(c)
+        |c| T::is_bit_valid(c.transmute())
     );
     impl_or_verify!(T: FromZeros => FromZeros for Unalign<T>);
     impl_or_verify!(T: FromBytes => FromBytes for Unalign<T>);
     impl_or_verify!(T: IntoBytes => IntoBytes for Unalign<T>);
-}
+};
 
 // Note that `Unalign: Clone` only if `T: Copy`. Since the inner `T` may not be
 // aligned, there's no way to safely call `T::clone`, and so a `T: Clone` bound
@@ -173,7 +168,7 @@ impl<T> Unalign<T> {
         // `Unalign`'s `Drop::drop` from being run, since dropping is not
         // supported in `const fn`s.
         //
-        // TODO(https://github.com/rust-lang/rust/issues/73255): Destructure
+        // FIXME(https://github.com/rust-lang/rust/issues/73255): Destructure
         // instead of using unsafe.
         unsafe { crate::util::transmute_unchecked(self) }
     }
@@ -188,8 +183,8 @@ impl<T> Unalign<T> {
     /// may prefer [`Deref::deref`], which is infallible.
     #[inline(always)]
     pub fn try_deref(&self) -> Result<&T, AlignmentError<&Self, T>> {
-        let inner = Ptr::from_ref(self).transparent_wrapper_into_inner();
-        match inner.bikeshed_try_into_aligned() {
+        let inner = Ptr::from_ref(self).transmute();
+        match inner.try_into_aligned() {
             Ok(aligned) => Ok(aligned.as_ref()),
             Err(err) => Err(err.map_src(|src| src.into_unalign().as_ref())),
         }
@@ -205,8 +200,8 @@ impl<T> Unalign<T> {
     /// callers may prefer [`DerefMut::deref_mut`], which is infallible.
     #[inline(always)]
     pub fn try_deref_mut(&mut self) -> Result<&mut T, AlignmentError<&mut Self, T>> {
-        let inner = Ptr::from_mut(self).transparent_wrapper_into_inner();
-        match inner.bikeshed_try_into_aligned() {
+        let inner = Ptr::from_mut(self).transmute::<_, _, (_, (_, _))>();
+        match inner.try_into_aligned() {
             Ok(aligned) => Ok(aligned.as_mut()),
             Err(err) => Err(err.map_src(|src| src.into_unalign().as_mut())),
         }
@@ -292,14 +287,14 @@ impl<T> Unalign<T> {
     /// such as [`read_unaligned`].
     ///
     /// [`read_unaligned`]: core::ptr::read_unaligned
-    // TODO(https://github.com/rust-lang/rust/issues/57349): Make this `const`.
+    // FIXME(https://github.com/rust-lang/rust/issues/57349): Make this `const`.
     #[inline(always)]
     pub fn get_mut_ptr(&mut self) -> *mut T {
         ptr::addr_of_mut!(self.0)
     }
 
     /// Sets the inner `T`, dropping the previous value.
-    // TODO(https://github.com/rust-lang/rust/issues/57349): Make this `const`.
+    // FIXME(https://github.com/rust-lang/rust/issues/57349): Make this `const`.
     #[inline(always)]
     pub fn set(&mut self, t: T) {
         *self = Unalign::new(t);
@@ -381,7 +376,7 @@ impl<T> Unalign<T> {
 
 impl<T: Copy> Unalign<T> {
     /// Gets a copy of the inner `T`.
-    // TODO(https://github.com/rust-lang/rust/issues/57349): Make this `const`.
+    // FIXME(https://github.com/rust-lang/rust/issues/57349): Make this `const`.
     #[inline(always)]
     pub fn get(&self) -> T {
         let Unalign(val) = *self;
@@ -394,14 +389,14 @@ impl<T: Unaligned> Deref for Unalign<T> {
 
     #[inline(always)]
     fn deref(&self) -> &T {
-        Ptr::from_ref(self).transparent_wrapper_into_inner().bikeshed_recall_aligned().as_ref()
+        Ptr::from_ref(self).transmute().bikeshed_recall_aligned().as_ref()
     }
 }
 
 impl<T: Unaligned> DerefMut for Unalign<T> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
-        Ptr::from_mut(self).transparent_wrapper_into_inner().bikeshed_recall_aligned().as_mut()
+        Ptr::from_mut(self).transmute::<_, _, (_, (_, _))>().bikeshed_recall_aligned().as_mut()
     }
 }
 
@@ -635,7 +630,7 @@ mod tests {
         const _U64: u64 = _UNALIGN.into_inner();
         // Make sure all code is considered "used".
         //
-        // TODO(https://github.com/rust-lang/rust/issues/104084): Remove this
+        // FIXME(https://github.com/rust-lang/rust/issues/104084): Remove this
         // attribute.
         #[allow(dead_code)]
         const _: () = {

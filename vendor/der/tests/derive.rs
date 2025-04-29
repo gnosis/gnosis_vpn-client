@@ -226,7 +226,7 @@ mod sequence {
     // ```
     //
     // [RFC 5280 Section 5.2.5]: https://datatracker.ietf.org/doc/html/rfc5280#section-5.2.5
-    #[derive(Sequence)]
+    #[derive(Sequence, Default)]
     pub struct IssuingDistributionPointExample {
         // Omit distributionPoint and only_some_reasons because corresponding structs are not
         // available here and are not germane to the example
@@ -408,6 +408,28 @@ mod sequence {
         assert_eq!(idp.only_contains_attribute_certs, true);
     }
 
+    #[test]
+    fn idp_encode_twice() {
+        let mut vec_buf = Vec::new();
+
+        IssuingDistributionPointExample {
+            only_contains_user_certs: true,
+            ..Default::default()
+        }
+        .encode_to_vec(&mut vec_buf)
+        .unwrap();
+
+        // encode to the same vec by appending
+        IssuingDistributionPointExample {
+            only_contains_cacerts: true,
+            ..Default::default()
+        }
+        .encode_to_vec(&mut vec_buf)
+        .unwrap();
+
+        assert_eq!(vec_buf, hex!("30038101FF 30038201FF"));
+    }
+
     // demonstrates default field that is not context specific
     #[test]
     fn extension_test() {
@@ -457,5 +479,61 @@ mod sequence {
             ALGORITHM_IDENTIFIER_DER,
             algorithm_identifier.to_der().unwrap()
         );
+    }
+}
+
+mod infer_default {
+    //! When another crate might define a PartialEq for another type, the use of
+    //! `default="Default::default"` in the der derivation will not provide enough
+    //! information for `der_derive` crate to figure out.
+    //!
+    //! This provides a reproduction for that case. This is intended to fail when we
+    //! compile tests.
+    //! ```
+    //! error[E0282]: type annotations needed
+    //!   --> der/tests/derive.rs:480:26
+    //!    |
+    //!480 |         #[asn1(default = "Default::default")]
+    //!    |                          ^^^^^^^^^^^^^^^^^^ cannot infer type
+    //!
+    //!error[E0283]: type annotations needed
+    //!   --> der/tests/derive.rs:478:14
+    //!    |
+    //!478 |     #[derive(Sequence)]
+    //!    |              ^^^^^^^^ cannot infer type
+    //!    |
+    //!note: multiple `impl`s satisfying `bool: PartialEq<_>` found
+    //!   --> der/tests/derive.rs:472:5
+    //!    |
+    //!472 |     impl PartialEq<BooleanIsh> for bool {
+    //!    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //!    = note: and another `impl` found in the `core` crate:
+    //!            - impl<host> PartialEq for bool
+    //!              where the constant `host` has type `bool`;
+    //!    = note: required for `&bool` to implement `PartialEq<&_>`
+    //!    = note: this error originates in the derive macro `Sequence` (in Nightly builds, run with -Z macro-backtrace for more info)
+    //! ```
+
+    use der::Sequence;
+
+    struct BooleanIsh;
+
+    impl PartialEq<BooleanIsh> for bool {
+        fn eq(&self, _other: &BooleanIsh) -> bool {
+            unimplemented!("This is only here to mess up the compiler's type inference")
+        }
+    }
+
+    #[derive(Sequence)]
+    struct Foo {
+        #[asn1(default = "Default::default")]
+        pub use_default_default: bool,
+
+        #[asn1(default = "something_true")]
+        pub use_custom: bool,
+    }
+
+    fn something_true() -> bool {
+        todo!()
     }
 }

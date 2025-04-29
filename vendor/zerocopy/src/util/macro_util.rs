@@ -17,15 +17,22 @@
 
 #![allow(missing_debug_implementations)]
 
-use core::mem::{self, ManuallyDrop};
+use core::{
+    mem::{self, ManuallyDrop},
+    ptr::NonNull,
+};
 
-// TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove this
-// `cfg` when `size_of_val_raw` is stabilized.
+// FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
+// this `cfg` when `size_of_val_raw` is stabilized.
 #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
-use core::ptr::{self, NonNull};
+#[cfg(not(target_pointer_width = "16"))]
+use core::ptr;
 
 use crate::{
-    pointer::invariant::{self, BecauseExclusive, BecauseImmutable, Invariants},
+    pointer::{
+        invariant::{self, BecauseExclusive, BecauseImmutable, Invariants},
+        TryTransmuteFromPtr,
+    },
     FromBytes, Immutable, IntoBytes, Ptr, TryFromBytes, ValidityError,
 };
 
@@ -99,11 +106,13 @@ impl<T, U> MaxAlignsOf<T, U> {
 }
 
 #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
+#[cfg(not(target_pointer_width = "16"))]
 const _64K: usize = 1 << 16;
 
-// TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove this
-// `cfg` when `size_of_val_raw` is stabilized.
+// FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
+// this `cfg` when `size_of_val_raw` is stabilized.
 #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
+#[cfg(not(target_pointer_width = "16"))]
 #[repr(C, align(65536))]
 struct Aligned64kAllocation([u8; _64K]);
 
@@ -113,9 +122,10 @@ struct Aligned64kAllocation([u8; _64K]);
 ///
 /// `ALIGNED_64K_ALLOCATION` is guaranteed to point to the entirety of an
 /// allocation with size and alignment 2^16, and to have valid provenance.
-// TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove this
-// `cfg` when `size_of_val_raw` is stabilized.
+// FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
+// this `cfg` when `size_of_val_raw` is stabilized.
 #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
+#[cfg(not(target_pointer_width = "16"))]
 pub const ALIGNED_64K_ALLOCATION: NonNull<[u8]> = {
     const REF: &Aligned64kAllocation = &Aligned64kAllocation([0; _64K]);
     let ptr: *const Aligned64kAllocation = REF;
@@ -129,9 +139,9 @@ pub const ALIGNED_64K_ALLOCATION: NonNull<[u8]> = {
     // - `ptr` is derived from a Rust reference, which is guaranteed to have
     //   valid provenance.
     //
-    // TODO(#429): Once `NonNull::new_unchecked` docs document that it preserves
-    // provenance, cite those docs.
-    // TODO: Replace this `as` with `ptr.cast_mut()` once our MSRV >= 1.65
+    // FIXME(#429): Once `NonNull::new_unchecked` docs document that it
+    // preserves provenance, cite those docs.
+    // FIXME: Replace this `as` with `ptr.cast_mut()` once our MSRV >= 1.65
     #[allow(clippy::as_conversions)]
     unsafe {
         NonNull::new_unchecked(ptr as *mut _)
@@ -142,8 +152,8 @@ pub const ALIGNED_64K_ALLOCATION: NonNull<[u8]> = {
 /// the type `$ty`.
 ///
 /// `trailing_field_offset!` produces code which is valid in a `const` context.
-// TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove this
-// `cfg` when `size_of_val_raw` is stabilized.
+// FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
+// this `cfg` when `size_of_val_raw` is stabilized.
 #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
 #[doc(hidden)] // `#[macro_export]` bypasses this module's `#[doc(hidden)]`.
 #[macro_export]
@@ -152,8 +162,6 @@ macro_rules! trailing_field_offset {
         let min_size = {
             let zero_elems: *const [()] =
                 $crate::util::macro_util::core_reexport::ptr::slice_from_raw_parts(
-                    // Work around https://github.com/rust-lang/rust-clippy/issues/12280
-                    #[allow(clippy::incompatible_msrv)]
                     $crate::util::macro_util::core_reexport::ptr::NonNull::<()>::dangling()
                         .as_ptr()
                         .cast_const(),
@@ -224,7 +232,7 @@ macro_rules! trailing_field_offset {
         //   address space. This is guaranteed because the same is guaranteed of
         //   allocated objects. [1]
         //
-        // [1] TODO(#429), TODO(https://github.com/rust-lang/rust/pull/116675):
+        // [1] FIXME(#429), FIXME(https://github.com/rust-lang/rust/pull/116675):
         //     Once these are guaranteed in the Reference, cite it.
         let offset = unsafe { field.cast::<u8>().offset_from(ptr.cast::<u8>()) };
         // Guaranteed not to be lossy: `field` comes after `ptr`, so the offset
@@ -242,8 +250,8 @@ macro_rules! trailing_field_offset {
 /// Computes alignment of `$ty: ?Sized`.
 ///
 /// `align_of!` produces code which is valid in a `const` context.
-// TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove this
-// `cfg` when `size_of_val_raw` is stabilized.
+// FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
+// this `cfg` when `size_of_val_raw` is stabilized.
 #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
 #[doc(hidden)] // `#[macro_export]` bypasses this module's `#[doc(hidden)]`.
 #[macro_export]
@@ -347,7 +355,7 @@ pub use core::mem::size_of;
 #[macro_export]
 macro_rules! struct_has_padding {
     ($t:ty, [$($ts:ty),*]) => {
-        ::zerocopy::util::macro_util::size_of::<$t>() > 0 $(+ ::zerocopy::util::macro_util::size_of::<$ts>())*
+        $crate::util::macro_util::size_of::<$t>() > 0 $(+ $crate::util::macro_util::size_of::<$ts>())*
     };
 }
 
@@ -367,7 +375,7 @@ macro_rules! struct_has_padding {
 #[macro_export]
 macro_rules! union_has_padding {
     ($t:ty, [$($ts:ty),*]) => {
-        false $(|| ::zerocopy::util::macro_util::size_of::<$t>() != ::zerocopy::util::macro_util::size_of::<$ts>())*
+        false $(|| $crate::util::macro_util::size_of::<$t>() != $crate::util::macro_util::size_of::<$ts>())*
     };
 }
 
@@ -392,10 +400,10 @@ macro_rules! union_has_padding {
 macro_rules! enum_has_padding {
     ($t:ty, $disc:ty, $([$($ts:ty),*]),*) => {
         false $(
-            || ::zerocopy::util::macro_util::size_of::<$t>()
+            || $crate::util::macro_util::size_of::<$t>()
                 != (
-                    ::zerocopy::util::macro_util::size_of::<$disc>()
-                    $(+ ::zerocopy::util::macro_util::size_of::<$ts>())*
+                    $crate::util::macro_util::size_of::<$disc>()
+                    $(+ $crate::util::macro_util::size_of::<$ts>())*
                 )
         )*
     }
@@ -488,7 +496,7 @@ pub const unsafe fn transmute_ref<'dst, 'src: 'dst, Src: 'src, Dst: 'dst>(
     // - We know that the returned lifetime will not outlive the input lifetime
     //   thanks to the lifetime bounds on this function.
     //
-    // TODO(#67): Once our MSRV is 1.58, replace this `transmute` with `&*dst`.
+    // FIXME(#67): Once our MSRV is 1.58, replace this `transmute` with `&*dst`.
     #[allow(clippy::transmute_ptr_to_ref)]
     unsafe {
         mem::transmute(dst)
@@ -505,7 +513,7 @@ pub const unsafe fn transmute_ref<'dst, 'src: 'dst, Src: 'src, Dst: 'dst>(
 /// - `Dst: FromBytes + IntoBytes`
 /// - `size_of::<Src>() == size_of::<Dst>()`
 /// - `align_of::<Src>() >= align_of::<Dst>()`
-// TODO(#686): Consider removing the `Immutable` requirement.
+// FIXME(#686): Consider removing the `Immutable` requirement.
 #[inline(always)]
 pub unsafe fn transmute_mut<'dst, 'src: 'dst, Src: 'src, Dst: 'dst>(
     src: &'src mut Src,
@@ -548,17 +556,19 @@ pub unsafe fn transmute_mut<'dst, 'src: 'dst, Src: 'src, Dst: 'dst>(
 /// [`is_bit_valid`]: TryFromBytes::is_bit_valid
 #[doc(hidden)]
 #[inline]
-fn try_cast_or_pme<Src, Dst, I, R>(
+fn try_cast_or_pme<Src, Dst, I, R, S>(
     src: Ptr<'_, Src, I>,
 ) -> Result<
     Ptr<'_, Dst, (I::Aliasing, invariant::Unaligned, invariant::Valid)>,
     ValidityError<Ptr<'_, Src, I>, Dst>,
 >
 where
-    // TODO(#2226): There should be a `Src: FromBytes` bound here, but doing so
+    // FIXME(#2226): There should be a `Src: FromBytes` bound here, but doing so
     // requires deeper surgery.
     Src: invariant::Read<I::Aliasing, R>,
-    Dst: TryFromBytes + invariant::Read<I::Aliasing, R>,
+    Dst: TryFromBytes
+        + invariant::Read<I::Aliasing, R>
+        + TryTransmuteFromPtr<Dst, I::Aliasing, invariant::Initialized, invariant::Valid, S>,
     I: Invariants<Validity = invariant::Initialized>,
     I::Aliasing: invariant::Reference,
 {
@@ -570,7 +580,7 @@ where
     //   `Src`.
     // - `p as *mut Dst` is a provenance-preserving cast
     #[allow(clippy::as_conversions)]
-    let c_ptr = unsafe { src.cast_unsized(|p| p as *mut Dst) };
+    let c_ptr = unsafe { src.cast_unsized(NonNull::cast::<Dst>) };
 
     match c_ptr.try_into_valid() {
         Ok(ptr) => Ok(ptr),
@@ -584,7 +594,7 @@ where
             //   to the size of `Src`.
             // - `p as *mut Src` is a provenance-preserving cast
             #[allow(clippy::as_conversions)]
-            let ptr = unsafe { ptr.cast_unsized(|p| p as *mut Src) };
+            let ptr = unsafe { ptr.cast_unsized(NonNull::cast::<Src>) };
             // SAFETY: `ptr` is `src`, and has the same alignment invariant.
             let ptr = unsafe { ptr.assume_alignment::<I::Alignment>() };
             // SAFETY: `ptr` is `src` and has the same validity invariant.
@@ -637,8 +647,7 @@ where
     //
     //   `MaybeUninit<T>` is guaranteed to have the same size, alignment, and
     //   ABI as `T`
-    let ptr: Ptr<'_, Dst, _> =
-        unsafe { ptr.cast_unsized(|mu: *mut mem::MaybeUninit<Dst>| mu.cast()) };
+    let ptr: Ptr<'_, Dst, _> = unsafe { ptr.cast_unsized(NonNull::<mem::MaybeUninit<Dst>>::cast) };
 
     if Dst::is_bit_valid(ptr.forget_aligned()) {
         // SAFETY: Since `Dst::is_bit_valid`, we know that `ptr`'s referent is
@@ -672,7 +681,7 @@ where
 {
     let ptr = Ptr::from_ref(src);
     let ptr = ptr.bikeshed_recall_initialized_immutable();
-    match try_cast_or_pme::<Src, Dst, _, BecauseImmutable>(ptr) {
+    match try_cast_or_pme::<Src, Dst, _, BecauseImmutable, _>(ptr) {
         Ok(ptr) => {
             static_assert!(Src, Dst => mem::align_of::<Dst>() <= mem::align_of::<Src>());
             // SAFETY: We have checked that `Dst` does not have a stricter
@@ -716,7 +725,7 @@ where
 {
     let ptr = Ptr::from_mut(src);
     let ptr = ptr.bikeshed_recall_initialized_from_bytes();
-    match try_cast_or_pme::<Src, Dst, _, BecauseExclusive>(ptr) {
+    match try_cast_or_pme::<Src, Dst, _, BecauseExclusive, _>(ptr) {
         Ok(ptr) => {
             static_assert!(Src, Dst => mem::align_of::<Dst>() <= mem::align_of::<Src>());
             // SAFETY: We have checked that `Dst` does not have a stricter
@@ -724,7 +733,7 @@ where
             let ptr = unsafe { ptr.assume_alignment::<invariant::Aligned>() };
             Ok(ptr.as_mut())
         }
-        Err(err) => Err(err.map_src(|ptr| ptr.bikeshed_recall_valid().as_mut())),
+        Err(err) => Err(err.map_src(|ptr| ptr.recall_validity().as_mut())),
     }
 }
 
@@ -803,7 +812,7 @@ mod tests {
         assert_t_align_gteq_u_align!(u8, AU64, false);
     }
 
-    // TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove
+    // FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
     // this `cfg` when `size_of_val_raw` is stabilized.
     #[allow(clippy::decimal_literal_representation)]
     #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]
@@ -905,7 +914,7 @@ mod tests {
         */
     }
 
-    // TODO(#29), TODO(https://github.com/rust-lang/rust/issues/69835): Remove
+    // FIXME(#29), FIXME(https://github.com/rust-lang/rust/issues/69835): Remove
     // this `cfg` when `size_of_val_raw` is stabilized.
     #[allow(clippy::decimal_literal_representation)]
     #[cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS)]

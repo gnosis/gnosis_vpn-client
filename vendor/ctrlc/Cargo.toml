@@ -13,12 +13,18 @@
 edition = "2021"
 rust-version = "1.69.0"
 name = "ctrlc"
-version = "3.4.5"
+version = "3.4.6"
 authors = ["Antti Keränen <detegr@gmail.com>"]
+build = false
 exclude = [
     "/.travis.yml",
     "/appveyor.yml",
 ]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Easy Ctrl-C handler for Rust projects"
 homepage = "https://github.com/Detegr/rust-ctrlc"
 documentation = "https://detegr.github.io/doc/ctrlc"
@@ -32,14 +38,26 @@ categories = ["os"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/Detegr/rust-ctrlc.git"
 
-[[test]]
-name = "main"
-path = "tests/main/mod.rs"
-harness = false
+[lib]
+name = "ctrlc"
+path = "src/lib.rs"
+
+[[example]]
+name = "issue_46_example"
+path = "examples/issue_46_example.rs"
+
+[[example]]
+name = "readme_example"
+path = "examples/readme_example.rs"
 
 [[test]]
 name = "issue_97"
 path = "tests/main/issue_97.rs"
+harness = false
+
+[[test]]
+name = "main"
+path = "tests/main/mod.rs"
 harness = false
 
 [dev-dependencies.signal-hook]

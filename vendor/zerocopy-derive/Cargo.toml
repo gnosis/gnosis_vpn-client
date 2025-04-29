@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "zerocopy-derive"
-version = "0.8.23"
+version = "0.8.25"
 authors = [
     "Joshua Liebow-Feeser <joshlf@google.com>",
     "Jack Wrenn <jswrenn@amazon.com>",
@@ -37,6 +37,10 @@ repository = "https://github.com/google/zerocopy"
 name = "zerocopy_derive"
 path = "src/lib.rs"
 proc-macro = true
+
+[[test]]
+name = "crate_path"
+path = "tests/crate_path.rs"
 
 [[test]]
 name = "deprecated"
@@ -153,6 +157,10 @@ path = "tests/union_try_from_bytes.rs"
 [[test]]
 name = "union_unaligned"
 path = "tests/union_unaligned.rs"
+
+[[test]]
+name = "unsafe_cell"
+path = "tests/unsafe_cell.rs"
 
 [dependencies.proc-macro2]
 version = "1.0.1"

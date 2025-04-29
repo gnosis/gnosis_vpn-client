@@ -5,13 +5,13 @@ use core::ops::{Deref, DerefMut, Range};
 #[cfg(feature = "std")]
 use std::io;
 
-use crate::common_state::{CommonState, Context, IoState, State, DEFAULT_BUFFER_LIMIT};
+use crate::common_state::{CommonState, Context, DEFAULT_BUFFER_LIMIT, IoState, State};
 use crate::enums::{AlertDescription, ContentType, ProtocolVersion};
 use crate::error::{Error, PeerMisbehaved};
 use crate::log::trace;
+use crate::msgs::deframer::DeframerIter;
 use crate::msgs::deframer::buffers::{BufferProgress, DeframerVecBuffer, Delocator, Locator};
 use crate::msgs::deframer::handshake::HandshakeDeframer;
-use crate::msgs::deframer::DeframerIter;
 use crate::msgs::handshake::Random;
 use crate::msgs::message::{InboundPlainMessage, Message, MessagePayload};
 use crate::record_layer::Decrypted;
@@ -27,12 +27,12 @@ mod connection {
     use core::ops::{Deref, DerefMut};
     use std::io::{self, BufRead, Read};
 
+    use crate::ConnectionCommon;
     use crate::common_state::{CommonState, IoState};
     use crate::error::Error;
     use crate::msgs::message::OutboundChunks;
     use crate::suites::ExtractedSecrets;
     use crate::vecbuf::ChunkVecBuffer;
-    use crate::ConnectionCommon;
 
     /// A client or server connection.
     #[derive(Debug)]
@@ -295,8 +295,7 @@ mod connection {
         }
     }
 
-    const UNEXPECTED_EOF_MESSAGE: &str =
-        "peer closed connection without sending TLS close_notify: \
+    const UNEXPECTED_EOF_MESSAGE: &str = "peer closed connection without sending TLS close_notify: \
 https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof";
 
     /// A structure that implements [`std::io::Write`] for writing plaintext.
@@ -467,18 +466,7 @@ impl<Data> ConnectionCommon<Data> {
     /// Extract secrets, so they can be used when configuring kTLS, for example.
     /// Should be used with care as it exposes secret key material.
     pub fn dangerous_extract_secrets(self) -> Result<ExtractedSecrets, Error> {
-        if !self.enable_secret_extraction {
-            return Err(Error::General("Secret extraction is disabled".into()));
-        }
-
-        let st = self.core.state?;
-
-        let record_layer = self.core.common_state.record_layer;
-        let PartiallyExtractedSecrets { tx, rx } = st.extract_secrets()?;
-        Ok(ExtractedSecrets {
-            tx: (record_layer.write_seq(), tx),
-            rx: (record_layer.read_seq(), rx),
-        })
+        self.core.dangerous_extract_secrets()
     }
 
     /// Sets a limit on the internal buffers used to buffer
@@ -650,7 +638,7 @@ impl<Data> ConnectionCommon<Data> {
                         rdlen += n;
                         Some(n)
                     }
-                    Err(ref err) if err.kind() == io::ErrorKind::Interrupted => None, // nothing to do
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => None, // nothing to do
                     Err(err) => return Err(err),
                 };
                 if read_size.is_some() {
@@ -821,6 +809,14 @@ impl<Data> From<ConnectionCore<Data>> for UnbufferedConnectionCommon<Data> {
             wants_write: false,
             emitted_peer_closed_state: false,
         }
+    }
+}
+
+impl<Data> UnbufferedConnectionCommon<Data> {
+    /// Extract secrets, so they can be used when configuring kTLS, for example.
+    /// Should be used with care as it exposes secret key material.
+    pub fn dangerous_extract_secrets(self) -> Result<ExtractedSecrets, Error> {
+        self.core.dangerous_extract_secrets()
     }
 }
 
@@ -1006,7 +1002,7 @@ impl<Data> ConnectionCore<Data> {
                     Ok(None) if !self.hs_deframer.is_aligned() => {
                         return Err(
                             PeerMisbehaved::RejectedEarlyDataInterleavedWithHandshakeMessage.into(),
-                        )
+                        );
                     }
 
                     // failed decryption during trial decryption.
@@ -1159,6 +1155,24 @@ impl<Data> ConnectionCore<Data> {
 
         self.common_state
             .process_main_protocol(msg, state, &mut self.data, sendable_plaintext)
+    }
+
+    pub(crate) fn dangerous_extract_secrets(self) -> Result<ExtractedSecrets, Error> {
+        if !self
+            .common_state
+            .enable_secret_extraction
+        {
+            return Err(Error::General("Secret extraction is disabled".into()));
+        }
+
+        let st = self.state?;
+
+        let record_layer = self.common_state.record_layer;
+        let PartiallyExtractedSecrets { tx, rx } = st.extract_secrets()?;
+        Ok(ExtractedSecrets {
+            tx: (record_layer.write_seq(), tx),
+            rx: (record_layer.read_seq(), rx),
+        })
     }
 
     pub(crate) fn export_keying_material<T: AsMut<[u8]>>(

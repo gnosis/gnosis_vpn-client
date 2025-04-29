@@ -235,7 +235,7 @@ impl<'a> Iterator for IntermediateIterator<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for IntermediateIterator<'a> {
+impl DoubleEndedIterator for IntermediateIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self.intermediates.split_last() {
             Some((head, tail)) => {
@@ -378,10 +378,10 @@ fn check_validity(input: &mut untrusted::Reader<'_>, time: UnixTime) -> Result<(
         return Err(Error::InvalidCertValidity);
     }
     if time < not_before {
-        return Err(Error::CertNotValidYet);
+        return Err(Error::CertNotValidYet { time, not_before });
     }
     if time > not_after {
-        return Err(Error::CertExpired);
+        return Err(Error::CertExpired { time, not_after });
     }
 
     // TODO: mozilla::pkix allows the TrustDomain to check not_before and
@@ -695,7 +695,7 @@ pub(crate) enum Role {
     EndEntity,
 }
 
-#[cfg(all(test, feature = "alloc", any(feature = "ring", feature = "aws_lc_rs")))]
+#[cfg(all(test, feature = "alloc", any(feature = "ring", feature = "aws-lc-rs")))]
 mod tests {
     use super::*;
     use crate::test_utils;

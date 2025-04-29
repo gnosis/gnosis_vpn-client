@@ -367,7 +367,7 @@ where
         // measure bytes (`source` deref's to `[u8]`, and `remainder` is a
         // `Ptr<[u8]>`), so `source.len() >= remainder.len()`. Thus, this cannot
         // underflow.
-        #[allow(unstable_name_collisions, clippy::incompatible_msrv)]
+        #[allow(unstable_name_collisions)]
         let split_at = unsafe { source.len().unchecked_sub(remainder.len()) };
         let (bytes, suffix) = source.split_at(split_at).map_err(|b| SizeError::new(b).into())?;
         // SAFETY: `try_cast_into` validates size and alignment, and returns a
@@ -624,7 +624,7 @@ where
         let ptr = Ptr::from_ref(b.into_byte_slice())
             .try_cast_into_no_leftover::<T, BecauseImmutable>(None)
             .expect("zerocopy internal error: into_ref should be infallible");
-        let ptr = ptr.bikeshed_recall_valid();
+        let ptr = ptr.recall_validity();
         ptr.as_ref()
     }
 }
@@ -658,7 +658,7 @@ where
         let ptr = Ptr::from_mut(b.into_byte_slice_mut())
             .try_cast_into_no_leftover::<T, BecauseExclusive>(None)
             .expect("zerocopy internal error: into_ref should be infallible");
-        let ptr = ptr.bikeshed_recall_valid();
+        let ptr = ptr.recall_validity();
         ptr.as_mut()
     }
 }
@@ -770,7 +770,7 @@ where
         let ptr = Ptr::from_ref(b.deref())
             .try_cast_into_no_leftover::<T, BecauseImmutable>(None)
             .expect("zerocopy internal error: Deref::deref should be infallible");
-        let ptr = ptr.bikeshed_recall_valid();
+        let ptr = ptr.recall_validity();
         ptr.as_ref()
     }
 }
@@ -778,7 +778,7 @@ where
 impl<B, T> DerefMut for Ref<B, T>
 where
     B: ByteSliceMut,
-    // TODO(#251): We can't remove `Immutable` here because it's required by
+    // FIXME(#251): We can't remove `Immutable` here because it's required by
     // the impl of `Deref`, which is a super-trait of `DerefMut`. Maybe we can
     // add a separate inherent method for this?
     T: FromBytes + IntoBytes + KnownLayout + Immutable + ?Sized,
@@ -799,7 +799,7 @@ where
         let ptr = Ptr::from_mut(b.deref_mut())
             .try_cast_into_no_leftover::<T, BecauseExclusive>(None)
             .expect("zerocopy internal error: DerefMut::deref_mut should be infallible");
-        let ptr = ptr.bikeshed_recall_valid();
+        let ptr = ptr.recall_validity::<_, (_, (_, (BecauseExclusive, BecauseExclusive)))>();
         ptr.as_mut()
     }
 }

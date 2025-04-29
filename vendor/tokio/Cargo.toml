@@ -13,9 +13,10 @@
 edition = "2021"
 rust-version = "1.70"
 name = "tokio"
-version = "1.44.1"
+version = "1.44.2"
 authors = ["Tokio Contributors <team@tokio.rs>"]
 build = false
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -68,6 +69,68 @@ features = [
     "full",
     "test-util",
 ]
+
+[features]
+default = []
+fs = []
+full = [
+    "fs",
+    "io-util",
+    "io-std",
+    "macros",
+    "net",
+    "parking_lot",
+    "process",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+]
+io-std = []
+io-util = ["bytes"]
+macros = ["tokio-macros"]
+net = [
+    "libc",
+    "mio/os-poll",
+    "mio/os-ext",
+    "mio/net",
+    "socket2",
+    "windows-sys/Win32_Foundation",
+    "windows-sys/Win32_Security",
+    "windows-sys/Win32_Storage_FileSystem",
+    "windows-sys/Win32_System_Pipes",
+    "windows-sys/Win32_System_SystemServices",
+]
+process = [
+    "bytes",
+    "libc",
+    "mio/os-poll",
+    "mio/os-ext",
+    "mio/net",
+    "signal-hook-registry",
+    "windows-sys/Win32_Foundation",
+    "windows-sys/Win32_System_Threading",
+    "windows-sys/Win32_System_WindowsProgramming",
+]
+rt = []
+rt-multi-thread = ["rt"]
+signal = [
+    "libc",
+    "mio/os-poll",
+    "mio/net",
+    "mio/os-ext",
+    "signal-hook-registry",
+    "windows-sys/Win32_Foundation",
+    "windows-sys/Win32_System_Console",
+]
+sync = []
+test-util = [
+    "rt",
+    "sync",
+    "time",
+]
+time = []
 
 [lib]
 name = "tokio"
@@ -715,68 +778,6 @@ version = "0.1"
 
 [dev-dependencies.tokio-test]
 version = "0.4.0"
-
-[features]
-default = []
-fs = []
-full = [
-    "fs",
-    "io-util",
-    "io-std",
-    "macros",
-    "net",
-    "parking_lot",
-    "process",
-    "rt",
-    "rt-multi-thread",
-    "signal",
-    "sync",
-    "time",
-]
-io-std = []
-io-util = ["bytes"]
-macros = ["tokio-macros"]
-net = [
-    "libc",
-    "mio/os-poll",
-    "mio/os-ext",
-    "mio/net",
-    "socket2",
-    "windows-sys/Win32_Foundation",
-    "windows-sys/Win32_Security",
-    "windows-sys/Win32_Storage_FileSystem",
-    "windows-sys/Win32_System_Pipes",
-    "windows-sys/Win32_System_SystemServices",
-]
-process = [
-    "bytes",
-    "libc",
-    "mio/os-poll",
-    "mio/os-ext",
-    "mio/net",
-    "signal-hook-registry",
-    "windows-sys/Win32_Foundation",
-    "windows-sys/Win32_System_Threading",
-    "windows-sys/Win32_System_WindowsProgramming",
-]
-rt = []
-rt-multi-thread = ["rt"]
-signal = [
-    "libc",
-    "mio/os-poll",
-    "mio/net",
-    "mio/os-ext",
-    "signal-hook-registry",
-    "windows-sys/Win32_Foundation",
-    "windows-sys/Win32_System_Console",
-]
-sync = []
-test-util = [
-    "rt",
-    "sync",
-    "time",
-]
-time = []
 
 [target.'cfg(all(target_family = "wasm", not(target_os = "wasi")))'.dev-dependencies.wasm-bindgen-test]
 version = "0.3.0"
