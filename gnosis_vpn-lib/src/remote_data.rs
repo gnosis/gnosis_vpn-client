@@ -1,10 +1,17 @@
-use thiserror::Error;
 use reqwest::header::{self, HeaderMap, HeaderValue};
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum HeaderError {
     #[error("Value cannot be used in http headers")]
     InvalidHeader(#[from] reqwest::header::InvalidHeaderName),
+}
+
+#[derive(Debug)]
+pub struct CustomError {
+    pub reqw_err: Option<reqwest::Error>,
+    pub status: Option<reqwest::StatusCode>,
+    pub value: Option<serde_json::Value>,
 }
 
 pub fn authentication_headers(api_token: &str) -> Result<HeaderMap, HeaderError> {

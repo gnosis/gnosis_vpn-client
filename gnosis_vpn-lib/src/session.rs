@@ -1,5 +1,9 @@
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Session {
-
+    pub ip: String,
+    pub port: u16,
+    pub protocol: String,
+    pub target: String,
 }
 
 pub struct EntryNode {
@@ -37,9 +41,12 @@ pub struct OpenSession {
     pub protocol: Protocol,
 }
 
-pub fn open(open_session: &OpenSession) -> Result<()> {
+pub fn open(open_session: &OpenSession) -> Result<Session> {
     let headers = remote_data::authentication_headers(open_session.api_token.as_str())?;
-    let url = open_session.endpoint.join("api/v3/session/")?.join(open_session.protocol)?;
+    let url = open_session
+        .endpoint
+        .join("api/v3/session/")?
+        .join(open_session.protocol)?;
     let mut json = serde_json::Map::new();
     json.insert("destination".to_string(), json!(open_session.destination));
 
@@ -61,6 +68,7 @@ pub fn open(open_session: &OpenSession) -> Result<()> {
             json!({"Hops": 1})
         }
     };
+
     json.insert("path".to_string(), path_json);
     if let Some(lh) = &open_session.listen_host {
         json.insert("listenHost".to_string(), json!(lh));
@@ -76,52 +84,43 @@ pub fn open(open_session: &OpenSession) -> Result<()> {
     };
     json.insert("capabilities".to_string(), capabilities_json);
 
-    let sender = sender.clone();
-    let client = client.clone();
-    thread::spawn(move || {
-        tracing::debug!(?headers, body = ?json, ?url, "post open session");
+    tracing::debug!(?headers, body = ?json, ?url, "post open session");
+    let fetch_res = client
+        .post(url)
+        .json(&json)
+        .timeout(std::time::Duration::from_secs(30))
+        .headers(headers)
+        .send()
+        .map(|res| (res.status(), res.json::<serde_json::Value>()));
 
-        let fetch_res = client
-            .post(url)
-            .json(&json)
-            .timeout(std::time::Duration::from_secs(30))
-            .headers(headers)
-            .send()
-            .map(|res| (res.status(), res.json::<serde_json::Value>()));
-
-        let evt = match fetch_res {
-            Ok((status, Ok(json))) if status.is_success() => {
-                Event::FetchOpenSession(remote_data::Event::Response(json))
-            }
-            Ok((status, Ok(json))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: None,
-                    status: Some(status),
-                    value: Some(json),
-                };
-                Event::FetchOpenSession(remote_data::Event::Error(e))
-            }
-            Ok((status, Err(e))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: Some(status),
-                    value: None,
-                };
-                Event::FetchOpenSession(remote_data::Event::Error(e))
-            }
-            Err(e) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: None,
-                    value: None,
-                };
-                Event::FetchOpenSession(remote_data::Event::Error(e))
-            }
-        };
-
-        sender.send(evt)
-    });
-    Ok(())
-
+    match fetch_res {
+        Ok((status, Ok(json))) if status.is_success() => {
+            let session = serde_json::from_value::<Session>(value)?;
+            Ok(session)
+        }
+        Ok((status, Ok(json))) => {
+            let e = remote_data::CustomError {
+                reqw_err: None,
+                status: Some(status),
+                value: Some(json),
+            };
+            Err(e)
+        }
+        Ok((status, Err(e))) => {
+            let e = remote_data::CustomError {
+                reqw_err: Some(e),
+                status: Some(status),
+                value: None,
+            };
+            Err(e)
+        }
+        Err(e) => {
+            let e = remote_data::CustomError {
+                reqw_err: Some(e),
+                status: None,
+                value: None,
+            };
+            Err(e)
+        }
     }
 }

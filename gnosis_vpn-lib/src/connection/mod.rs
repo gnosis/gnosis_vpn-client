@@ -25,8 +25,6 @@ pub struct BridgeSession {
     pub target: Option<SessionTargetConfig>,
 }
 
-pub struct OpenBridgeSession {
-
 
 pub struct EntryNode {
     pub endpoint: Url,
