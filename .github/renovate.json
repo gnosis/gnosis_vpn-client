@@ -1,10 +1,7 @@
 {
   "enabled": true,
   "prCreation": "not-pending",
-  "extends": [
-    "config:recommended",
-    ":disableDependencyDashboard"
-  ],
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
   "vulnerabilityAlerts": { "enabled": true },
   "semanticCommits": "enabled",
   "rangeStrategy": "bump",
