@@ -1,9 +1,10 @@
 use anyhow::Result;
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config::Config;
+use gnosis_vpn_lib::config::{self, Config};
+use gnosis_vpn_lib::connection::{self, Connection};
 use gnosis_vpn_lib::peer_id::PeerId;
-use gnosis_vpn_lib::state::State;
-use gnosis_vpn_lib::{config, log_output, state, wireguard};
+use gnosis_vpn_lib::state::{self, State};
+use gnosis_vpn_lib::{log_output, wireguard};
 use rand::Rng;
 use reqwest::blocking;
 use std::collections::HashMap;
@@ -48,6 +49,8 @@ pub struct Core {
     exit_node: Option<ExitNode>,
     fetch_data: FetchData,
     session: Option<Session>,
+
+    connection: Option<connection::Connection>,
 }
 
 #[derive(Debug)]
@@ -201,6 +204,8 @@ impl Core {
     }
 
     fn setup_from_config(&mut self) -> Result<()> {
+        let conn = Connection::new();
+
         self.check_close_session()?;
         if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
             let en_endpoint = entry_node.endpoint.clone();

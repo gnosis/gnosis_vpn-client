@@ -4,7 +4,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum HeaderError {
     #[error("Value cannot be used in http headers")]
-    InvalidHeader(#[from] reqwest::header::InvalidHeaderName),
+    InvalidHeader(#[from] reqwest::header::InvalidHeaderValue),
 }
 
 #[derive(Debug)]

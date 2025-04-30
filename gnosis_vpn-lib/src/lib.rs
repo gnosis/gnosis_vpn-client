@@ -7,5 +7,8 @@ pub mod socket;
 pub mod state;
 pub mod wireguard;
 
+mod connection;
 mod dirs;
+mod entry_node;
 mod remote_data;
+mod session;

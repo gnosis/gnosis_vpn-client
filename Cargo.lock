@@ -670,9 +670,11 @@ name = "gnosis_vpn-lib"
 version = "0.8.4"
 dependencies = [
  "bincode",
+ "crossbeam-channel",
  "directories",
  "humantime",
  "libp2p-identity",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
