@@ -17,19 +17,19 @@ pub struct Session {
     pub target: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub enum Capability {
     Segmentation,
     Retransmission,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Path {
     Hop(u8),
     Intermediates(Vec<PeerId>),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Target {
     Plain(SocketAddr),
     Sealed(SocketAddr),

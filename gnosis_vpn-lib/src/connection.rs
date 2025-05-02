@@ -8,7 +8,7 @@ use crate::session;
 /// Represents the different phases of a connection
 /// Up: Idle -> SetUpBridgeSession -> RegisterWg -> TearDownBridgeSession -> SetUpMainSession -> ConnectWg -> Ready
 /// Down: Ready -> DisconnectWg -> TearDownBridgeSession -> SetUpBridgeSession -> UnregisterWg -> TearDownBridgeSession -> Idle
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Phase {
     Idle,
     SetUpBridgeSession,
@@ -22,7 +22,7 @@ enum Phase {
     Ready,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Direction {
     Up,
     Down,
@@ -33,7 +33,7 @@ enum Event {
     Session(Result<session::Session, session::Error>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Connection {
     phase: Phase,
     direction: Direction,

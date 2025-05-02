@@ -2,6 +2,7 @@ use anyhow::Result;
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection};
+use gnosis_vpn_lib::entry_node::EntryNode;
 use gnosis_vpn_lib::peer_id::PeerId;
 use gnosis_vpn_lib::state::{self, State};
 use gnosis_vpn_lib::{log_output, wireguard};
@@ -16,8 +17,8 @@ use url::Url;
 
 use crate::backoff;
 use crate::backoff::FromIteratorToSeries;
-use crate::entry_node;
-use crate::entry_node::{EntryNode, Path};
+use crate::entry_node as old_entry_node;
+use crate::entry_node::{EntryNode as OldEntryNode, Path as OldPath};
 use crate::event::Event;
 use crate::exit_node::ExitNode;
 use crate::remote_data;
@@ -45,7 +46,7 @@ pub struct Core {
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
     status: Status,
-    entry_node: Option<EntryNode>,
+    entry_node: Option<OldEntryNode>,
     exit_node: Option<ExitNode>,
     fetch_data: FetchData,
     session: Option<Session>,
@@ -143,6 +144,7 @@ impl Core {
             sender,
             session: None,
             shutdown_sender: None,
+            connection: None,
         };
         core.setup();
         core
@@ -204,9 +206,7 @@ impl Core {
     }
 
     fn setup_from_config(&mut self) -> Result<()> {
-        let conn = Connection::new();
-
-        self.check_close_session()?;
+        // self.check_close_session()?;
         if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
             let en_endpoint = entry_node.endpoint.clone();
             let en_api_token = entry_node.api_token.clone();
@@ -214,13 +214,13 @@ impl Core {
             let en_listen_host = session.listen_host.clone().or(internal_port);
             let path = session.path.clone().unwrap_or_default();
             let en_path = match path {
-                config::SessionPathConfig::Hop(hop) => Path::Hop(hop),
-                config::SessionPathConfig::Intermediates(ids) => Path::Intermediates(ids.clone()),
+                config::SessionPathConfig::Hop(hop) => OldPath::Hop(hop),
+                config::SessionPathConfig::Intermediates(ids) => OldPath::Intermediates(ids.clone()),
             };
             let xn_peer_id = session.destination;
 
             // convert config to old application struture
-            self.entry_node = Some(EntryNode::new(
+            self.entry_node = Some(OldEntryNode::new(
                 &en_endpoint,
                 &en_api_token,
                 en_listen_host.as_deref(),
@@ -231,8 +231,20 @@ impl Core {
             self.fetch_data.addresses = RemoteData::Fetching {
                 started_at: SystemTime::now(),
             };
-            self.fetch_addresses()?;
-            self.check_open_session()?;
+            // self.fetch_addresses()?;
+            // self.check_open_session()?;
+            let entry_node = EntryNode {
+                endpoint: en_endpoint.clone(),
+                api_token: en_api_token.clone(),
+                listen_host: en_listen_host,
+            };
+            let conn = Connection::new(
+                entry_node,
+                xn_peer_id,
+                en_path,
+                session.target.clone(),
+                session.target_wg.clone(),
+            );
         }
         Ok(())
     }
@@ -293,7 +305,7 @@ impl Core {
                 self.fetch_data.addresses = RemoteData::Success;
                 match &mut self.entry_node {
                     Some(en) => {
-                        let addresses = serde_json::from_value::<entry_node::Addresses>(value)?;
+                        let addresses = serde_json::from_value::<old_entry_node::Addresses>(value)?;
                         en.addresses = Some(addresses);
                         tracing::info!("fetched addresses");
                         Ok(())
@@ -552,7 +564,7 @@ impl Core {
 
     fn repeat_fetch_addresses(&mut self, error: remote_data::CustomError, backoffs: &mut Vec<time::Duration>) {
         if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = entry_node::schedule_retry_query_addresses(backoff, &self.sender);
+            let cancel_sender = old_entry_node::schedule_retry_query_addresses(backoff, &self.sender);
             self.fetch_data.addresses = RemoteData::RetryFetching {
                 error,
                 cancel_sender,
@@ -583,7 +595,7 @@ impl Core {
         backoffs: &mut Vec<time::Duration>,
     ) -> Result<()> {
         if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = entry_node::schedule_retry_list_sessions(backoff, &self.sender);
+            let cancel_sender = old_entry_node::schedule_retry_list_sessions(backoff, &self.sender);
             self.fetch_data.list_sessions = RemoteData::RetryFetching {
                 error,
                 cancel_sender,
@@ -644,11 +656,11 @@ impl Core {
         // TODO move this to library and enhance CLI to only allow one option
         // hop has precedence over intermediate_id
         let path = match (hop, intermediate_id) {
-            (Some(h), _) => Path::Hop(*h),
-            (_, Some(id)) => Path::Intermediates(vec![*id]),
-            _ => Path::Hop(1),
+            (Some(h), _) => OldPath::Hop(*h),
+            (_, Some(id)) => OldPath::Intermediates(vec![*id]),
+            _ => OldPath::Hop(1),
         };
-        self.entry_node = Some(EntryNode::new(endpoint, api_token, listen_host.as_deref(), path));
+        self.entry_node = Some(OldEntryNode::new(endpoint, api_token, listen_host.as_deref(), path));
         self.fetch_data.addresses = RemoteData::Fetching {
             started_at: SystemTime::now(),
         };
