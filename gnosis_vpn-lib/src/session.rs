@@ -87,15 +87,13 @@ impl Target {
 }
 
 impl OpenSession {
-    pub fn bridge(entry_node: &EntryNode, destination: &str, path: &Option<Path>, target: &Option<Target>) -> Self {
+    pub fn bridge(entry_node: &EntryNode, destination: &str, path: &Path, target: &Target) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
             destination: destination.to_string(),
             capabilities: vec![Capability::Segmentation],
-            path: path.clone().unwrap_or(Path::Hop(1)),
-            target: target
-                .clone()
-                .unwrap_or(Target::Plain(SocketAddr::from(([127, 0, 0, 1], 8000)))),
+            path: path.clone(),
+            target: target.clone(),
             protocol: Protocol::Tcp,
         }
     }

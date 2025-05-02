@@ -39,20 +39,42 @@ pub struct Connection {
     direction: Direction,
     // runtime data
     client: blocking::Client,
-    abort_sender: crossbeam_channel::Sender<()>,
+    abort_sender: Option<crossbeam_channel::Sender<()>>,
     // input data
     entry_node: EntryNode,
     destination: String,
-    path: Option<session::Path>,
-    target: Option<session::Target>,
+    path: session::Path,
+    target_bridge: session::Target,
+    target_wg: session::Target,
     // state data
     session: Option<session::Session>,
 }
 
 impl Connection {
+    pub fn new(
+        entry_node: &EntryNode,
+        destination: &str,
+        path: session::Path,
+        target_bridge: &session::Target,
+        target_wg: &session::Target,
+    ) -> Self {
+        Connection {
+            phase: Phase::Idle,
+            direction: Direction::Halt,
+            client: blocking::Client::new(),
+            abort_sender: None,
+            entry_node: entry_node.clone(),
+            destination: destination.to_string(),
+            path: path.clone(),
+            target_bridge: target_bridge.clone(),
+            target_wg: target_wg.clone(),
+            session: None,
+        }
+    }
+
     pub fn start(&mut self) {
         let (send_abort, recv_abort) = crossbeam_channel::bounded(1);
-        self.abort_sender = send_abort;
+        self.abort_sender = Some(send_abort);
         let mut me = self.clone();
         thread::spawn(move || loop {
             let recv_event: crossbeam_channel::Receiver<Event> = me.act_up();
@@ -82,7 +104,16 @@ impl Connection {
     }
 
     pub fn abort(&self) -> Result<(), crossbeam_channel::SendError<()>> {
-        self.abort_sender.send(())
+        match &self.abort_sender {
+            Some(sender) => {
+                tracing::info!("Aborting connection");
+                sender.send(())
+            }
+            None => {
+                tracing::info!("Connection not started - nothing to abort");
+                Ok(())
+            }
+        }
     }
 
     fn act_up(&mut self) -> crossbeam_channel::Receiver<Event> {
@@ -133,7 +164,7 @@ impl Connection {
         let entry_node = self.entry_node.clone();
         let destination = self.destination.clone();
         let path = self.path.clone();
-        let target = self.target.clone();
+        let target = self.target_bridge.clone();
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
