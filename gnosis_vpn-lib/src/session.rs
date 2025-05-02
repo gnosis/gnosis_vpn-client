@@ -9,7 +9,7 @@ use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::remote_data;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub ip: String,
     pub port: u16,
