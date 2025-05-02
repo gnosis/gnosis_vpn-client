@@ -1,9 +1,9 @@
+use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fmt;
 use std::net::SocketAddr;
 use thiserror::Error;
-use url::Url;
 
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
@@ -17,6 +17,7 @@ pub struct Session {
     pub target: String,
 }
 
+#[derive(Serialize)]
 pub enum Capability {
     Segmentation,
     Retransmission,
@@ -42,10 +43,22 @@ pub enum Protocol {
 pub struct OpenSession {
     entry_node: EntryNode,
     destination: String,
-    capabilities: Option<Vec<Capability>>,
-    path: Option<Path>,
-    target: Option<Target>,
+    capabilities: Vec<Capability>,
+    path: Path,
+    target: Target,
     protocol: Protocol,
+}
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Invalid header")]
+    Header(#[from] remote_data::HeaderError),
+    #[error("Error parsing url")]
+    Url(#[from] url::ParseError),
+    #[error("Error converting json to struct")]
+    Deserialize(#[from] serde_json::Error),
+    #[error("Error making http request")]
+    RemoteData(remote_data::CustomError),
 }
 
 impl fmt::Display for Protocol {
@@ -57,71 +70,66 @@ impl fmt::Display for Protocol {
     }
 }
 
+impl Target {
+    pub fn type_(&self) -> String {
+        match self {
+            Target::Plain(_) => "Plain".to_string(),
+            Target::Sealed(_) => "Sealed".to_string(),
+        }
+    }
+
+    pub fn address(&self) -> String {
+        match self {
+            Target::Plain(addr) => addr.to_string(),
+            Target::Sealed(addr) => addr.to_string(),
+        }
+    }
+}
+
 impl OpenSession {
     pub fn bridge(entry_node: &EntryNode, destination: &str, path: &Option<Path>, target: &Option<Target>) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
             destination: destination.to_string(),
-            capabilities: Some(vec![Capability::Segmentation]),
-            path: path.clone(),
-            target: target.clone(),
+            capabilities: vec![Capability::Segmentation],
+            path: path.clone().unwrap_or(Path::Hop(1)),
+            target: target
+                .clone()
+                .unwrap_or(Target::Plain(SocketAddr::from(([127, 0, 0, 1], 8000)))),
             protocol: Protocol::Tcp,
         }
     }
 }
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Invalid header")]
-    Header(#[from] remote_data::HeaderError),
-    #[error("Error parsing url")]
-    Url(#[from] url::ParseError),
-}
-
-pub fn open(open_session: &OpenSession) -> Result<Session, Error> {
-    let headers =
-        remote_data::authentication_headers(open_session.entry_node.api_token.as_str()).map_err(Error::Header)?;
+pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Session, Error> {
+    let headers = remote_data::authentication_headers(open_session.entry_node.api_token.as_str())?;
     let url = open_session
         .entry_node
         .endpoint
         .join("api/v3/session/")?
-        .join(open_session.protocol.as_str())?;
+        .join(open_session.protocol.to_string().as_str())?;
     let mut json = serde_json::Map::new();
     json.insert("destination".to_string(), json!(open_session.destination));
 
-    let target = open_session.target.clone().unwrap_or_default();
-    let target_type = target.type_.unwrap_or_default();
-    let target_host = target.host.unwrap_or(config::default_session_target_host());
-    let target_port = target.port.unwrap_or(config::default_session_target_port());
-
-    let target_json = json!({ target_type.to_string(): format!("{}:{}", target_host, target_port) });
+    let target = open_session.target.clone();
+    let target_json = json!({ target.type_(): target.address() });
     json.insert("target".to_string(), target_json);
+
     let path_json = match open_session.path.clone() {
-        Some(SessionPathConfig::Hop(hop)) => {
+        Path::Hop(hop) => {
             json!({"Hops": hop})
         }
-        Some(SessionPathConfig::Intermediates(ids)) => {
+        Path::Intermediates(ids) => {
             json!({ "IntermediatePath": ids.clone() })
         }
-        None => {
-            json!({"Hops": 1})
-        }
     };
-
     json.insert("path".to_string(), path_json);
-    if let Some(lh) = &open_session.listen_host {
+
+    if let Some(lh) = &open_session.entry_node.listen_host {
         json.insert("listenHost".to_string(), json!(lh));
     };
 
-    let capabilities_json = match &open_session.capabilities {
-        Some(caps) => {
-            json!(caps)
-        }
-        None => {
-            json!(["Segmentation"])
-        }
-    };
-    json.insert("capabilities".to_string(), capabilities_json);
+    json.insert("capabilities".to_string(), json!(open_session.capabilities));
 
     tracing::debug!(?headers, body = ?json, ?url, "post open session");
     let fetch_res = client
@@ -134,7 +142,7 @@ pub fn open(open_session: &OpenSession) -> Result<Session, Error> {
 
     match fetch_res {
         Ok((status, Ok(json))) if status.is_success() => {
-            let session = serde_json::from_value::<Session>(value)?;
+            let session = serde_json::from_value::<Session>(json)?;
             Ok(session)
         }
         Ok((status, Ok(json))) => {
@@ -143,7 +151,7 @@ pub fn open(open_session: &OpenSession) -> Result<Session, Error> {
                 status: Some(status),
                 value: Some(json),
             };
-            Err(e)
+            Err(Error::RemoteData(e))
         }
         Ok((status, Err(e))) => {
             let e = remote_data::CustomError {
@@ -151,7 +159,7 @@ pub fn open(open_session: &OpenSession) -> Result<Session, Error> {
                 status: Some(status),
                 value: None,
             };
-            Err(e)
+            Err(Error::RemoteData(e))
         }
         Err(e) => {
             let e = remote_data::CustomError {
@@ -159,7 +167,7 @@ pub fn open(open_session: &OpenSession) -> Result<Session, Error> {
                 status: None,
                 value: None,
             };
-            Err(e)
+            Err(Error::RemoteData(e))
         }
     }
 }
