@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::Ipv4Addr;
 use thiserror::Error;
+use url::Url;
 
-use crate::entry_node::EntryNode;
 use crate::remote_data;
 use crate::session::Session;
 
@@ -18,7 +18,7 @@ pub struct Register {
 
 pub struct RegisterInput {
     public_key: String,
-    entry_node: EntryNode,
+    endpoint: Url,
     session: Session,
 }
 
@@ -36,7 +36,7 @@ pub enum Error {
 
 pub fn register(client: &blocking::Client, input: &RegisterInput) -> Result<Register, Error> {
     let headers = remote_data::json_headers();
-    let mut url = input.entry_node.endpoint.join("api/v1/clients/register")?;
+    let mut url = input.endpoint.join("api/v1/clients/register")?;
     url.set_port(Some(input.session.port)).map_err(|_| Error::InvalidPort)?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));

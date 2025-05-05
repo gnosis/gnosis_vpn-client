@@ -4,6 +4,7 @@ use std::thread;
 
 use crate::entry_node::EntryNode;
 use crate::session;
+use crate::wg_client;
 
 /// Represents the different phases of a connection
 /// Up: Idle -> SetUpBridgeSession -> RegisterWg -> TearDownBridgeSession -> SetUpMainSession -> ConnectWg -> Ready
@@ -182,7 +183,9 @@ impl Connection {
     fn bridge2wg(&mut self) -> crossbeam_channel::Receiver<Event> {
         self.phase = Phase::RegisterWg;
         let (_s, r) = crossbeam_channel::bounded(1);
-        thread::spawn(move || {});
+        thread::spawn(move || {
+            let rw = wg_client::Register {};
+        });
         r
     }
 }
