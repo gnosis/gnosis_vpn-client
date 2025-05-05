@@ -29,6 +29,7 @@ enum Direction {
     Halt,
 }
 
+#[derive(Debug)]
 enum Event {
     Session(Result<session::Session, session::Error>),
 }
@@ -76,7 +77,7 @@ impl Connection {
         let (send_abort, recv_abort) = crossbeam_channel::bounded(1);
         self.abort_sender = Some(send_abort);
         let mut me = self.clone();
-        thread::spawn(move || loop {
+        thread::spawn(move || {
             let recv_event: crossbeam_channel::Receiver<Event> = me.act_up();
             crossbeam_channel::select! {
                 recv(recv_abort) -> res => {
@@ -92,6 +93,7 @@ impl Connection {
                 recv(recv_event) -> res => {
                     match res {
                         Ok(evt) => {
+                                tracing::info!(event = ?evt, "Received event");
                                 me.act_event(evt)
                         }
                         Err(error) => {
@@ -118,6 +120,7 @@ impl Connection {
 
     fn act_up(&mut self) -> crossbeam_channel::Receiver<Event> {
         self.direction = Direction::Up;
+        tracing::info!(?self, "Starting connection");
         match self.phase {
             Phase::Idle => self.idle2bridge(),
             _ => {
