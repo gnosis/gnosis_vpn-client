@@ -77,7 +77,7 @@ impl Connection {
         let (send_abort, recv_abort) = crossbeam_channel::bounded(1);
         self.abort_sender = Some(send_abort);
         let mut me = self.clone();
-        thread::spawn(move || {
+        thread::spawn(move || loop {
             let recv_event: crossbeam_channel::Receiver<Event> = me.act_up();
             crossbeam_channel::select! {
                 recv(recv_abort) -> res => {
@@ -120,9 +120,10 @@ impl Connection {
 
     fn act_up(&mut self) -> crossbeam_channel::Receiver<Event> {
         self.direction = Direction::Up;
-        tracing::info!(?self, "Starting connection");
+        tracing::info!(phase = ?self.phase, "Acting up");
         match self.phase {
             Phase::Idle => self.idle2bridge(),
+            Phase::SetUpBridgeSession => self.bridge2wg(),
             _ => {
                 panic!("Invalid phase for up action");
             }
@@ -143,7 +144,6 @@ impl Connection {
             Event::Session(res) => match res {
                 Ok(session) => {
                     self.session = Some(session);
-                    self.phase = Phase::Ready;
                 }
                 Err(error) => {
                     tracing::error!(?error, "Failed to open session");

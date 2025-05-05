@@ -12,3 +12,4 @@ pub mod wireguard;
 
 mod dirs;
 mod remote_data;
+mod wg_client;
