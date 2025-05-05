@@ -4,12 +4,14 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection};
 use gnosis_vpn_lib::entry_node::EntryNode;
 use gnosis_vpn_lib::peer_id::PeerId;
+use gnosis_vpn_lib::session::{self};
 use gnosis_vpn_lib::state::{self, State};
 use gnosis_vpn_lib::{log_output, wireguard};
 use rand::Rng;
 use reqwest::blocking;
 use std::collections::HashMap;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time;
 use std::time::SystemTime;
 use tracing::instrument;
@@ -23,8 +25,8 @@ use crate::event::Event;
 use crate::exit_node::ExitNode;
 use crate::remote_data;
 use crate::remote_data::RemoteData;
-use crate::session;
-use crate::session::Session;
+use crate::session as old_session;
+use crate::session::Session as OldSession;
 
 #[derive(Debug)]
 pub struct Core {
@@ -49,7 +51,7 @@ pub struct Core {
     entry_node: Option<OldEntryNode>,
     exit_node: Option<ExitNode>,
     fetch_data: FetchData,
-    session: Option<Session>,
+    session: Option<OldSession>,
 
     connection: Option<connection::Connection>,
 }
@@ -233,18 +235,37 @@ impl Core {
             };
             // self.fetch_addresses()?;
             // self.check_open_session()?;
+        }
+
+        if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
+            let internal_port = entry_node.internal_connection_port.map(|port| format!(":{}", port));
+            let en_listen_host = session.listen_host.clone().or(internal_port);
             let entry_node = EntryNode {
-                endpoint: en_endpoint.clone(),
-                api_token: en_api_token.clone(),
+                endpoint: entry_node.endpoint.clone(),
+                api_token: entry_node.api_token.clone(),
                 listen_host: en_listen_host,
             };
-            let conn = Connection::new(
-                entry_node,
-                xn_peer_id,
-                en_path,
-                session.target.clone(),
-                session.target_wg.clone(),
+            let xn_peer_id = session.destination;
+
+            let en_path = session.path.clone().unwrap_or_default();
+            let path = match en_path {
+                config::SessionPathConfig::Hop(hop) => session::Path::Hop(hop),
+                config::SessionPathConfig::Intermediates(ids) => session::Path::Intermediates(ids.clone()),
+            };
+
+            let target_bridge = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000));
+            let target_wg = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 51820));
+
+            let mut conn = Connection::new(
+                &entry_node,
+                xn_peer_id.to_string().as_str(),
+                &path,
+                &target_bridge,
+                &target_wg,
             );
+
+            conn.start();
+            self.connection = Some(conn);
         }
         Ok(())
     }
@@ -343,13 +364,13 @@ impl Core {
     fn evt_fetch_open_session(&mut self, evt: remote_data::Event) -> Result<()> {
         match evt {
             remote_data::Event::Response(value) => {
-                let session = serde_json::from_value::<Session>(value)?;
+                let session = serde_json::from_value::<OldSession>(value)?;
                 let session_port = session.port;
                 self.session = Some(session);
                 self.fetch_data.open_session = RemoteData::Success;
                 let next_check = self.rng.gen_range(5..13);
                 let cancel_sender =
-                    session::schedule_check_session(time::Duration::from_secs(next_check), &self.sender);
+                    old_session::schedule_check_session(time::Duration::from_secs(next_check), &self.sender);
                 self.status = Status::MonitoringSession {
                     start_time: SystemTime::now(),
                     cancel_sender,
@@ -470,7 +491,7 @@ impl Core {
         match evt {
             remote_data::Event::Response(value) => {
                 self.fetch_data.list_sessions = RemoteData::Success;
-                let res_sessions = serde_json::from_value::<Vec<session::Session>>(value);
+                let res_sessions = serde_json::from_value::<Vec<old_session::Session>>(value);
                 match res_sessions {
                     Ok(sessions) => self.verify_session(&sessions),
                     Err(e) => {
@@ -577,7 +598,7 @@ impl Core {
 
     fn repeat_fetch_open_session(&mut self, error: remote_data::CustomError, backoffs: &mut Vec<time::Duration>) {
         if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = session::schedule_retry_open(backoff, &self.sender);
+            let cancel_sender = old_session::schedule_retry_open(backoff, &self.sender);
             self.fetch_data.open_session = RemoteData::RetryFetching {
                 error,
                 cancel_sender,
@@ -619,7 +640,7 @@ impl Core {
         backoffs: &mut Vec<time::Duration>,
     ) -> Result<()> {
         if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = session::schedule_retry_close(backoff, &self.sender);
+            let cancel_sender = old_session::schedule_retry_close(backoff, &self.sender);
             self.fetch_data.close_session = RemoteData::RetryFetching {
                 error,
                 cancel_sender,
@@ -763,7 +784,7 @@ impl Core {
 
     fn fetch_open_session(&mut self) -> Result<()> {
         if let (Some(en), Some(session)) = (&self.entry_node, &self.config.connection) {
-            let open_session = session::OpenSession {
+            let open_session = old_session::OpenSession {
                 endpoint: en.endpoint.clone(),
                 api_token: en.api_token.clone(),
                 destination: session.destination.to_string(),
@@ -773,7 +794,7 @@ impl Core {
                 capabilities: session.capabilities.clone(),
             };
             tracing::info!("opening session");
-            session::open(&self.client, &self.sender, &open_session)?;
+            old_session::open(&self.client, &self.sender, &open_session)?;
         } else {
             tracing::warn!("no entry node or session to open");
         }
@@ -806,14 +827,14 @@ impl Core {
         }
     }
 
-    fn verify_session(&mut self, sessions: &[session::Session]) -> Result<()> {
+    fn verify_session(&mut self, sessions: &[old_session::Session]) -> Result<()> {
         match (&self.session, &self.status) {
             (Some(sess), Status::MonitoringSession { start_time, .. }) => {
                 if sess.verify_open(sessions) {
                     tracing::info!(session = ?sess, since = log_output::elapsed(start_time), "verified session open");
                     let next_check = self.rng.gen_range(5..13);
                     let cancel_sender =
-                        session::schedule_check_session(time::Duration::from_secs(next_check), &self.sender);
+                        old_session::schedule_check_session(time::Duration::from_secs(next_check), &self.sender);
                     self.status = Status::MonitoringSession {
                         start_time: *start_time,
                         cancel_sender,

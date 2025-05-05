@@ -54,7 +54,7 @@ impl Connection {
     pub fn new(
         entry_node: &EntryNode,
         destination: &str,
-        path: session::Path,
+        path: &session::Path,
         target_bridge: &session::Target,
         target_wg: &session::Target,
     ) -> Self {
