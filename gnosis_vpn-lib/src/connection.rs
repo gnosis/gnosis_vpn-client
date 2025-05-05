@@ -33,6 +33,7 @@ enum Direction {
 #[derive(Debug)]
 enum Event {
     Session(Result<session::Session, session::Error>),
+    Register(Result<wg_client::Register, wg_client::Error>),
 }
 
 #[derive(Clone, Debug)]
@@ -48,8 +49,15 @@ pub struct Connection {
     path: session::Path,
     target_bridge: session::Target,
     target_wg: session::Target,
+    wg_public_key: String,
     // state data
     session: Option<session::Session>,
+    wg_registration: Option<wg_client::Register>,
+}
+
+#[derive(Debug)]
+enum Error {
+    SessionNotSet,
 }
 
 impl Connection {
@@ -59,6 +67,7 @@ impl Connection {
         path: &session::Path,
         target_bridge: &session::Target,
         target_wg: &session::Target,
+        wg_public_key: &str,
     ) -> Self {
         Connection {
             phase: Phase::Idle,
@@ -70,7 +79,9 @@ impl Connection {
             path: path.clone(),
             target_bridge: target_bridge.clone(),
             target_wg: target_wg.clone(),
+            wg_public_key: wg_public_key.to_string(),
             session: None,
+            wg_registration: None,
         }
     }
 
@@ -79,7 +90,14 @@ impl Connection {
         self.abort_sender = Some(send_abort);
         let mut me = self.clone();
         thread::spawn(move || loop {
-            let recv_event: crossbeam_channel::Receiver<Event> = me.act_up();
+            let result = me.act_up();
+            let recv_event = match result {
+                Ok(recv_event) => recv_event,
+                Err(error) => {
+                    tracing::error!(?error, "Failed to act up");
+                    crossbeam_channel::never()
+                }
+            };
             crossbeam_channel::select! {
                 recv(recv_abort) -> res => {
                     match res {
@@ -119,7 +137,7 @@ impl Connection {
         }
     }
 
-    fn act_up(&mut self) -> crossbeam_channel::Receiver<Event> {
+    fn act_up(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
         self.direction = Direction::Up;
         tracing::info!(phase = ?self.phase, "Acting up");
         match self.phase {
@@ -151,6 +169,15 @@ impl Connection {
                     self.phase = Phase::Idle;
                 }
             },
+            Event::Register(res) => match res {
+                Ok(register) => {
+                    self.wg_registration = Some(register);
+                }
+                Err(error) => {
+                    tracing::error!(?error, "Failed to register wg client");
+                    self.phase = Phase::SetUpBridgeSession;
+                }
+            },
         }
     }
 
@@ -163,29 +190,29 @@ impl Connection {
     }
 
     /// Transition from Idle to SetUpBridgeSession
-    fn idle2bridge(&mut self) -> crossbeam_channel::Receiver<Event> {
+    fn idle2bridge(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
         self.phase = Phase::SetUpBridgeSession;
-        let entry_node = self.entry_node.clone();
-        let destination = self.destination.clone();
-        let path = self.path.clone();
-        let target = self.target_bridge.clone();
+        let os = session::OpenSession::bridge(&self.entry_node, &self.destination, &self.path, &self.target_bridge);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            let os = session::OpenSession::bridge(&entry_node, &destination, &path, &target);
             let res = session::open(&client, &os);
             _ = s.send(Event::Session(res));
         });
-        r
+        Ok(r)
     }
 
     /// Transition from SetUpBridgeSession to RegisterWg
-    fn bridge2wg(&mut self) -> crossbeam_channel::Receiver<Event> {
+    fn bridge2wg(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
+        let session = self.session.as_ref().ok_or(Error::SessionNotSet)?;
         self.phase = Phase::RegisterWg;
-        let (_s, r) = crossbeam_channel::bounded(1);
+        let ri = wg_client::RegisterInput::new(&self.wg_public_key, &self.entry_node.endpoint, &session);
+        let client = self.client.clone();
+        let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            let rw = wg_client::Register {};
+            let res = wg_client::register(&client, &ri);
+            _ = s.send(Event::Register(res));
         });
-        r
+        Ok(r)
     }
 }

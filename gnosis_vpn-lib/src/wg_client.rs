@@ -34,6 +34,16 @@ pub enum Error {
     InvalidPort,
 }
 
+impl RegisterInput {
+    pub fn new(public_key: &str, endpoint: &Url, session: &Session) -> Self {
+        RegisterInput {
+            public_key: public_key.to_string(),
+            endpoint: endpoint.clone(),
+            session: session.clone(),
+        }
+    }
+}
+
 pub fn register(client: &blocking::Client, input: &RegisterInput) -> Result<Register, Error> {
     let headers = remote_data::json_headers();
     let mut url = input.endpoint.join("api/v1/clients/register")?;

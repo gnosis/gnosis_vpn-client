@@ -237,6 +237,15 @@ impl Core {
             // self.check_open_session()?;
         }
 
+        let priv_key = self
+            .wg_priv_key()
+            .ok_or(anyhow::anyhow!("missing wireguard private key"))?;
+        let wg_pub_key = self
+            .wg
+            .as_ref()
+            .ok_or(anyhow::anyhow!("missing wg module"))?
+            .public_key(priv_key.as_str())?;
+
         if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
             let internal_port = entry_node.internal_connection_port.map(|port| format!(":{}", port));
             let en_listen_host = session.listen_host.clone().or(internal_port);
@@ -262,6 +271,7 @@ impl Core {
                 &path,
                 &target_bridge,
                 &target_wg,
+                &wg_pub_key,
             );
 
             conn.start();
