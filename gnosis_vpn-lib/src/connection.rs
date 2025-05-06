@@ -1,14 +1,16 @@
 use crossbeam_channel;
-use reqwest::blocking;
+use reqwest::{blocking, StatusCode};
 use std::thread;
+use std::time::Duration;
 
 use crate::entry_node::EntryNode;
-use crate::session;
+use crate::remote_data;
+use crate::session::{self, Session};
 use crate::wg_client;
 
 /// Represents the different phases of a connection
-/// Up: Idle -> SetUpBridgeSession -> RegisterWg -> TearDownBridgeSession -> SetUpMainSession -> ConnectWg -> Ready
-/// Down: Ready -> DisconnectWg -> TearDownBridgeSession -> SetUpBridgeSession -> UnregisterWg -> TearDownBridgeSession -> Idle
+/// Up: Idle -> SetUpBridgeSession -> RegisterWg -> TearDownBridgeSession -> SetUpMainSession -> MonitorMainSession
+/// Down: MonitorMainSession -> TearDownBridgeSession -> SetUpBridgeSession -> UnregisterWg -> TearDownBridgeSession -> Idle
 #[derive(Clone, Debug)]
 enum Phase {
     Idle,
@@ -18,9 +20,7 @@ enum Phase {
     UnregisterWg,
     SetUpMainSession,
     TearDownMainSession,
-    ConnectWg,
-    DisconnectWg,
-    Ready,
+    MonitorMainSession,
 }
 
 #[derive(Clone, Debug)]
@@ -32,8 +32,10 @@ enum Direction {
 
 #[derive(Debug)]
 enum Event {
-    Session(Result<session::Session, session::Error>),
-    Register(Result<wg_client::Register, wg_client::Error>),
+    BridgeSession(Result<Session, session::Error>),
+    RegisterWg(Result<wg_client::Register, wg_client::Error>),
+    TearDownBridgeSession(Result<(), session::Error>),
+    MainSession(Result<Session, session::Error>),
 }
 
 #[derive(Clone, Debug)]
@@ -51,13 +53,14 @@ pub struct Connection {
     target_wg: session::Target,
     wg_public_key: String,
     // state data
-    session: Option<session::Session>,
+    session: Option<Session>,
     wg_registration: Option<wg_client::Register>,
 }
 
 #[derive(Debug)]
 enum Error {
     SessionNotSet,
+    WgRegistrationNotSet,
 }
 
 impl Connection {
@@ -143,9 +146,10 @@ impl Connection {
         match self.phase {
             Phase::Idle => self.idle2bridge(),
             Phase::SetUpBridgeSession => self.bridge2wg(),
-            _ => {
-                panic!("Invalid phase for up action");
-            }
+            Phase::RegisterWg => self.wg2teardown(),
+            Phase::TearDownBridgeSession => self.teardown2main(),
+            Phase::SetUpMainSession => self.main2monitor(),
+            Phase::MonitorMainSession => self.monitor(),
         }
     }
 
@@ -160,22 +164,52 @@ impl Connection {
 
     fn act_event(&mut self, event: Event) {
         match event {
-            Event::Session(res) => match res {
+            Event::BridgeSession(res) => match res {
                 Ok(session) => {
                     self.session = Some(session);
+                }
+                // Some(Object {"status": String("LISTEN_HOST_ALREADY_USED")}) })))
+                Err(session::Error::RemoteData(remote_data::CustomError {
+                    status: Some(StatusCode::CONFLICT),
+                    value: Some(json),
+                    reqw_err: _,
+                })) => {
+                    if (json["status"] == "LISTEN_HOST_ALREADY_USED") {
+                        // TODO hanlde dismantling on existing port
+                    }
+                    tracing::error!(?json, "Failed to open session - CONFLICT");
+                    self.phase = Phase::Idle;
                 }
                 Err(error) => {
                     tracing::error!(?error, "Failed to open session");
                     self.phase = Phase::Idle;
                 }
             },
-            Event::Register(res) => match res {
+            Event::RegisterWg(res) => match res {
                 Ok(register) => {
                     self.wg_registration = Some(register);
                 }
                 Err(error) => {
                     tracing::error!(?error, "Failed to register wg client");
                     self.phase = Phase::SetUpBridgeSession;
+                }
+            },
+            Event::TearDownBridgeSession(res) => match res {
+                Ok(_) => {
+                    self.session = None;
+                }
+                Err(error) => {
+                    tracing::error!(?error, "Failed to tear down bridge session");
+                    self.phase = Phase::RegisterWg;
+                }
+            },
+            Event::MainSession(res) => match res {
+                Ok(session) => {
+                    self.session = Some(session);
+                }
+                Err(error) => {
+                    tracing::error!(?error, "Failed to open main session");
+                    self.phase = Phase::TearDownBridgeSession;
                 }
             },
         }
@@ -192,12 +226,18 @@ impl Connection {
     /// Transition from Idle to SetUpBridgeSession
     fn idle2bridge(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
         self.phase = Phase::SetUpBridgeSession;
-        let os = session::OpenSession::bridge(&self.entry_node, &self.destination, &self.path, &self.target_bridge);
+        let params = session::OpenSession::bridge(
+            &self.entry_node,
+            &self.destination,
+            &self.path,
+            &self.target_bridge,
+            &Duration::from_secs(15),
+        );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            let res = session::open(&client, &os);
-            _ = s.send(Event::Session(res));
+            let res = Session::open(&client, &params);
+            _ = s.send(Event::BridgeSession(res));
         });
         Ok(r)
     }
@@ -211,7 +251,41 @@ impl Connection {
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
             let res = wg_client::register(&client, &ri);
-            _ = s.send(Event::Register(res));
+            _ = s.send(Event::RegisterWg(res));
+        });
+        Ok(r)
+    }
+
+    /// Transition from RegisterWg to TearDownBridgeSession
+    fn wg2teardown(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
+        let session = self.session.as_ref().ok_or(Error::SessionNotSet)?.clone();
+        self.wg_registration.as_ref().ok_or(Error::WgRegistrationNotSet)?;
+        self.phase = Phase::TearDownBridgeSession;
+        let params = session::CloseSession::new(&self.entry_node, &Duration::from_secs(15));
+        let client = self.client.clone();
+        let (s, r) = crossbeam_channel::bounded(1);
+        thread::spawn(move || {
+            let res = session.close(&client, &params);
+            _ = s.send(Event::TearDownBridgeSession(res));
+        });
+        Ok(r)
+    }
+
+    /// Transition from TearDownBridgeSession to SetUpMainSession
+    fn teardown2main(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
+        self.phase = Phase::SetUpMainSession;
+        let params = session::OpenSession::main(
+            &self.entry_node,
+            &self.destination,
+            &self.path,
+            &self.target_wg,
+            &Duration::from_secs(30),
+        );
+        let client = self.client.clone();
+        let (s, r) = crossbeam_channel::bounded(1);
+        thread::spawn(move || {
+            let res = Session::open(&client, &params);
+            _ = s.send(Event::MainSession(res));
         });
         Ok(r)
     }
