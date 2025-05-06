@@ -133,7 +133,7 @@ pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Ses
     let fetch_res = client
         .post(url)
         .json(&json)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(15))
         .headers(headers)
         .send()
         .map(|res| (res.status(), res.json::<serde_json::Value>()));
@@ -166,6 +166,51 @@ pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Ses
                 value: None,
             };
             Err(Error::RemoteData(e))
+        }
+    }
+}
+
+impl Session {
+    pub fn close(&self, client: &blocking::Client, entry_node: &EntryNode) -> Result<(), Error> {
+        let headers = remote_data::authentication_headers(entry_node.api_token.as_str())?;
+        let path = format!("api/v3/session/udp/{}/{}", self.ip, self.port);
+        let url = entry_node.endpoint.join(path.as_str())?;
+
+        tracing::debug!(?headers, ?url, "delete session");
+
+        let fetch_res = client
+            .delete(url)
+            .timeout(std::time::Duration::from_secs(15))
+            .headers(headers)
+            .send()
+            .map(|res| (res.status(), res.json::<serde_json::Value>()));
+
+        match fetch_res {
+            Ok((status, _)) if status.is_success() => Ok(()),
+            Ok((status, Ok(json))) => {
+                let e = remote_data::CustomError {
+                    reqw_err: None,
+                    status: Some(status),
+                    value: Some(json),
+                };
+                Err(Error::RemoteData(e))
+            }
+            Ok((status, Err(e))) => {
+                let e = remote_data::CustomError {
+                    reqw_err: Some(e),
+                    status: Some(status),
+                    value: None,
+                };
+                Err(Error::RemoteData(e))
+            }
+            Err(e) => {
+                let e = remote_data::CustomError {
+                    reqw_err: Some(e),
+                    status: None,
+                    value: None,
+                };
+                Err(Error::RemoteData(e))
+            }
         }
     }
 }
