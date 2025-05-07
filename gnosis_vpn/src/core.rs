@@ -409,12 +409,12 @@ impl Core {
     }
 
     fn establish_wg(&mut self) {
+        tracing::info!(self = ?self, "establish wg");
         // connect wireguard session if possible
-        if let (Some(wg), Some(_), Some(privkey), Some(wg_conf), Some(en_host), Some(port)) = (
+        if let (Some(wg), Some(wg_conf), Some(privkey), Some(en_host), Some(port)) = (
             &self.wg,
             &self.config.wireguard,
             &self.wg_priv_key(),
-            &self.config.wireguard,
             &self.config.hoprd_node.as_ref().and_then(|en| en.endpoint.host()),
             &self.connection.as_ref().and_then(|c| c.port().ok()),
         ) {
