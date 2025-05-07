@@ -12,6 +12,7 @@ use reqwest::blocking;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::thread;
 use std::time;
 use std::time::SystemTime;
 use tracing::instrument;
@@ -265,6 +266,7 @@ impl Core {
             let target_bridge = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000));
             let target_wg = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 51820));
 
+            let (s, r) = crossbeam_channel::bounded(1);
             let mut conn = Connection::new(
                 &entry_node,
                 xn_peer_id.to_string().as_str(),
@@ -272,10 +274,26 @@ impl Core {
                 &target_bridge,
                 &target_wg,
                 &wg_pub_key,
+                s,
             );
 
-            conn.start();
+            conn.establish();
             self.connection = Some(conn);
+            thread::spawn(move || loop {
+                crossbeam_channel::select! {
+                    recv(r) -> event => {
+                        match event {
+                            Ok(event) => {
+                                tracing::info!(event = ?event, "core received event");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "failed to receive event");
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
         }
         Ok(())
     }
