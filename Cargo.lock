@@ -674,6 +674,7 @@ dependencies = [
  "directories",
  "humantime",
  "libp2p-identity",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

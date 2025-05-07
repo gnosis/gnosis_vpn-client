@@ -1,6 +1,7 @@
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::cmp;
 use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -14,7 +15,7 @@ use crate::remote_data;
 pub struct Session {
     pub ip: String,
     pub port: u16,
-    pub protocol: String,
+    pub protocol: Protocol,
     pub target: String,
 }
 
@@ -36,6 +37,7 @@ pub enum Target {
     Sealed(SocketAddr),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Protocol {
     Udp,
     Tcp,
@@ -53,6 +55,12 @@ pub struct OpenSession {
 
 pub struct CloseSession {
     entry_node: EntryNode,
+    timeout: Duration,
+}
+
+pub struct ListSession {
+    entry_node: EntryNode,
+    protocol: Protocol,
     timeout: Duration,
 }
 
@@ -128,6 +136,16 @@ impl CloseSession {
     }
 }
 
+impl ListSession {
+    pub fn new(entry_node: &EntryNode, protocol: &Protocol, timeout: &Duration) -> Self {
+        ListSession {
+            entry_node: entry_node.clone(),
+            protocol: protocol.clone(),
+            timeout: timeout.clone(),
+        }
+    }
+}
+
 impl Session {
     pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Self, Error> {
         let headers = remote_data::authentication_headers(open_session.entry_node.api_token.as_str())?;
@@ -159,7 +177,7 @@ impl Session {
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
 
-        tracing::debug!(?headers, body = ?json, ?url, "post open session");
+        tracing::debug!(?headers, body = ?json, %url, "post open session");
         let fetch_res = client
             .post(url)
             .json(&json)
@@ -202,10 +220,10 @@ impl Session {
 
     pub fn close(&self, client: &blocking::Client, close_session: &CloseSession) -> Result<(), Error> {
         let headers = remote_data::authentication_headers(close_session.entry_node.api_token.as_str())?;
-        let path = format!("api/v3/session/udp/{}/{}", self.ip, self.port);
+        let path = format!("api/v3/session/{}/{}/{}", self.protocol, self.ip, self.port);
         let url = close_session.entry_node.endpoint.join(path.as_str())?;
 
-        tracing::debug!(?headers, ?url, "delete session");
+        tracing::debug!(?headers, %url, "delete session");
         let fetch_res = client
             .delete(url)
             .timeout(close_session.timeout)
@@ -240,5 +258,67 @@ impl Session {
                 Err(Error::RemoteData(e))
             }
         }
+    }
+
+    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Session>, Error> {
+        let headers = remote_data::authentication_headers(list_session.entry_node.api_token.as_str())?;
+        let path = format!("api/v3/session/{}", list_session.protocol);
+        let url = list_session.entry_node.endpoint.join(path.as_str())?;
+
+        tracing::debug!(?headers, %url, "list sessions");
+
+        let fetch_res = client
+            .get(url)
+            .timeout(list_session.timeout)
+            .headers(headers)
+            .send()
+            .map(|res| (res.status(), res.json::<serde_json::Value>()));
+
+        match fetch_res {
+            Ok((status, Ok(json))) if status.is_success() => {
+                let sessions = serde_json::from_value::<Vec<Session>>(json)?;
+                Ok(sessions)
+            }
+            Ok((status, Ok(json))) => {
+                let e = remote_data::CustomError {
+                    reqw_err: None,
+                    status: Some(status),
+                    value: Some(json),
+                };
+                Err(Error::RemoteData(e))
+            }
+            Ok((status, Err(e))) => {
+                let e = remote_data::CustomError {
+                    reqw_err: Some(e),
+                    status: Some(status),
+                    value: None,
+                };
+                Err(Error::RemoteData(e))
+            }
+            Err(e) => {
+                let e = remote_data::CustomError {
+                    reqw_err: Some(e),
+                    status: None,
+                    value: None,
+                };
+                Err(Error::RemoteData(e))
+            }
+        }
+    }
+
+    pub fn verify_open(&self, sessions: &[Session]) -> bool {
+        sessions.iter().any(|entry| entry == self)
+    }
+}
+
+impl cmp::PartialEq for Session {
+    fn eq(&self, other: &Self) -> bool {
+        self.ip == other.ip && self.port == other.port && self.protocol == other.protocol && self.target == other.target
+    }
+}
+
+impl cmp::PartialEq for Protocol {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
     }
 }
