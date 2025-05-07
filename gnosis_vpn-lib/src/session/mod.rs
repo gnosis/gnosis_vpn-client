@@ -2,7 +2,6 @@ use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp;
-use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 use thiserror::Error;
@@ -10,6 +9,10 @@ use thiserror::Error;
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::remote_data;
+
+use protocol::Protocol;
+
+mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -35,12 +38,6 @@ pub enum Path {
 pub enum Target {
     Plain(SocketAddr),
     Sealed(SocketAddr),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Protocol {
-    Udp,
-    Tcp,
 }
 
 pub struct OpenSession {
@@ -74,15 +71,6 @@ pub enum Error {
     Deserialize(#[from] serde_json::Error),
     #[error("Error making http request")]
     RemoteData(remote_data::CustomError),
-}
-
-impl fmt::Display for Protocol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Protocol::Udp => write!(f, "udp"),
-            Protocol::Tcp => write!(f, "tcp"),
-        }
-    }
 }
 
 impl Target {
@@ -314,11 +302,5 @@ impl Session {
 impl cmp::PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
         self.ip == other.ip && self.port == other.port && self.protocol == other.protocol && self.target == other.target
-    }
-}
-
-impl cmp::PartialEq for Protocol {
-    fn eq(&self, other: &Self) -> bool {
-        self.to_string() == other.to_string()
     }
 }
