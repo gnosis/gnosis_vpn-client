@@ -55,6 +55,7 @@ pub struct Core {
     session: Option<OldSession>,
 
     connection: Option<connection::Connection>,
+    wg_connected: bool,
 }
 
 #[derive(Debug)]
@@ -148,6 +149,7 @@ impl Core {
             session: None,
             shutdown_sender: None,
             connection: None,
+            wg_connected: false,
         };
         core.setup();
         core
@@ -279,12 +281,21 @@ impl Core {
 
             conn.establish();
             self.connection = Some(conn);
+            let sender = self.sender.clone();
             thread::spawn(move || loop {
                 crossbeam_channel::select! {
                     recv(r) -> event => {
-                        match event {
-                            Ok(event) => {
                                 tracing::info!(event = ?event, "core received event");
+                        match event {
+                            Ok(connection::Event::Connected) => {
+                                tracing::info!("sending connectwg");
+                                _ = sender.send(Event::ConnectWg).map_err(|e| {
+                                    tracing::warn!(error = ?e, "failed to send connectwg");
+                                });
+                            }
+                            Ok(connection::Event::Disconnected) => {
+                                tracing::info!("sending disconnectwg");
+                                _ = sender.send(Event::DisconnectWg);
                             }
                             Err(e) => {
                                 tracing::warn!(error = ?e, "failed to receive event");
@@ -321,6 +332,14 @@ impl Core {
             Event::FetchListSessions(evt) => self.evt_fetch_list_sessions(evt),
             Event::FetchCloseSession(evt) => self.evt_fetch_close_session(evt),
             Event::CheckSession => self.evt_check_session(),
+            Event::ConnectWg => {
+                self.establish_wg();
+                Ok(())
+            }
+            Event::DisconnectWg => {
+                self.dismantle_wg();
+                Ok(())
+            }
         }
     }
 
@@ -386,6 +405,100 @@ impl Core {
                 }
             },
             remote_data::Event::Retry => self.fetch_addresses(),
+        }
+    }
+
+    fn establish_wg(&mut self) {
+        // connect wireguard session if possible
+        if let (Some(wg), Some(_), Some(privkey), Some(wg_conf), Some(en_host), Some(port)) = (
+            &self.wg,
+            &self.config.wireguard,
+            &self.wg_priv_key(),
+            &self.config.wireguard,
+            &self.config.hoprd_node.as_ref().and_then(|en| en.endpoint.host()),
+            &self.connection.as_ref().and_then(|c| c.port().ok()),
+        ) {
+            let peer_info = wireguard::PeerInfo {
+                public_key: wg_conf.server_public_key.clone(),
+                endpoint: format!("{}:{}", en_host, port),
+            };
+            let interface_info = wireguard::InterfaceInfo {
+                private_key: privkey.clone(),
+                address: wg_conf.address.clone(),
+                allowed_ips: wg_conf.allowed_ips.clone(),
+                listen_port: wg_conf.listen_port,
+            };
+            let info = wireguard::ConnectSession {
+                interface: interface_info,
+                peer: peer_info,
+            };
+
+            // prepare session path for printing
+            let session_path = {
+                let (en, path) = match &self.entry_node {
+                    Some(en) => (en.to_string(), en.path.to_string()),
+                    None => ("<entry_node>".to_string(), "<path>".to_string()),
+                };
+
+                let xn = match &self.config.connection {
+                    Some(conn) => match conn.target.as_ref().and_then(|t| t.host.clone()) {
+                        Some(host) => format!(
+                            "({})({})",
+                            log_output::peer_id(conn.destination.to_string().as_str()),
+                            host
+                        ),
+                        None => format!("({})", log_output::peer_id(conn.destination.to_string().as_str())),
+                    },
+                    None => "<exitnode>".to_string(),
+                };
+
+                if path.is_empty() {
+                    format!("{} <-> {}", en, xn)
+                } else {
+                    format!("{} <-> {} <-> {}", en, path, xn)
+                }
+            };
+
+            match wg.connect_session(&info) {
+                Ok(_) => {
+                    tracing::info!("opened session and wireguard connection");
+                    tracing::info!(
+                        r"
+
+    /---==========================---\
+    |   VPN CONNECTION ESTABLISHED   |
+    \---==========================---/
+
+    route: {}
+",
+                        session_path
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(warn = ?e, "openend session but failed to connect wireguard session");
+                    self.replace_issue(Issue::WireGuard(e));
+                }
+            }
+        }
+    }
+
+    fn dismantle_wg(&self) {
+        if let Some(wg) = &self.wg {
+            match wg.close_session() {
+                Ok(_) => {
+                    tracing::info!(
+                        r"
+
+    /---==========================---\
+    |   VPN CONNECTION BROKEN        |
+    \---==========================---/
+"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(warn = ?e, "error closing wireguard connection");
+                }
+            }
         }
     }
 

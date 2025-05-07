@@ -9,6 +9,8 @@ pub enum Event {
     FetchListSessions(remote_data::Event),
     FetchCloseSession(remote_data::Event),
     CheckSession,
+    ConnectWg,
+    DisconnectWg,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -27,6 +29,8 @@ impl fmt::Display for Event {
             Event::FetchListSessions(evt) => write!(f, "FetchListSessions: {}", evt),
             Event::FetchCloseSession(evt) => write!(f, "FetchCloseSession: {}", evt),
             Event::CheckSession => write!(f, "CheckSession"),
+            Event::ConnectWg => write!(f, "ConnectWg"),
+            Event::DisconnectWg => write!(f, "DisconnectWg"),
         }
     }
 }

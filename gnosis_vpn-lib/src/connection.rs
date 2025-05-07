@@ -16,6 +16,11 @@ pub enum Event {
     Disconnected,
 }
 
+#[derive(Debug)]
+pub enum Error {
+    NotConnected,
+}
+
 /// Represents the different phases of a connection
 /// Up: Idle -> SetUpBridgeSession -> RegisterWg -> TearDownBridgeSession -> SetUpMainSession -> MonitorMainSession
 /// Down: MonitorMainSession -> TearDownMainSession -> SetUpBridgeSession -> UnregisterWg -> TearDownBridgeSession -> Idle
@@ -67,7 +72,7 @@ pub struct Connection {
 }
 
 #[derive(Debug)]
-enum Error {
+enum InternalError {
     SessionNotSet,
     WgRegistrationNotSet,
 }
@@ -152,7 +157,14 @@ impl Connection {
         }
     }
 
-    fn act_up(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, Error> {
+    pub fn port(&self) -> Result<u16, Error> {
+        match self.session_since.as_ref() {
+            Some((session, _)) => Ok(session.port),
+            None => Err(Error::NotConnected),
+        }
+    }
+
+    fn act_up(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
         self.direction = Direction::Up;
         tracing::info!(phase = ?self.phase, "Acting up");
         match self.phase {
@@ -259,7 +271,7 @@ impl Connection {
     }
 
     /// Transition from Idle to SetUpBridgeSession
-    fn idle2bridge(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, Error> {
+    fn idle2bridge(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
         self.phase = Phase::SetUpBridgeSession;
         let params = session::OpenSession::bridge(
             &self.entry_node,
@@ -278,8 +290,8 @@ impl Connection {
     }
 
     /// Transition from SetUpBridgeSession to RegisterWg
-    fn bridge2wg(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, Error> {
-        let (session, _) = self.session_since.as_ref().ok_or(Error::SessionNotSet)?;
+    fn bridge2wg(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
+        let (session, _) = self.session_since.as_ref().ok_or(InternalError::SessionNotSet)?;
         self.phase = Phase::RegisterWg;
         let ri = wg_client::RegisterInput::new(&self.wg_public_key, &self.entry_node.endpoint, &session);
         let client = self.client.clone();
@@ -292,9 +304,11 @@ impl Connection {
     }
 
     /// Transition from RegisterWg to TearDownBridgeSession
-    fn wg2teardown(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, Error> {
-        let (session, _) = self.session_since.as_ref().ok_or(Error::SessionNotSet)?.clone();
-        self.wg_registration.as_ref().ok_or(Error::WgRegistrationNotSet)?;
+    fn wg2teardown(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
+        let (session, _) = self.session_since.as_ref().ok_or(InternalError::SessionNotSet)?.clone();
+        self.wg_registration
+            .as_ref()
+            .ok_or(InternalError::WgRegistrationNotSet)?;
         self.phase = Phase::TearDownBridgeSession;
         let params = session::CloseSession::new(&self.entry_node, &Duration::from_secs(15));
         let client = self.client.clone();
@@ -307,7 +321,7 @@ impl Connection {
     }
 
     /// Transition from TearDownBridgeSession to SetUpMainSession
-    fn teardown2main(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, Error> {
+    fn teardown2main(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
         self.phase = Phase::SetUpMainSession;
         let params = session::OpenSession::main(
             &self.entry_node,
@@ -325,8 +339,8 @@ impl Connection {
         Ok(r)
     }
 
-    fn monitor(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, Error> {
-        let (session, _) = self.session_since.as_ref().ok_or(Error::SessionNotSet)?;
+    fn monitor(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
+        let (session, _) = self.session_since.as_ref().ok_or(InternalError::SessionNotSet)?;
         self.phase = Phase::MonitorMainSession;
         let params = session::ListSession::new(&self.entry_node, &session.protocol, &Duration::from_secs(30));
         let client = self.client.clone();
