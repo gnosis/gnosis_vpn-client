@@ -221,8 +221,7 @@ impl Connection {
                 Ok(sessions) => match self.session_since.as_ref() {
                     Some((session, since)) => {
                         if session.verify_open(&sessions) {
-                            let msg = format!("session verified open since {}", log_output::elapsed(&since));
-                            tracing::info!(?sessions, msg);
+                            tracing::info!(?sessions, "session verified open since {}", log_output::elapsed(&since));
                         } else {
                             tracing::info!("Session is closed");
                             self.session_since = None;
@@ -317,6 +316,7 @@ impl Connection {
 
     fn monitor(&mut self) -> Result<crossbeam_channel::Receiver<Event>, Error> {
         let (session, _) = self.session_since.as_ref().ok_or(Error::SessionNotSet)?;
+        self.phase = Phase::MonitorMainSession;
         let params = session::ListSession::new(&self.entry_node, &session.protocol, &Duration::from_secs(30));
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
