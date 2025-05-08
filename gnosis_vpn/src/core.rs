@@ -340,7 +340,7 @@ impl Core {
                         private_key: privkey.clone(),
                         address: wg_registration.address(),
                         allowed_ips: None,
-                        listen_port: Some(51830),
+                        listen_port: None,
                     };
                     let peer_info = wireguard::PeerInfo {
                         public_key: wg_registration.server_public_key(),
