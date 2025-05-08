@@ -266,7 +266,7 @@ impl Core {
             };
 
             let target_bridge = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000));
-            let target_wg = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 51820));
+            let target_wg = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 51821));
 
             let (s, r) = crossbeam_channel::bounded(1);
             let mut conn = Connection::new(
@@ -340,7 +340,7 @@ impl Core {
                         private_key: privkey.clone(),
                         address: wg_registration.address(),
                         allowed_ips: None,
-                        listen_port: None,
+                        listen_port: Some(51830),
                     };
                     let peer_info = wireguard::PeerInfo {
                         public_key: wg_registration.server_public_key(),
