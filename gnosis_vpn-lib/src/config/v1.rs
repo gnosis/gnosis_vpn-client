@@ -2,15 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
 use std::default::Default;
 use std::fmt::Display;
-use std::fs;
-use std::path::PathBuf;
 use std::vec::Vec;
-use thiserror::Error;
 use url::Url;
 
 use crate::peer_id::PeerId;
-
-const SUPPORTED_CONFIG_VERSIONS: [u8; 1] = [1];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -78,25 +73,6 @@ pub enum SessionPathConfig {
 }
 
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
-
-#[cfg(target_family = "unix")]
-pub fn path() -> PathBuf {
-    match std::env::var("GNOSISVPN_CONFIG_PATH") {
-        Ok(path) => {
-            tracing::info!(?path, "using custom config path");
-            PathBuf::from(path)
-        }
-        Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_PATH),
-        Err(e) => {
-            tracing::warn!(warn = ?e, "using default config path");
-            PathBuf::from(DEFAULT_PATH)
-        }
-    }
-}
-
-pub fn parse(content: &str) -> Result<Config, toml::de::Error> {
-    toml::from_str(&content)
-}
 
 impl Default for Config {
     fn default() -> Self {

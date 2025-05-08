@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 pub mod v1;
+mod v2;
 
-const SUPPORTED_CONFIG_VERSIONS: [u8; 1] = [1];
+const CONFIG_VERSION: u8 = 2;
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 
 #[cfg(target_family = "unix")]
@@ -42,10 +43,26 @@ pub fn read() -> Result<v1::Config, Error> {
             Error::IO(e)
         }
     })?;
-    let config: v1::Config = v1::parse(&content).map_err(Error::Deserialization)?;
-    if SUPPORTED_CONFIG_VERSIONS.contains(&config.version) {
-        Ok(config)
-    } else {
-        Err(Error::VersionMismatch(config.version))
+
+    toml::from_str::<v1::Config>(&content).map_err(Error::Deserialization)
+    /*
+    let res_v2 = toml::from_str::<v2::Config>(&content);
+    match res_v2 {
+        Ok(config) => {
+            if config.version == CONFIG_VERSION {
+                return Ok(config);
+            } else {
+                return Err(Error::VersionMismatch(config.version));
+            }
+        }
+        Err(err) => {
+            let res_v1 = toml::from_str::<v1::Config>(&content);
+            if res_v1.is_ok() {
+                return Err(Error::VersionMismatch(1));
+            } else {
+                return Err(Error::Deserialization(err));
+            }
+        }
     }
+    */
 }
