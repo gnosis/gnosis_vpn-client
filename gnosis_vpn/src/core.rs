@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config::{self, Config};
+use gnosis_vpn_lib::config::{self, v1};
 use gnosis_vpn_lib::connection::{self, Connection};
 use gnosis_vpn_lib::entry_node::EntryNode;
 use gnosis_vpn_lib::peer_id::PeerId;
@@ -34,7 +34,7 @@ pub struct Core {
     // http client
     client: blocking::Client,
     // configuration data
-    config: Config,
+    config: v1::Config,
     // event transmitter
     sender: crossbeam_channel::Sender<Event>,
     // potential non critial user visible errors
@@ -89,7 +89,7 @@ enum Issue {
     WireGuard(wireguard::Error),
 }
 
-fn read_config() -> (Config, Option<Issue>) {
+fn read_config() -> (v1::Config, Option<Issue>) {
     match config::read() {
         Ok(cfg) => {
             tracing::info!("read config without issues");
@@ -97,11 +97,11 @@ fn read_config() -> (Config, Option<Issue>) {
         }
         Err(config::Error::NoFile) => {
             tracing::info!("no config - using default");
-            (Config::default(), None)
+            (v1::Config::default(), None)
         }
         Err(e) => {
             tracing::warn!(warn = ?e, "failed to read config file");
-            (Config::default(), Some(Issue::Config(e)))
+            (v1::Config::default(), Some(Issue::Config(e)))
         }
     }
 }
@@ -219,8 +219,8 @@ impl Core {
             let en_listen_host = session.listen_host.clone().or(internal_port);
             let path = session.path.clone().unwrap_or_default();
             let en_path = match path {
-                config::SessionPathConfig::Hop(hop) => OldPath::Hop(hop),
-                config::SessionPathConfig::Intermediates(ids) => OldPath::Intermediates(ids.clone()),
+                config::v1::SessionPathConfig::Hop(hop) => OldPath::Hop(hop),
+                config::v1::SessionPathConfig::Intermediates(ids) => OldPath::Intermediates(ids.clone()),
             };
             let xn_peer_id = session.destination;
 
@@ -261,8 +261,8 @@ impl Core {
 
             let en_path = session.path.clone().unwrap_or_default();
             let path = match en_path {
-                config::SessionPathConfig::Hop(hop) => session::Path::Hop(hop),
-                config::SessionPathConfig::Intermediates(ids) => session::Path::Intermediates(ids.clone()),
+                config::v1::SessionPathConfig::Hop(hop) => session::Path::Hop(hop),
+                config::v1::SessionPathConfig::Intermediates(ids) => session::Path::Intermediates(ids.clone()),
             };
 
             let target_bridge = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000));
@@ -1113,7 +1113,7 @@ impl fmt::Display for Status {
 impl fmt::Display for Core {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut print = HashMap::new();
-        if self.config == Config::default() {
+        if self.config == v1::Config::default() {
             print.insert("config", "<default>".to_string());
         }
         if !self.issues.is_empty() {

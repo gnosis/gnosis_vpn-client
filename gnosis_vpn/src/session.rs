@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gnosis_vpn_lib::config;
-use gnosis_vpn_lib::config::{SessionCapabilitiesConfig, SessionPathConfig, SessionTargetConfig};
+use gnosis_vpn_lib::config::v1::{SessionCapabilitiesConfig, SessionPathConfig, SessionTargetConfig};
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -46,8 +46,8 @@ pub fn open(
 
     let target = open_session.target.clone().unwrap_or_default();
     let target_type = target.type_.unwrap_or_default();
-    let target_host = target.host.unwrap_or(config::default_session_target_host());
-    let target_port = target.port.unwrap_or(config::default_session_target_port());
+    let target_host = target.host.unwrap_or(config::v1::default_session_target_host());
+    let target_port = target.port.unwrap_or(config::v1::default_session_target_port());
 
     let target_json = json!({ target_type.to_string(): format!("{}:{}", target_host, target_port) });
     json.insert("target".to_string(), target_json);

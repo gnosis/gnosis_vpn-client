@@ -94,32 +94,8 @@ pub fn path() -> PathBuf {
     }
 }
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Config file not found")]
-    NoFile,
-    #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
-    #[error("Deserialization error: {0}")]
-    Deserialization(#[from] toml::de::Error),
-    #[error("Unsupported config version")]
-    VersionMismatch(u8),
-}
-
-pub fn read() -> Result<Config, Error> {
-    let content = fs::read_to_string(path()).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::NoFile
-        } else {
-            Error::IO(e)
-        }
-    })?;
-    let config: Config = toml::from_str(&content).map_err(Error::Deserialization)?;
-    if SUPPORTED_CONFIG_VERSIONS.contains(&config.version) {
-        Ok(config)
-    } else {
-        Err(Error::VersionMismatch(config.version))
-    }
+pub fn parse(content: &str) -> Result<Config, toml::de::Error> {
+    toml::from_str(&content)
 }
 
 impl Default for Config {
