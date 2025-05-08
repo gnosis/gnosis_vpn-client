@@ -22,13 +22,13 @@ pub enum Error {
     WgError(String),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConnectSession {
     pub interface: InterfaceInfo,
     pub peer: PeerInfo,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct InterfaceInfo {
     pub private_key: String,
     pub address: String,
@@ -36,18 +36,11 @@ pub struct InterfaceInfo {
     pub listen_port: Option<u16>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PeerInfo {
     pub public_key: String,
     pub endpoint: String,
 }
-
-/*
-pub struct VerifySession {
-    peer_public_key: String,
-    private_key: String,
-}
-*/
 
 pub fn best_flavor() -> (Option<Box<dyn WireGuard>>, Vec<Error>) {
     let mut errors: Vec<Error> = Vec::new();
@@ -78,16 +71,13 @@ pub trait WireGuard: Debug {
     fn connect_session(&self, session: &ConnectSession) -> Result<(), Error>;
     fn public_key(&self, priv_key: &str) -> Result<String, Error>;
     fn close_session(&self) -> Result<(), Error>;
-    // fn verify_session(&self, session: &VerifySession) -> Result<(), Error>;
 }
 
-/*
-impl VerifySession {
-    pub fn new(peer_public_key: &str, private_key: &str) -> Self {
-        Self {
-            peer_public_key: peer_public_key.to_string(),
-            private_key: private_key.to_string(),
+impl ConnectSession {
+    pub fn new(interface: &InterfaceInfo, peer: &PeerInfo) -> Self {
+        ConnectSession {
+            interface: interface.clone(),
+            peer: peer.clone(),
         }
     }
 }
-*/

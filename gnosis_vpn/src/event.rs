@@ -1,6 +1,8 @@
-use crate::remote_data;
+use gnosis_vpn_lib::connection;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+use crate::remote_data;
 
 #[derive(Debug)]
 pub enum Event {
@@ -9,7 +11,7 @@ pub enum Event {
     FetchListSessions(remote_data::Event),
     FetchCloseSession(remote_data::Event),
     CheckSession,
-    ConnectWg,
+    ConnectWg(connection::ConnectInfo),
     DisconnectWg,
 }
 
@@ -29,7 +31,7 @@ impl fmt::Display for Event {
             Event::FetchListSessions(evt) => write!(f, "FetchListSessions: {}", evt),
             Event::FetchCloseSession(evt) => write!(f, "FetchCloseSession: {}", evt),
             Event::CheckSession => write!(f, "CheckSession"),
-            Event::ConnectWg => write!(f, "ConnectWg"),
+            Event::ConnectWg(..) => write!(f, "ConnectWg"),
             Event::DisconnectWg => write!(f, "DisconnectWg"),
         }
     }

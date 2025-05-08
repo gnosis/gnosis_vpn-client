@@ -12,8 +12,14 @@ use crate::wg_client;
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Connected,
+    Connected(ConnectInfo),
     Disconnected,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConnectInfo {
+    pub endpoint: String,
+    pub wg_registration: wg_client::Register,
 }
 
 #[derive(Debug)]
@@ -230,13 +236,26 @@ impl Connection {
                 }
             },
             InternalEvent::MainSession(res) => match res {
-                Ok(session) => {
-                    self.session_since = Some((session, SystemTime::now()));
-                    _ = self.sender.send(Event::Connected);
-                }
+                Ok(session) => match self.wg_registration.as_ref() {
+                    Some(wg_registration) => {
+                        self.session_since = Some((session.clone(), SystemTime::now()));
+                        let host = self
+                            .entry_node
+                            .endpoint
+                            .host()
+                            .map(|host| host.to_string())
+                            .unwrap_or("".to_string());
+                        _ = self.sender.send(Event::Connected(ConnectInfo {
+                            endpoint: format!("{}:{}", host, session.port),
+                            wg_registration: wg_registration.clone(),
+                        }));
+                    }
+                    None => {
+                        tracing::error!("No wg registration found, when it should have been set");
+                    }
+                },
                 Err(error) => {
                     tracing::error!(?error, "Failed to open main session");
-                    self.phase = Phase::TearDownBridgeSession;
                 }
             },
             InternalEvent::ListSessions(res) => match res {

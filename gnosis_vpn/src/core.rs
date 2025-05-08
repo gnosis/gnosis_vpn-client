@@ -284,26 +284,23 @@ impl Core {
             let sender = self.sender.clone();
             thread::spawn(move || loop {
                 crossbeam_channel::select! {
-                    recv(r) -> event => {
-                                tracing::info!(event = ?event, "core received event");
-                        match event {
-                            Ok(connection::Event::Connected) => {
-                                tracing::info!("sending connectwg");
-                                _ = sender.send(Event::ConnectWg).map_err(|e| {
-                                    tracing::warn!(error = ?e, "failed to send connectwg");
-                                });
-                            }
-                            Ok(connection::Event::Disconnected) => {
-                                tracing::info!("sending disconnectwg");
-                                _ = sender.send(Event::DisconnectWg);
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = ?e, "failed to receive event");
-                                break;
-                            }
+                recv(r) -> event => {
+                            tracing::info!(event = ?event, "core received event");
+                    match event {
+                        Ok(connection::Event::Connected(conninfo)) => {
+                            _ = sender.send(Event::ConnectWg(conninfo));
+                            break;
+                        }
+                        Ok(connection::Event::Disconnected) => {
+                            tracing::info!("sending disconnectwg");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                            break;
                         }
                     }
                 }
+                            }
             });
         }
         Ok(())
@@ -332,12 +329,33 @@ impl Core {
             Event::FetchListSessions(evt) => self.evt_fetch_list_sessions(evt),
             Event::FetchCloseSession(evt) => self.evt_fetch_close_session(evt),
             Event::CheckSession => self.evt_check_session(),
-            Event::ConnectWg => {
-                self.establish_wg();
+            Event::ConnectWg(connection::ConnectInfo {
+                endpoint,
+                wg_registration,
+            }) => {
+                tracing::info!("trying wg conn");
+                if let (Some(wg), Some(privkey)) = (&self.wg, self.wg_priv_key()) {
+                    tracing::info!("core received connected with wg_priv_key");
+                    let interface_info = wireguard::InterfaceInfo {
+                        private_key: privkey.clone(),
+                        address: wg_registration.address(),
+                        allowed_ips: None,
+                        listen_port: None,
+                    };
+                    let peer_info = wireguard::PeerInfo {
+                        public_key: wg_registration.server_public_key(),
+                        endpoint,
+                    };
+                    let info = wireguard::ConnectSession::new(&interface_info, &peer_info);
+                    let res = wg.connect_session(&info);
+                    tracing::info!(?res, "res wg");
+                }
+
+                // self.establish_wg();
                 Ok(())
             }
             Event::DisconnectWg => {
-                self.dismantle_wg();
+                // self.dismantle_wg();
                 Ok(())
             }
         }
@@ -409,7 +427,13 @@ impl Core {
     }
 
     fn establish_wg(&mut self) {
-        tracing::info!(self = ?self, "establish wg");
+        tracing::info!(wg = ?self.wg,
+            wg_conf = ?self.config.wireguard,
+            privkey = ?self.wg_priv_key(),
+            en_host = ?self.config.hoprd_node.as_ref().and_then(|en| en.endpoint.host()),
+            port = ?self.connection.as_ref().and_then(|c| c.port().ok()),
+            conn = ?self.connection,
+            "foobar");
         // connect wireguard session if possible
         if let (Some(wg), Some(wg_conf), Some(privkey), Some(en_host), Some(port)) = (
             &self.wg,

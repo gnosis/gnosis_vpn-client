@@ -44,6 +44,16 @@ impl RegisterInput {
     }
 }
 
+impl Register {
+    pub fn address(&self) -> String {
+        format!("{}/32", self.ip)
+    }
+
+    pub fn server_public_key(&self) -> String {
+        self.server_public_key.clone()
+    }
+}
+
 pub fn register(client: &blocking::Client, input: &RegisterInput) -> Result<Register, Error> {
     let headers = remote_data::json_headers();
     let mut url = input.endpoint.join("api/v1/clients/register")?;
