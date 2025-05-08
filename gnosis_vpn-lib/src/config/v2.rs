@@ -70,6 +70,18 @@ struct WireGuard {
     listen_port: Option<u16>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            version: 2,
+            hoprd_node: None,
+            destinations: None,
+            connection: None,
+            wireguard: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Config;

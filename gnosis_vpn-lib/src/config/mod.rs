@@ -8,13 +8,12 @@ mod v2;
 const CONFIG_VERSION: u8 = 2;
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 
+pub type Config = v2::Config;
+
 #[cfg(target_family = "unix")]
 pub fn path() -> PathBuf {
     match std::env::var("GNOSISVPN_CONFIG_PATH") {
-        Ok(path) => {
-            tracing::info!(?path, "using custom config path");
-            PathBuf::from(path)
-        }
+        Ok(path) => PathBuf::from(path),
         Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_PATH),
         Err(e) => {
             tracing::warn!(warn = ?e, "using default config path");
@@ -35,7 +34,7 @@ pub enum Error {
     VersionMismatch(u8),
 }
 
-pub fn read() -> Result<v1::Config, Error> {
+pub fn read() -> Result<v2::Config, Error> {
     let content = fs::read_to_string(path()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
@@ -44,8 +43,6 @@ pub fn read() -> Result<v1::Config, Error> {
         }
     })?;
 
-    toml::from_str::<v1::Config>(&content).map_err(Error::Deserialization)
-    /*
     let res_v2 = toml::from_str::<v2::Config>(&content);
     match res_v2 {
         Ok(config) => {
@@ -64,5 +61,4 @@ pub fn read() -> Result<v1::Config, Error> {
             }
         }
     }
-    */
 }

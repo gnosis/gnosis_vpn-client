@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config::{self, v1};
+use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection};
 use gnosis_vpn_lib::entry_node::EntryNode;
 use gnosis_vpn_lib::peer_id::PeerId;
@@ -34,7 +34,7 @@ pub struct Core {
     // http client
     client: blocking::Client,
     // configuration data
-    config: v1::Config,
+    config: Config,
     // event transmitter
     sender: crossbeam_channel::Sender<Event>,
     // potential non critial user visible errors
@@ -89,7 +89,7 @@ enum Issue {
     WireGuard(wireguard::Error),
 }
 
-fn read_config() -> (v1::Config, Option<Issue>) {
+fn read_config() -> (Config, Option<Issue>) {
     match config::read() {
         Ok(cfg) => {
             tracing::info!("read config without issues");
@@ -97,11 +97,11 @@ fn read_config() -> (v1::Config, Option<Issue>) {
         }
         Err(config::Error::NoFile) => {
             tracing::info!("no config - using default");
-            (v1::Config::default(), None)
+            (Config::default(), None)
         }
         Err(e) => {
             tracing::warn!(warn = ?e, "failed to read config file");
-            (v1::Config::default(), Some(Issue::Config(e)))
+            (Config::default(), Some(Issue::Config(e)))
         }
     }
 }
@@ -170,9 +170,6 @@ impl Core {
     }
 
     fn wg_priv_key(&self) -> Option<String> {
-        if let Some(key) = &self.config.wireguard.as_ref().and_then(|wg| wg.private_key.clone()) {
-            return Some(key.clone());
-        }
         if let Some(key) = &self.state.wg_private_key {
             return Some(key.clone());
         }
@@ -180,9 +177,8 @@ impl Core {
     }
 
     fn setup_wg_priv_key(&mut self) {
-        // if wg is available check private key
         // gengerate a new one if none
-        if let (Some(wg), Some(_), None) = (&self.wg, &self.config.wireguard, &self.wg_priv_key()) {
+        if let (Some(wg), None) = (&self.wg, &self.wg_priv_key()) {
             let priv_key = match wg.generate_key() {
                 Ok(priv_key) => priv_key,
                 Err(e) => {
