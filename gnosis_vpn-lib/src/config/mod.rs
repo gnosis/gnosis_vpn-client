@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
 
+use crate::entry_node::EntryNode;
+
 pub mod v1;
 mod v2;
 
@@ -23,7 +25,7 @@ pub fn path() -> PathBuf {
 }
 
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum ReadError {
     #[error("Config file not found")]
     NoFile,
     #[error("IO error: {0}")]
@@ -34,12 +36,18 @@ pub enum Error {
     VersionMismatch(u8),
 }
 
-pub fn read() -> Result<v2::Config, Error> {
+#[derive(Error, Debug)]
+pub enum ConfigIssue {
+    #[error("[hoprd_node] entry missing")]
+    HoprdNodeMissing,
+}
+
+pub fn read() -> Result<Config, ReadError> {
     let content = fs::read_to_string(path()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            Error::NoFile
+            ReadError::NoFile
         } else {
-            Error::IO(e)
+            ReadError::IO(e)
         }
     })?;
 
@@ -49,16 +57,30 @@ pub fn read() -> Result<v2::Config, Error> {
             if config.version == CONFIG_VERSION {
                 return Ok(config);
             } else {
-                return Err(Error::VersionMismatch(config.version));
+                return Err(ReadError::VersionMismatch(config.version));
             }
         }
         Err(err) => {
             let res_v1 = toml::from_str::<v1::Config>(&content);
             if res_v1.is_ok() {
-                return Err(Error::VersionMismatch(1));
+                return Err(ReadError::VersionMismatch(1));
             } else {
-                return Err(Error::Deserialization(err));
+                return Err(ReadError::Deserialization(err));
             }
         }
+    }
+}
+
+impl Config {
+    pub fn entry_node(&self) -> Result<EntryNode, ConfigIssue> {
+        let hoprd_node = self.hoprd_node.as_ref().ok_or(ConfigIssue::HoprdNodeMissing)?;
+        let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
+        let listen_host = self
+            .connection
+            .as_ref()
+            .and_then(|c| c.listen_host.clone())
+            .or(internal_connection_port);
+        let en = EntryNode::new(hoprd_node.endpoint.clone(), hoprd_node.api_token.clone(), listen_host);
+        Ok(en)
     }
 }

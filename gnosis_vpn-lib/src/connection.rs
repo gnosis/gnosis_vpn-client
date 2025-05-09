@@ -1,4 +1,5 @@
 use crossbeam_channel;
+use libp2p_identity::PeerId as libp2p_PeerId;
 use rand::Rng;
 use reqwest::{blocking, StatusCode};
 use std::thread;
@@ -59,6 +60,14 @@ enum InternalEvent {
 }
 
 #[derive(Clone, Debug)]
+pub struct Destination {
+    peer_id: libp2p_PeerId,
+    path: session::Path,
+    target_bridge: session::Target,
+    target_wg: session::Target,
+}
+
+#[derive(Clone, Debug)]
 pub struct Connection {
     phase: Phase,
     direction: Direction,
@@ -69,10 +78,7 @@ pub struct Connection {
     wg_registration: Option<wg_client::Register>,
     // input data
     entry_node: EntryNode,
-    destination: String,
-    path: session::Path,
-    target_bridge: session::Target,
-    target_wg: session::Target,
+    destination: Destination,
     wg_public_key: String,
     sender: crossbeam_channel::Sender<Event>,
 }
@@ -83,28 +89,38 @@ enum InternalError {
     WgRegistrationNotSet,
 }
 
-impl Connection {
+impl Destination {
     pub fn new(
-        entry_node: &EntryNode,
-        destination: &str,
+        peer_id: &libp2p_PeerId,
         path: &session::Path,
         target_bridge: &session::Target,
         target_wg: &session::Target,
+    ) -> Self {
+        Self {
+            peer_id: peer_id.clone(),
+            path: path.clone(),
+            target_bridge: target_bridge.clone(),
+            target_wg: target_wg.clone(),
+        }
+    }
+}
+
+impl Connection {
+    pub fn new(
+        entry_node: &EntryNode,
+        destination: &Destination,
         wg_public_key: &str,
         sender: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Connection {
             abort_sender: None,
             client: blocking::Client::new(),
-            destination: destination.to_string(),
+            destination: destination.clone(),
             direction: Direction::Halt,
             entry_node: entry_node.clone(),
-            path: path.clone(),
             phase: Phase::Idle,
             sender: sender.clone(),
             session_since: None,
-            target_bridge: target_bridge.clone(),
-            target_wg: target_wg.clone(),
             wg_public_key: wg_public_key.to_string(),
             wg_registration: None,
         }
@@ -294,9 +310,9 @@ impl Connection {
         self.phase = Phase::SetUpBridgeSession;
         let params = session::OpenSession::bridge(
             &self.entry_node,
-            &self.destination,
-            &self.path,
-            &self.target_bridge,
+            &self.destination.peer_id.to_string(),
+            &self.destination.path,
+            &self.destination.target_bridge,
             &Duration::from_secs(15),
         );
         let client = self.client.clone();
@@ -344,9 +360,9 @@ impl Connection {
         self.phase = Phase::SetUpMainSession;
         let params = session::OpenSession::main(
             &self.entry_node,
-            &self.destination,
-            &self.path,
-            &self.target_wg,
+            &self.destination.peer_id.to_string(),
+            &self.destination.path,
+            &self.destination.target_wg,
             &Duration::from_secs(20),
         );
         let client = self.client.clone();

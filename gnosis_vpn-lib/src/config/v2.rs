@@ -10,17 +10,17 @@ use crate::peer_id::PeerId;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
-    hoprd_node: Option<HoprdNode>,
+    pub hoprd_node: Option<HoprdNode>,
     destinations: Option<HashMap<String, Destination>>,
-    connection: Option<Connection>,
+    pub connection: Option<Connection>,
     wireguard: Option<WireGuard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct HoprdNode {
-    endpoint: Url,
-    api_token: String,
-    internal_connection_port: Option<u16>,
+    pub endpoint: Url,
+    pub api_token: String,
+    pub internal_connection_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -40,7 +40,7 @@ enum DestinationPath {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Connection {
-    listen_host: Option<String>,
+    pub listen_host: Option<String>,
     tcp: Option<ConnectionProtocol>,
     udp: Option<ConnectionProtocol>,
     target: Option<ConnectionTarget>,
