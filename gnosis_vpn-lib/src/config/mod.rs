@@ -84,32 +84,30 @@ impl Config {
     }
 
     pub fn destinations(&self) -> HashMap<String, Destination> {
-        let config_dests = self.destinations.unwrap_or(HashMap::new());
+        let config_dests = self.destinations.clone().unwrap_or(HashMap::new());
+        let connection = self.connection.as_ref();
         config_dests
             .iter()
             .map(|(k, v)| {
-                let path = match v.path {
+                let path = match v.path.clone() {
                     v2::DestinationPath::Intermediates(p) => session::Path::Intermediates(p),
                     v2::DestinationPath::Hops(h) => session::Path::Hops(h),
                 };
 
-                let bridge_caps = self
-                    .connection
-                    .and_then(|c| c.bridge)
+                let bridge_caps = connection
+                    .and_then(|c| c.bridge.as_ref())
                     .and_then(|b| b.capabilities.clone())
                     .unwrap_or(v2::Connection::default_bridge_capabilities())
                     .iter()
                     .map(|cap| <v2::SessionCapability as Into<session::Capability>>::into(cap.clone()))
                     .collect::<Vec<session::Capability>>();
-                let bridge_target_socket = self
-                    .connection
-                    .and_then(|c| c.bridge)
+                let bridge_target_socket = connection
+                    .and_then(|c| c.bridge.as_ref())
                     .and_then(|b| b.target)
                     .unwrap_or(v2::Connection::default_bridge_target());
-                let bridge_target_type = self
-                    .connection
-                    .and_then(|c| c.bridge)
-                    .and_then(|b| b.target_type)
+                let bridge_target_type = connection
+                    .and_then(|c| c.bridge.as_ref())
+                    .and_then(|b| b.target_type.clone())
                     .unwrap_or(v2::SessionTargetType::default());
                 let bridge_target = match bridge_target_type {
                     v2::SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
@@ -117,23 +115,20 @@ impl Config {
                 };
                 let params_bridge = SessionParameters::new(&bridge_target, &bridge_caps);
 
-                let wg_caps = self
-                    .connection
-                    .and_then(|c| c.wg)
+                let wg_caps = connection
+                    .and_then(|c| c.wg.as_ref())
                     .and_then(|w| w.capabilities.clone())
                     .unwrap_or(v2::Connection::default_wg_capabilities())
                     .iter()
                     .map(|cap| <v2::SessionCapability as Into<session::Capability>>::into(cap.clone()))
                     .collect::<Vec<session::Capability>>();
-                let wg_target_socket = self
-                    .connection
-                    .and_then(|c| c.wg)
+                let wg_target_socket = connection
+                    .and_then(|c| c.wg.as_ref())
                     .and_then(|w| w.target)
                     .unwrap_or(v2::Connection::default_wg_target());
-                let wg_target_type = self
-                    .connection
-                    .and_then(|c| c.wg)
-                    .and_then(|w| w.target_type)
+                let wg_target_type = connection
+                    .and_then(|c| c.wg.as_ref())
+                    .and_then(|w| w.target_type.clone())
                     .unwrap_or(v2::SessionTargetType::default());
                 let wg_target = match wg_target_type {
                     v2::SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
