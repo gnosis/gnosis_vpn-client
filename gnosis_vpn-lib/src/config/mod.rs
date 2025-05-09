@@ -99,11 +99,8 @@ impl Config {
                     .and_then(|b| b.capabilities.clone())
                     .unwrap_or(v2::Connection::default_bridge_capabilities())
                     .iter()
-                    .map(|cap| match cap {
-                        v2::SessionCapability::Segmentation => session::Capability::Segmentation,
-                        v2::SessionCapability::Retransmission => session::Capability::Retransmission,
-                    })
-                    .collect::<Vec<_>>();
+                    .map(|cap| <v2::SessionCapability as Into<session::Capability>>::into(cap.clone()))
+                    .collect::<Vec<session::Capability>>();
                 let bridge_target_socket = self
                     .connection
                     .and_then(|c| c.bridge)
@@ -114,24 +111,37 @@ impl Config {
                     .and_then(|c| c.bridge)
                     .and_then(|b| b.target_type)
                     .unwrap_or(v2::SessionTargetType::default());
-
                 let bridge_target = match bridge_target_type {
                     v2::SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
                     v2::SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
                 };
                 let params_bridge = SessionParameters::new(&bridge_target, &bridge_caps);
-                let wg_target = self
-                    .connection
-                    .and_then(|c| c.wg)
-                    .and_then(|w| w.target)
-                    .unwrap_or(v2::Connection::default_wg_target());
+
                 let wg_caps = self
                     .connection
                     .and_then(|c| c.wg)
                     .and_then(|w| w.capabilities.clone())
-                    .unwrap_or(v2::Connection::default_wg_capabilities());
-                let params_wg = SessionParameters::new(wg_target, wg_caps);
-                let dest = Destination::new(&v.peer_id, &path, params_bridge, params_wg);
+                    .unwrap_or(v2::Connection::default_wg_capabilities())
+                    .iter()
+                    .map(|cap| <v2::SessionCapability as Into<session::Capability>>::into(cap.clone()))
+                    .collect::<Vec<session::Capability>>();
+                let wg_target_socket = self
+                    .connection
+                    .and_then(|c| c.wg)
+                    .and_then(|w| w.target)
+                    .unwrap_or(v2::Connection::default_wg_target());
+                let wg_target_type = self
+                    .connection
+                    .and_then(|c| c.wg)
+                    .and_then(|w| w.target_type)
+                    .unwrap_or(v2::SessionTargetType::default());
+                let wg_target = match wg_target_type {
+                    v2::SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
+                    v2::SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
+                };
+                let params_wg = SessionParameters::new(&wg_target, &wg_caps);
+
+                let dest = Destination::new(&v.peer_id, &path, &params_bridge, &params_wg);
                 (k.clone(), dest)
             })
             .collect()

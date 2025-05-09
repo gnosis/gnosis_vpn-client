@@ -370,9 +370,9 @@ impl Connection {
         self.phase = Phase::SetUpMainSession;
         let params = session::OpenSession::main(
             &self.entry_node,
-            &self.destination.peer_id.to_string(),
+            &self.destination.peer_id,
             &self.destination.path,
-            &self.destination.target_wg,
+            &self.destination.target,
             &Duration::from_secs(20),
         );
         let client = self.client.clone();

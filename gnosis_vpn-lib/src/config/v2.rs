@@ -6,6 +6,7 @@ use std::vec::Vec;
 use url::Url;
 
 use crate::peer_id::PeerId;
+use crate::session;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -77,6 +78,15 @@ struct ConnectionTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct WireGuard {
     listen_port: Option<u16>,
+}
+
+impl Into<session::Capability> for SessionCapability {
+    fn into(self) -> session::Capability {
+        match self {
+            SessionCapability::Segmentation => session::Capability::Segmentation,
+            SessionCapability::Retransmission => session::Capability::Retransmission,
+        }
+    }
 }
 
 impl Connection {
