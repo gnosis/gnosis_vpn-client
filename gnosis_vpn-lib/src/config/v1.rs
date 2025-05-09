@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
+use std::collections::HashMap;
 use std::default::Default;
 use std::fmt::Display;
 use std::vec::Vec;
 use url::Url;
 
+use super::ConfigError;
+
+use crate::connection::Destination as ConnDestination;
+use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -116,4 +121,28 @@ pub fn default_session_target_host() -> String {
 
 pub fn default_session_target_port() -> u16 {
     51820
+}
+
+impl Config {
+    pub fn entry_node(&self) -> Result<EntryNode, ConfigError> {
+        let hoprd_node = self.hoprd_node.as_ref().ok_or(ConfigError::HoprdNodeMissing)?;
+
+        let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
+
+        let listen_host = self
+            .connection
+            .as_ref()
+            .and_then(|c| c.listen_host.clone())
+            .or(internal_connection_port);
+
+        Ok(EntryNode::new(
+            hoprd_node.endpoint.clone(),
+            hoprd_node.api_token.clone(),
+            listen_host,
+        ))
+    }
+
+    pub fn destinations(&self) -> HashMap<String, ConnDestination> {
+        HashMap::new()
+    }
 }

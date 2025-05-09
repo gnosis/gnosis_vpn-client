@@ -5,33 +5,36 @@ use std::net::SocketAddr;
 use std::vec::Vec;
 use url::Url;
 
+use super::ConfigError;
+use crate::connection::{Destination as ConnDestination, SessionParameters};
+use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::session;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
-    pub hoprd_node: HoprdNode,
-    pub destinations: Option<HashMap<String, Destination>>,
-    pub connection: Option<Connection>,
-    pub wireguard: Option<WireGuard>,
+    hoprd_node: HoprdNode,
+    destinations: Option<HashMap<String, Destination>>,
+    connection: Option<Connection>,
+    wireguard: Option<WireGuard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct HoprdNode {
-    pub endpoint: Url,
-    pub api_token: String,
-    pub internal_connection_port: Option<u16>,
+struct HoprdNode {
+    endpoint: Url,
+    api_token: String,
+    internal_connection_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Destination {
-    pub peer_id: PeerId,
-    pub path: DestinationPath,
+struct Destination {
+    peer_id: PeerId,
+    path: DestinationPath,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum DestinationPath {
+enum DestinationPath {
     #[serde(alias = "intermediates")]
     Intermediates(Vec<PeerId>),
     #[serde(alias = "hops")]
@@ -39,21 +42,21 @@ pub enum DestinationPath {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Connection {
-    pub listen_host: Option<String>,
-    pub bridge: Option<ConnectionProtocol>,
-    pub wg: Option<ConnectionProtocol>,
+struct Connection {
+    listen_host: Option<String>,
+    bridge: Option<ConnectionProtocol>,
+    wg: Option<ConnectionProtocol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ConnectionProtocol {
-    pub capabilities: Option<Vec<SessionCapability>>,
-    pub target: Option<SocketAddr>,
-    pub target_type: Option<SessionTargetType>,
+struct ConnectionProtocol {
+    capabilities: Option<Vec<SessionCapability>>,
+    target: Option<SocketAddr>,
+    target_type: Option<SessionTargetType>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum SessionCapability {
+enum SessionCapability {
     #[serde(alias = "segmentation")]
     Segmentation,
     #[serde(alias = "retransmission")]
@@ -61,7 +64,7 @@ pub enum SessionCapability {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub enum SessionTargetType {
+enum SessionTargetType {
     #[default]
     #[serde(alias = "plain")]
     Plain,
@@ -104,6 +107,81 @@ impl Connection {
     }
     pub fn default_listen_host() -> String {
         ":1422".to_string()
+    }
+}
+
+impl Config {
+    pub fn entry_node(&self) -> Result<EntryNode, ConfigError> {
+        let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
+        let listen_host = self
+            .connection
+            .as_ref()
+            .and_then(|c| c.listen_host.clone())
+            .or(internal_connection_port);
+        Ok(EntryNode::new(
+            self.hoprd_node.endpoint.clone(),
+            self.hoprd_node.api_token.clone(),
+            listen_host,
+        ))
+    }
+
+    pub fn destinations(&self) -> HashMap<String, ConnDestination> {
+        let config_dests = self.destinations.clone().unwrap_or(HashMap::new());
+        let connection = self.connection.as_ref();
+        config_dests
+            .iter()
+            .map(|(k, v)| {
+                let path = match v.path.clone() {
+                    DestinationPath::Intermediates(p) => session::Path::Intermediates(p),
+                    DestinationPath::Hops(h) => session::Path::Hops(h),
+                };
+
+                let bridge_caps = connection
+                    .and_then(|c| c.bridge.as_ref())
+                    .and_then(|b| b.capabilities.clone())
+                    .unwrap_or(Connection::default_bridge_capabilities())
+                    .iter()
+                    .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
+                    .collect::<Vec<session::Capability>>();
+                let bridge_target_socket = connection
+                    .and_then(|c| c.bridge.as_ref())
+                    .and_then(|b| b.target)
+                    .unwrap_or(Connection::default_bridge_target());
+                let bridge_target_type = connection
+                    .and_then(|c| c.bridge.as_ref())
+                    .and_then(|b| b.target_type.clone())
+                    .unwrap_or(SessionTargetType::default());
+                let bridge_target = match bridge_target_type {
+                    SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
+                    SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
+                };
+                let params_bridge = SessionParameters::new(&bridge_target, &bridge_caps);
+
+                let wg_caps = connection
+                    .and_then(|c| c.wg.as_ref())
+                    .and_then(|w| w.capabilities.clone())
+                    .unwrap_or(Connection::default_wg_capabilities())
+                    .iter()
+                    .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
+                    .collect::<Vec<session::Capability>>();
+                let wg_target_socket = connection
+                    .and_then(|c| c.wg.as_ref())
+                    .and_then(|w| w.target)
+                    .unwrap_or(Connection::default_wg_target());
+                let wg_target_type = connection
+                    .and_then(|c| c.wg.as_ref())
+                    .and_then(|w| w.target_type.clone())
+                    .unwrap_or(SessionTargetType::default());
+                let wg_target = match wg_target_type {
+                    SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
+                    SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
+                };
+                let params_wg = SessionParameters::new(&wg_target, &wg_caps);
+
+                let dest = ConnDestination::new(&v.peer_id, &path, &params_bridge, &params_wg);
+                (k.clone(), dest)
+            })
+            .collect()
     }
 }
 

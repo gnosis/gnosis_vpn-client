@@ -3,17 +3,18 @@ use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::connection::{Destination, SessionParameters};
+use crate::connection::Destination;
 use crate::entry_node::EntryNode;
-use crate::session;
 
 pub mod v1;
 mod v2;
 
-const CONFIG_VERSION: u8 = 2;
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 
-pub type Config = v2::Config;
+pub enum Config {
+    V1(v1::Config),
+    V2(v2::Config),
+}
 
 #[cfg(target_family = "unix")]
 pub fn path() -> PathBuf {
@@ -27,7 +28,7 @@ pub fn path() -> PathBuf {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum ReadError {
     #[error("Config file not found")]
     NoFile,
@@ -37,6 +38,12 @@ pub enum ReadError {
     Deserialization(#[from] toml::de::Error),
     #[error("Unsupported config version")]
     VersionMismatch(u8),
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("hoprd_node is missing")]
+    HoprdNodeMissing,
 }
 
 pub fn read() -> Result<Config, ReadError> {
@@ -51,94 +58,44 @@ pub fn read() -> Result<Config, ReadError> {
     let res_v2 = toml::from_str::<v2::Config>(&content);
     match res_v2 {
         Ok(config) => {
-            if config.version == CONFIG_VERSION {
-                return Ok(config);
+            if config.version == 2 {
+                return Ok(Config::V2(config));
             } else {
                 return Err(ReadError::VersionMismatch(config.version));
             }
         }
         Err(err) => {
+            tracing::warn!(warn = ?err, "failed to parse v2 config, trying v1");
             let res_v1 = toml::from_str::<v1::Config>(&content);
-            if res_v1.is_ok() {
-                return Err(ReadError::VersionMismatch(1));
-            } else {
-                return Err(ReadError::Deserialization(err));
+            match res_v1 {
+                Ok(config) => {
+                    if config.version == 1 {
+                        tracing::warn!("found v1 configuration file, please update to configuration file version 2");
+                        return Ok(Config::V1(config));
+                    } else {
+                        return Err(ReadError::VersionMismatch(config.version));
+                    }
+                }
+                Err(err) => {
+                    return Err(ReadError::Deserialization(err));
+                }
             }
         }
     }
 }
 
 impl Config {
-    pub fn entry_node(&self) -> EntryNode {
-        let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
-        let listen_host = self
-            .connection
-            .as_ref()
-            .and_then(|c| c.listen_host.clone())
-            .or(internal_connection_port);
-        EntryNode::new(
-            self.hoprd_node.endpoint.clone(),
-            self.hoprd_node.api_token.clone(),
-            listen_host,
-        )
+    pub fn entry_node(&self) -> Result<EntryNode, ConfigError> {
+        match self {
+            Config::V1(config) => config.entry_node(),
+            Config::V2(config) => config.entry_node(),
+        }
     }
 
     pub fn destinations(&self) -> HashMap<String, Destination> {
-        let config_dests = self.destinations.clone().unwrap_or(HashMap::new());
-        let connection = self.connection.as_ref();
-        config_dests
-            .iter()
-            .map(|(k, v)| {
-                let path = match v.path.clone() {
-                    v2::DestinationPath::Intermediates(p) => session::Path::Intermediates(p),
-                    v2::DestinationPath::Hops(h) => session::Path::Hops(h),
-                };
-
-                let bridge_caps = connection
-                    .and_then(|c| c.bridge.as_ref())
-                    .and_then(|b| b.capabilities.clone())
-                    .unwrap_or(v2::Connection::default_bridge_capabilities())
-                    .iter()
-                    .map(|cap| <v2::SessionCapability as Into<session::Capability>>::into(cap.clone()))
-                    .collect::<Vec<session::Capability>>();
-                let bridge_target_socket = connection
-                    .and_then(|c| c.bridge.as_ref())
-                    .and_then(|b| b.target)
-                    .unwrap_or(v2::Connection::default_bridge_target());
-                let bridge_target_type = connection
-                    .and_then(|c| c.bridge.as_ref())
-                    .and_then(|b| b.target_type.clone())
-                    .unwrap_or(v2::SessionTargetType::default());
-                let bridge_target = match bridge_target_type {
-                    v2::SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
-                    v2::SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
-                };
-                let params_bridge = SessionParameters::new(&bridge_target, &bridge_caps);
-
-                let wg_caps = connection
-                    .and_then(|c| c.wg.as_ref())
-                    .and_then(|w| w.capabilities.clone())
-                    .unwrap_or(v2::Connection::default_wg_capabilities())
-                    .iter()
-                    .map(|cap| <v2::SessionCapability as Into<session::Capability>>::into(cap.clone()))
-                    .collect::<Vec<session::Capability>>();
-                let wg_target_socket = connection
-                    .and_then(|c| c.wg.as_ref())
-                    .and_then(|w| w.target)
-                    .unwrap_or(v2::Connection::default_wg_target());
-                let wg_target_type = connection
-                    .and_then(|c| c.wg.as_ref())
-                    .and_then(|w| w.target_type.clone())
-                    .unwrap_or(v2::SessionTargetType::default());
-                let wg_target = match wg_target_type {
-                    v2::SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
-                    v2::SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
-                };
-                let params_wg = SessionParameters::new(&wg_target, &wg_caps);
-
-                let dest = Destination::new(&v.peer_id, &path, &params_bridge, &params_wg);
-                (k.clone(), dest)
-            })
-            .collect()
+        match self {
+            Config::V1(config) => config.destinations(),
+            Config::V2(config) => config.destinations(),
+        }
     }
 }
