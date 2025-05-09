@@ -172,7 +172,7 @@ impl Session {
         json.insert("target".to_string(), target_json);
 
         let path_json = match open_session.path.clone() {
-            Path::Hop(hop) => {
+            Path::Hops(hop) => {
                 json!({"Hops": hop})
             }
             Path::Intermediates(ids) => {

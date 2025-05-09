@@ -320,9 +320,10 @@ impl Connection {
         self.phase = Phase::SetUpBridgeSession;
         let params = session::OpenSession::bridge(
             &self.entry_node,
-            &self.destination.peer_id.to_string(),
+            &self.destination.peer_id,
+            &self.destination.bridge.capabilities,
             &self.destination.path,
-            &self.destination.target_bridge,
+            &self.destination.bridge.target,
             &Duration::from_secs(15),
         );
         let client = self.client.clone();
@@ -371,8 +372,9 @@ impl Connection {
         let params = session::OpenSession::main(
             &self.entry_node,
             &self.destination.peer_id,
+            &self.destination.wg.capabilities,
             &self.destination.path,
-            &self.destination.target,
+            &self.destination.wg.target,
             &Duration::from_secs(20),
         );
         let client = self.client.clone();

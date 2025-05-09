@@ -18,14 +18,14 @@ pub struct Config {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct HoprdNode {
+pub struct HoprdNode {
     pub endpoint: Url,
     pub api_token: String,
     pub internal_connection_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct Destination {
+pub struct Destination {
     pub peer_id: PeerId,
     pub path: DestinationPath,
 }
