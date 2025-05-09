@@ -10,10 +10,10 @@ use crate::peer_id::PeerId;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
-    pub hoprd_node: Option<HoprdNode>,
-    destinations: Option<HashMap<String, Destination>>,
+    pub hoprd_node: HoprdNode,
+    pub destinations: Option<HashMap<String, Destination>>,
     pub connection: Option<Connection>,
-    wireguard: Option<WireGuard>,
+    pub wireguard: Option<WireGuard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,13 +25,12 @@ struct HoprdNode {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Destination {
-    peer_id: PeerId,
-    path: DestinationPath,
-    target: Option<ConnectionTarget>,
+    pub peer_id: PeerId,
+    pub path: DestinationPath,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum DestinationPath {
+pub enum DestinationPath {
     #[serde(alias = "intermediates")]
     Intermediates(Vec<PeerId>),
     #[serde(alias = "hops")]
@@ -39,16 +38,17 @@ enum DestinationPath {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct Connection {
+pub struct Connection {
     pub listen_host: Option<String>,
-    tcp: Option<ConnectionProtocol>,
-    udp: Option<ConnectionProtocol>,
-    target: Option<ConnectionTarget>,
+    pub bridge: Option<ConnectionProtocol>,
+    pub wg: Option<ConnectionProtocol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct ConnectionProtocol {
-    capabilities: Vec<SessionCapability>,
+pub struct ConnectionProtocol {
+    pub capabilities: Option<Vec<SessionCapability>>,
+    pub target: Option<SocketAddr>,
+    pub target_type: Option<SessionTargetType>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -57,6 +57,15 @@ pub enum SessionCapability {
     Segmentation,
     #[serde(alias = "retransmission")]
     Retransmission,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum SessionTargetType {
+    #[default]
+    #[serde(alias = "plain")]
+    Plain,
+    #[serde(alias = "sealed")]
+    Sealed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,15 +79,21 @@ struct WireGuard {
     listen_port: Option<u16>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            version: 2,
-            hoprd_node: None,
-            destinations: None,
-            connection: None,
-            wireguard: None,
-        }
+impl Connection {
+    pub fn default_bridge_capabilities() -> Vec<SessionCapability> {
+        vec![SessionCapability::Segmentation, SessionCapability::Retransmission]
+    }
+    pub fn default_wg_capabilities() -> Vec<SessionCapability> {
+        vec![SessionCapability::Segmentation]
+    }
+    pub fn default_bridge_target() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 8000))
+    }
+    pub fn default_wg_target() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 51820))
+    }
+    pub fn default_listen_host() -> String {
+        ":1422".to_string()
     }
 }
 
@@ -116,21 +131,19 @@ path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ
 [destinations.spain]
 peer_id = "12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL"
 path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
-[destinations.spain.target]
-bridge = "127.0.0.1:8001"
-wg = "127.0.0.1:51821"
 
 [connection]
 listen_host = "0.0.0.0:1422"
 
-[connection.tcp]
+[connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
-[connection.udp]
-capabilities = [ "segmentation" ]
+target = "127.0.0.1:8000"
+target_type = "plain"
 
-[connection.target]
-bridge = "127.0.0.1:8000"
-wg = "127.0.0.1:51820"
+[connection.wg]
+capabilities = [ "segmentation" ]
+target = "127.0.0.1:51820"
+target_type = "sealed"
 
 [wireguard]
 listen_port = 51820

@@ -1,5 +1,4 @@
 use crossbeam_channel;
-use libp2p_identity::PeerId as libp2p_PeerId;
 use rand::Rng;
 use reqwest::{blocking, StatusCode};
 use std::thread;
@@ -7,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::entry_node::EntryNode;
 use crate::log_output;
+use crate::peer_id::PeerId;
 use crate::remote_data;
 use crate::session::{self, Session};
 use crate::wg_client;
@@ -61,10 +61,16 @@ enum InternalEvent {
 
 #[derive(Clone, Debug)]
 pub struct Destination {
-    peer_id: libp2p_PeerId,
+    peer_id: PeerId,
     path: session::Path,
-    target_bridge: session::Target,
-    target_wg: session::Target,
+    bridge: SessionParameters,
+    wg: SessionParameters,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionParameters {
+    target: session::Target,
+    capabilities: Vec<session::Capability>,
 }
 
 #[derive(Clone, Debug)]
@@ -89,18 +95,22 @@ enum InternalError {
     WgRegistrationNotSet,
 }
 
+impl SessionParameters {
+    pub fn new(target: &session::Target, capabilities: &Vec<session::Capability>) -> Self {
+        Self {
+            target: target.clone(),
+            capabilities: capabilities.clone(),
+        }
+    }
+}
+
 impl Destination {
-    pub fn new(
-        peer_id: &libp2p_PeerId,
-        path: &session::Path,
-        target_bridge: &session::Target,
-        target_wg: &session::Target,
-    ) -> Self {
+    pub fn new(peer_id: &PeerId, path: &session::Path, bridge: &SessionParameters, wg: &SessionParameters) -> Self {
         Self {
             peer_id: peer_id.clone(),
             path: path.clone(),
-            target_bridge: target_bridge.clone(),
-            target_wg: target_wg.clone(),
+            bridge: bridge.clone(),
+            wg: wg.clone(),
         }
     }
 }

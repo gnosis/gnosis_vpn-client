@@ -22,15 +22,15 @@ pub struct Session {
     pub target: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Capability {
     Segmentation,
     Retransmission,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum Path {
-    Hop(u8),
+    Hops(u8),
     Intermediates(Vec<PeerId>),
 }
 
@@ -42,7 +42,7 @@ pub enum Target {
 
 pub struct OpenSession {
     entry_node: EntryNode,
-    destination: String,
+    destination: PeerId,
     capabilities: Vec<Capability>,
     path: Path,
     target: Target,
@@ -74,6 +74,14 @@ pub enum Error {
 }
 
 impl Target {
+    pub fn plain(addr: &SocketAddr) -> Self {
+        Target::Plain(addr.clone())
+    }
+
+    pub fn sealed(addr: &SocketAddr) -> Self {
+        Target::Sealed(addr.clone())
+    }
+
     pub fn type_(&self) -> String {
         match self {
             Target::Plain(_) => "Plain".to_string(),
@@ -90,11 +98,18 @@ impl Target {
 }
 
 impl OpenSession {
-    pub fn bridge(entry_node: &EntryNode, destination: &str, path: &Path, target: &Target, timeout: &Duration) -> Self {
+    pub fn bridge(
+        entry_node: &EntryNode,
+        destination: &PeerId,
+        capabilities: &Vec<Capability>,
+        path: &Path,
+        target: &Target,
+        timeout: &Duration,
+    ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
-            destination: destination.to_string(),
-            capabilities: vec![Capability::Retransmission, Capability::Segmentation],
+            destination: destination.clone(),
+            capabilities: capabilities.clone(),
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
@@ -102,11 +117,18 @@ impl OpenSession {
         }
     }
 
-    pub fn main(entry_node: &EntryNode, destination: &str, path: &Path, target: &Target, timeout: &Duration) -> Self {
+    pub fn main(
+        entry_node: &EntryNode,
+        destination: &PeerId,
+        capabilities: &Vec<Capability>,
+        path: &Path,
+        target: &Target,
+        timeout: &Duration,
+    ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
-            destination: destination.to_string(),
-            capabilities: vec![Capability::Segmentation],
+            destination: destination.clone(),
+            capabilities: capabilities.clone(),
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
