@@ -42,28 +42,14 @@ pub struct PeerInfo {
     pub endpoint: String,
 }
 
-pub fn best_flavor() -> (Option<Box<dyn WireGuard>>, Vec<Error>) {
-    let mut errors: Vec<Error> = Vec::new();
-
-    match kernel::available() {
-        Ok(true) => return (Some(Box::new(kernel::Kernel::new())), errors),
-        Ok(false) => (),
-        Err(e) => errors.push(e),
+pub fn best_flavor() -> Result<Box<dyn WireGuard>, Error> {
+    if kernel::available().is_ok() {
+        return Ok(Box::new(kernel::Kernel::new()));
     }
-
-    match userspace::available() {
-        Ok(true) => return (Some(Box::new(userspace::UserSpace::new())), errors),
-        Ok(false) => (),
-        Err(e) => errors.push(e),
+    if userspace::available().is_ok() {
+        return Ok(Box::new(userspace::UserSpace::new()));
     }
-
-    match tooling::available() {
-        Ok(true) => return (Some(Box::new(tooling::Tooling::new())), errors),
-        Ok(false) => (),
-        Err(e) => errors.push(e),
-    }
-
-    (None, errors)
+    tooling::available().map(|_| Box::new(tooling::Tooling::new()) as Box<dyn WireGuard>)
 }
 
 pub trait WireGuard: Debug {

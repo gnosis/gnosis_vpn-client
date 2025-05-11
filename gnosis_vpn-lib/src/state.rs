@@ -11,7 +11,7 @@ pub struct State {
     pub wg_private_key: Option<String>,
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
     #[error("state folder error")]
     NoStateFolder,
@@ -33,10 +33,7 @@ fn path() -> Option<PathBuf> {
 }
 
 pub fn read() -> Result<State, Error> {
-    let p = match path() {
-        Some(p) => p,
-        None => return Err(Error::NoStateFolder),
-    };
+    let p = path().ok_or(Error::NoStateFolder)?;
     let content = fs::read(p).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
@@ -55,10 +52,7 @@ impl State {
     }
 
     fn write(&self) -> Result<(), Error> {
-        let path = match path() {
-            Some(p) => p,
-            None => return Err(Error::NoStateFolder),
-        };
+        let path = path().ok_or(Error::NoStateFolder)?;
         let content = bincode::serialize(&self).map_err(Error::BinCodeError)?;
         let parent = path.parent().ok_or(Error::NoParentFolder)?;
         fs::create_dir_all(parent).map_err(Error::IO)?;

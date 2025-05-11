@@ -31,31 +31,18 @@ use crate::session::Session as OldSession;
 
 #[derive(Debug)]
 pub struct Core {
-    // http client
-    client: blocking::Client,
     // configuration data
     config: Config,
-    // event transmitter
+    // global event transmitter
     sender: crossbeam_channel::Sender<Event>,
-    // potential non critial user visible errors
-    issues: Vec<Issue>,
     // internal persistent application state
     state: state::State,
     // wg interface,
     wg: Option<Box<dyn wireguard::WireGuard>>,
-    // random generator
-    rng: rand::rngs::ThreadRng,
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
-    status: Status,
-    entry_node: Option<OldEntryNode>,
-    exit_node: Option<ExitNode>,
-    fetch_data: FetchData,
-    session: Option<OldSession>,
-
     connection: Option<connection::Connection>,
-    wg_connected: bool,
 }
 
 #[derive(Debug)]
@@ -81,6 +68,12 @@ enum Status {
     },
 }
 
+#[derive(Clone, Debug)]
+enum Error {
+    Config(config::Error),
+    State(state::Error),
+}
+
 #[derive(Debug)]
 enum Issue {
     Config(config::Error),
@@ -89,70 +82,27 @@ enum Issue {
     WireGuard(wireguard::Error),
 }
 
-fn read_config() -> (Config, Option<Issue>) {
-    match config::read() {
-        Ok(cfg) => {
-            tracing::info!("read config without issues");
-            (cfg, None)
-        }
-        Err(config::Error::NoFile) => {
-            tracing::info!("no config - using default");
-            (Config::default(), None)
-        }
-        Err(e) => {
-            tracing::warn!(warn = ?e, "failed to read config file");
-            (Config::default(), Some(Issue::Config(e)))
-        }
-    }
-}
-
-fn read_state() -> (State, Option<Issue>) {
-    match state::read() {
-        Ok(state) => (state, None),
-        Err(state::Error::NoFile) => (State::default(), None),
-        Err(e) => {
-            tracing::warn!(warn = ?e, "failed to read state file");
-            (State::default(), Some(Issue::State(e)))
-        }
-    }
-}
-
 impl Core {
-    pub fn init(sender: crossbeam_channel::Sender<Event>) -> Core {
-        let (config, conf_issue) = read_config();
-        let mut issues = conf_issue.map(|i| vec![i]).unwrap_or(Vec::new());
-        let (wg, wg_errors) = wireguard::best_flavor();
-        let mut wg_issues = wg_errors.iter().map(|i| Issue::WireGuardInit(i.clone())).collect();
-        issues.append(&mut wg_issues);
-        let (state, state_issue) = read_state();
-        if let Some(issue) = state_issue {
-            issues.push(issue);
-        }
+    pub fn init(sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
+        let config = config::read().map_err(Error::Config)?;
+        let state = state::read().map_err(Error::State)?;
+        let wireguard = match wireguard::best_flavor() {
+            Ok(wg) => Some(wg),
+            Err(e) => {
+                tracing::error!(error = ?e, "could not determine wireguard handling mode - proceeding with manual wireguard interaction");
+                None
+            }
+        };
 
-        let mut core = Core {
+        let core = Core {
             config,
-            issues,
-            status: Status::Idle,
-            entry_node: None,
-            exit_node: None,
-            client: blocking::Client::new(),
-            fetch_data: FetchData {
-                addresses: RemoteData::NotAsked,
-                open_session: RemoteData::NotAsked,
-                list_sessions: RemoteData::NotAsked,
-                close_session: RemoteData::NotAsked,
-            },
             state,
-            wg,
-            rng: rand::thread_rng(),
+            wg: wireguard,
             sender,
-            session: None,
             shutdown_sender: None,
             connection: None,
-            wg_connected: false,
         };
-        core.setup();
-        core
+        Ok(core)
     }
 
     pub fn shutdown(&mut self) -> Result<crossbeam_channel::Receiver<()>> {
@@ -162,8 +112,9 @@ impl Core {
         Ok(receiver)
     }
 
-    fn setup(&mut self) {
+    fn setup(&mut self) -> Result<()> {
         self.setup_wg_priv_key();
+        self.setup_from_config();
         if let Err(e) = self.setup_from_config() {
             tracing::error!(error = ?e, "failed setup from config");
         }

@@ -305,7 +305,7 @@ fn loop_daemon(
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let mut state = core::Core::init(sender);
+    let mut core = core::Core::init(sender);
 
     let mut read_config_receiver: crossbeam_channel::Receiver<Instant> = crossbeam_channel::never();
     let mut shutdown_receiver: crossbeam_channel::Receiver<()> = crossbeam_channel::never();
@@ -322,7 +322,7 @@ fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                    match state.shutdown() {
+                    match core.shutdown() {
                         Ok(r) => shutdown_receiver = r,
                         Err(e) => {
                             tracing::error!(error = ?e, "failed to initiate shutdown");
@@ -334,15 +334,15 @@ fn loop_daemon(
             recv(shutdown_receiver) -> _ => {
                 return exitcode::OK;
             }
-            recv(socket_receiver) -> stream => incoming_stream(&mut state, stream),
-            recv(core_receiver) -> event => incoming_event(&mut state, event),
+            recv(socket_receiver) -> stream => incoming_stream(&mut core, stream),
+            recv(core_receiver) -> event => incoming_event(&mut core, event),
             recv(config_receiver) -> event => {
                 let resp = incoming_config_fs_event(event);
                 if let Some(r) = resp {
                     read_config_receiver = r
                 }
             },
-            recv(read_config_receiver) -> _ => state.update_config(),
+            recv(read_config_receiver) -> _ => core.update_config(),
         }
     }
 }

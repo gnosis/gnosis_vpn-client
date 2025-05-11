@@ -11,13 +11,14 @@ mod v2;
 
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 
+#[derive(Clone, Debug)]
 pub enum Config {
     V1(v1::Config),
     V2(v2::Config),
 }
 
 #[cfg(target_family = "unix")]
-pub fn path() -> PathBuf {
+fn path() -> PathBuf {
     match std::env::var("GNOSISVPN_CONFIG_PATH") {
         Ok(path) => PathBuf::from(path),
         Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_PATH),
@@ -29,7 +30,7 @@ pub fn path() -> PathBuf {
 }
 
 #[derive(Debug, Error)]
-pub enum ReadError {
+pub enum Error {
     #[error("Config file not found")]
     NoFile,
     #[error("IO error: {0}")]
@@ -46,12 +47,12 @@ pub enum ConfigError {
     HoprdNodeMissing,
 }
 
-pub fn read() -> Result<Config, ReadError> {
+pub fn read() -> Result<Config, Error> {
     let content = fs::read_to_string(path()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            ReadError::NoFile
+            Error::NoFile
         } else {
-            ReadError::IO(e)
+            Error::IO(e)
         }
     })?;
 
@@ -61,7 +62,7 @@ pub fn read() -> Result<Config, ReadError> {
             if config.version == 2 {
                 return Ok(Config::V2(config));
             } else {
-                return Err(ReadError::VersionMismatch(config.version));
+                return Err(Error::VersionMismatch(config.version));
             }
         }
         Err(err) => {
@@ -73,11 +74,11 @@ pub fn read() -> Result<Config, ReadError> {
                         tracing::warn!("found v1 configuration file, please update to configuration file version 2");
                         return Ok(Config::V1(config));
                     } else {
-                        return Err(ReadError::VersionMismatch(config.version));
+                        return Err(Error::VersionMismatch(config.version));
                     }
                 }
                 Err(err) => {
-                    return Err(ReadError::Deserialization(err));
+                    return Err(Error::Deserialization(err));
                 }
             }
         }
