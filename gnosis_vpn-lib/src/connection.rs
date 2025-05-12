@@ -3,6 +3,7 @@ use rand::Rng;
 use reqwest::{blocking, StatusCode};
 use std::thread;
 use std::time::{Duration, SystemTime};
+use thiserror::Error;
 
 use crate::entry_node::EntryNode;
 use crate::log_output;
@@ -89,9 +90,11 @@ pub struct Connection {
     sender: crossbeam_channel::Sender<Event>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum InternalError {
+    #[error("Missing session data")]
     SessionNotSet,
+    #[error("Missing WireGuard registration data")]
     WgRegistrationNotSet,
 }
 
@@ -145,7 +148,7 @@ impl Connection {
             let recv_event = match result {
                 Ok(recv_event) => recv_event,
                 Err(error) => {
-                    tracing::error!(?error, "Failed to act up");
+                    tracing::error!(%error, "Failed to act up");
                     crossbeam_channel::never()
                 }
             };
@@ -157,7 +160,7 @@ impl Connection {
                             break;
                         }
                         Err(error) => {
-                            tracing::error!(?error, "Failed receiving abort signal");
+                            tracing::error!(%error, "Failed receiving abort signal");
                         }
                     }
                 },
@@ -168,7 +171,7 @@ impl Connection {
                                 me.act_event(evt);
                         }
                         Err(error) => {
-                            tracing::error!(?error, "Failed receiving event");
+                            tracing::error!(%error, "Failed receiving event");
                         }
                     }
                 }
@@ -239,7 +242,7 @@ impl Connection {
                     self.phase = Phase::Idle;
                 }
                 Err(error) => {
-                    tracing::error!(?error, "Failed to open session");
+                    tracing::error!(%error, "Failed to open session");
                     self.phase = Phase::Idle;
                 }
             },
@@ -248,7 +251,7 @@ impl Connection {
                     self.wg_registration = Some(register);
                 }
                 Err(error) => {
-                    tracing::error!(?error, "Failed to register wg client");
+                    tracing::error!(%error, "Failed to register wg client");
                     self.phase = Phase::SetUpBridgeSession;
                 }
             },
@@ -257,7 +260,7 @@ impl Connection {
                     self.session_since = None;
                 }
                 Err(error) => {
-                    tracing::error!(?error, "Failed to tear down bridge session");
+                    tracing::error!(%error, "Failed to tear down bridge session");
                     self.phase = Phase::RegisterWg;
                 }
             },
@@ -281,7 +284,7 @@ impl Connection {
                     }
                 },
                 Err(error) => {
-                    tracing::error!(?error, "Failed to open main session");
+                    tracing::error!(%error, "Failed to open main session");
                 }
             },
             InternalEvent::ListSessions(res) => match res {
@@ -301,7 +304,7 @@ impl Connection {
                     }
                 },
                 Err(error) => {
-                    tracing::error!(?error, "Failed to list sessions");
+                    tracing::error!(%error, "Failed to list sessions");
                 }
             },
         }

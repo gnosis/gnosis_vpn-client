@@ -55,7 +55,8 @@ pub fn read(path: &Path) -> Result<Config, Error> {
                 return Err(Error::VersionMismatch(config.version));
             }
         }
-        Err(err) => {
+        Err(error) => {
+            tracing::error!("failed to parse v2 configuration file: {}", error);
             let res_v1 = toml::from_str::<v1::Config>(&content);
             match res_v1 {
                 Ok(config) => {
@@ -66,7 +67,7 @@ pub fn read(path: &Path) -> Result<Config, Error> {
                         return Err(Error::VersionMismatch(config.version));
                     }
                 }
-                Err(_err) => {
+                Err(err) => {
                     // return error from v2 config as this is the desired config file
                     return Err(Error::Deserialization(err));
                 }
