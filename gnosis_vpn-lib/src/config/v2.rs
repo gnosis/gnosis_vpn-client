@@ -203,7 +203,6 @@ version = 2
 [hoprd_node]
 endpoint = "http://127.0.0.1:3001"
 api_token = "1234567890"
-internal_connection_port = 1422
 "#####;
         toml::from_str::<Config>(config).expect("Failed to parse minimal config");
     }
