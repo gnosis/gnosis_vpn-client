@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::connection::Destination;
@@ -19,7 +19,7 @@ pub enum Config {
 }
 
 #[cfg(target_family = "unix")]
-fn path() -> PathBuf {
+pub fn path() -> PathBuf {
     match std::env::var("GNOSISVPN_CONFIG_PATH") {
         Ok(path) => PathBuf::from(path),
         Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_PATH),
@@ -48,8 +48,8 @@ pub enum ConfigError {
     HoprdNodeMissing,
 }
 
-pub fn read() -> Result<Config, Error> {
-    let content = fs::read_to_string(path()).map_err(|e| {
+pub fn read(path: &Path) -> Result<Config, Error> {
+    let content = fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
         } else {

@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,11 +16,7 @@ use tracing::Level;
 
 mod backoff;
 mod core;
-mod entry_node;
 mod event;
-mod exit_node;
-mod remote_data;
-mod session;
 
 /// Gnosis VPN system service - offers interaction commands on Gnosis VPN to other applications.
 #[derive(Debug, Parser)]
@@ -57,6 +53,7 @@ fn config_channel() -> Result<
     (
         notify::RecommendedWatcher,
         crossbeam_channel::Receiver<notify::Result<notify::Event>>,
+        PathBuf,
     ),
     exitcode::ExitCode,
 > {
@@ -97,7 +94,7 @@ fn config_channel() -> Result<
         }
     };
 
-    Ok((watcher, receiver))
+    Ok((watcher, receiver, config::path()))
 }
 
 #[tracing::instrument(level = Level::DEBUG)]
@@ -154,7 +151,7 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
 }
 
 #[tracing::instrument(skip(res_stream), level = Level::DEBUG) ]
-fn incoming_stream(state: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) -> () {
+fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) -> () {
     let mut stream: net::UnixStream = match res_stream {
         Ok(strm) => strm,
         Err(e) => {
@@ -178,12 +175,10 @@ fn incoming_stream(state: &mut core::Core, res_stream: Result<net::UnixStream, c
     };
     tracing::debug!(command = %cmd, "parsed command");
 
-    let res = match state.handle_cmd(&cmd) {
+    let res = match core.handle_cmd(&cmd) {
         Ok(res) => res,
         Err(e) => {
-            // Log the error and its chain in one line
-            let error_chain: Vec<String> = e.chain().map(|cause| cause.to_string()).collect();
-            tracing::error!(?error_chain, "error handling command");
+            tracing::error!(error = ?e, "error handling command");
             return;
         }
     };
@@ -202,7 +197,7 @@ fn incoming_stream(state: &mut core::Core, res_stream: Result<net::UnixStream, c
 }
 
 #[tracing::instrument(skip(res_event), level = Level::DEBUG) ]
-fn incoming_event(state: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) -> () {
+fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) -> () {
     let event: event::Event = match res_event {
         Ok(evt) => evt,
         Err(e) => {
@@ -211,12 +206,11 @@ fn incoming_event(state: &mut core::Core, res_event: Result<event::Event, crossb
         }
     };
 
-    match state.handle_event(event) {
+    match core.handle_event(event) {
         Ok(_) => (),
         Err(e) => {
-            // Log the error and its chain in one line
-            let error_chain: Vec<String> = e.chain().map(|cause| cause.to_string()).collect();
-            tracing::error!(?error_chain, "error handling event");
+            tracing::error!(error = ?e, "error handling event");
+            return;
         }
     }
 }
@@ -276,7 +270,7 @@ fn daemon(socket_path: &Path) -> exitcode::ExitCode {
     };
 
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = match config_channel() {
+    let (_config_watcher, config_receiver, config_path) = match config_channel() {
         Ok(receiver) => receiver,
         Err(exit) => return exit,
     };
@@ -286,7 +280,7 @@ fn daemon(socket_path: &Path) -> exitcode::ExitCode {
         Err(exit) => return exit,
     };
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver);
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, &config_path);
 
     // cleanup
     match fs::remove_file(socket_path) {
@@ -303,9 +297,16 @@ fn loop_daemon(
     ctrlc_receiver: &crossbeam_channel::Receiver<()>,
     config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
+    config_path: &PathBuf,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let mut core = core::Core::init(sender);
+    let mut core = match core::Core::init(&config_path, sender) {
+        Ok(core) => core,
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to initialize core logic");
+            return exitcode::OSERR;
+        }
+    };
 
     let mut read_config_receiver: crossbeam_channel::Receiver<Instant> = crossbeam_channel::never();
     let mut shutdown_receiver: crossbeam_channel::Receiver<()> = crossbeam_channel::never();
@@ -322,13 +323,7 @@ fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                    match core.shutdown() {
-                        Ok(r) => shutdown_receiver = r,
-                        Err(e) => {
-                            tracing::error!(error = ?e, "failed to initiate shutdown");
-                            return exitcode::OSERR;
-                        }
-                    }
+                        shutdown_receiver = core.shutdown();
                 }
             }
             recv(shutdown_receiver) -> _ => {
@@ -342,7 +337,16 @@ fn loop_daemon(
                     read_config_receiver = r
                 }
             },
-            recv(read_config_receiver) -> _ => core.update_config(),
+            recv(read_config_receiver) -> _ => {
+                match core.update_config(&config_path) {
+                    Ok(_) => {
+                        tracing::info!("updated configuration - resetting application");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, "failed to update configuration - staying on current configuration");
+                    }
+                }
+            }
         }
     }
 }

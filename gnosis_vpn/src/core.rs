@@ -11,6 +11,7 @@ use reqwest::blocking;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time;
 use std::time::SystemTime;
@@ -20,14 +21,7 @@ use url::Url;
 
 use crate::backoff;
 use crate::backoff::FromIteratorToSeries;
-use crate::entry_node as old_entry_node;
-use crate::entry_node::{EntryNode as OldEntryNode, Path as OldPath};
 use crate::event::Event;
-use crate::exit_node::ExitNode;
-use crate::remote_data;
-use crate::remote_data::RemoteData;
-use crate::session as old_session;
-use crate::session::Session as OldSession;
 
 #[derive(Debug)]
 pub struct Core {
@@ -45,31 +39,8 @@ pub struct Core {
     connection: Option<connection::Connection>,
 }
 
-#[derive(Debug)]
-struct FetchData {
-    addresses: RemoteData,
-    open_session: RemoteData,
-    list_sessions: RemoteData,
-    close_session: RemoteData,
-}
-
-#[derive(Debug)]
-enum Status {
-    Idle,
-    OpeningSession {
-        start_time: SystemTime,
-    },
-    MonitoringSession {
-        start_time: SystemTime,
-        cancel_sender: crossbeam_channel::Sender<()>,
-    },
-    ClosingSession {
-        start_time: SystemTime,
-    },
-}
-
 #[derive(Debug, Error)]
-enum Error {
+pub enum Error {
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
     #[error("State error: {0}")]
@@ -87,8 +58,8 @@ enum Issue {
 }
 
 impl Core {
-    pub fn init(sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
-        let config = config::read()?;
+    pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
+        let config = config::read(config_path)?;
         let mut state = state::read()?;
         let wireguard = match wireguard::best_flavor() {
             Ok(wg) => Some(wg),
@@ -262,8 +233,8 @@ impl Core {
     }
 
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
-    pub fn update_config(&mut self) -> Result<(), Error> {
-        let config = config::read()?;
+    pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
+        let config = config::read(&config_path)?;
         self.config = config;
         // TODO
         //self.reset();
@@ -271,100 +242,103 @@ impl Core {
     }
 
     fn establish_wg(&mut self) {
-        tracing::info!(wg = ?self.wg,
-            privkey = ?self.state.wg_private_key(),
-            port = ?self.connection.as_ref().and_then(|c| c.port().ok()),
-            conn = ?self.connection,
-            "foobar");
-        // connect wireguard session if possible
-        if let (Some(wg), Some(wg_conf), Some(privkey), Some(en_host), Some(port)) = (
-            &self.wg,
-            &self.config.wireguard,
-            &self.wg_priv_key(),
-            &self.config.hoprd_node.as_ref().and_then(|en| en.endpoint.host()),
-            &self.connection.as_ref().and_then(|c| c.port().ok()),
-        ) {
-            let peer_info = wireguard::PeerInfo {
-                public_key: wg_conf.server_public_key.clone(),
-                endpoint: format!("{}:{}", en_host, port),
-            };
-            let interface_info = wireguard::InterfaceInfo {
-                private_key: privkey.clone(),
-                address: wg_conf.address.clone(),
-                allowed_ips: wg_conf.allowed_ips.clone(),
-                listen_port: wg_conf.listen_port,
-            };
-            let info = wireguard::ConnectSession {
-                interface: interface_info,
-                peer: peer_info,
-            };
+        // todo
+        /*
+                tracing::info!(wg = ?self.wg,
+                    privkey = ?self.state.wg_private_key(),
+                    port = ?self.connection.as_ref().and_then(|c| c.port().ok()),
+                    conn = ?self.connection,
+                    "foobar");
+                // connect wireguard session if possible
+                if let (Some(wg), Some(wg_conf), Some(privkey), Some(en_host), Some(port)) = (
+                    &self.wg,
+                    &self.config.wireguard,
+                    &self.wg_priv_key(),
+                    &self.config.hoprd_node.as_ref().and_then(|en| en.endpoint.host()),
+                    &self.connection.as_ref().and_then(|c| c.port().ok()),
+                ) {
+                    let peer_info = wireguard::PeerInfo {
+                        public_key: wg_conf.server_public_key.clone(),
+                        endpoint: format!("{}:{}", en_host, port),
+                    };
+                    let interface_info = wireguard::InterfaceInfo {
+                        private_key: privkey.clone(),
+                        address: wg_conf.address.clone(),
+                        allowed_ips: wg_conf.allowed_ips.clone(),
+                        listen_port: wg_conf.listen_port,
+                    };
+                    let info = wireguard::ConnectSession {
+                        interface: interface_info,
+                        peer: peer_info,
+                    };
 
-            // prepare session path for printing
-            let session_path = {
-                let (en, path) = match &self.entry_node {
-                    Some(en) => (en.to_string(), en.path.to_string()),
-                    None => ("<entry_node>".to_string(), "<path>".to_string()),
-                };
+                    // prepare session path for printing
+                    let session_path = {
+                        let (en, path) = match &self.entry_node {
+                            Some(en) => (en.to_string(), en.path.to_string()),
+                            None => ("<entry_node>".to_string(), "<path>".to_string()),
+                        };
 
-                let xn = match &self.config.connection {
-                    Some(conn) => match conn.target.as_ref().and_then(|t| t.host.clone()) {
-                        Some(host) => format!(
-                            "({})({})",
-                            log_output::peer_id(conn.destination.to_string().as_str()),
-                            host
-                        ),
-                        None => format!("({})", log_output::peer_id(conn.destination.to_string().as_str())),
-                    },
-                    None => "<exitnode>".to_string(),
-                };
+                        let xn = match &self.config.connection {
+                            Some(conn) => match conn.target.as_ref().and_then(|t| t.host.clone()) {
+                                Some(host) => format!(
+                                    "({})({})",
+                                    log_output::peer_id(conn.destination.to_string().as_str()),
+                                    host
+                                ),
+                                None => format!("({})", log_output::peer_id(conn.destination.to_string().as_str())),
+                            },
+                            None => "<exitnode>".to_string(),
+                        };
 
-                if path.is_empty() {
-                    format!("{} <-> {}", en, xn)
-                } else {
-                    format!("{} <-> {} <-> {}", en, path, xn)
-                }
-            };
+                        if path.is_empty() {
+                            format!("{} <-> {}", en, xn)
+                        } else {
+                            format!("{} <-> {} <-> {}", en, path, xn)
+                        }
+                    };
 
-            match wg.connect_session(&info) {
-                Ok(_) => {
-                    tracing::info!("opened session and wireguard connection");
-                    tracing::info!(
-                        r"
+                    match wg.connect_session(&info) {
+                        Ok(_) => {
+                            tracing::info!("opened session and wireguard connection");
+                            tracing::info!(
+                                r"
 
-    /---==========================---\
-    |   VPN CONNECTION ESTABLISHED   |
-    \---==========================---/
+            /---==========================---\
+            |   VPN CONNECTION ESTABLISHED   |
+            \---==========================---/
 
-    route: {}
-",
-                        session_path
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(warn = ?e, "openend session but failed to connect wireguard session");
-                    self.replace_issue(Issue::WireGuard(e));
-                }
-            }
-        }
-    }
-
-    fn dismantle_wg(&self) {
-        if let Some(wg) = &self.wg {
-            match wg.close_session() {
-                Ok(_) => {
-                    tracing::info!(
-                        r"
-
-    /---==========================---\
-    |   VPN CONNECTION BROKEN        |
-    \---==========================---/
-"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(warn = ?e, "error closing wireguard connection");
+            route: {}
+        ",
+                                session_path
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(warn = ?e, "openend session but failed to connect wireguard session");
+                            self.replace_issue(Issue::WireGuard(e));
+                        }
+                    }
                 }
             }
-        }
+
+            fn dismantle_wg(&self) {
+                if let Some(wg) = &self.wg {
+                    match wg.close_session() {
+                        Ok(_) => {
+                            tracing::info!(
+                                r"
+
+            /---==========================---\
+            |   VPN CONNECTION BROKEN        |
+            \---==========================---/
+        "
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(warn = ?e, "error closing wireguard connection");
+                        }
+                    }
+                }
+                */
     }
 }

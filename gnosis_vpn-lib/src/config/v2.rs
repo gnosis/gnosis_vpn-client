@@ -200,9 +200,12 @@ mod tests {
     fn test_minimal_config() {
         let config = r#####"
 version = 2
+[hoprd_node]
+endpoint = "http://127.0.0.1:3001"
+api_token = "1234567890"
+internal_connection_port = 1422
 "#####;
-        let result = toml::from_str::<Config>(config);
-        assert!(result.is_ok());
+        toml::from_str::<Config>(config).expect("Failed to parse minimal config");
     }
 
     #[test]
@@ -243,7 +246,6 @@ target_type = "sealed"
 [wireguard]
 listen_port = 51820
 "#####;
-        let result = toml::from_str::<Config>(config);
-        assert!(result.is_ok());
+        toml::from_str::<Config>(config).expect("Failed to parse full config");
     }
 }
