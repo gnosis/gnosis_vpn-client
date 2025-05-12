@@ -1,27 +1,20 @@
-use clap::Parser;
 use ctrlc::Error as CtrlcError;
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config;
-use gnosis_vpn_lib::socket;
 use notify::{RecursiveMode, Watcher};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::Level;
 
 mod backoff;
+mod cli;
 mod core;
 mod event;
-
-/// Gnosis VPN system service - offers interaction commands on Gnosis VPN to other applications.
-#[derive(Debug, Parser)]
-#[command(version)]
-struct Cli {}
 
 #[tracing::instrument(level = Level::DEBUG)]
 fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode> {
@@ -49,18 +42,18 @@ fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode
 }
 
 #[tracing::instrument(level = Level::DEBUG)]
-fn config_channel() -> Result<
+fn config_channel(
+    config_path: &Path,
+) -> Result<
     (
         notify::RecommendedWatcher,
         crossbeam_channel::Receiver<notify::Result<notify::Event>>,
-        PathBuf,
     ),
     exitcode::ExitCode,
 > {
     let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
 
-    let path = config::path();
-    let parent = match path.parent() {
+    let parent = match config_path.parent() {
         Some(dir) => dir,
         None => {
             tracing::error!("config path has no parent");
@@ -94,7 +87,7 @@ fn config_channel() -> Result<
         }
     };
 
-    Ok((watcher, receiver, config::path()))
+    Ok((watcher, receiver))
 }
 
 #[tracing::instrument(level = Level::DEBUG)]
@@ -221,6 +214,7 @@ const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
 #[tracing::instrument(skip(res_event), level = Level::DEBUG) ]
 fn incoming_config_fs_event(
     res_event: Result<notify::Result<notify::Event>, crossbeam_channel::RecvError>,
+    config_path: &Path,
 ) -> Option<crossbeam_channel::Receiver<Instant>> {
     let event: notify::Result<notify::Event> = match res_event {
         Ok(evt) => evt,
@@ -233,7 +227,7 @@ fn incoming_config_fs_event(
     match event {
         Ok(notify::Event { kind, paths, attrs: _ })
             if kind == notify::event::EventKind::Create(notify::event::CreateKind::File)
-                && paths == vec![config::path()] =>
+                && paths == vec![config_path] =>
         {
             tracing::debug!("config file created");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
@@ -243,14 +237,14 @@ fn incoming_config_fs_event(
                 == notify::event::EventKind::Modify(notify::event::ModifyKind::Data(
                     notify::event::DataChange::Any,
                 ))
-                && paths == vec![config::path()] =>
+                && paths == vec![config_path] =>
         {
             tracing::debug!("config file modified");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
         }
         Ok(notify::Event { kind, paths, attrs: _ })
             if kind == notify::event::EventKind::Remove(notify::event::RemoveKind::File)
-                && paths == vec![config::path()] =>
+                && paths == vec![config_path] =>
         {
             tracing::debug!("config file removed");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
@@ -263,14 +257,14 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(socket_path: &Path) -> exitcode::ExitCode {
+fn daemon(socket_path: &Path, config_path: &Path) -> exitcode::ExitCode {
     let ctrlc_receiver = match ctrlc_channel() {
         Ok(receiver) => receiver,
         Err(exit) => return exit,
     };
 
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver, config_path) = match config_channel() {
+    let (_config_watcher, config_receiver) = match config_channel(config_path) {
         Ok(receiver) => receiver,
         Err(exit) => return exit,
     };
@@ -297,7 +291,7 @@ fn loop_daemon(
     ctrlc_receiver: &crossbeam_channel::Receiver<()>,
     config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
-    config_path: &PathBuf,
+    config_path: &Path,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
     let mut core = match core::Core::init(&config_path, sender) {
@@ -332,7 +326,7 @@ fn loop_daemon(
             recv(socket_receiver) -> stream => incoming_stream(&mut core, stream),
             recv(core_receiver) -> event => incoming_event(&mut core, event),
             recv(config_receiver) -> event => {
-                let resp = incoming_config_fs_event(event);
+                let resp = incoming_config_fs_event(event, config_path);
                 if let Some(r) = resp {
                     read_config_receiver = r
                 }
@@ -352,7 +346,7 @@ fn loop_daemon(
 }
 
 fn main() {
-    let _args = Cli::parse();
+    let args = cli::parse();
 
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
@@ -362,9 +356,7 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    let socket_path = socket::path();
-
-    let exit = daemon(&socket_path);
+    let exit = daemon(&args.socket_path, &args.config_path);
 
     if exit != exitcode::OK {
         tracing::warn!("abnormal exit");

@@ -1,6 +1,6 @@
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::socket;
-use std::path::PathBuf;
+use std::path::Path;
 
 mod cli;
 
@@ -28,7 +28,7 @@ fn main() {
     }
 }
 
-fn process_cmd(socket_path: &PathBuf, cmd: &Command) -> Result<Option<String>, socket::Error> {
+fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Option<String>, socket::Error> {
     match socket::process_cmd(socket_path, cmd) {
         Ok(socket::ReturnValue::WithResponse(s)) => Ok(Some(s)),
         Ok(_) => Ok(None),

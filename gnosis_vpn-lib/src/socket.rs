@@ -37,11 +37,11 @@ pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 // }
 
 #[tracing::instrument(level = tracing::Level::DEBUG)]
-pub fn process_cmd(socket_path: &PathBuf, cmd: &Command) -> Result<ReturnValue, Error> {
+pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<ReturnValue, Error> {
     check_path(&socket_path)?;
 
     let mut stream = UnixStream::connect(&socket_path).map_err(|x| Error::ConnectSocketIO {
-        socket_path: socket_path.clone(),
+        socket_path: socket_path.to_path_buf(),
         error: x,
     })?;
 

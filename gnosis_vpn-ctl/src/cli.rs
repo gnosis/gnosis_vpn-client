@@ -4,7 +4,7 @@ use gnosis_vpn_lib::peer_id::PeerId;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 
-/// Gnosis VPN client - WireGuard client for GnosisVPN connections
+/// Gnosis VPN client control interface for Gnosis VPN service
 #[derive(Debug, Parser)]
 #[command(version)]
 pub struct Cli {

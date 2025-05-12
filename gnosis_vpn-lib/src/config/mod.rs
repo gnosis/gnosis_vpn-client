@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
 
 use crate::connection::Destination;
@@ -10,24 +10,13 @@ use crate::wireguard::config::Config as WireGuardConfig;
 mod v1;
 mod v2;
 
-const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
+pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
+pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 
 #[derive(Clone, Debug)]
 pub enum Config {
     V1(v1::Config),
     V2(v2::Config),
-}
-
-#[cfg(target_family = "unix")]
-pub fn path() -> PathBuf {
-    match std::env::var("GNOSISVPN_CONFIG_PATH") {
-        Ok(path) => PathBuf::from(path),
-        Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_PATH),
-        Err(e) => {
-            tracing::warn!(warn = ?e, "using default config path");
-            PathBuf::from(DEFAULT_PATH)
-        }
-    }
 }
 
 #[derive(Debug, Error)]
