@@ -180,10 +180,7 @@ impl Session {
             }
         };
         json.insert("path".to_string(), path_json);
-
-        if let Some(lh) = &open_session.entry_node.listen_host {
-            json.insert("listenHost".to_string(), json!(lh));
-        };
+        json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
 

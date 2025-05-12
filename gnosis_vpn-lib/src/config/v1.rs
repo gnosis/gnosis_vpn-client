@@ -148,9 +148,8 @@ impl Config {
         HashMap::new()
     }
 
-    pub fn wireguard(&self) -> Option<WireGuardConfig> {
-        self.wireguard.as_ref().map(|wg| WireGuardConfig {
-            listen_port: wg.listen_port,
-        })
+    pub fn wireguard(&self) -> WireGuardConfig {
+        let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
+        WireGuardConfig::new(&listen_port)
     }
 }
