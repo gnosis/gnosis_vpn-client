@@ -1,4 +1,4 @@
-use bpaf::Bpaf;
+use clap::Parser;
 use gnosis_vpn_lib::peer_id::PeerId;
 use url::Url;
 

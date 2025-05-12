@@ -137,26 +137,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bpaf"
-version = "0.9.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4848ed5727d39a7573551c205bcb1ccd88c8cad4ed2c80f62e2316f208196b8d"
-dependencies = [
- "bpaf_derive",
-]
-
-[[package]]
-name = "bpaf_derive"
-version = "0.5.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fefb4feeec9a091705938922f26081aad77c64cd2e76cd1c4a9ece8e42e1618a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -648,7 +628,6 @@ dependencies = [
 name = "gnosis_vpn-ctl"
 version = "0.8.4"
 dependencies = [
- "bpaf",
  "gnosis_vpn-lib",
  "libp2p-identity",
  "tracing",
