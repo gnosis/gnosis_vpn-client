@@ -11,13 +11,14 @@ use super::ConfigError;
 use crate::connection::Destination as ConnDestination;
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
+use crate::wireguard::config::Config as WireGuardConfig;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
     pub hoprd_node: Option<EntryNodeConfig>,
     pub connection: Option<SessionConfig>,
-    pub wireguard: Option<WireGuardConfig>,
+    pub wireguard: Option<OldWireGuardConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,7 +38,7 @@ pub struct SessionConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WireGuardConfig {
+pub struct OldWireGuardConfig {
     pub address: String,
     pub server_public_key: String,
     pub allowed_ips: Option<String>,
@@ -133,16 +134,23 @@ impl Config {
             .connection
             .as_ref()
             .and_then(|c| c.listen_host.clone())
-            .or(internal_connection_port);
+            .or(internal_connection_port)
+            .unwrap_or(":1422".to_string());
 
         Ok(EntryNode::new(
-            hoprd_node.endpoint.clone(),
-            hoprd_node.api_token.clone(),
-            listen_host,
+            &hoprd_node.endpoint,
+            &hoprd_node.api_token,
+            &listen_host,
         ))
     }
 
     pub fn destinations(&self) -> HashMap<String, ConnDestination> {
         HashMap::new()
+    }
+
+    pub fn wireguard(&self) -> Option<WireGuardConfig> {
+        self.wireguard.as_ref().map(|wg| WireGuardConfig {
+            listen_port: wg.listen_port,
+        })
     }
 }

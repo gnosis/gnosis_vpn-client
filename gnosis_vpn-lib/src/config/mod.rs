@@ -5,8 +5,9 @@ use thiserror::Error;
 
 use crate::connection::Destination;
 use crate::entry_node::EntryNode;
+use crate::wireguard::config::Config as WireGuardConfig;
 
-pub mod v1;
+mod v1;
 mod v2;
 
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
@@ -31,13 +32,13 @@ fn path() -> PathBuf {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Config file not found")]
+    #[error("Configuration file not found")]
     NoFile,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("Deserialization error: {0}")]
     Deserialization(#[from] toml::de::Error),
-    #[error("Unsupported config version")]
+    #[error("Unsupported config version: {0}")]
     VersionMismatch(u8),
 }
 
@@ -97,6 +98,13 @@ impl Config {
         match self {
             Config::V1(config) => config.destinations(),
             Config::V2(config) => config.destinations(),
+        }
+    }
+
+    pub fn wireguard(&self) -> WireGuardConfig {
+        match self {
+            Config::V1(config) => config.wireguard(),
+            Config::V2(config) => config.wireguard(),
         }
     }
 }

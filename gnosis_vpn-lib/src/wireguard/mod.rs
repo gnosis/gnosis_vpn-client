@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use thiserror::Error;
 
+pub mod config;
 mod kernel;
 mod tooling;
 mod userspace;

@@ -10,6 +10,7 @@ use crate::connection::{Destination as ConnDestination, SessionParameters};
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::session;
+use crate::wireguard::config::Config as WireGuardConfig;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -117,11 +118,12 @@ impl Config {
             .connection
             .as_ref()
             .and_then(|c| c.listen_host.clone())
-            .or(internal_connection_port);
+            .or(internal_connection_port)
+            .unwrap_or(Connection::default_listen_host());
         Ok(EntryNode::new(
-            self.hoprd_node.endpoint.clone(),
-            self.hoprd_node.api_token.clone(),
-            listen_host,
+            &self.hoprd_node.endpoint,
+            &self.hoprd_node.api_token,
+            &listen_host,
         ))
     }
 
@@ -182,6 +184,12 @@ impl Config {
                 (k.clone(), dest)
             })
             .collect()
+    }
+
+    pub fn wireguard(&self) -> Option<WireGuardConfig> {
+        self.wireguard.as_ref().map(|wg| WireGuardConfig {
+            listen_port: wg.listen_port,
+        })
     }
 }
 
