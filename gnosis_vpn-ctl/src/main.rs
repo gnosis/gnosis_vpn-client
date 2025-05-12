@@ -15,7 +15,7 @@ fn main() {
             if json_output {
                 match serde_json::to_string_pretty(&s) {
                     Ok(json) => println!("{}", json),
-                    Err(e) => eprintln!("Error serializing to JSON: {:?}", e),
+                    Err(e) => eprintln!("Error serializing to JSON: {}", e),
                 }
             } else {
                 println!("{:?}", s);
@@ -23,7 +23,7 @@ fn main() {
         }
         Ok(None) => (),
         Err(e) => {
-            eprintln!("Error processing {}: {:?}", cmd, e);
+            eprintln!("Error processing {}: {}", cmd, e);
         }
     }
 }
