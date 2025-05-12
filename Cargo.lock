@@ -630,6 +630,7 @@ version = "0.8.4"
 dependencies = [
  "clap",
  "gnosis_vpn-lib",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "url",
