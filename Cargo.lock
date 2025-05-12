@@ -628,8 +628,8 @@ dependencies = [
 name = "gnosis_vpn-ctl"
 version = "0.8.4"
 dependencies = [
+ "clap",
  "gnosis_vpn-lib",
- "libp2p-identity",
  "tracing",
  "tracing-subscriber",
  "url",

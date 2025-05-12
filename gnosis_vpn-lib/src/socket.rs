@@ -28,22 +28,8 @@ pub enum Error {
     ReadSocketIO(io::Error),
 }
 
-const DEFAULT_PATH: &str = "/var/run/gnosis_vpn.sock";
-
-#[cfg(target_family = "unix")]
-pub fn path() -> PathBuf {
-    match std::env::var("GNOSISVPN_SOCKET_PATH") {
-        Ok(path) => {
-            tracing::info!(?path, "using custom socket path");
-            PathBuf::from(path)
-        }
-        Err(std::env::VarError::NotPresent) => PathBuf::from(DEFAULT_PATH),
-        Err(e) => {
-            tracing::warn!(warn = ?e, "using default socket path");
-            PathBuf::from(DEFAULT_PATH)
-        }
-    }
-}
+pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn.sock";
+pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 
 // #[cfg(target_family = "windows")]
 // pub fn socket_path() -> PathBuf {
@@ -51,8 +37,7 @@ pub fn path() -> PathBuf {
 // }
 
 #[tracing::instrument(level = tracing::Level::DEBUG)]
-pub fn process_cmd(cmd: &Command) -> Result<ReturnValue, Error> {
-    let socket_path = path();
+pub fn process_cmd(socket_path: &PathBuf, cmd: &Command) -> Result<ReturnValue, Error> {
     check_path(&socket_path)?;
 
     let mut stream = UnixStream::connect(&socket_path).map_err(|x| Error::ConnectSocketIO {

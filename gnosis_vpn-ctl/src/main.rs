@@ -1,4 +1,5 @@
-use gnosis_vpn_lib::{command, socket};
+use gnosis_vpn_lib::command::Command;
+use gnosis_vpn_lib::socket;
 
 mod cli;
 
@@ -23,10 +24,30 @@ fn as_internal_cmd(cmd: &cli::Command) -> command::Command {
 }
 
 fn main() {
+    let args = cli::parse();
+
+    let cmd: Command = args.command.into();
+    let json_output = args.command.json;
+
+    match socket::process_cmd(args.socket_path, &cmd) {
+        Ok(socket::ReturnValue::WithResponse(s)) => {
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&s));
+            } else {
+                println!("{:?}", s);
+            }
+        }
+        Ok(_) => (),
+        Err(x) => tracing::warn!("{} failed with: {:?}", cmd, x),
+    }
+
+    match args.command {
+        Command::Status => {
+        }
+
+
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
-
-    let options = cli::cli().run();
 
     tracing::debug!(?options, "Options parsed");
 

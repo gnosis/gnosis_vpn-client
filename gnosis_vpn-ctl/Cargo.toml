@@ -4,8 +4,8 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+clap = { workspace = true }
 gnosis_vpn-lib = { workspace = true }
-libp2p-identity = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
