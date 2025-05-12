@@ -73,6 +73,12 @@ pub enum Error {
     RemoteData(remote_data::CustomError),
 }
 
+impl Default for Path {
+    fn default() -> Self {
+        Path::Hops(1)
+    }
+}
+
 impl Target {
     pub fn plain(addr: &SocketAddr) -> Self {
         Target::Plain(addr.clone())

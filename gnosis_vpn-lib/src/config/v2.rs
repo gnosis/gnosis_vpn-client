@@ -31,7 +31,7 @@ struct HoprdNode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Destination {
     peer_id: PeerId,
-    path: DestinationPath,
+    path: Option<DestinationPath>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -134,8 +134,9 @@ impl Config {
             .iter()
             .map(|(k, v)| {
                 let path = match v.path.clone() {
-                    DestinationPath::Intermediates(p) => session::Path::Intermediates(p),
-                    DestinationPath::Hops(h) => session::Path::Hops(h),
+                    Some(DestinationPath::Intermediates(p)) => session::Path::Intermediates(p),
+                    Some(DestinationPath::Hops(h)) => session::Path::Hops(h),
+                    None => session::Path::default(),
                 };
 
                 let bridge_caps = connection
@@ -219,7 +220,6 @@ internal_connection_port = 1422
 [destinations]
 [destinations.germany]
 peer_id = "12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7"
-path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
 
 [destinations.usa]
 peer_id = "12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5"
