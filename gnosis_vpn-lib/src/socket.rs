@@ -48,12 +48,8 @@ pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<ReturnValue, Err
     let json_cmd = serde_json::to_string(cmd)?;
     push_command(&mut stream, &json_cmd)?;
 
-    if let Command::Status = cmd {
-        let response = pull_response(&mut stream)?;
-        Ok(ReturnValue::WithResponse(response))
-    } else {
-        Ok(ReturnValue::NoResponse)
-    }
+    let response = pull_response(&mut stream)?;
+    Ok(ReturnValue::WithResponse(response))
 }
 
 fn check_path(socket_path: &Path) -> Result<(), Error> {

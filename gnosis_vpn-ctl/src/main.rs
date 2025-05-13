@@ -18,10 +18,12 @@ fn main() {
                     Err(e) => eprintln!("Error serializing to JSON: {}", e),
                 }
             } else {
-                println!("{:?}", s);
+                println!("{}", s);
             }
         }
-        Ok(None) => (),
+        Ok(None) => {
+            println!("foobar1")
+        }
         Err(e) => {
             eprintln!("Error processing {}: {}", cmd, e);
         }

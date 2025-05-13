@@ -304,7 +304,7 @@ impl Core {
                 }
                 None => {
                     tracing::info!(peer_id = %peer_id, "destination peer id not found");
-                    Ok(Some(format!("unknown peer id")))
+                    Ok(Some("unknown peer id".to_string()))
                 }
             },
             _ => Err(Error::NotImplemented),
