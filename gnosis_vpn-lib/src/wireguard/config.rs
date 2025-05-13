@@ -1,12 +1,12 @@
 #[derive(Clone, Debug)]
 pub struct Config {
-    listen_port: Option<u16>,
-    manual_mode: Option<ManualMode>,
+    pub listen_port: Option<u16>,
+    pub manual_mode: Option<ManualMode>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ManualMode {
-    public_key: String,
+    pub public_key: String,
 }
 
 impl Config {

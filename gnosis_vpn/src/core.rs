@@ -42,7 +42,7 @@ pub struct Core {
     target_state: TargetState,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TargetState {
     Idle,
     Connect(Destination),
@@ -57,6 +57,8 @@ pub enum Error {
     State(#[from] state::Error),
     #[error("WireGuard error: {0}")]
     WireGuard(#[from] wireguard::Error),
+    #[error("Missing manual_mode configuration")]
+    WireGuardManualModeMissing,
     #[error("Not yet implemented")]
     NotImplemented,
 }
@@ -64,14 +66,27 @@ pub enum Error {
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
         let config = config::read(config_path)?;
-        let mut state = state::read()?;
-        let wireguard = match wireguard::best_flavor() {
-            Ok(wg) => Some(wg),
-            Err(e) => {
-                tracing::error!(error = ?e, "could not determine wireguard handling mode - proceeding with manual wireguard interaction");
-                None
+        let wireguard = if config.wireguard().manual_mode.is_some() {
+            tracing::info!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
+            None
+        } else {
+            match wireguard::best_flavor() {
+                Ok(wg) => Some(wg),
+                Err(e) => {
+                    tracing::error!(error = ?e, "could not determine WireGuard handling mode");
+                    print_manual_instructions();
+                    return Err(Error::WireGuardManualModeMissing);
+                }
             }
         };
+
+        let mut state = match state::read() {
+            Err(state::Error::NoFile) => {
+                tracing::info!("no service state file found - clean start");
+                Ok(state::State::default())
+            }
+            x => x,
+        }?;
 
         if let (Some(wg), None) = (&wireguard, &state.wg_private_key()) {
             let priv_key = wg.generate_key()?;
@@ -99,7 +114,9 @@ impl Core {
     }
 
     fn act_on_target(&mut self) {
-        match &self.target_state {
+        // avoid immutable borrow of self
+        let target_state = self.target_state.clone();
+        match target_state {
             TargetState::Connect(destination) => match &self.connection {
                 Some(conn) => {
                     if conn.has_destination(&destination) {
@@ -110,7 +127,7 @@ impl Core {
                 }
                 None => {
                     tracing::info!(destination = %destination, "establishing new connection");
-                    self.connect(destination);
+                    self.connect(&destination);
                 }
             },
             TargetState::Shutdown => {
@@ -236,9 +253,21 @@ impl Core {
     }
 
     fn connect(&mut self, destination: &Destination) {
+        let wg_pub_key = match self.wg_public_key() {
+            Some(wg_pub_key) => wg_pub_key,
+            None => {
+                tracing::error!("Unable to create connection without WireGuard public key");
+                tracing::error!(
+                    ">> If you intend to use manual WireGuard mode, please set the public key in the configuration file: <<"
+                );
+                tracing::error!(">> [wireguard] <<");
+                tracing::error!(r#">> manual_mode = {{ public_key = "<wg public key" }} <<"#);
+                return;
+            }
+        };
+
         let (s, r) = crossbeam_channel::bounded(1);
         let mut conn = Connection::new(&self.config.entry_node(), &destination, &wg_pub_key, s);
-
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
@@ -251,7 +280,6 @@ impl Core {
                         break;
                     }
                     Ok(connection::Event::Disconnected) => {
-
                         tracing::info!("TODO sending disconnectwg");
                     }
                     Err(e) => {
@@ -427,4 +455,26 @@ impl Core {
                 }
                 */
     }
+
+    fn wg_public_key(&self) -> Option<String> {
+        if let (Some(wg), Some(privkey)) = (&self.wg, &self.state.wg_private_key()) {
+            match wg.public_key(privkey.as_str()) {
+                Ok(pubkey) => Some(pubkey),
+                Err(e) => {
+                    tracing::error!(error = %e, "Unable to generate public key from private key");
+                    None
+                }
+            }
+        } else {
+            self.config.wireguard().manual_mode.map(|mm| mm.public_key)
+        }
+    }
+}
+
+fn print_manual_instructions() {
+    tracing::error!(
+        ">> If you intend to use manual WireGuard mode, please set the public key in the configuration file: <<"
+    );
+    tracing::error!(">> [wireguard] <<");
+    tracing::error!(r#">> manual_mode = {{ public_key = "<wg public key" }} <<"#);
 }
