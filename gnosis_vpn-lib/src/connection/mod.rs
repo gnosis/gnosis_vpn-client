@@ -1,16 +1,20 @@
+use std::thread;
+use std::time::{Duration, SystemTime};
+
 use crossbeam_channel;
 use rand::Rng;
 use reqwest::{blocking, StatusCode};
-use std::thread;
-use std::time::{Duration, SystemTime};
 use thiserror::Error;
 
 use crate::entry_node::EntryNode;
 use crate::log_output;
-use crate::peer_id::PeerId;
 use crate::remote_data;
 use crate::session::{self, Session};
 use crate::wg_client;
+
+use destination::Destination;
+
+pub mod destination;
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -61,14 +65,6 @@ enum InternalEvent {
 }
 
 #[derive(Clone, Debug)]
-pub struct Destination {
-    peer_id: PeerId,
-    path: session::Path,
-    bridge: SessionParameters,
-    wg: SessionParameters,
-}
-
-#[derive(Clone, Debug)]
 pub struct SessionParameters {
     target: session::Target,
     capabilities: Vec<session::Capability>,
@@ -103,17 +99,6 @@ impl SessionParameters {
         Self {
             target: target.clone(),
             capabilities: capabilities.clone(),
-        }
-    }
-}
-
-impl Destination {
-    pub fn new(peer_id: &PeerId, path: &session::Path, bridge: &SessionParameters, wg: &SessionParameters) -> Self {
-        Self {
-            peer_id: peer_id.clone(),
-            path: path.clone(),
-            bridge: bridge.clone(),
-            wg: wg.clone(),
         }
     }
 }

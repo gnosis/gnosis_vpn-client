@@ -1,22 +1,24 @@
-use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::vec::Vec;
+
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::ConfigError;
 use crate::connection::{Destination as ConnDestination, SessionParameters};
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::session;
 use crate::wireguard::config::Config as WireGuardConfig;
 
+use super::ConfigError;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
     hoprd_node: HoprdNode,
-    destinations: Option<HashMap<String, Destination>>,
+    destinations: Option<HashMap<PeerId, Destination>>,
     connection: Option<Connection>,
     wireguard: Option<WireGuard>,
 }
@@ -30,7 +32,7 @@ struct HoprdNode {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Destination {
-    peer_id: PeerId,
+    meta: Option<HashMap<String, String>>,
     path: Option<DestinationPath>,
 }
 
@@ -127,7 +129,7 @@ impl Config {
         ))
     }
 
-    pub fn destinations(&self) -> HashMap<String, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
         let config_dests = self.destinations.clone().unwrap_or(HashMap::new());
         let connection = self.connection.as_ref();
         config_dests
@@ -180,8 +182,9 @@ impl Config {
                     SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
                 };
                 let params_wg = SessionParameters::new(&wg_target, &wg_caps);
+                let meta = v.meta.clone().unwrap_or_default();
 
-                let dest = ConnDestination::new(&v.peer_id, &path, &params_bridge, &params_wg);
+                let dest = ConnDestination::new(&k, &path, &meta, &params_bridge, &params_wg);
                 (k.clone(), dest)
             })
             .collect()
@@ -218,15 +221,17 @@ api_token = "1234567890"
 internal_connection_port = 1422
 
 [destinations]
+
 [destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
-location = "Germany"
+meta = { location = "Germany" }
+path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
 
 [destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
-location = "USA"
+meta = { location = "USA" }
 path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ" ] }
 
 [destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
-location = "Spain"
+meta = { location = "Spain" }
 path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
 
 [connection]

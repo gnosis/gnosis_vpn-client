@@ -1,13 +1,3 @@
-use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, Connection};
-use gnosis_vpn_lib::entry_node::EntryNode;
-use gnosis_vpn_lib::peer_id::PeerId;
-use gnosis_vpn_lib::session::{self};
-use gnosis_vpn_lib::state;
-use gnosis_vpn_lib::{log_output, wireguard};
-use rand::Rng;
-use reqwest::blocking;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -15,9 +5,21 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time;
 use std::time::SystemTime;
+
+use rand::Rng;
+use reqwest::blocking;
 use thiserror::Error;
 use tracing::instrument;
 use url::Url;
+
+use gnosis_vpn_lib::command::Command;
+use gnosis_vpn_lib::config::{self, Config};
+use gnosis_vpn_lib::connection::{self, Connection, Destination};
+use gnosis_vpn_lib::entry_node::EntryNode;
+use gnosis_vpn_lib::peer_id::PeerId;
+use gnosis_vpn_lib::session::{self};
+use gnosis_vpn_lib::state;
+use gnosis_vpn_lib::{log_output, wireguard};
 
 use crate::backoff;
 use crate::backoff::FromIteratorToSeries;
@@ -37,6 +39,13 @@ pub struct Core {
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
     connection: Option<connection::Connection>,
+    target_state: TargetState,
+}
+
+#[derive(Debug)]
+pub enum TargetState {
+    Idle,
+    Connect(Destination),
 }
 
 #[derive(Debug, Error)]
@@ -185,6 +194,22 @@ impl Core {
 
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
     pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Option<String>, Error> {
+        match cmd {
+            Command::Connect(peer_id) => {
+                match (self.config.destinations().get(peer_id)) {
+                    Some(dest) -> {
+                        tracing::info!(destination = %dest, "targetting new destination");
+                        self.target_state = TargetState::Connect(dest.clone());
+                        Ok(Some(format!("targetting {}", dest)))
+                    },
+                    None => {
+                        tracing::info!(peer_id = %peer_id, "destination peer id not found");
+                        Ok(Some(format!("unknown peer id")))
+                    }
+                }
+            }
+            _ => {}
+        }
         // TODO
         Ok(None)
     }

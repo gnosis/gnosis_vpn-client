@@ -144,7 +144,7 @@ impl Config {
         ))
     }
 
-    pub fn destinations(&self) -> HashMap<String, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
         HashMap::new()
     }
 

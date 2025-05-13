@@ -1,6 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 
 use crate::log_output;
 use crate::peer_id::PeerId;
@@ -9,6 +10,7 @@ use crate::peer_id::PeerId;
 pub enum Command {
     Status,
     Connect(PeerId),
+    ConnectMeta((String, String)),
     Disconnect,
 }
 

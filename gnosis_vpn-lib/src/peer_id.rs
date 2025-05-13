@@ -1,6 +1,8 @@
 use libp2p_identity::PeerId as libp2p_PeerId;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::cmp::Eq;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -48,3 +50,11 @@ impl FromStr for PeerId {
         Ok(Self { id })
     }
 }
+
+impl Hash for PeerId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl Eq for PeerId {}
