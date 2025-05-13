@@ -350,9 +350,7 @@ impl Core {
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
         let config = config::read(&config_path)?;
         self.config = config;
-        // TODO
-        //self.reset();
-        Ok(())
+        Err(Error::NotImplemented)
     }
 
     fn establish_wg(&mut self) {
