@@ -10,7 +10,7 @@ use crate::connection::{Destination as ConnDestination, SessionParameters};
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::session;
-use crate::wireguard::config::Config as WireGuardConfig;
+use crate::wireguard::config::{Config as WireGuardConfig, ManualMode as WireGuardManualMode};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -82,6 +82,12 @@ struct ConnectionTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct WireGuard {
     listen_port: Option<u16>,
+    manual_mode: Option<WgManualMode>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct WgManualMode {
+    public_key: String,
 }
 
 impl Into<session::Capability> for SessionCapability {
@@ -186,7 +192,12 @@ impl Config {
 
     pub fn wireguard(&self) -> WireGuardConfig {
         let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
-        WireGuardConfig::new(&listen_port)
+        let manual_mode = self
+            .wireguard
+            .as_ref()
+            .and_then(|wg| wg.manual_mode.as_ref())
+            .map(|wgm| WireGuardManualMode::new(wgm.public_key.as_str()));
+        WireGuardConfig::new(&listen_port, &manual_mode)
     }
 }
 
@@ -243,6 +254,8 @@ target_type = "sealed"
 
 [wireguard]
 listen_port = 51820
+# only specify this if you want to manually connect via WireGuard
+manual_mode = { public_key = "VbezNcrZstuGTkXc7uNwHHB1BA8fLgL8IAQO/pWTpSw=" }
 "#####;
         toml::from_str::<Config>(config).expect("Failed to parse full config");
     }

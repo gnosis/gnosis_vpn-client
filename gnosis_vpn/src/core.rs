@@ -237,15 +237,7 @@ impl Core {
 
     fn connect(&mut self, destination: &Destination) {
         let (s, r) = crossbeam_channel::bounded(1);
-        let mut conn = Connection::new(
-            &self.config.hoprd_node,
-            &destination.peer_id,
-            &destination.path,
-            &destination.bridge.target,
-            &destination.wg.target,
-            &wg_pub_key,
-            s,
-        );
+        let mut conn = Connection::new(&self.config.entry_node(), &destination, &wg_pub_key, s);
 
         conn.establish();
         self.connection = Some(conn);

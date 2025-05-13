@@ -76,8 +76,6 @@ pub enum SessionPathConfig {
     Intermediates(Vec<PeerId>),
 }
 
-const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
-
 impl Default for SessionPathConfig {
     fn default() -> Self {
         SessionPathConfig::Hop(1)
@@ -132,6 +130,6 @@ impl Config {
 
     pub fn wireguard(&self) -> WireGuardConfig {
         let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
-        WireGuardConfig::new(&listen_port)
+        WireGuardConfig::new(&listen_port, &None)
     }
 }

@@ -86,3 +86,6 @@ target = "127.0.0.1:51820"
 # [wireguard]
 # interface listen port for incoming connections; defaults to 51820.
 # listen_port = 51820
+# GnosisVPN will handle this automatically, but can only do so on supported platforms.
+# If you manually handle the WireGuard interface, you need to specify a public_key here
+# manual_mode = { public_key = "VbezNcrZstuGTkXc7uNwHHB1BA8fLgL8IAQO/pWTpSw=" }
