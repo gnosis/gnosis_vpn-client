@@ -12,8 +12,6 @@ use crate::peer_id::PeerId;
 use crate::session;
 use crate::wireguard::config::Config as WireGuardConfig;
 
-use super::ConfigError;
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
@@ -114,7 +112,7 @@ impl Connection {
 }
 
 impl Config {
-    pub fn entry_node(&self) -> Result<EntryNode, ConfigError> {
+    pub fn entry_node(&self) -> EntryNode {
         let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
         let listen_host = self
             .connection
@@ -122,11 +120,7 @@ impl Config {
             .and_then(|c| c.listen_host.clone())
             .or(internal_connection_port)
             .unwrap_or(Connection::default_listen_host());
-        Ok(EntryNode::new(
-            &self.hoprd_node.endpoint,
-            &self.hoprd_node.api_token,
-            &listen_host,
-        ))
+        EntryNode::new(&self.hoprd_node.endpoint, &self.hoprd_node.api_token, &listen_host)
     }
 
     pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {

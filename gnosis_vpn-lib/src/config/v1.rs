@@ -6,8 +6,6 @@ use std::fmt::Display;
 use std::vec::Vec;
 use url::Url;
 
-use super::ConfigError;
-
 use crate::connection::Destination as ConnDestination;
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
@@ -16,7 +14,7 @@ use crate::wireguard::config::Config as WireGuardConfig;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
-    pub hoprd_node: Option<EntryNodeConfig>,
+    pub hoprd_node: EntryNodeConfig,
     pub connection: Option<SessionConfig>,
     pub wireguard: Option<OldWireGuardConfig>,
 }
@@ -80,17 +78,6 @@ pub enum SessionPathConfig {
 
 const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            version: 1,
-            hoprd_node: None,
-            connection: None,
-            wireguard: None,
-        }
-    }
-}
-
 impl Default for SessionPathConfig {
     fn default() -> Self {
         SessionPathConfig::Hop(1)
@@ -125,9 +112,8 @@ pub fn default_session_target_port() -> u16 {
 }
 
 impl Config {
-    pub fn entry_node(&self) -> Result<EntryNode, ConfigError> {
-        let hoprd_node = self.hoprd_node.as_ref().ok_or(ConfigError::HoprdNodeMissing)?;
-
+    pub fn entry_node(&self) -> EntryNode {
+        let hoprd_node = self.hoprd_node.clone();
         let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
 
         let listen_host = self
@@ -137,11 +123,7 @@ impl Config {
             .or(internal_connection_port)
             .unwrap_or(":1422".to_string());
 
-        Ok(EntryNode::new(
-            &hoprd_node.endpoint,
-            &hoprd_node.api_token,
-            &listen_host,
-        ))
+        EntryNode::new(&hoprd_node.endpoint, &hoprd_node.api_token, &listen_host)
     }
 
     pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {

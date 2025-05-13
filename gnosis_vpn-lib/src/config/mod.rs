@@ -33,12 +33,6 @@ pub enum Error {
     VersionMismatch(u8),
 }
 
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("hoprd_node is missing")]
-    HoprdNodeMissing,
-}
-
 pub fn read(path: &Path) -> Result<Config, Error> {
     let content = fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -79,7 +73,7 @@ pub fn read(path: &Path) -> Result<Config, Error> {
 }
 
 impl Config {
-    pub fn entry_node(&self) -> Result<EntryNode, ConfigError> {
+    pub fn entry_node(&self) -> EntryNode {
         match self {
             Config::V1(config) => config.entry_node(),
             Config::V2(config) => config.entry_node(),

@@ -100,22 +100,19 @@ impl Core {
 
     fn act_on_target(&mut self) {
         match &self.target_state {
-            TargetState::Connect(destination) => {
-                match &self.connection {
-                    Some(conn) => {
-                        if conn.has_destination(&destination) {
-                            tracing::info!(destination = %destination, "already connecting to target destination");
-                        } else {
-                            tracing::info!(current = %conn.destination(), target = %destination, "TODO disconnecting current destination")
-                            // TODO
-                        }
-                    }
-                    None => {
-                        tracing::info!(destination = %destination, "TODO establishing new connection");
-                        // TODO
+            TargetState::Connect(destination) => match &self.connection {
+                Some(conn) => {
+                    if conn.has_destination(&destination) {
+                        tracing::info!(destination = %destination, "already connecting to target destination");
+                    } else {
+                        tracing::info!(current = %conn.destination(), target = %destination, "TODO disconnecting current destination")
                     }
                 }
-            }
+                None => {
+                    tracing::info!(destination = %destination, "establishing new connection");
+                    self.connect(destination);
+                }
+            },
             TargetState::Shutdown => {
                 match (&self.connection, &self.shutdown_sender) {
                     (Some(conn), _) => {
@@ -234,7 +231,45 @@ impl Core {
             });
         }
         Ok(())
+
             */
+    }
+
+    fn connect(&mut self, destination: &Destination) {
+        let (s, r) = crossbeam_channel::bounded(1);
+        let mut conn = Connection::new(
+            &self.config.hoprd_node,
+            &destination.peer_id,
+            &destination.path,
+            &destination.bridge.target,
+            &destination.wg.target,
+            &wg_pub_key,
+            s,
+        );
+
+        conn.establish();
+        self.connection = Some(conn);
+        let sender = self.sender.clone();
+        thread::spawn(move || loop {
+            crossbeam_channel::select! {
+            recv(r) -> event => {
+                match event {
+                    Ok(connection::Event::Connected(conninfo)) => {
+                        _ = sender.send(Event::ConnectWg(conninfo));
+                        break;
+                    }
+                    Ok(connection::Event::Disconnected) => {
+
+                        tracing::info!("TODO sending disconnectwg");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to receive event");
+                        break;
+                    }
+                }
+            }
+                        }
+        });
     }
 
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
