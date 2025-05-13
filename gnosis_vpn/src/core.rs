@@ -46,6 +46,7 @@ pub struct Core {
 pub enum TargetState {
     Idle,
     Connect(Destination),
+    Shutdown,
 }
 
 #[derive(Debug, Error)]
@@ -56,6 +57,8 @@ pub enum Error {
     State(#[from] state::Error),
     #[error("WireGuard error: {0}")]
     WireGuard(#[from] wireguard::Error),
+    #[error("Not yet implemented")]
+    NotImplemented,
 }
 
 impl Core {
@@ -82,6 +85,7 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
+            target_state: TargetState::Idle,
         };
         Ok(core)
     }
@@ -89,8 +93,49 @@ impl Core {
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
-        // TODO intiate shutdown
+        self.target_state = TargetState::Shutdown;
+        self.act_on_target();
         receiver
+    }
+
+    fn act_on_target(&mut self) {
+        match &self.target_state {
+            TargetState::Connect(destination) => {
+                match &self.connection {
+                    Some(conn) => {
+                        if conn.has_destination(&destination) {
+                            tracing::info!(destination = %destination, "already connecting to target destination");
+                        } else {
+                            tracing::info!(current = %conn.destination(), target = %destination, "TODO disconnecting current destination")
+                            // TODO
+                        }
+                    }
+                    None => {
+                        tracing::info!(destination = %destination, "TODO establishing new connection");
+                        // TODO
+                    }
+                }
+            }
+            TargetState::Shutdown => {
+                match (&self.connection, &self.shutdown_sender) {
+                    (Some(conn), _) => {
+                        tracing::info!(current = %conn.destination(), "TODO disconnecting current destination");
+                        // TODO
+                    }
+                    (None, Some(sender)) => {
+                        tracing::info!("shutting down");
+                        _ = sender.send(());
+                    }
+                    _ => {
+                        tracing::warn!("shutdown target without shutdown sender");
+                    }
+                }
+            }
+            t => {
+                tracing::info!("TODO {:?}", t);
+                // TODO
+            }
+        }
     }
 
     fn setup_from_config(&mut self) -> Result<(), Error> {
@@ -195,23 +240,20 @@ impl Core {
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
     pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Option<String>, Error> {
         match cmd {
-            Command::Connect(peer_id) => {
-                match (self.config.destinations().get(peer_id)) {
-                    Some(dest) -> {
-                        tracing::info!(destination = %dest, "targetting new destination");
-                        self.target_state = TargetState::Connect(dest.clone());
-                        Ok(Some(format!("targetting {}", dest)))
-                    },
-                    None => {
-                        tracing::info!(peer_id = %peer_id, "destination peer id not found");
-                        Ok(Some(format!("unknown peer id")))
-                    }
+            Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
+                Some(dest) => {
+                    tracing::info!(destination = %dest, "targetting new destination");
+                    self.target_state = TargetState::Connect(dest.clone());
+                    self.act_on_target();
+                    Ok(Some(format!("targetting {}", dest)))
                 }
-            }
-            _ => {}
+                None => {
+                    tracing::info!(peer_id = %peer_id, "destination peer id not found");
+                    Ok(Some(format!("unknown peer id")))
+                }
+            },
+            _ => Err(Error::NotImplemented),
         }
-        // TODO
-        Ok(None)
     }
 
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]

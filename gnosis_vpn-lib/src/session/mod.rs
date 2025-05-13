@@ -10,8 +10,10 @@ use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::remote_data;
 
-use protocol::Protocol;
+pub use path::Path;
+pub use protocol::Protocol;
 
+mod path;
 mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,19 +24,13 @@ pub struct Session {
     pub target: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum Capability {
     Segmentation,
     Retransmission,
 }
 
-#[derive(Clone, Debug)]
-pub enum Path {
-    Hops(u8),
-    Intermediates(Vec<PeerId>),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Plain(SocketAddr),
     Sealed(SocketAddr),
@@ -71,12 +67,6 @@ pub enum Error {
     Deserialize(#[from] serde_json::Error),
     #[error("Error making http request")]
     RemoteData(remote_data::CustomError),
-}
-
-impl Default for Path {
-    fn default() -> Self {
-        Path::Hops(1)
-    }
 }
 
 impl Target {

@@ -12,7 +12,7 @@ use crate::remote_data;
 use crate::session::{self, Session};
 use crate::wg_client;
 
-use destination::Destination;
+pub use destination::{Destination, SessionParameters};
 
 pub mod destination;
 
@@ -65,12 +65,6 @@ enum InternalEvent {
 }
 
 #[derive(Clone, Debug)]
-pub struct SessionParameters {
-    target: session::Target,
-    capabilities: Vec<session::Capability>,
-}
-
-#[derive(Clone, Debug)]
 pub struct Connection {
     phase: Phase,
     direction: Direction,
@@ -94,15 +88,6 @@ enum InternalError {
     WgRegistrationNotSet,
 }
 
-impl SessionParameters {
-    pub fn new(target: &session::Target, capabilities: &Vec<session::Capability>) -> Self {
-        Self {
-            target: target.clone(),
-            capabilities: capabilities.clone(),
-        }
-    }
-}
-
 impl Connection {
     pub fn new(
         entry_node: &EntryNode,
@@ -122,6 +107,14 @@ impl Connection {
             wg_public_key: wg_public_key.to_string(),
             wg_registration: None,
         }
+    }
+
+    pub fn has_destination(&self, destination: &Destination) -> bool {
+        self.destination == *destination
+    }
+
+    pub fn destination(&self) -> Destination {
+        self.destination.clone()
     }
 
     pub fn establish(&mut self) {
