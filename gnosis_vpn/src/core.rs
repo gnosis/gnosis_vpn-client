@@ -49,14 +49,6 @@ pub enum Error {
     WireGuard(#[from] wireguard::Error),
 }
 
-#[derive(Debug)]
-enum Issue {
-    Config(config::Error),
-    State(state::Error),
-    WireGuardInit(wireguard::Error),
-    WireGuard(wireguard::Error),
-}
-
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
         let config = config::read(config_path)?;
