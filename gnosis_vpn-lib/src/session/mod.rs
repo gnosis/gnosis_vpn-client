@@ -2,6 +2,7 @@ use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp;
+use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use std::time::Duration;
 use thiserror::Error;
@@ -317,5 +318,11 @@ impl Session {
 impl cmp::PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
         self.ip == other.ip && self.port == other.port && self.protocol == other.protocol && self.target == other.target
+    }
+}
+
+impl Display for Session {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Session[{}/{}]", self.port, self.protocol)
     }
 }
