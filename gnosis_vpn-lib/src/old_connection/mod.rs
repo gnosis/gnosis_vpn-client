@@ -25,7 +25,6 @@ pub struct BridgeSession {
     pub target: Option<SessionTargetConfig>,
 }
 
-
 pub struct EntryNode {
     pub endpoint: Url,
     pub api_token: String,
@@ -38,11 +37,9 @@ pub enum Connection {
     EstablishWgSession(WgSession),
 }
 
-
 pub struct Connection {
     entry_node: EntryNode,
     path: Path,
-
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,7 +69,10 @@ pub fn open(
     open_session: &OpenSession,
 ) -> Result<()> {
     let headers = remote_data::authentication_headers(open_session.api_token.as_str())?;
-    let url = open_session.endpoint.join("api/v3/session/")?.join(open_session.protocol)?;
+    let url = open_session
+        .endpoint
+        .join("api/v3/session/")?
+        .join(open_session.protocol)?;
     let mut json = serde_json::Map::new();
     json.insert("destination".to_string(), json!(open_session.destination));
 

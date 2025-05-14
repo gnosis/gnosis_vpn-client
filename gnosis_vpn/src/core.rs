@@ -1,28 +1,15 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread;
-use std::time;
-use std::time::SystemTime;
 
-use rand::Rng;
-use reqwest::blocking;
 use thiserror::Error;
 use tracing::instrument;
-use url::Url;
 
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
-use gnosis_vpn_lib::entry_node::EntryNode;
-use gnosis_vpn_lib::peer_id::PeerId;
-use gnosis_vpn_lib::session::{self};
 use gnosis_vpn_lib::state;
-use gnosis_vpn_lib::{log_output, wireguard};
+use gnosis_vpn_lib::wireguard;
 
-use crate::backoff;
-use crate::backoff::FromIteratorToSeries;
 use crate::event::Event;
 
 #[derive(Debug)]
@@ -282,6 +269,9 @@ impl Core {
                     Ok(connection::Event::Disconnected) => {
                         tracing::info!("TODO sending disconnectwg");
                     }
+                    Ok(connection::Event::Dismantled) => {
+                        tracing::info!("TODO connection dismantled");
+                    }
                     Err(e) => {
                         tracing::warn!(error = ?e, "failed to receive event");
                         break;
@@ -314,21 +304,18 @@ impl Core {
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         match event {
-            Event::ConnectWg(connection::ConnectInfo {
-                endpoint,
-                wg_registration,
-            }) => {
+            Event::ConnectWg(connection::ConnectInfo { endpoint, registration }) => {
                 tracing::info!("trying wg conn");
                 if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
                     tracing::info!("core received connected with wg_priv_key");
                     let interface_info = wireguard::InterfaceInfo {
                         private_key: privkey.clone(),
-                        address: wg_registration.address(),
+                        address: registration.address(),
                         allowed_ips: None,
                         listen_port: None,
                     };
                     let peer_info = wireguard::PeerInfo {
-                        public_key: wg_registration.server_public_key(),
+                        public_key: registration.server_public_key(),
                         endpoint,
                     };
                     let info = wireguard::ConnectSession::new(&interface_info, &peer_info);
