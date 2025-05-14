@@ -1,3 +1,4 @@
+use std::fmt::{self, Display};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -28,56 +29,65 @@ pub struct ConnectInfo {
     pub wg_registration: wg_client::Register,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
+    #[error("No active session")]
     NotConnected,
+    #[error("Failed to send message")]
+    ChannelError(#[from] crossbeam_channel::SendError<()>),
 }
 
 /// Represents the different phases of a connection
-/// Up: Idle -> SetUpBridgeSession -> RegisterWg -> TearDownBridgeSession -> SetUpMainSession -> MonitorMainSession
-/// Down: MonitorMainSession -> TearDownMainSession -> SetUpBridgeSession -> UnregisterWg -> TearDownBridgeSession -> Idle
+/// Up: Idle -> BridgeSessionOpen -> WgRegistrationReceived -> BridgeSessionClosed -> MainSessionOpen
+/// Down: MainSessionOpen -> MainSessionClosed -> BridgeSessionOpen -> WgUnregistrationReceived -> BridgeSessionClosed -> Idle
 #[derive(Clone, Debug)]
 enum Phase {
     Idle,
-    SetUpBridgeSession,
-    TearDownBridgeSession,
-    RegisterWg,
-    UnregisterWg,
-    SetUpMainSession,
-    TearDownMainSession,
-    MonitorMainSession,
-}
-
-#[derive(Clone, Debug)]
-enum Direction {
-    Up,
-    Down,
-    Halt,
+    BridgeSessionOpen,
+    BridgeSessionClosed,
+    WgRegistrationReceived,
+    WgUnregistrationReceived,
+    MainSessionOpen,
+    MainSessionClosed,
 }
 
 #[derive(Debug)]
 enum InternalEvent {
-    BridgeSession(Result<Session, session::Error>),
+    SetUpSession(Result<Session, session::Error>),
+    TearDownSession(Result<(), session::Error>),
     RegisterWg(Result<wg_client::Register, wg_client::Error>),
-    TearDownBridgeSession(Result<(), session::Error>),
-    MainSession(Result<Session, session::Error>),
+    UnregisterWg(Result<(), wg_client::Error>),
     ListSessions(Result<Vec<Session>, session::Error>),
 }
 
 #[derive(Clone, Debug)]
 pub struct Connection {
-    phase: Phase,
-    direction: Direction,
-    // runtime data
-    abort_sender: Option<crossbeam_channel::Sender<()>>,
+    // message passing helper
+    abort_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
+    establish_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
+    dismantle_channel: (
+        crossbeam_channel::Sender<RuntimeData>,
+        crossbeam_channel::Receiver<RuntimeData>,
+    ),
+
+    // reuse http client
     client: blocking::Client,
-    session_since: Option<(Session, SystemTime)>,
-    wg_registration: Option<wg_client::Register>,
-    // input data
+
+    // dynamic runtime data
+    runtime_data: RuntimeData,
+
+    // static input data
     entry_node: EntryNode,
     destination: Destination,
     wg_public_key: String,
     sender: crossbeam_channel::Sender<Event>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeData {
+    phase: Phase,
+    session_since: Option<(Session, SystemTime)>,
+    wg_registration: Option<wg_client::Register>,
 }
 
 #[derive(Debug, Error)]
@@ -86,6 +96,8 @@ enum InternalError {
     SessionNotSet,
     #[error("Missing WireGuard registration data")]
     WgRegistrationNotSet,
+    #[error("Invalid phase for action")]
+    UnexpectedPhase,
 }
 
 impl Connection {
@@ -95,17 +107,21 @@ impl Connection {
         wg_public_key: &str,
         sender: crossbeam_channel::Sender<Event>,
     ) -> Self {
+        let runtime_data = RuntimeData {
+            phase: Phase::Idle,
+            session_since: None,
+            wg_registration: None,
+        };
         Connection {
-            abort_sender: None,
+            abort_channel: crossbeam_channel::bounded(1),
+            establish_channel: crossbeam_channel::bounded(1),
+            dismantle_channel: crossbeam_channel::bounded(1),
             client: blocking::Client::new(),
             destination: destination.clone(),
-            direction: Direction::Halt,
             entry_node: entry_node.clone(),
-            phase: Phase::Idle,
+            runtime_data,
             sender: sender.clone(),
-            session_since: None,
             wg_public_key: wg_public_key.to_string(),
-            wg_registration: None,
         }
     }
 
@@ -118,27 +134,42 @@ impl Connection {
     }
 
     pub fn establish(&mut self) {
-        let (send_abort, recv_abort) = crossbeam_channel::bounded(1);
-        self.abort_sender = Some(send_abort);
         let mut me = self.clone();
         thread::spawn(move || loop {
             let result = me.act_up();
             let recv_event = match result {
                 Ok(recv_event) => recv_event,
                 Err(error) => {
-                    tracing::error!(%error, "Failed to act up");
+                    tracing::error!(%error, "Critical error during connection establishment - halting");
                     crossbeam_channel::never()
                 }
             };
             crossbeam_channel::select! {
-                recv(recv_abort) -> res => {
+                // waiting on dismantle signal for providing runtime data
+                recv(me.establish_channel.1) -> res => {
                     match res {
-                        Ok(_) => {
-                            me.act_abort();
+                        Ok(()) => {
+                            match me.dismantle_channel.0.send(me.runtime_data) {
+                                Ok(()) => (),
+                                Err(error) => {
+                                    tracing::error!(%error, "Critical error sending runtime data on dismantle channel - halting");
+                                }
+                            }
                             break;
                         }
                         Err(error) => {
-                            tracing::error!(%error, "Failed receiving abort signal");
+                            tracing::error!(%error, "Failed receiving signal on establish channel");
+                        }
+                    }
+                },
+                recv(me.abort_channel.1) -> res => {
+                    match res {
+                        Ok(()) => {
+                            tracing::warn!("Received abort signal during connection establishment");
+                            break;
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "Failed receiving signal on abort channel during connection establishment");
                         }
                     }
                 },
@@ -157,47 +188,90 @@ impl Connection {
         });
     }
 
-    pub fn abort(&self) -> Result<(), crossbeam_channel::SendError<()>> {
-        match &self.abort_sender {
-            Some(sender) => {
-                tracing::info!("Aborting connection");
-                sender.send(())
+    pub fn dismantle(&mut self) {
+        let mut me = self.clone();
+        thread::spawn(move || loop {
+            match me.establish_channel.0.send(()) {
+                Ok(()) => (),
+                Err(error) => {
+                    tracing::error!(%error, "Critical error sending dismantle signal on establish channel - halting");
+                    break;
+                }
             }
-            None => {
-                tracing::info!("Connection not started - nothing to abort");
-                Ok(())
+            me.runtime_data = crossbeam_channel::select! {
+                recv(me.dismantle_channel.1) -> res => {
+                    match res {
+                        Ok(data) => data,
+                        Err(error) => {
+                            tracing::error!(%error, "Critical error receiving runtime data on dismantle channel - halting");
+                            break;
+                        }
+                    }
+                }
+                default(Duration::from_secs(3)) => {
+                            tracing::error!("Critical timeout receiving runtime data on dismantle channel - halting");
+                            break;
+                }
+            };
+
+            let result = me.act_down();
+            let recv_event = match result {
+                Ok(recv_event) => recv_event,
+                Err(error) => {
+                    tracing::error!(%error, "Critical error during connection dismantling - halting");
+                    crossbeam_channel::never()
+                }
+            };
+            crossbeam_channel::select! {
+                recv(me.abort_channel.1) -> res => {
+                    match res {
+                        Ok(()) => {
+                            tracing::warn!("Received abort signal during connection dismantling");
+                            break;
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "Failed receiving signal on abort channel during connection dismantling");
+                        }
+                    }
+                }
+                recv(recv_event) -> res => {
+                    match res {
+                        Ok(evt) => {
+                                tracing::info!(event = ?evt, "Received event");
+                                me.act_event(evt);
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "Failed receiving event");
+                        }
+                    }
+                }
             }
-        }
+        });
     }
 
-    pub fn port(&self) -> Result<u16, Error> {
-        match self.session_since.as_ref() {
-            Some((session, _)) => Ok(session.port),
-            None => Err(Error::NotConnected),
-        }
+    pub fn abort(&self) {
+        tracing::info!("Aborting connection");
+        self.abort_channel.0.send(()).unwrap_or_else(|error| {
+            tracing::error!(%error, "Failed sending signal on abort channel");
+        });
     }
 
     fn act_up(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
-        self.direction = Direction::Up;
-        tracing::info!(phase = ?self.phase, "Acting up");
-        match self.phase {
+        tracing::info!(runtime_data = %self.runtime_data, "Establishing connection");
+        match self.runtime_data.phase {
             Phase::Idle => self.idle2bridge(),
-            Phase::SetUpBridgeSession => self.bridge2wg(),
-            Phase::RegisterWg => self.wg2teardown(),
-            Phase::TearDownBridgeSession => self.teardown2main(),
-            Phase::SetUpMainSession | Phase::MonitorMainSession => self.monitor(),
-            Phase::TearDownMainSession | Phase::UnregisterWg => {
-                panic!("Invalid phase for up action");
-            }
+            Phase::BridgeSessionOpen => self.bridge2wg(),
+            Phase::WgRegistrationReceived => self.wg2teardown(),
+            Phase::BridgeSessionClosed => self.teardown2main(),
+            Phase::MainSessionOpen | Phase::MonitorMainSession => self.monitor(),
+            Phase::MainSessionClosed | Phase::WgUnregistrationReceived => Err(InternalError::UnexpectedPhase),
         }
     }
 
-    fn act_down(&self) {
-        match self.phase {
-            Phase::Idle => {}
-            _ => {
-                panic!("Invalid phase for down action");
-            }
+    fn act_down(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
+        tracing::info!(runtime_data = %self.runtime_data, "Dismantling connection");
+        match self.runtime_data.phase {
+            _ => Err(InternalError::UnexpectedPhase),
         }
     }
 
@@ -205,7 +279,8 @@ impl Connection {
         match event {
             InternalEvent::BridgeSession(res) => match res {
                 Ok(session) => {
-                    self.session_since = Some((session, SystemTime::now()));
+                    self.runtime_data.phase = Phase::BridgeSessionOpen;
+                    self.runtime_data.session_since = Some((session, SystemTime::now()));
                 }
                 // Some(Object {"status": String("LISTEN_HOST_ALREADY_USED")}) })))
                 Err(session::Error::RemoteData(remote_data::CustomError {
@@ -217,35 +292,33 @@ impl Connection {
                         // TODO hanlde dismantling on existing port
                     }
                     tracing::error!(?json, "Failed to open session - CONFLICT");
-                    self.phase = Phase::Idle;
                 }
                 Err(error) => {
                     tracing::error!(%error, "Failed to open session");
-                    self.phase = Phase::Idle;
                 }
             },
             InternalEvent::RegisterWg(res) => match res {
                 Ok(register) => {
-                    self.wg_registration = Some(register);
+                    self.runtime_data.phase = Phase::WgRegistrationReceived;
+                    self.runtime_data.wg_registration = Some(register);
                 }
                 Err(error) => {
                     tracing::error!(%error, "Failed to register wg client");
-                    self.phase = Phase::SetUpBridgeSession;
                 }
             },
             InternalEvent::TearDownBridgeSession(res) => match res {
                 Ok(_) => {
-                    self.session_since = None;
+                    self.runtime_data.session_since = None;
                 }
                 Err(error) => {
                     tracing::error!(%error, "Failed to tear down bridge session");
-                    self.phase = Phase::RegisterWg;
+                    self.runtime_data.phase = Phase::WgRegistrationReceived;
                 }
             },
             InternalEvent::MainSession(res) => match res {
-                Ok(session) => match self.wg_registration.as_ref() {
+                Ok(session) => match self.runtime_data.wg_registration.as_ref() {
                     Some(wg_registration) => {
-                        self.session_since = Some((session.clone(), SystemTime::now()));
+                        self.runtime_data.session_since = Some((session.clone(), SystemTime::now()));
                         let host = self
                             .entry_node
                             .endpoint
@@ -266,14 +339,14 @@ impl Connection {
                 }
             },
             InternalEvent::ListSessions(res) => match res {
-                Ok(sessions) => match self.session_since.as_ref() {
+                Ok(sessions) => match self.runtime_data.session_since.as_ref() {
                     Some((session, since)) => {
                         if session.verify_open(&sessions) {
                             tracing::info!(?sessions, "session verified open since {}", log_output::elapsed(&since));
                         } else {
                             tracing::info!("Session is closed");
-                            self.session_since = None;
-                            self.phase = Phase::TearDownBridgeSession;
+                            self.runtime_data.session_since = None;
+                            self.runtime_data.phase = Phase::BridgeSessionClosed;
                             _ = self.sender.send(Event::Disconnected)
                         }
                     }
@@ -288,17 +361,8 @@ impl Connection {
         }
     }
 
-    fn act_abort(&self) {
-        match self.phase {
-            _ => {
-                panic!("Invalid phase for abort action");
-            }
-        }
-    }
-
-    /// Transition from Idle to SetUpBridgeSession
+    /// Transition from Idle to BridgeSessionOpen
     fn idle2bridge(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
-        self.phase = Phase::SetUpBridgeSession;
         let params = session::OpenSession::bridge(
             &self.entry_node,
             &self.destination.peer_id,
@@ -316,10 +380,13 @@ impl Connection {
         Ok(r)
     }
 
-    /// Transition from SetUpBridgeSession to RegisterWg
+    /// Transition from BridgeSessionOpen to WgRegistrationReceived
     fn bridge2wg(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
-        let (session, _) = self.session_since.as_ref().ok_or(InternalError::SessionNotSet)?;
-        self.phase = Phase::RegisterWg;
+        let (session, _) = self
+            .runtime_data
+            .session_since
+            .as_ref()
+            .ok_or(InternalError::SessionNotSet)?;
         let ri = wg_client::RegisterInput::new(&self.wg_public_key, &self.entry_node.endpoint, &session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -330,13 +397,19 @@ impl Connection {
         Ok(r)
     }
 
-    /// Transition from RegisterWg to TearDownBridgeSession
+    /// Transition from WgRegistrationReceived to BridgeSessionClosed
     fn wg2teardown(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
-        let (session, _) = self.session_since.as_ref().ok_or(InternalError::SessionNotSet)?.clone();
-        self.wg_registration
+        let (session, _) = self
+            .runtime_data
+            .session_since
+            .as_ref()
+            .ok_or(InternalError::SessionNotSet)?
+            .clone();
+        self.runtime_data
+            .wg_registration
             .as_ref()
             .ok_or(InternalError::WgRegistrationNotSet)?;
-        self.phase = Phase::TearDownBridgeSession;
+        self.runtime_data.phase = Phase::BridgeSessionClosed;
         let params = session::CloseSession::new(&self.entry_node, &Duration::from_secs(15));
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -347,9 +420,9 @@ impl Connection {
         Ok(r)
     }
 
-    /// Transition from TearDownBridgeSession to SetUpMainSession
+    /// Transition from BridgeSessionClosed to MainSessionOpen
     fn teardown2main(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
-        self.phase = Phase::SetUpMainSession;
+        self.runtime_data.phase = Phase::MainSessionOpen;
         let params = session::OpenSession::main(
             &self.entry_node,
             &self.destination.peer_id,
@@ -368,8 +441,12 @@ impl Connection {
     }
 
     fn monitor(&mut self) -> Result<crossbeam_channel::Receiver<InternalEvent>, InternalError> {
-        let (session, _) = self.session_since.as_ref().ok_or(InternalError::SessionNotSet)?;
-        self.phase = Phase::MonitorMainSession;
+        let (session, _) = self
+            .runtime_data
+            .session_since
+            .as_ref()
+            .ok_or(InternalError::SessionNotSet)?;
+        self.runtime_data.phase = Phase::MonitorMainSession;
         let params = session::ListSession::new(&self.entry_node, &session.protocol, &Duration::from_secs(30));
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -385,5 +462,27 @@ impl Connection {
             }
         });
         Ok(r)
+    }
+}
+
+impl Display for RuntimeData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let phase = match self.phase {
+            Phase::Idle => "Idle",
+            Phase::BridgeSessionOpen => "BridgeSessionOpen",
+            Phase::BridgeSessionClosed => "BridgeSessionClosed",
+            Phase::WgRegistrationReceived => "WgRegistrationReceived",
+            Phase::WgUnregistrationReceived => "WgUnregistrationReceived",
+            Phase::MainSessionOpen => "MainSessionOpen",
+            Phase::MainSessionClosed => "MainSessionClosed",
+        };
+        write!(f, "RuntimeData[{}", phase);
+        if let Some((_session, since)) = &self.session_since {
+            write!(f, ", session since {}", log_output::elapsed(since));
+        }
+        if let Some(wg_registration) = &self.wg_registration {
+            write!(f, ", {}", wg_registration);
+        }
+        write!(f, "]")
     }
 }

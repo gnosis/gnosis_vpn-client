@@ -1,6 +1,7 @@
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fmt::{self, Display};
 use std::net::Ipv4Addr;
 use thiserror::Error;
 use url::Url;
@@ -98,5 +99,11 @@ pub fn register(client: &blocking::Client, input: &RegisterInput) -> Result<Regi
             };
             Err(Error::RemoteData(e))
         }
+    }
+}
+
+impl Display for Register {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "WgRegistration[{}]", self.ip)
     }
 }
