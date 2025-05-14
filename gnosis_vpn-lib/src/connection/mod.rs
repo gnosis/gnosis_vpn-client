@@ -255,10 +255,7 @@ impl Connection {
     }
 
     pub fn pretty_print_path(&self) -> String {
-        let mut path = self.destination.path.clone();
-        path.push_str(" -> ");
-        path.push_str(&self.destination.wg.target);
-        path
+        format!("(e._)->{}", self.destination.pretty_print_path())
     }
 
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {

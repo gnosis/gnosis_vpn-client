@@ -355,7 +355,10 @@ impl Core {
 
             route: {}
         ",
-                        self.connection.map(|c| c.pretty_print_path()).unwrap_or_default()
+                        self.connection
+                            .as_ref()
+                            .map(|c| c.pretty_print_path())
+                            .unwrap_or_default()
                     );
                     Ok(())
                 }
