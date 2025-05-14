@@ -387,9 +387,10 @@ impl Core {
             \---============================---/
 
             route: {}
-            ready for manual WireGuard connection
-            wg-quick configuration blueprint:
-            {}
+
+            --- ready for manual WireGuard connection (wg-quick configuration blueprint) ---
+
+{}
 
             ",
                 self.connection

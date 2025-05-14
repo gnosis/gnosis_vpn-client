@@ -210,9 +210,7 @@ impl Connection {
                             return;
                 }
             };
-
             me.phase_down = me.phase_up.clone().into();
-            tracing::info!(from = %me.phase_down, "Starting dismantling connection");
 
             let mut me2 = me.clone();
             thread::spawn(move || loop {
@@ -255,7 +253,7 @@ impl Connection {
     }
 
     pub fn pretty_print_path(&self) -> String {
-        format!("(e._)->{}", self.destination.pretty_print_path())
+        format!("(entry){}", self.destination.pretty_print_path())
     }
 
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {

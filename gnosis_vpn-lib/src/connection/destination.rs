@@ -49,7 +49,7 @@ impl Destination {
 
     pub fn pretty_print_path(&self) -> String {
         format!(
-            "{}->(x{})",
+            "{}(x{})",
             self.path.to_string(),
             log_output::peer_id(&self.peer_id.to_string().as_str())
         )
