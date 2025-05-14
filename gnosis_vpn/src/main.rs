@@ -177,7 +177,6 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
     };
 
     if let Some(resp) = res {
-        tracing::info!(response = %resp);
         if let Err(e) = stream.write_all(resp.as_bytes()) {
             tracing::error!(error = ?e, "error writing response");
             return;

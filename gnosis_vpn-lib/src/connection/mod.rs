@@ -171,7 +171,7 @@ impl Connection {
                 recv(recv_event) -> res => {
                     match res {
                         Ok(evt) => {
-                            tracing::info!(event = ?evt, "Received event during connection establishment");
+                            tracing::debug!(event = ?evt, "Received event during connection establishment");
                             _ = me.act_event_up(evt).map_err(|error| {
                                 tracing::error!(%error, "Failed to process event during connection establishment");
                             });
@@ -212,6 +212,7 @@ impl Connection {
             };
 
             me.phase_down = me.phase_up.clone().into();
+            tracing::info!(from = %me.phase_down, "Starting dismantling connection");
 
             let mut me2 = me.clone();
             thread::spawn(move || loop {
@@ -231,7 +232,7 @@ impl Connection {
                     recv(recv_event) -> res => {
                         match res {
                             Ok(evt) => {
-                                tracing::info!(event = ?evt, "Received event during connection dismantling");
+                                tracing::debug!(event = ?evt, "Received event during connection dismantling");
                                 _ = me2.act_event_down(evt).map_err(|error| {
                                     tracing::error!(%error, "Failed to process event during connection dismantling");
                                 });
@@ -253,6 +254,13 @@ impl Connection {
         });
     }
 
+    pub fn pretty_print_path(&self) -> String {
+        let mut path = self.destination.path.clone();
+        path.push_str(" -> ");
+        path.push_str(&self.destination.wg.target);
+        path
+    }
+
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::info!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
@@ -265,7 +273,7 @@ impl Connection {
     }
 
     fn act_down(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        tracing::info!(phase_down = %self.phase_down, from = %self.phase_up, "Dismantling connection");
+        tracing::info!(phase_down = %self.phase_down, "Dismantling connection");
         match self.phase_down.clone() {
             PhaseDown::Idle => crossbeam_channel::never(),
             PhaseDown::MainSessionOpen(session, _since, _registration) => self.main2teardown(&session),

@@ -1,4 +1,5 @@
 use std::cmp::PartialEq;
+use std::fmt::{self, Display};
 
 use crate::peer_id::PeerId;
 
@@ -11,5 +12,12 @@ pub enum Path {
 impl Default for Path {
     fn default() -> Self {
         Path::Hops(1)
+    }
+}
+
+impl Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self
+        write!(f, "WgRegistration[{}]", self.ip)
     }
 }
