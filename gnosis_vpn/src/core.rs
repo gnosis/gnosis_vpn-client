@@ -313,7 +313,7 @@ impl Core {
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         tracing::info!(%event, "handling event");
         match event {
-            Event::ConnectWg(conninfo) => self.establish_wg(conninfo),
+            Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
             Event::DisconnectWg => {
                 // self.dismantle_wg();
                 Ok(())
@@ -328,22 +328,22 @@ impl Core {
         Err(Error::NotImplemented)
     }
 
-    fn establish_wg(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
+    fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
         if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
             tracing::info!("iniating wireguard connection");
             let interface_info = wireguard::InterfaceInfo {
                 private_key: privkey.clone(),
                 address: conninfo.registration.address(),
                 allowed_ips: None,
-                listen_port: None,
+                listen_port: self.config.wireguard().listen_port,
             };
             let peer_info = wireguard::PeerInfo {
                 public_key: conninfo.registration.server_public_key(),
                 endpoint: conninfo.endpoint,
             };
-            let info = wireguard::ConnectSession::new(&interface_info, &peer_info);
+            let connect_session = wireguard::ConnectSession::new(&interface_info, &peer_info);
 
-            match wg.connect_session(&info) {
+            match wg.connect_session(&connect_session) {
                 Ok(_) => {
                     tracing::info!("established wireguard connection");
                     tracing::info!(
@@ -368,7 +368,36 @@ impl Core {
                 }
             }
         } else {
-            tracing::info!("TODO Manual wg connection");
+            let interface_info = wireguard::InterfaceInfo {
+                private_key: "<WireGuard private key>".to_string(),
+                address: conninfo.registration.address(),
+                allowed_ips: None,
+                listen_port: self.config.wireguard().listen_port,
+            };
+            let peer_info = wireguard::PeerInfo {
+                public_key: conninfo.registration.server_public_key(),
+                endpoint: conninfo.endpoint,
+            };
+            let connect_session = wireguard::ConnectSession::new(&interface_info, &peer_info);
+            tracing::info!(
+                r"
+
+            /---============================---\
+            |   HOPRD CONNECTION ESTABLISHED   |
+            \---============================---/
+
+            route: {}
+            ready for manual WireGuard connection
+            wg-quick configuration blueprint:
+            {}
+
+            ",
+                self.connection
+                    .as_ref()
+                    .map(|c| c.pretty_print_path())
+                    .unwrap_or_default(),
+                connect_session.to_file_string()
+            );
             Ok(())
         }
     }
