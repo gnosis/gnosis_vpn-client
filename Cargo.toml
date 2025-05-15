@@ -15,7 +15,8 @@ crossbeam-channel = "0.5"
 ctrlc = { version = "3.4", features = ["termination"] }
 directories = { version = "5.0" }
 exitcode = "1.1"
-humantime = "2.1"
+humantime = "2.2"
+humantime-serde = "1.1"
 libp2p-identity = { version = "0.2", features = ["ed25519", "peerid"] }
 notify = { version = "6.1", features = ["serde"] }
 rand = { version = "0.8" }
