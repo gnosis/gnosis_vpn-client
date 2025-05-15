@@ -12,7 +12,7 @@ pub struct ManualMode {
 impl Config {
     pub fn new(listen_port: &Option<u16>, manual_mode: &Option<ManualMode>) -> Self {
         Config {
-            listen_port: listen_port.clone(),
+            listen_port: *listen_port,
             manual_mode: manual_mode.clone(),
         }
     }

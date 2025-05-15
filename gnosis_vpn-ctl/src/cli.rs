@@ -43,9 +43,9 @@ pub enum Command {
     Disconnect {},
 }
 
-impl Into<LibCommand> for Command {
-    fn into(self) -> LibCommand {
-        match self {
+impl From<Command> for LibCommand {
+    fn from(val: Command) -> Self {
+        match val {
             Command::Status {} => LibCommand::Status,
             Command::Connect { peer_id } => LibCommand::Connect(peer_id),
             Command::Disconnect {} => LibCommand::Disconnect,

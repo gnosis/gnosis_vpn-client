@@ -428,7 +428,7 @@ impl Connection {
 
     /// Transition from BridgeSessionOpen to WgRegistrationReceived
     fn bridge2wgreg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = wg_client::Input::new(&self.wg_public_key, &self.entry_node.endpoint, &session);
+        let ri = wg_client::Input::new(&self.wg_public_key, &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
@@ -523,7 +523,7 @@ impl Connection {
 
     /// Transition from BridgeSessionOpen to WgUnregistrationReceived
     fn bridge2wgunreg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = wg_client::Input::new(&self.wg_public_key, &self.entry_node.endpoint, &session);
+        let params = wg_client::Input::new(&self.wg_public_key, &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {

@@ -90,9 +90,9 @@ struct WgManualMode {
     public_key: String,
 }
 
-impl Into<session::Capability> for SessionCapability {
-    fn into(self) -> session::Capability {
-        match self {
+impl From<SessionCapability> for session::Capability {
+    fn from(val: SessionCapability) -> Self {
+        match val {
             SessionCapability::Segmentation => session::Capability::Segmentation,
             SessionCapability::Retransmission => session::Capability::Retransmission,
         }
@@ -130,7 +130,7 @@ impl Config {
     }
 
     pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
-        let config_dests = self.destinations.clone().unwrap_or(HashMap::new());
+        let config_dests = self.destinations.clone().unwrap_or_default();
         let connection = self.connection.as_ref();
         config_dests
             .iter()
@@ -155,7 +155,7 @@ impl Config {
                 let bridge_target_type = connection
                     .and_then(|c| c.bridge.as_ref())
                     .and_then(|b| b.target_type.clone())
-                    .unwrap_or(SessionTargetType::default());
+                    .unwrap_or_default();
                 let bridge_target = match bridge_target_type {
                     SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
                     SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
@@ -176,7 +176,7 @@ impl Config {
                 let wg_target_type = connection
                     .and_then(|c| c.wg.as_ref())
                     .and_then(|w| w.target_type.clone())
-                    .unwrap_or(SessionTargetType::default());
+                    .unwrap_or_default();
                 let wg_target = match wg_target_type {
                     SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
                     SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
@@ -184,8 +184,8 @@ impl Config {
                 let params_wg = SessionParameters::new(&wg_target, &wg_caps);
                 let meta = v.meta.clone().unwrap_or_default();
 
-                let dest = ConnDestination::new(&k, &path, &meta, &params_bridge, &params_wg);
-                (k.clone(), dest)
+                let dest = ConnDestination::new(k, &path, &meta, &params_bridge, &params_wg);
+                (*k, dest)
             })
             .collect()
     }

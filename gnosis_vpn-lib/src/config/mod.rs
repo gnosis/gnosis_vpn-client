@@ -46,9 +46,9 @@ pub fn read(path: &Path) -> Result<Config, Error> {
     match res_v2 {
         Ok(config) => {
             if config.version == 2 {
-                return Ok(Config::V2(config));
+                Ok(Config::V2(config))
             } else {
-                return Err(Error::VersionMismatch(config.version));
+                Err(Error::VersionMismatch(config.version))
             }
         }
         Err(error) => {
@@ -58,14 +58,14 @@ pub fn read(path: &Path) -> Result<Config, Error> {
                 Ok(config) => {
                     if config.version == 1 {
                         tracing::warn!("found v1 configuration file, please update to configuration file version 2");
-                        return Ok(Config::V1(config));
+                        Ok(Config::V1(config))
                     } else {
-                        return Err(Error::VersionMismatch(config.version));
+                        Err(Error::VersionMismatch(config.version))
                     }
                 }
                 Err(err) => {
                     // return error from v2 config as this is the desired config file
-                    return Err(Error::Deserialization(err));
+                    Err(Error::Deserialization(err))
                 }
             }
         }

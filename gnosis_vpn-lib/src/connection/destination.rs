@@ -39,7 +39,7 @@ impl Destination {
         wg: &SessionParameters,
     ) -> Self {
         Self {
-            peer_id: peer_id.clone(),
+            peer_id: *peer_id,
             path: path.clone(),
             meta: meta.clone(),
             bridge: bridge.clone(),
@@ -50,15 +50,15 @@ impl Destination {
     pub fn pretty_print_path(&self) -> String {
         format!(
             "{}(x{})",
-            self.path.to_string(),
-            log_output::peer_id(&self.peer_id.to_string().as_str())
+            self.path,
+            log_output::peer_id(self.peer_id.to_string().as_str())
         )
     }
 
     fn meta_str(&self) -> String {
         match self.meta.get("location") {
             Some(location) => {
-                return location.clone();
+                location.clone()
             }
             None => self
                 .meta

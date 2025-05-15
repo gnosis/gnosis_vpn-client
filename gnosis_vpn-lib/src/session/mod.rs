@@ -72,11 +72,11 @@ pub enum Error {
 
 impl Target {
     pub fn plain(addr: &SocketAddr) -> Self {
-        Target::Plain(addr.clone())
+        Target::Plain(*addr)
     }
 
     pub fn sealed(addr: &SocketAddr) -> Self {
-        Target::Sealed(addr.clone())
+        Target::Sealed(*addr)
     }
 
     pub fn type_(&self) -> String {
@@ -105,12 +105,12 @@ impl OpenSession {
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
-            destination: destination.clone(),
+            destination: *destination,
             capabilities: capabilities.clone(),
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
-            timeout: timeout.clone(),
+            timeout: *timeout,
         }
     }
 
@@ -124,12 +124,12 @@ impl OpenSession {
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
-            destination: destination.clone(),
+            destination: *destination,
             capabilities: capabilities.clone(),
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
-            timeout: timeout.clone(),
+            timeout: *timeout,
         }
     }
 }
@@ -138,7 +138,7 @@ impl CloseSession {
     pub fn new(entry_node: &EntryNode, timeout: &Duration) -> Self {
         CloseSession {
             entry_node: entry_node.clone(),
-            timeout: timeout.clone(),
+            timeout: *timeout,
         }
     }
 }
@@ -148,7 +148,7 @@ impl ListSession {
         ListSession {
             entry_node: entry_node.clone(),
             protocol: protocol.clone(),
-            timeout: timeout.clone(),
+            timeout: *timeout,
         }
     }
 }
