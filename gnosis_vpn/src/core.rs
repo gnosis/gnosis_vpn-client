@@ -358,7 +358,7 @@ impl Core {
                         self.connection
                             .as_ref()
                             .map(|c| c.pretty_print_path())
-                            .unwrap_or_default()
+                            .unwrap_or("<unknown>".to_string())
                     );
                     Ok(())
                 }
@@ -396,7 +396,7 @@ impl Core {
                 self.connection
                     .as_ref()
                     .map(|c| c.pretty_print_path())
-                    .unwrap_or_default(),
+                    .unwrap_or("<unknown>".to_string()),
                 connect_session.to_file_string()
             );
             Ok(())
