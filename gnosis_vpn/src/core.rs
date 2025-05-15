@@ -31,7 +31,7 @@ pub struct Core {
 
 #[derive(Clone, Debug)]
 pub enum TargetState {
-    Idle,
+    Disconnected,
     Connect(Destination),
     Shutdown,
 }
@@ -87,7 +87,7 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
-            target_state: TargetState::Idle,
+            target_state: TargetState::Disconnected,
         };
         Ok(core)
     }
@@ -117,14 +117,22 @@ impl Core {
                     self.connect(&destination);
                 }
             },
-            TargetState::Idle => match &mut self.connection {
+            TargetState::Disconnected => match &mut self.connection {
                 Some(conn) => {
                     tracing::info!(current = %conn.destination(), "disconnecting from current destination");
                     conn.dismantle();
+                    if let Some(wg) = &self.wg {
+                        match wg.close_session() {
+                            Ok(_) => {
+                                tracing::info!("WireGuard connection closed");
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = %err, "failed to close WireGuard connection");
+                            }
+                        }
+                    }
                 }
-                None => {
-                    tracing::info!("no connection to disconnect");
-                }
+                None => tracing::info!("no connection to disconnect"),
             },
             TargetState::Shutdown => {
                 match (&self.connection, &self.shutdown_sender) {
@@ -144,9 +152,9 @@ impl Core {
         }
     }
 
+    /*
     fn setup_from_config(&mut self) -> Result<(), Error> {
         Ok(())
-        /*
         // self.check_close_session()?;
         if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
             let en_endpoint = entry_node.endpoint.clone();
@@ -241,8 +249,8 @@ impl Core {
         }
         Ok(())
 
-            */
     }
+            */
 
     fn connect(&mut self, destination: &Destination) {
         let wg_pub_key = match self.wg_public_key() {
@@ -272,7 +280,7 @@ impl Core {
                             break;
                         }
                         Ok(connection::Event::Disconnected) => {
-                            tracing::info!("TODO sending disconnectwg");
+                            tracing::info!("connection hickup");
                         }
                         Ok(connection::Event::Dismantled) => {
                             tracing::info!("TODO connection dismantled");
@@ -302,7 +310,7 @@ impl Core {
                 }
             },
             Command::Disconnect => {
-                self.target_state = TargetState::Idle;
+                self.target_state = TargetState::Disconnected;
                 self.act_on_target();
                 Ok(Some("disconnecting".to_string()))
             }
@@ -314,22 +322,19 @@ impl Core {
         tracing::info!(%event, "handling event");
         match event {
             Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
-            Event::DisconnectWg => {
-                // self.dismantle_wg();
-                Ok(())
-            }
         }
     }
 
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        let config = config::read(&config_path)?;
-        self.config = config;
+        _ = config::read(&config_path)?;
+        // self.config = config;
         Err(Error::NotImplemented)
     }
 
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
         if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
+            // automatic wg connection
             tracing::info!("iniating wireguard connection");
             let interface_info = wireguard::InterfaceInfo {
                 private_key: privkey.clone(),
@@ -368,6 +373,7 @@ impl Core {
                 }
             }
         } else {
+            // manual wg connection
             let interface_info = wireguard::InterfaceInfo {
                 private_key: "<WireGuard private key>".to_string(),
                 address: conninfo.registration.address(),
@@ -401,29 +407,6 @@ impl Core {
             );
             Ok(())
         }
-    }
-
-    fn dismantle_wg(&self) {
-        /*
-                if let Some(wg) = &self.wg {
-                    match wg.close_session() {
-                        Ok(_) => {
-                            tracing::info!(
-                                r"
-
-            /---==========================---\
-            |   VPN CONNECTION BROKEN        |
-            \---==========================---/
-        "
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(warn = ?e, "error closing wireguard connection");
-                        }
-                    }
-                }
-
-                */
     }
 
     fn wg_public_key(&self) -> Option<String> {

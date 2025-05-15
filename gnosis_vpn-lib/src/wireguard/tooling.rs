@@ -15,8 +15,7 @@ pub fn available() -> Result<bool, Error> {
         // suppress log output
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map_err(|e| Error::IO(e.to_string()))?;
+        .status()?;
     Ok(code.success())
 }
 
@@ -30,19 +29,16 @@ impl Tooling {
 const TMP_FILE: &str = "wg0_gnosisvpn.conf";
 
 fn wg_config_file() -> Result<PathBuf, Error> {
-    let p_dirs = dirs::project().ok_or(Error::IO("unable to create project directories".to_string()))?;
+    let p_dirs = dirs::project().ok_or(Error::ProjectDirs)?;
     let cache_dir = p_dirs.cache_dir();
-    fs::create_dir_all(cache_dir).map_err(|e| Error::IO(e.to_string()))?;
+    fs::create_dir_all(cache_dir)?;
 
     Ok(cache_dir.join(TMP_FILE))
 }
 
 impl WireGuard for Tooling {
     fn generate_key(&self) -> Result<String, Error> {
-        let output = Command::new("wg")
-            .arg("genkey")
-            .output()
-            .map_err(|e| Error::IO(e.to_string()))?;
+        let output = Command::new("wg").arg("genkey").output()?;
         String::from_utf8(output.stdout)
             .map(|s| s.trim().to_string())
             .map_err(Error::FromUtf8Error)
@@ -52,28 +48,24 @@ impl WireGuard for Tooling {
         let conf_file = wg_config_file()?;
         let config = session.to_file_string();
         let content = config.as_bytes();
-        fs::write(&conf_file, content).map_err(|e| Error::IO(e.to_string()))?;
+        fs::write(&conf_file, content)?;
 
-        let output = Command::new("wg-quick")
-            .arg("up")
-            .arg(conf_file)
-            .output()
-            .map_err(|e| Error::IO(e.to_string()))?;
+        let output = Command::new("wg-quick").arg("up").arg(conf_file).output()?;
 
-        tracing::info!("wg-quick up output: {:?}", output);
+        tracing::info!("wg-quick up stderr: {:?}", output.stderr);
+        tracing::info!("wg-quick up stdout: {:?}", output.stdout);
+        tracing::info!("wg-quick up status: {}", output.status);
         Ok(())
     }
 
     fn close_session(&self) -> Result<(), Error> {
         let conf_file = wg_config_file()?;
 
-        let output = Command::new("wg-quick")
-            .arg("down")
-            .arg(conf_file)
-            .output()
-            .map_err(|e| Error::IO(e.to_string()))?;
+        let output = Command::new("wg-quick").arg("down").arg(conf_file).output()?;
 
-        tracing::info!("wg-quick down output: {:?}", output);
+        tracing::info!("wg-quick down stderr: {:?}", output.stderr);
+        tracing::info!("wg-quick down stdout: {:?}", output.stdout);
+        tracing::info!("wg-quick down status: {}", output.status);
         Ok(())
     }
 
@@ -120,16 +112,13 @@ impl WireGuard for Tooling {
             .arg("pubkey")
             .stdin(Stdio::piped()) // Enable piping to stdin
             .stdout(Stdio::piped()) // Capture stdout
-            .spawn()
-            .map_err(|e| Error::IO(e.to_string()))?;
+            .spawn()?;
 
         if let Some(stdin) = command.stdin.as_mut() {
-            stdin
-                .write_all(priv_key.as_bytes())
-                .map_err(|e| Error::IO(e.to_string()))?;
+            stdin.write_all(priv_key.as_bytes())?
         }
 
-        let output = command.wait_with_output().map_err(|e| Error::IO(e.to_string()))?;
+        let output = command.wait_with_output()?;
 
         // Print the command output
         if output.status.success() {

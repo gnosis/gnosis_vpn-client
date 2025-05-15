@@ -6,13 +6,12 @@ mod kernel;
 mod tooling;
 mod userspace;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug)]
 pub enum Error {
     #[error("implementation pending: {0}")]
     NotYetImplemented(String),
-    // cannot use IO error because it does not allow Clone or Copy
     #[error("IO error: {0}")]
-    IO(String),
+    IO(#[from] std::io::Error),
     #[error("encoding error: {0}")]
     FromUtf8Error(#[from] std::string::FromUtf8Error),
     #[error("toml error: {0}")]
@@ -21,6 +20,8 @@ pub enum Error {
     Monitoring(String),
     #[error("wireguard error: {0}")]
     WgError(String),
+    #[error("Unable to determine project directories")]
+    ProjectDirs,
 }
 
 #[derive(Clone, Debug)]
