@@ -11,7 +11,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::Level;
 
-mod backoff;
 mod cli;
 mod core;
 mod event;
