@@ -449,7 +449,6 @@ impl Connection {
             &self.destination.bridge.capabilities,
             &self.destination.path,
             &self.destination.bridge.target,
-            &Duration::from_secs(15),
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -477,7 +476,7 @@ impl Connection {
 
     /// Transition from WgRegistrationReceived to BridgeSessionClosed
     fn wgreg2teardown(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::CloseSession::new(&self.entry_node, &Duration::from_secs(15));
+        let params = session::CloseSession::new(&self.entry_node);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         let session = session.clone();
@@ -496,7 +495,6 @@ impl Connection {
             &self.destination.wg.capabilities,
             &self.destination.path,
             &self.destination.wg.target,
-            &Duration::from_secs(20),
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -509,7 +507,7 @@ impl Connection {
 
     /// Looping state in MainSessionOpen
     fn monitor(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::ListSession::new(&self.entry_node, &session.protocol, &Duration::from_secs(30));
+        let params = session::ListSession::new(&self.entry_node, &session.protocol);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
@@ -528,7 +526,7 @@ impl Connection {
 
     /// Transition from MainSessionOpen to MainSessionClosed
     fn main2teardown(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::CloseSession::new(&self.entry_node, &Duration::from_secs(10));
+        let params = session::CloseSession::new(&self.entry_node);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         let session = session.clone();
@@ -547,7 +545,6 @@ impl Connection {
             &self.destination.bridge.capabilities,
             &self.destination.path,
             &self.destination.bridge.target,
-            &Duration::from_secs(10),
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -572,7 +569,7 @@ impl Connection {
 
     /// Transition from WgUnregistrationReceived to BridgeSessionClosed
     fn wgunreg2teardown(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::CloseSession::new(&self.entry_node, &Duration::from_secs(10));
+        let params = session::CloseSession::new(&self.entry_node);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         let session = session.clone();

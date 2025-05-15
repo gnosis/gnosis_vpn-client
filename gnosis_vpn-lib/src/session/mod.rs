@@ -4,7 +4,6 @@ use serde_json::json;
 use std::cmp;
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
-use std::time::Duration;
 use thiserror::Error;
 
 use crate::entry_node::EntryNode;
@@ -44,18 +43,15 @@ pub struct OpenSession {
     path: Path,
     target: Target,
     protocol: Protocol,
-    timeout: Duration,
 }
 
 pub struct CloseSession {
     entry_node: EntryNode,
-    timeout: Duration,
 }
 
 pub struct ListSession {
     entry_node: EntryNode,
     protocol: Protocol,
-    timeout: Duration,
 }
 
 #[derive(Error, Debug)]
@@ -101,7 +97,6 @@ impl OpenSession {
         capabilities: &[Capability],
         path: &Path,
         target: &Target,
-        timeout: &Duration,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -110,7 +105,6 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
-            timeout: *timeout,
         }
     }
 
@@ -120,7 +114,6 @@ impl OpenSession {
         capabilities: &[Capability],
         path: &Path,
         target: &Target,
-        timeout: &Duration,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -129,26 +122,23 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
-            timeout: *timeout,
         }
     }
 }
 
 impl CloseSession {
-    pub fn new(entry_node: &EntryNode, timeout: &Duration) -> Self {
+    pub fn new(entry_node: &EntryNode) -> Self {
         CloseSession {
             entry_node: entry_node.clone(),
-            timeout: *timeout,
         }
     }
 }
 
 impl ListSession {
-    pub fn new(entry_node: &EntryNode, protocol: &Protocol, timeout: &Duration) -> Self {
+    pub fn new(entry_node: &EntryNode, protocol: &Protocol) -> Self {
         ListSession {
             entry_node: entry_node.clone(),
             protocol: protocol.clone(),
-            timeout: *timeout,
         }
     }
 }
@@ -185,7 +175,7 @@ impl Session {
         let fetch_res = client
             .post(url)
             .json(&json)
-            .timeout(open_session.timeout)
+            .timeout(open_session.entry_node.session_timeout)
             .headers(headers)
             .send()
             .map(|res| (res.status(), res.json::<serde_json::Value>()));
@@ -230,7 +220,7 @@ impl Session {
         tracing::debug!(?headers, %url, "delete session");
         let fetch_res = client
             .delete(url)
-            .timeout(close_session.timeout)
+            .timeout(close_session.entry_node.session_timeout)
             .headers(headers)
             .send()
             .map(|res| (res.status(), res.json::<serde_json::Value>()));
@@ -273,7 +263,7 @@ impl Session {
 
         let fetch_res = client
             .get(url)
-            .timeout(list_session.timeout)
+            .timeout(list_session.entry_node.session_timeout)
             .headers(headers)
             .send()
             .map(|res| (res.status(), res.json::<serde_json::Value>()));

@@ -75,6 +75,9 @@ target = "127.0.0.1:51820"
 # It is best to only use the `internal_connection_port` from the [hoprd_node] section.
 # If listen_host is enabled, `internal_connection_port` is ignored.
 # listen_host = "0.0.0.0:1422"
+# session timeout - specify HTTP timeout for session requests.
+# While this will be used for all HTTP request, it will only have a real impact on session creation requests.
+# session_timeout = "15s"
 
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]

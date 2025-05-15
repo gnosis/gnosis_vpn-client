@@ -1,6 +1,7 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::Duration;
 use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,8 @@ enum DestinationPath {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Connection {
     listen_host: Option<String>,
+    #[serde(with = "humantime_serde::option")]
+    session_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
 }
@@ -107,13 +110,16 @@ impl Connection {
         vec![SessionCapability::Segmentation]
     }
     pub fn default_bridge_target() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 8000))
+        SocketAddr::from(([172, 17, 0, 1], 8000))
     }
     pub fn default_wg_target() -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], 51820))
+        SocketAddr::from(([172, 17, 0, 1], 51820))
     }
     pub fn default_listen_host() -> String {
         ":1422".to_string()
+    }
+    pub fn default_session_timeout() -> Duration {
+        Duration::from_secs(15)
     }
 }
 
@@ -126,7 +132,17 @@ impl Config {
             .and_then(|c| c.listen_host.clone())
             .or(internal_connection_port)
             .unwrap_or(Connection::default_listen_host());
-        EntryNode::new(&self.hoprd_node.endpoint, &self.hoprd_node.api_token, &listen_host)
+        let session_timeout = self
+            .connection
+            .as_ref()
+            .and_then(|c| c.session_timeout)
+            .unwrap_or(Connection::default_session_timeout());
+        EntryNode::new(
+            &self.hoprd_node.endpoint,
+            &self.hoprd_node.api_token,
+            &listen_host,
+            &session_timeout,
+        )
     }
 
     pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
@@ -241,6 +257,7 @@ path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr
 
 [connection]
 listen_host = "0.0.0.0:1422"
+session_timeout = "15s"
 
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]

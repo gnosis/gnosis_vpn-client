@@ -3,6 +3,7 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::default::Default;
 use std::fmt::Display;
+use std::time::Duration;
 use std::vec::Vec;
 use url::Url;
 
@@ -121,7 +122,12 @@ impl Config {
             .or(internal_connection_port)
             .unwrap_or(":1422".to_string());
 
-        EntryNode::new(&hoprd_node.endpoint, &hoprd_node.api_token, &listen_host)
+        EntryNode::new(
+            &hoprd_node.endpoint,
+            &hoprd_node.api_token,
+            &listen_host,
+            &Duration::from_secs(15),
+        )
     }
 
     pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
