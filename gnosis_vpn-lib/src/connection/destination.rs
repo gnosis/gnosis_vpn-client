@@ -22,10 +22,10 @@ pub struct SessionParameters {
 }
 
 impl SessionParameters {
-    pub fn new(target: &session::Target, capabilities: &Vec<session::Capability>) -> Self {
+    pub fn new(target: &session::Target, capabilities: &[session::Capability]) -> Self {
         Self {
             target: target.clone(),
-            capabilities: capabilities.clone(),
+            capabilities: capabilities.to_owned(),
         }
     }
 }
@@ -57,9 +57,7 @@ impl Destination {
 
     fn meta_str(&self) -> String {
         match self.meta.get("location") {
-            Some(location) => {
-                location.clone()
-            }
+            Some(location) => location.clone(),
             None => self
                 .meta
                 .iter()

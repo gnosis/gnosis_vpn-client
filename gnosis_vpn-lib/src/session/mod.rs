@@ -98,7 +98,7 @@ impl OpenSession {
     pub fn bridge(
         entry_node: &EntryNode,
         destination: &PeerId,
-        capabilities: &Vec<Capability>,
+        capabilities: &[Capability],
         path: &Path,
         target: &Target,
         timeout: &Duration,
@@ -106,7 +106,7 @@ impl OpenSession {
         OpenSession {
             entry_node: entry_node.clone(),
             destination: *destination,
-            capabilities: capabilities.clone(),
+            capabilities: capabilities.to_owned(),
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
@@ -117,7 +117,7 @@ impl OpenSession {
     pub fn main(
         entry_node: &EntryNode,
         destination: &PeerId,
-        capabilities: &Vec<Capability>,
+        capabilities: &[Capability],
         path: &Path,
         target: &Target,
         timeout: &Duration,
@@ -125,7 +125,7 @@ impl OpenSession {
         OpenSession {
             entry_node: entry_node.clone(),
             destination: *destination,
-            capabilities: capabilities.clone(),
+            capabilities: capabilities.to_owned(),
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
