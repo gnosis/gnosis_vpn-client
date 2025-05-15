@@ -34,7 +34,7 @@ pub struct ConnectInfo {
 pub enum Error {
     #[error("No active session")]
     NotConnected,
-    #[error("Failed to send message")]
+    #[error("Failed to send message: {0}")]
     ChannelError(#[from] crossbeam_channel::SendError<()>),
 }
 
@@ -105,13 +105,13 @@ pub struct Connection {
 enum InternalError {
     #[error("Invalid phase for action")]
     UnexpectedPhase,
-    #[error("Internal session error")]
+    #[error("Internal session error: {0}")]
     SessionError(#[from] session::Error),
-    #[error("Internal WireGuard error")]
+    #[error("Internal WireGuard error: {0}")]
     WgError(#[from] wg_client::Error),
-    #[error("Channel send error")]
+    #[error("Channel send error: {0}")]
     SendError(#[from] crossbeam_channel::SendError<Event>),
-    #[error("Unexpected event")]
+    #[error("Unexpected event: {0}")]
     UnexecptedEvent(InternalEvent),
 }
 
@@ -156,6 +156,7 @@ impl Connection {
                 BackoffState::Inactive => (me.act_up(), crossbeam_channel::never()),
                 BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                     Some(delay) => {
+                        tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay");
                         me.backoff = BackoffState::Triggered(backoff);
                         (crossbeam_channel::never(), crossbeam_channel::after(delay))
                     }
@@ -165,6 +166,7 @@ impl Connection {
                     }
                 },
                 BackoffState::Triggered(backoff) => {
+                    tracing::debug!(?backoff, "Activating backoff");
                     me.backoff = BackoffState::Active(backoff);
                     (me.act_up(), crossbeam_channel::never())
                 }
@@ -634,6 +636,20 @@ impl From<PhaseUp> for PhaseDown {
             PhaseUp::MainSessionOpen(session, since, registration) => {
                 PhaseDown::MainSessionOpen(session, since, registration)
             }
+        }
+    }
+}
+
+impl Display for InternalEvent {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            InternalEvent::SetUpBridgeSession(res) => write!(f, "SetUpBridgeSession({:?})", res),
+            InternalEvent::TearDownBridgeSession(res) => write!(f, "TearDownBridgeSession({:?})", res),
+            InternalEvent::SetUpMainSession(res) => write!(f, "SetUpMainSession({:?})", res),
+            InternalEvent::TearDownMainSession(res) => write!(f, "TearDownMainSession({:?})", res),
+            InternalEvent::RegisterWg(res) => write!(f, "RegisterWg({:?})", res),
+            InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({:?})", res),
+            InternalEvent::ListSessions(res) => write!(f, "ListSessions({:?})", res),
         }
     }
 }
