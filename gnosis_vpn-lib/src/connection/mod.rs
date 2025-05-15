@@ -1,3 +1,4 @@
+use backoff::{backoff::Backoff, ExponentialBackoff};
 use std::fmt::{self, Display};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -72,6 +73,13 @@ enum InternalEvent {
 }
 
 #[derive(Clone, Debug)]
+enum BackoffState {
+    Inactive,
+    Active(ExponentialBackoff),
+    Triggered(ExponentialBackoff),
+}
+
+#[derive(Clone, Debug)]
 pub struct Connection {
     // message passing helper
     abort_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
@@ -84,6 +92,7 @@ pub struct Connection {
     // dynamic runtime data
     phase_up: PhaseUp,
     phase_down: PhaseDown,
+    backoff: BackoffState,
 
     // static input data
     entry_node: EntryNode,
@@ -115,13 +124,14 @@ impl Connection {
     ) -> Self {
         Connection {
             abort_channel: crossbeam_channel::bounded(1),
-            establish_channel: crossbeam_channel::bounded(1),
-            dismantle_channel: crossbeam_channel::bounded(1),
+            backoff: BackoffState::Inactive,
             client: blocking::Client::new(),
             destination: destination.clone(),
+            dismantle_channel: crossbeam_channel::bounded(1),
             entry_node: entry_node.clone(),
-            phase_up: PhaseUp::Idle,
+            establish_channel: crossbeam_channel::bounded(1),
             phase_down: PhaseDown::Idle,
+            phase_up: PhaseUp::Idle,
             sender: sender.clone(),
             wg_public_key: wg_public_key.to_string(),
         }
@@ -138,7 +148,27 @@ impl Connection {
     pub fn establish(&mut self) {
         let mut me = self.clone();
         thread::spawn(move || loop {
-            let recv_event = me.act_up();
+            // handle backoff here
+            // Inactive - no backoff was set, act up
+            // Active - backoff was set and can trigger, don't act until backoff delay
+            // Triggered - backoff was triggered, time to act up again keeping backoff active
+            let (recv_event, recv_backoff) = match me.backoff {
+                BackoffState::Inactive => (me.act_up(), crossbeam_channel::never()),
+                BackoffState::Active(mut backoff) => match backoff.next_backoff() {
+                    Some(delay) => {
+                        me.backoff = BackoffState::Triggered(backoff);
+                        (crossbeam_channel::never(), crossbeam_channel::after(delay))
+                    }
+                    None => {
+                        tracing::error!("Critical error: backoff exhausted - halting");
+                        break;
+                    }
+                },
+                BackoffState::Triggered(backoff) => {
+                    me.backoff = BackoffState::Active(backoff);
+                    (me.act_up(), crossbeam_channel::never())
+                }
+            };
             crossbeam_channel::select! {
                 // waiting on dismantle signal for providing runtime data
                 recv(me.establish_channel.1) -> res => {
@@ -167,6 +197,9 @@ impl Connection {
                             tracing::error!(%error, "Failed receiving signal on abort channel during connection establishment");
                         }
                     }
+                },
+                recv(recv_backoff) -> _ => {
+                    tracing::debug!("Backoff delay expired");
                 },
                 recv(recv_event) -> res => {
                     match res {
@@ -285,6 +318,7 @@ impl Connection {
                 let session = res?;
                 if let PhaseUp::Idle = self.phase_up {
                     self.phase_up = PhaseUp::BridgeSessionOpen(session);
+                    self.backoff = BackoffState::Inactive;
                     Ok(())
                 } else {
                     Err(InternalError::UnexpectedPhase)
@@ -419,6 +453,9 @@ impl Connection {
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
+        if let BackoffState::Inactive = self.backoff {
+            self.backoff = BackoffState::Active(ExponentialBackoff::default());
+        }
         thread::spawn(move || {
             let res = Session::open(&client, &params);
             _ = s.send(InternalEvent::SetUpBridgeSession(res));
