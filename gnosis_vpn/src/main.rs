@@ -273,7 +273,7 @@ fn daemon(socket_path: &Path, config_path: &Path) -> exitcode::ExitCode {
         Err(exit) => return exit,
     };
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, &config_path);
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, config_path);
 
     // cleanup
     match fs::remove_file(socket_path) {
@@ -293,7 +293,7 @@ fn loop_daemon(
     config_path: &Path,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let mut core = match core::Core::init(&config_path, sender) {
+    let mut core = match core::Core::init(config_path, sender) {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");
@@ -331,7 +331,7 @@ fn loop_daemon(
                 }
             },
             recv(read_config_receiver) -> _ => {
-                match core.update_config(&config_path) {
+                match core.update_config(config_path) {
                     Ok(_) => {
                         tracing::info!("updated configuration - resetting application");
                     }

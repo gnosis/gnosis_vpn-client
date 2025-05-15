@@ -32,7 +32,7 @@ pub struct Core {
 #[derive(Clone, Debug)]
 pub enum TargetState {
     Disconnected,
-    Connect(Destination),
+    Connect(Box<Destination>),
     Shutdown,
 }
 
@@ -267,7 +267,7 @@ impl Core {
         };
 
         let (s, r) = crossbeam_channel::bounded(1);
-        let mut conn = Connection::new(&self.config.entry_node(), &destination, &wg_pub_key, s);
+        let mut conn = Connection::new(&self.config.entry_node(), destination, &wg_pub_key, s);
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
@@ -300,7 +300,7 @@ impl Core {
         match cmd {
             Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
                 Some(dest) => {
-                    self.target_state = TargetState::Connect(dest.clone());
+                    self.target_state = TargetState::Connect(Box::new(dest.clone()));
                     self.act_on_target();
                     Ok(Some(format!("targetting {}", dest)))
                 }
@@ -327,7 +327,7 @@ impl Core {
 
     #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        _ = config::read(&config_path)?;
+        _ = config::read(config_path)?;
         // self.config = config;
         Err(Error::NotImplemented)
     }
