@@ -154,106 +154,6 @@ impl Core {
         }
     }
 
-    /*
-    fn setup_from_config(&mut self) -> Result<(), Error> {
-        Ok(())
-        // self.check_close_session()?;
-        if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
-            let en_endpoint = entry_node.endpoint.clone();
-            let en_api_token = entry_node.api_token.clone();
-            let internal_port = entry_node.internal_connection_port.map(|port| format!(":{}", port));
-            let en_listen_host = session.listen_host.clone().or(internal_port);
-            let path = session.path.clone().unwrap_or_default();
-            let en_path = match path {
-                config::v1::SessionPathConfig::Hop(hop) => OldPath::Hop(hop),
-                config::v1::SessionPathConfig::Intermediates(ids) => OldPath::Intermediates(ids.clone()),
-            };
-            let xn_peer_id = session.destination;
-
-            // convert config to old application struture
-            self.entry_node = Some(OldEntryNode::new(
-                &en_endpoint,
-                &en_api_token,
-                en_listen_host.as_deref(),
-                en_path,
-            ));
-            self.exit_node = Some(ExitNode { peer_id: xn_peer_id });
-
-            self.fetch_data.addresses = RemoteData::Fetching {
-                started_at: SystemTime::now(),
-            };
-            // self.fetch_addresses()?;
-            // self.check_open_session()?;
-        }
-
-        let priv_key = self
-            .wg_priv_key()
-            .ok_or(anyhow::anyhow!("missing wireguard private key"))?;
-        let wg_pub_key = self
-            .wg
-            .as_ref()
-            .ok_or(anyhow::anyhow!("missing wg module"))?
-            .public_key(priv_key.as_str())?;
-
-        if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
-            let internal_port = entry_node.internal_connection_port.map(|port| format!(":{}", port));
-            let en_listen_host = session.listen_host.clone().or(internal_port);
-            let entry_node = EntryNode {
-                endpoint: entry_node.endpoint.clone(),
-                api_token: entry_node.api_token.clone(),
-                listen_host: en_listen_host,
-            };
-            let xn_peer_id = session.destination;
-
-            let en_path = session.path.clone().unwrap_or_default();
-            let path = match en_path {
-                config::v1::SessionPathConfig::Hop(hop) => session::Path::Hop(hop),
-                config::v1::SessionPathConfig::Intermediates(ids) => session::Path::Intermediates(ids.clone()),
-            };
-
-            let target_bridge = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000));
-            let target_wg = session::Target::Plain(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 51821));
-
-            let (s, r) = crossbeam_channel::bounded(1);
-            let mut conn = Connection::new(
-                &entry_node,
-                xn_peer_id.to_string().as_str(),
-                &path,
-                &target_bridge,
-                &target_wg,
-                &wg_pub_key,
-                s,
-            );
-
-            conn.establish();
-            self.connection = Some(conn);
-            let sender = self.sender.clone();
-            thread::spawn(move || loop {
-                crossbeam_channel::select! {
-                recv(r) -> event => {
-                            tracing::info!(event = ?event, "core received event");
-                    match event {
-                        Ok(connection::Event::Connected(conninfo)) => {
-                            _ = sender.send(Event::ConnectWg(conninfo));
-                            break;
-                        }
-                        Ok(connection::Event::Disconnected) => {
-                            tracing::info!("sending disconnectwg");
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = ?e, "failed to receive event");
-                            break;
-                        }
-                    }
-                }
-                            }
-            });
-        }
-        Ok(())
-
-    }
-            */
-
     fn connect(&mut self, destination: &Destination) {
         let wg_pub_key = match self.wg_public_key() {
             Some(wg_pub_key) => wg_pub_key,
@@ -278,18 +178,21 @@ impl Core {
                 recv(r) -> event => {
                     match event {
                         Ok(connection::Event::Connected(conninfo)) => {
-                            _ = sender.send(Event::ConnectWg(conninfo));
-                            break;
+                            _ = sender.send(Event::ConnectWg(conninfo)).map_err(|error| {
+                                tracing::error!(error = %error, "failed to send ConnectWg event");
+                            });
                         }
                         Ok(connection::Event::Disconnected) => {
                             tracing::info!("connection hickup");
                         }
                         Ok(connection::Event::Dismantled) => {
-                            tracing::info!("TODO connection dismantled");
+                            _ = sender.send(Event::DropConnection).map_err(|error| {
+                                tracing::error!(error = %error, "failed to send DropConnection event");
+                            });
+                            break;
                         }
                         Err(e) => {
                             tracing::warn!(error = ?e, "failed to receive event");
-                            break;
                         }
                     }
                 }
@@ -324,6 +227,7 @@ impl Core {
         tracing::info!(%event, "handling event");
         match event {
             Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
+            Event::DropConnection => self.on_drop_connection(),
         }
     }
 
@@ -335,6 +239,7 @@ impl Core {
     }
 
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
+        tracing::debug!(?conninfo, "on session ready");
         if self.connected {
             tracing::info!("already connected - might be connection hickup");
             return Ok(());
@@ -414,6 +319,13 @@ impl Core {
             );
             Ok(())
         }
+    }
+
+    fn on_drop_connection(&mut self) -> Result<(), Error> {
+        tracing::debug!("on drop connection");
+        self.connected = false;
+        self.connection = None;
+        Ok(())
     }
 
     fn wg_public_key(&self) -> Option<String> {

@@ -142,7 +142,6 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
     Ok(receiver)
 }
 
-#[tracing::instrument(skip(res_stream), level = Level::DEBUG) ]
 fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) -> () {
     let mut stream: net::UnixStream = match res_stream {
         Ok(strm) => strm,
@@ -165,7 +164,8 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
             return;
         }
     };
-    tracing::debug!(command = %cmd, "parsed command");
+
+    tracing::debug!(command = %cmd, "incoming command");
 
     let res = match core.handle_cmd(&cmd) {
         Ok(res) => res,
@@ -187,7 +187,6 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
     }
 }
 
-#[tracing::instrument(skip(res_event), level = Level::DEBUG) ]
 fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) -> () {
     let event: event::Event = match res_event {
         Ok(evt) => evt,
@@ -196,6 +195,8 @@ fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbe
             return;
         }
     };
+
+    tracing::debug!(event = %event, "incoming event");
 
     match core.handle_event(event) {
         Ok(_) => (),
@@ -209,7 +210,6 @@ fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbe
 // handling fs config events with a grace period to avoid duplicate reads without delay
 const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
 
-#[tracing::instrument(skip(res_event), level = Level::DEBUG) ]
 fn incoming_config_fs_event(
     res_event: Result<notify::Result<notify::Event>, crossbeam_channel::RecvError>,
     config_path: &Path,
@@ -221,6 +221,8 @@ fn incoming_config_fs_event(
             return None;
         }
     };
+
+    tracing::debug!(event = ?event, "incoming config event");
 
     match event {
         Ok(notify::Event { kind, paths, attrs: _ })

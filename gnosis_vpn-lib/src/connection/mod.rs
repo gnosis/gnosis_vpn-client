@@ -164,7 +164,7 @@ impl Connection {
                         me.backoff = BackoffState::Inactive;
                         tracing::error!("Critical error: backoff exhausted during connection establishment - halting");
                         me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
-                            tracing::error!(%error, "Failed sending signal on dismantle channel");
+                            tracing::error!(%error, "Failed sending dismantled event");
                         });
                         break;
                     }
@@ -184,7 +184,10 @@ impl Connection {
                             match me.dismantle_channel.0.send(me.phase_up) {
                                 Ok(()) => (),
                                 Err(error) => {
-                                    tracing::error!(%error, "Critical error sending runtime data on dismantle channel - halting");
+                                    tracing::error!(%error, "Critical error sending connection data on dismantle channel - halting");
+                                    me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
+                                        tracing::error!(%error, "Failed sending dismantled event");
+                                    });
                                 }
                             }
                             break;
@@ -272,6 +275,9 @@ impl Connection {
                             tracing::error!(
                                 "Critical error: backoff exhausted during connection dismantling - halting"
                             );
+                            me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
+                                tracing::error!(%error, "Failed sending dismantled event");
+                            });
                             break;
                         }
                     },
@@ -410,11 +416,12 @@ impl Connection {
                         .host()
                         .map(|host| host.to_string())
                         .unwrap_or("".to_string());
-                    _ = self.sender.send(Event::Connected(ConnectInfo {
-                        endpoint: format!("{}:{}", host, session.port),
-                        registration: registration.clone(),
-                    }));
-                    Ok(())
+                    self.sender
+                        .send(Event::Connected(ConnectInfo {
+                            endpoint: format!("{}:{}", host, session.port),
+                            registration: registration.clone(),
+                        }))
+                        .map_err(InternalError::SendError)
                 } else {
                     Err(InternalError::UnexpectedPhase)
                 }
@@ -476,7 +483,7 @@ impl Connection {
                 if let PhaseDown::WgUnregistrationReceived(_session) = self.phase_down.clone() {
                     self.phase_down = PhaseDown::BridgeSessionClosed;
                     self.backoff = BackoffState::Inactive;
-                    Ok(())
+                    self.sender.send(Event::Dismantled).map_err(InternalError::SendError)
                 } else {
                     Err(InternalError::UnexpectedPhase)
                 }
