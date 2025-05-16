@@ -163,7 +163,7 @@ impl Connection {
                     None => {
                         me.backoff = BackoffState::Inactive;
                         tracing::error!("Critical error: backoff exhausted during connection establishment - halting");
-                        me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
+                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
                             tracing::error!(%error, "Failed sending dismantled event");
                         });
                         break;
@@ -185,7 +185,7 @@ impl Connection {
                                 Ok(()) => (),
                                 Err(error) => {
                                     tracing::error!(%error, "Critical error sending connection data on dismantle channel - halting");
-                                    me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
+                                    _ = me.sender.send(Event::Dismantled).map_err(|error| {
                                         tracing::error!(%error, "Failed sending dismantled event");
                                     });
                                 }
@@ -275,7 +275,7 @@ impl Connection {
                             tracing::error!(
                                 "Critical error: backoff exhausted during connection dismantling - halting"
                             );
-                            me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
+                            _ = me.sender.send(Event::Dismantled).map_err(|error| {
                                 tracing::error!(%error, "Failed sending dismantled event");
                             });
                             break;
@@ -323,7 +323,7 @@ impl Connection {
 
     pub fn abort(&self) {
         tracing::info!("Aborting connection");
-        self.abort_channel.0.send(()).unwrap_or_else(|error| {
+        _ = self.abort_channel.0.send(()).map_err(|error| {
             tracing::error!(%error, "Failed sending signal on abort channel");
         });
     }
@@ -351,7 +351,7 @@ impl Connection {
             PhaseDown::MainSessionClosed(_registration) => self.teardown2bridge(),
             PhaseDown::BridgeSessionOpen(session, _registration) => self.bridge2wgunreg(&session),
             PhaseDown::WgUnregistrationReceived(session) => self.wgunreg2teardown(&session),
-            PhaseDown::BridgeSessionClosed => crossbeam_channel::never(),
+            PhaseDown::BridgeSessionClosed => self.shutdown(),
         }
     }
 
@@ -483,7 +483,7 @@ impl Connection {
                 if let PhaseDown::WgUnregistrationReceived(_session) = self.phase_down.clone() {
                     self.phase_down = PhaseDown::BridgeSessionClosed;
                     self.backoff = BackoffState::Inactive;
-                    self.sender.send(Event::Dismantled).map_err(InternalError::SendError)
+                    Ok(())
                 } else {
                     Err(InternalError::UnexpectedPhase)
                 }
@@ -650,6 +650,14 @@ impl Connection {
             _ = s.send(InternalEvent::TearDownBridgeSession(res));
         });
         r
+    }
+
+    /// Final state before dropping
+    fn shutdown(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        _ = self.sender.send(Event::Dismantled).map_err(|error| {
+            tracing::error!(%error, "Failed sending dismantled event");
+        });
+        crossbeam_channel::never()
     }
 }
 
