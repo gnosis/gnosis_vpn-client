@@ -36,7 +36,6 @@ pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 // PathBuf::from("//./pipe/Gnosis VPN")
 // }
 
-#[tracing::instrument(level = tracing::Level::DEBUG)]
 pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<ReturnValue, Error> {
     check_path(socket_path)?;
 

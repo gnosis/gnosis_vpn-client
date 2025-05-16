@@ -2,7 +2,6 @@ use std::path::Path;
 use std::thread;
 
 use thiserror::Error;
-use tracing::instrument;
 
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::config::{self, Config};
@@ -231,7 +230,6 @@ impl Core {
         }
     }
 
-    #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
         _ = config::read(config_path)?;
         // self.config = config;

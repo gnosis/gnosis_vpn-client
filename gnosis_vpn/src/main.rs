@@ -9,15 +9,13 @@ use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::Level;
 
 mod cli;
 mod core;
 mod event;
 
-#[tracing::instrument(level = Level::DEBUG)]
 fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode> {
-    let (sender, receiver) = crossbeam_channel::bounded(100);
+    let (sender, receiver) = crossbeam_channel::bounded(2);
     match ctrlc::set_handler(move || match sender.send(()) {
         Ok(_) => (),
         Err(e) => {
@@ -40,7 +38,6 @@ fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode
     }
 }
 
-#[tracing::instrument(level = Level::DEBUG)]
 fn config_channel(
     config_path: &Path,
 ) -> Result<
@@ -89,7 +86,6 @@ fn config_channel(
     Ok((watcher, receiver))
 }
 
-#[tracing::instrument(level = Level::DEBUG)]
 fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net::UnixStream>, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
@@ -142,7 +138,7 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
     Ok(receiver)
 }
 
-fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) -> () {
+fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) {
     let mut stream: net::UnixStream = match res_stream {
         Ok(strm) => strm,
         Err(e) => {
@@ -181,13 +177,12 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
             return;
         }
         if let Err(e) = stream.flush() {
-            tracing::error!(error = ?e, "error flushing stream");
-            return;
+            tracing::error!(error = ?e, "error flushing stream")
         }
     }
 }
 
-fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) -> () {
+fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) {
     let event: event::Event = match res_event {
         Ok(evt) => evt,
         Err(e) => {
@@ -201,8 +196,7 @@ fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbe
     match core.handle_event(event) {
         Ok(_) => (),
         Err(e) => {
-            tracing::error!(error = ?e, "error handling event");
-            return;
+            tracing::error!(error = ?e, "error handling event")
         }
     }
 }
