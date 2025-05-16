@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -25,7 +26,6 @@ impl Tooling {
     }
 }
 
-// const NETWORK: &str = "wg0_gnosisvpn";
 const TMP_FILE: &str = "wg0_gnosisvpn.conf";
 
 fn wg_config_file() -> Result<PathBuf, Error> {
@@ -49,12 +49,17 @@ impl WireGuard for Tooling {
         let config = session.to_file_string();
         let content = config.as_bytes();
         fs::write(&conf_file, content)?;
+        fs::set_permissions(&conf_file, fs::Permissions::from_mode(0o600))?;
 
         let output = Command::new("wg-quick").arg("up").arg(conf_file).output()?;
 
-        tracing::info!("wg-quick up stderr: {:?}", output.stderr);
-        tracing::info!("wg-quick up stdout: {:?}", output.stdout);
-        tracing::info!("wg-quick up status: {}", output.status);
+        if !output.status.success() {
+            tracing::info!("wg-quick up status: {}", output.status);
+            tracing::info!("wg-quick up stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+        }
+        if !output.stdout.is_empty() {
+            tracing::info!("wg-quick up stdout: {:?}", String::from_utf8_lossy(&output.stdout));
+        }
         Ok(())
     }
 
@@ -63,9 +68,13 @@ impl WireGuard for Tooling {
 
         let output = Command::new("wg-quick").arg("down").arg(conf_file).output()?;
 
-        tracing::info!("wg-quick down stderr: {:?}", output.stderr);
-        tracing::info!("wg-quick down stdout: {:?}", output.stdout);
-        tracing::info!("wg-quick down status: {}", output.status);
+        if !output.status.success() {
+            tracing::info!("wg-quick down status: {}", output.status);
+            tracing::info!("wg-quick down stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+        }
+        if !output.stdout.is_empty() {
+            tracing::info!("wg-quick down stdout: {:?}", String::from_utf8_lossy(&output.stdout));
+        }
         Ok(())
     }
 

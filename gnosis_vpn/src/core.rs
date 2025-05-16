@@ -26,6 +26,7 @@ pub struct Core {
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
     connection: Option<connection::Connection>,
+    connected: bool,
     target_state: TargetState,
 }
 
@@ -87,6 +88,7 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
+            connected: false,
             target_state: TargetState::Disconnected,
         };
         Ok(core)
@@ -333,6 +335,11 @@ impl Core {
     }
 
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
+        if self.connected {
+            tracing::info!("already connected - might be connection hickup");
+            return Ok(());
+        }
+        self.connected = true;
         if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
             // automatic wg connection
             tracing::info!("iniating wireguard connection");

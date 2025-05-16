@@ -163,6 +163,9 @@ impl Connection {
                     None => {
                         me.backoff = BackoffState::Inactive;
                         tracing::error!("Critical error: backoff exhausted during connection establishment - halting");
+                        me.sender.send(Event::Dismantled).unwrap_or_else(|error| {
+                            tracing::error!(%error, "Failed sending signal on dismantle channel");
+                        });
                         break;
                     }
                 },
@@ -172,6 +175,7 @@ impl Connection {
                     (me.act_up(), crossbeam_channel::never())
                 }
             };
+            // main listening loop
             crossbeam_channel::select! {
                 // waiting on dismantle signal for providing runtime data
                 recv(me.establish_channel.1) -> res => {
@@ -224,6 +228,7 @@ impl Connection {
     pub fn dismantle(&mut self) {
         let mut outer = self.clone();
         thread::spawn(move || {
+            // abort establishing
             match outer.establish_channel.0.send(()) {
                 Ok(()) => (),
                 Err(error) => {
@@ -241,8 +246,8 @@ impl Connection {
                         }
                     }
                 }
-                default(Duration::from_secs(3)) => {
-                            tracing::error!("Critical timeout receiving runtime data on dismantle channel - halting");
+                default(Duration::from_secs(5)) => {
+                            tracing::error!("Critical timeout receiving connection data on dismantle channel - halting");
                             return;
                 }
             };
@@ -276,6 +281,7 @@ impl Connection {
                         (me.act_down(), crossbeam_channel::never())
                     }
                 };
+                // main listening loop
                 crossbeam_channel::select! {
                     recv(recv_backoff) -> _ => {
                         tracing::debug!("Backoff delay expired during connection dismantling");

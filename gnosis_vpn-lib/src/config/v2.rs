@@ -46,7 +46,7 @@ enum DestinationPath {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Connection {
     listen_host: Option<String>,
-    #[serde(with = "humantime_serde::option")]
+    #[serde(default, with = "humantime_serde::option")]
     session_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
@@ -257,7 +257,6 @@ path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr
 
 [connection]
 listen_host = "0.0.0.0:1422"
-session_timeout = "15s"
 
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
