@@ -122,34 +122,22 @@ impl Core {
                 Some(conn) => {
                     tracing::info!(current = %conn.destination(), "disconnecting from current destination");
                     conn.dismantle();
-                    if let Some(wg) = &self.wg {
-                        match wg.close_session() {
-                            Ok(_) => {
-                                tracing::info!("WireGuard connection closed");
-                            }
-                            Err(err) => {
-                                tracing::warn!(error = %err, "failed to close WireGuard connection");
-                            }
-                        }
-                    }
                 }
                 None => tracing::info!("no connection to disconnect"),
             },
-            TargetState::Shutdown => {
-                match (&self.connection, &self.shutdown_sender) {
-                    (Some(conn), _) => {
-                        tracing::info!(current = %conn.destination(), "TODO disconnecting current destination");
-                        // TODO
-                    }
-                    (None, Some(sender)) => {
-                        tracing::info!("shutting down");
-                        _ = sender.send(());
-                    }
-                    _ => {
-                        tracing::warn!("shutdown target without shutdown sender");
-                    }
+            TargetState::Shutdown => match &mut self.connection {
+                Some(conn) => {
+                    tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
+                    conn.dismantle();
+                    self.disconnect_wg();
                 }
-            }
+                None => {
+                    tracing::debug!("direct shutdown - no connection to disconnect");
+                    self.shutdown_sender.as_ref().map(|s| {
+                        _ = s.send(());
+                    });
+                }
+            },
         }
     }
 
@@ -323,6 +311,10 @@ impl Core {
         tracing::debug!("on drop connection");
         self.connected = false;
         self.connection = None;
+        if let Some(sender) = self.shutdown_sender.as_ref() {
+            tracing::debug!("shutting down after disconnecting");
+            _ = sender.send(());
+        }
         Ok(())
     }
 
@@ -337,6 +329,19 @@ impl Core {
             }
         } else {
             self.config.wireguard().manual_mode.map(|mm| mm.public_key)
+        }
+    }
+
+    fn disconnect_wg(&mut self) {
+        if let Some(wg) = &self.wg {
+            match wg.close_session() {
+                Ok(_) => {
+                    tracing::info!("WireGuard connection closed");
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to close WireGuard connection");
+                }
+            }
         }
     }
 }

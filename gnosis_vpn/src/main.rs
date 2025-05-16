@@ -311,7 +311,7 @@ fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                        shutdown_receiver = core.shutdown();
+                    shutdown_receiver = core.shutdown();
                 }
             }
             recv(shutdown_receiver) -> _ => {
