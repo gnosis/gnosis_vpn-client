@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::command::Command;
+use crate::command::{Command, Response};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -30,7 +30,7 @@ pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 // PathBuf::from("//./pipe/Gnosis VPN")
 // }
 
-pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<String, Error> {
+pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, Error> {
     check_path(socket_path)?;
 
     let mut stream = UnixStream::connect(socket_path).map_err(|x| Error::ConnectSocketIO {
@@ -40,7 +40,8 @@ pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<String, Error> {
 
     let json_cmd = serde_json::to_string(cmd)?;
     push_command(&mut stream, &json_cmd)?;
-    pull_response(&mut stream)
+    let str_resp = pull_response(&mut stream)?;
+    serde_json::from_str::<Response>(&str_resp).map_err(Error::Serialization)
 }
 
 fn check_path(socket_path: &Path) -> Result<(), Error> {
