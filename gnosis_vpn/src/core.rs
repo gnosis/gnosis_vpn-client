@@ -219,7 +219,11 @@ impl Core {
                 }
             }
             Command::Status => {
-                let wg_status = self.wg.as_ref().map(|_| command::WireGuardStatus::new(self.wg_connected)).unwrap_or(command::WireGuardStatus::manual());
+                let wg_status = self
+                    .wg
+                    .as_ref()
+                    .map(|_| command::WireGuardStatus::new(self.wg_connected))
+                    .unwrap_or(command::WireGuardStatus::manual());
                 let status = match (self.target_destination, self.connection, self.session_connected) {
                     (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
                     (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
@@ -239,8 +243,6 @@ impl Core {
                         })
                         .collect(),
                 )))
-
-
             }
         }
     }
@@ -383,9 +385,6 @@ impl Core {
             }
         }
     }
-
-    fn status_response(&self) ->
-                let wg_status = WireGuardStatus::new(self.wg.as_ref().map(|_| self.wg_connected));
 }
 
 fn print_manual_instructions() {
