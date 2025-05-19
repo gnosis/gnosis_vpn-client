@@ -122,6 +122,7 @@ impl Core {
                 Some(conn) => {
                     tracing::info!(current = %conn.destination(), "disconnecting from current destination");
                     conn.dismantle();
+                    self.disconnect_wg();
                 }
                 None => tracing::info!("no connection to disconnect"),
             },
