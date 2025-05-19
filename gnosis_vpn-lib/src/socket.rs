@@ -6,12 +6,6 @@ use thiserror::Error;
 
 use crate::command::Command;
 
-#[derive(Debug)]
-pub enum ReturnValue {
-    WithResponse(String),
-    NoResponse,
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("service not running")]
@@ -21,7 +15,7 @@ pub enum Error {
     #[error("error connecting socket at `{socket_path:?}`: {error:?}")]
     ConnectSocketIO { socket_path: PathBuf, error: io::Error },
     #[error("failed serializing command: {0}")]
-    CommandSerialization(#[from] serde_json::Error),
+    Serialization(#[from] serde_json::Error),
     #[error("error writing to socket at: {0}")]
     WriteSocketIO(io::Error),
     #[error("error reading from socket: {0}")]
@@ -36,7 +30,7 @@ pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 // PathBuf::from("//./pipe/Gnosis VPN")
 // }
 
-pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<ReturnValue, Error> {
+pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<String, Error> {
     check_path(socket_path)?;
 
     let mut stream = UnixStream::connect(socket_path).map_err(|x| Error::ConnectSocketIO {
@@ -46,9 +40,7 @@ pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<ReturnValue, Err
 
     let json_cmd = serde_json::to_string(cmd)?;
     push_command(&mut stream, &json_cmd)?;
-
-    let response = pull_response(&mut stream)?;
-    Ok(ReturnValue::WithResponse(response))
+    pull_response(&mut stream)
 }
 
 fn check_path(socket_path: &Path) -> Result<(), Error> {

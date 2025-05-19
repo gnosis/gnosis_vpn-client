@@ -3,7 +3,7 @@ use std::thread;
 
 use thiserror::Error;
 
-use gnosis_vpn_lib::command::Command;
+use gnosis_vpn_lib::command::{Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
 use gnosis_vpn_lib::state;
@@ -188,7 +188,7 @@ impl Core {
         });
     }
 
-    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Option<String>, Error> {
+    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
         tracing::info!(%cmd, "handling command");
         match cmd {
             Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
