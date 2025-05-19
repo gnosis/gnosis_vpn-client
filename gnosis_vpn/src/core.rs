@@ -3,7 +3,7 @@ use std::thread;
 
 use thiserror::Error;
 
-use gnosis_vpn_lib::command::{Command, Response};
+use gnosis_vpn_lib::command::{Command, ConnectResponse, DisconnectResponse, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
 use gnosis_vpn_lib::state;
@@ -19,21 +19,15 @@ pub struct Core {
     sender: crossbeam_channel::Sender<Event>,
     // internal persistent application state
     state: state::State,
-    // wg interface,
+    // wg interface, will be None if manual mode is used
     wg: Option<Box<dyn wireguard::WireGuard>>,
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
     connection: Option<connection::Connection>,
-    connected: bool,
-    target_state: TargetState,
-}
-
-#[derive(Clone, Debug)]
-pub enum TargetState {
-    Disconnected,
-    Connect(Box<Destination>),
-    Shutdown,
+    session_connected: bool,
+    wg_connected: bool,
+    target_destination: Option<Destination>,
 }
 
 #[derive(Debug, Error)]
@@ -75,6 +69,7 @@ impl Core {
             x => x,
         }?;
 
+        // only triggerd in non manual mode
         if let (Some(wg), None) = (&wireguard, &state.wg_private_key()) {
             let priv_key = wg.generate_key()?;
             state.set_wg_private_key(priv_key.clone())?
@@ -87,8 +82,9 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
-            connected: false,
-            target_state: TargetState::Disconnected,
+            session_connected: false,
+            wg_connected: false,
+            target_destination: None,
         };
         Ok(core)
     }
@@ -96,50 +92,47 @@ impl Core {
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
-        self.target_state = TargetState::Shutdown;
-        self.act_on_target();
+        match &mut self.connection {
+            Some(conn) => {
+                tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
+                self.target_destination = None;
+                conn.dismantle();
+                self.disconnect_wg();
+            }
+            None => {
+                tracing::debug!("direct shutdown - no connection to disconnect");
+                self.shutdown_sender.as_ref().map(|s| {
+                    _ = s.send(());
+                });
+            }
+        }
         receiver
     }
 
     fn act_on_target(&mut self) {
-        // avoid immutable borrow of self
-        let target_state = self.target_state.clone();
-        match target_state {
-            TargetState::Connect(destination) => match &self.connection {
-                Some(conn) => {
-                    if conn.has_destination(&destination) {
-                        tracing::info!(destination = %destination, "already connecting to target destination");
-                    } else {
-                        tracing::info!(current = %conn.destination(), target = %destination, "TODO disconnecting from current destination")
-                    }
-                }
-                None => {
-                    tracing::info!(destination = %destination, "establishing new connection");
-                    self.connect(&destination);
-                }
-            },
-            TargetState::Disconnected => match &mut self.connection {
-                Some(conn) => {
-                    tracing::info!(current = %conn.destination(), "disconnecting from current destination");
+        match (self.target_destination.clone(), &mut self.connection) {
+            (Some(dest), Some(conn)) => {
+                if conn.has_destination(&dest) {
+                    tracing::info!(destination = %dest, "already connecting to target destination");
+                } else {
+                    tracing::info!(current = %conn.destination(), target = %dest, "disconnecting from current destination to connect to target destination");
                     conn.dismantle();
                     self.disconnect_wg();
                 }
-                None => tracing::info!("no connection to disconnect"),
-            },
-            TargetState::Shutdown => match &mut self.connection {
-                Some(conn) => {
-                    tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
-                    conn.dismantle();
-                    self.disconnect_wg();
-                }
-                None => {
-                    tracing::debug!("direct shutdown - no connection to disconnect");
-                    self.shutdown_sender.as_ref().map(|s| {
-                        _ = s.send(());
-                    });
-                }
-            },
-        }
+            }
+            (None, Some(conn)) => {
+                tracing::info!(current = %conn.destination(), "disconnecting from current destination");
+                conn.dismantle();
+                self.disconnect_wg();
+            }
+            (Some(dest), None) => {
+                tracing::info!(destination = %dest, "establishing new connection");
+                self.connect(&dest);
+            }
+            (None, None) => {
+                tracing::info!("no connection to disconnect");
+            }
+        };
     }
 
     fn connect(&mut self, destination: &Destination) {
@@ -193,21 +186,42 @@ impl Core {
         match cmd {
             Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
                 Some(dest) => {
-                    self.target_state = TargetState::Connect(Box::new(dest.clone()));
+                    self.target_destination = Some(dest.clone());
                     self.act_on_target();
-                    Ok(Some(format!("targetting {}", dest)))
+                    Ok(Response::connect(ConnectResponse::new(dest.clone().into())))
                 }
                 None => {
                     tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
-                    Ok(Some("unknown peer id".to_string()))
+                    Ok(Response::connect(ConnectResponse::peer_id_not_found()))
                 }
             },
-            Command::Disconnect => {
-                self.target_state = TargetState::Disconnected;
-                self.act_on_target();
-                Ok(Some("disconnecting".to_string()))
+            Command::ConnectMeta((_key, _value)) => {
+                // build meta map and look for destination
+                Err(Error::NotImplemented)
             }
-            _ => Err(Error::NotImplemented),
+            Command::Disconnect => {
+                self.target_destination = None;
+                self.act_on_target();
+                let conn = self.connection.clone();
+                match conn {
+                    Some(mut c) => {
+                        tracing::info!(current = %c.destination(), "disconnecting from current destination");
+                        c.dismantle();
+                        self.disconnect_wg();
+                        Ok(Response::disconnect(DisconnectResponse::new(
+                            c.destination().clone().into(),
+                        )))
+                    }
+                    None => {
+                        tracing::info!("no connection to disconnect");
+                        Ok(Response::disconnect(DisconnectResponse::not_connected()))
+                    }
+                }
+            }
+            Command::Status => {
+                // build status
+                Err(Error::NotImplemented)
+            }
         }
     }
 
@@ -227,11 +241,11 @@ impl Core {
 
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
         tracing::debug!(?conninfo, "on session ready");
-        if self.connected {
+        if self.session_connected {
             tracing::info!("already connected - might be connection hickup");
             return Ok(());
         }
-        self.connected = true;
+        self.session_connected = true;
         if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
             // automatic wg connection
             tracing::info!("iniating wireguard connection");
@@ -249,6 +263,7 @@ impl Core {
 
             match wg.connect_session(&connect_session) {
                 Ok(_) => {
+                    self.wg_connected = true;
                     tracing::info!("established wireguard connection");
                     tracing::info!(
                         r"
@@ -310,7 +325,7 @@ impl Core {
 
     fn on_drop_connection(&mut self) -> Result<(), Error> {
         tracing::debug!("on drop connection");
-        self.connected = false;
+        self.session_connected = false;
         self.connection = None;
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
@@ -320,23 +335,26 @@ impl Core {
     }
 
     fn wg_public_key(&self) -> Option<String> {
-        if let (Some(wg), Some(privkey)) = (&self.wg, &self.state.wg_private_key()) {
-            match wg.public_key(privkey.as_str()) {
-                Ok(pubkey) => Some(pubkey),
-                Err(e) => {
-                    tracing::error!(error = %e, "Unable to generate public key from private key");
-                    None
+        self.config.wireguard().manual_mode.map(|mm| mm.public_key).or_else(|| {
+            if let (Some(wg), Some(privkey)) = (&self.wg, &self.state.wg_private_key()) {
+                match wg.public_key(privkey.as_str()) {
+                    Ok(pubkey) => Some(pubkey),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Unable to generate public key from private key");
+                        None
+                    }
                 }
+            } else {
+                None
             }
-        } else {
-            self.config.wireguard().manual_mode.map(|mm| mm.public_key)
-        }
+        })
     }
 
     fn disconnect_wg(&mut self) {
         if let Some(wg) = &self.wg {
             match wg.close_session() {
                 Ok(_) => {
+                    self.wg_connected = false;
                     tracing::info!("WireGuard connection closed");
                 }
                 Err(err) => {

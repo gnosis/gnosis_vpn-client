@@ -163,7 +163,7 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
 
     tracing::debug!(command = %cmd, "incoming command");
 
-    let res = match core.handle_cmd(&cmd) {
+    let resp = match core.handle_cmd(&cmd) {
         Ok(res) => res,
         Err(e) => {
             tracing::error!(error = ?e, "error handling command");
@@ -171,14 +171,21 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
         }
     };
 
-    if let Some(resp) = res {
-        if let Err(e) = stream.write_all(resp.as_bytes()) {
-            tracing::error!(error = ?e, "error writing response");
+    let str_resp = match serde_json::to_string(&resp) {
+        Ok(res) => res,
+        Err(e) => {
+            tracing::error!(error = ?e, "error serializing response");
             return;
         }
-        if let Err(e) = stream.flush() {
-            tracing::error!(error = ?e, "error flushing stream")
-        }
+    };
+
+    if let Err(e) = stream.write_all(str_resp.as_bytes()) {
+        tracing::error!(error = ?e, "error writing response");
+        return;
+    }
+
+    if let Err(e) = stream.flush() {
+        tracing::error!(error = ?e, "error flushing stream")
     }
 }
 

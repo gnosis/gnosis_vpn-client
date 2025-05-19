@@ -41,7 +41,7 @@ pub enum WireguardStatus {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Status {
     Connecting(Destination),
-    Disconnecting(Destination),
+    Disconnecting,
     Connected(Destination),
     Disconnected,
 }
@@ -49,19 +49,49 @@ pub enum Status {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    CannotConnect(String),
+    PeerIdNotFound,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DisconnectResponse {
     Disconnecting(Destination),
-    CannotDisconnect(String),
+    NotConnected,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub peer_id: PeerId,
+}
+
+impl ConnectResponse {
+    pub fn new(destination: Destination) -> Self {
+        ConnectResponse::Connecting(destination)
+    }
+
+    pub fn peer_id_not_found() -> Self {
+        ConnectResponse::PeerIdNotFound
+    }
+}
+
+impl DisconnectResponse {
+    pub fn new(destination: Destination) -> Self {
+        DisconnectResponse::Disconnecting(destination)
+    }
+
+    pub fn not_connected() -> Self {
+        DisconnectResponse::NotConnected
+    }
+}
+
+impl Response {
+    pub fn connect(conn: ConnectResponse) -> Self {
+        Response::Connect(conn)
+    }
+
+    pub fn disconnect(disc: DisconnectResponse) -> Self {
+        Response::Disconnect(disc)
+    }
 }
 
 impl fmt::Display for Command {

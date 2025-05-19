@@ -67,9 +67,8 @@ fn push_command(socket: &mut UnixStream, json_cmd: &str) -> Result<(), Error> {
 
 fn pull_response(socket: &mut UnixStream) -> Result<String, Error> {
     let mut response = String::new();
-    let res = socket.read_to_string(&mut response);
-    match res {
-        Ok(_) => Ok(response),
-        Err(x) => Err(Error::ReadSocketIO(x)),
-    }
+    socket
+        .read_to_string(&mut response)
+        .map(|_size| response)
+        .map_err(Error::ReadSocketIO)
 }
