@@ -26,13 +26,13 @@ pub enum Response {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub wireguard: WireguardStatus,
+    pub wireguard: WireGuardStatus,
     pub status: Status,
     pub available_destinations: Vec<Destination>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum WireguardStatus {
+pub enum WireGuardStatus {
     Up,
     Down,
     ManuallyManaged,
@@ -41,7 +41,7 @@ pub enum WireguardStatus {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Status {
     Connecting(Destination),
-    Disconnecting,
+    Disconnecting(Destination),
     Connected(Destination),
     Disconnected,
 }
@@ -64,6 +64,38 @@ pub struct Destination {
     pub peer_id: PeerId,
 }
 
+impl WireGuardStatus {
+    pub fn new(connected: bool) -> Self {
+        if connected {
+            WireGuardStatus::Up
+        } else {
+            WireGuardStatus::Down
+        }
+    }
+
+    pub fn manual() -> Self {
+        WireGuardStatus::ManuallyManaged
+    }
+}
+
+impl Status {
+    pub fn connecting(destination: Destination) -> Self {
+        Status::Connecting(destination)
+    }
+
+    pub fn connected(destination: Destination) -> Self {
+        Status::Connected(destination)
+    }
+
+    pub fn disconnecting(destination: Destination) -> Self {
+        Status::Disconnecting(destination)
+    }
+
+    pub fn disconnected() -> Self {
+        Status::Disconnected
+    }
+}
+
 impl ConnectResponse {
     pub fn new(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
@@ -84,6 +116,16 @@ impl DisconnectResponse {
     }
 }
 
+impl StatusResponse {
+    pub fn new(wireguard: WireGuardStatus, status: Status, available_destinations: Vec<Destination>) -> Self {
+        StatusResponse {
+            wireguard,
+            status,
+            available_destinations,
+        }
+    }
+}
+
 impl Response {
     pub fn connect(conn: ConnectResponse) -> Self {
         Response::Connect(conn)
@@ -91,6 +133,10 @@ impl Response {
 
     pub fn disconnect(disc: DisconnectResponse) -> Self {
         Response::Disconnect(disc)
+    }
+
+    pub fn status(stat: StatusResponse) -> Self {
+        Response::Status(stat)
     }
 }
 

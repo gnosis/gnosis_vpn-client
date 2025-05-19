@@ -3,7 +3,7 @@ use std::thread;
 
 use thiserror::Error;
 
-use gnosis_vpn_lib::command::{Command, ConnectResponse, DisconnectResponse, Response};
+use gnosis_vpn_lib::command::{self, Command, ConnectResponse, DisconnectResponse, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
 use gnosis_vpn_lib::state;
@@ -219,8 +219,28 @@ impl Core {
                 }
             }
             Command::Status => {
-                // build status
-                Err(Error::NotImplemented)
+                let wg_status = self.wg.as_ref().map(|_| command::WireGuardStatus::new(self.wg_connected)).unwrap_or(command::WireGuardStatus::manual());
+                let status = match (self.target_destination, self.connection, self.session_connected) {
+                    (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
+                    (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
+                    (None, Some(conn), _) => command::Status::disconnecting(conn.destination().into()),
+                    (None, None, _) => command::Status::disconnected(),
+                };
+
+                let destinations = self.config.destinations();
+                Ok(Response::status(command::StatusResponse::new(
+                    wg_status,
+                    status,
+                    destinations
+                        .iter()
+                        .map(|(k, v)| {
+                            let dest = v.clone();
+                            (k.clone(), dest.into())
+                        })
+                        .collect(),
+                )))
+
+
             }
         }
     }
@@ -363,6 +383,9 @@ impl Core {
             }
         }
     }
+
+    fn status_response(&self) ->
+                let wg_status = WireGuardStatus::new(self.wg.as_ref().map(|_| self.wg_connected));
 }
 
 fn print_manual_instructions() {
