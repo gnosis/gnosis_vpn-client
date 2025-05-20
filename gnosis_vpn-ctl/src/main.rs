@@ -1,3 +1,6 @@
+use exitcode::{self, ExitCode};
+use std::process;
+
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
 
@@ -15,19 +18,28 @@ fn main() {
         }
     };
 
+    let exit = -pretty_print(&resp);
+    process::exit(exit);
+}
+
+fn pretty_print(resp: &Response) -> ExitCode {
     // pretty print for users
     match resp {
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
             println!("Connecting to {}", dest);
+            return exitcode::OK;
         }
         Response::Connect(command::ConnectResponse::PeerIdNotFound) => {
             eprintln!("Peer ID not found in available destinations");
+            return exitcode::UNAVAILABLE;
         }
         Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
             println!("Disconnecting from {}", dest);
+            return exitcode::OK;
         }
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
-            println!("Currently not connected to any destination");
+            eprintln!("Currently not connected to any destination");
+            return exitcode::PROTOCOL;
         }
         Response::Status(command::StatusResponse {
             wireguard,
@@ -41,6 +53,7 @@ fn main() {
                 str_resp.push_str(&format!("  - {}\n", dest));
             }
             println!("{}", str_resp);
+            return exitcode::OK;
         }
     }
 }
