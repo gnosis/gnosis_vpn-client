@@ -180,7 +180,7 @@ fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, cr
     };
 
     if let Err(e) = stream.write_all(str_resp.as_bytes()) {
-        tracing::error!(error = ?e, "error writing response");
+        tracing::error!(error = %e, "error writing response");
         return;
     }
 
