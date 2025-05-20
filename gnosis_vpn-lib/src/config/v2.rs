@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use std::vec::Vec;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
 use crate::connection::{Destination as ConnDestination, SessionParameters};
@@ -12,6 +12,8 @@ use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
 use crate::session;
 use crate::wireguard::config::{Config as WireGuardConfig, ManualMode as WireGuardManualMode};
+
+const MAX_HOPS: u8 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -39,7 +41,7 @@ struct Destination {
 enum DestinationPath {
     #[serde(alias = "intermediates")]
     Intermediates(Vec<PeerId>),
-    #[serde(alias = "hops")]
+    #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
 }
 
@@ -182,6 +184,21 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         wrong_keys.push(key.clone());
     }
     wrong_keys
+}
+
+fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u8::deserialize(deserializer)?;
+    if value <= MAX_HOPS {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "hops must be less than or equal to {}",
+            MAX_HOPS
+        )))
+    }
 }
 
 impl From<SessionCapability> for session::Capability {
