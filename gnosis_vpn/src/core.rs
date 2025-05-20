@@ -48,7 +48,7 @@ impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
         let config = config::read(config_path)?;
         let wireguard = if config.wireguard().manual_mode.is_some() {
-            tracing::info!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
+            tracing::warn!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
             None
         } else {
             match wireguard::best_flavor() {
