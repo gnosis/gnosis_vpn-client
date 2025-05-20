@@ -201,10 +201,10 @@ impl Connection {
         vec![SessionCapability::Segmentation]
     }
     pub fn default_bridge_target() -> SocketAddr {
-        SocketAddr::from(([172, 17, 0, 1], 8000))
+        SocketAddr::from(([172, 30, 0, 1], 8000))
     }
     pub fn default_wg_target() -> SocketAddr {
-        SocketAddr::from(([172, 17, 0, 1], 51820))
+        SocketAddr::from(([172, 30, 0, 1], 51820))
     }
     pub fn default_listen_host() -> String {
         ":1422".to_string()
