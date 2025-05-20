@@ -49,7 +49,7 @@ pub fn read(path: &Path) -> Result<Config, Error> {
             if config.version == 2 {
                 let wrong_keys = v2::wrong_keys(&table);
                 for key in wrong_keys.iter() {
-                    tracing::warn!("ignoring unsupported key in configuration file: {}", key);
+                    tracing::warn!(%key, "ignoring unsupported key in configuration file");
                 }
                 Ok(Config::V2(config))
             } else {
