@@ -101,9 +101,9 @@ impl Core {
             }
             None => {
                 tracing::debug!("direct shutdown - no connection to disconnect");
-                self.shutdown_sender.as_ref().map(|s| {
+                if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(());
-                });
+                };
             }
         }
         receiver
@@ -240,8 +240,8 @@ impl Core {
                     wg_status,
                     status,
                     destinations
-                        .iter()
-                        .map(|(_k, v)| {
+                        .values()
+                        .map(|v| {
                             let dest = v.clone();
                             dest.into()
                         })
