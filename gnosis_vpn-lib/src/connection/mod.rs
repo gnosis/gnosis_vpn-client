@@ -333,7 +333,7 @@ impl Connection {
     }
 
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        tracing::info!(phase = %self.phase_up, "Establishing connection");
+        tracing::debug!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
             PhaseUp::Idle => self.idle2bridge(),
             PhaseUp::BridgeSessionOpen(session) => self.bridge2wgreg(&session),
@@ -344,7 +344,7 @@ impl Connection {
     }
 
     fn act_down(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        tracing::info!(phase_down = %self.phase_down, "Dismantling connection");
+        tracing::debug!(phase_down = %self.phase_down, "Dismantling connection");
         match self.phase_down.clone() {
             PhaseDown::Idle => crossbeam_channel::never(),
             PhaseDown::MainSessionOpen(session, _since, _registration) => self.main2teardown(&session),

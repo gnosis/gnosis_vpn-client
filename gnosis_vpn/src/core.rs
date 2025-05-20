@@ -6,8 +6,8 @@ use thiserror::Error;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
-use gnosis_vpn_lib::state;
-use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::state::{self, State};
+use gnosis_vpn_lib::wireguard::{self, WireGuard};
 
 use crate::event::Event;
 
@@ -18,9 +18,9 @@ pub struct Core {
     // global event transmitter
     sender: crossbeam_channel::Sender<Event>,
     // internal persistent application state
-    state: state::State,
+    state: State,
     // wg interface, will be None if manual mode is used
-    wg: Option<Box<dyn wireguard::WireGuard>>,
+    wg: Option<Box<dyn WireGuard>>,
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
@@ -40,40 +40,11 @@ pub enum Error {
     WireGuard(#[from] wireguard::Error),
     #[error("Missing manual_mode configuration")]
     WireGuardManualModeMissing,
-    #[error("Not yet implemented")]
-    NotImplemented,
 }
 
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
-        let config = config::read(config_path)?;
-        let wireguard = if config.wireguard().manual_mode.is_some() {
-            tracing::warn!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
-            None
-        } else {
-            match wireguard::best_flavor() {
-                Ok(wg) => Some(wg),
-                Err(e) => {
-                    tracing::error!(error = ?e, "could not determine WireGuard handling mode");
-                    print_manual_instructions();
-                    return Err(Error::WireGuardManualModeMissing);
-                }
-            }
-        };
-
-        let mut state = match state::read() {
-            Err(state::Error::NoFile) => {
-                tracing::info!("no service state file found - clean start");
-                Ok(state::State::default())
-            }
-            x => x,
-        }?;
-
-        // only triggerd in non manual mode
-        if let (Some(wg), None) = (&wireguard, &state.wg_private_key()) {
-            let priv_key = wg.generate_key()?;
-            state.set_wg_private_key(priv_key.clone())?
-        }
+        let (state, config, wireguard) = setup_from_config(config_path)?;
 
         let core = Core {
             config,
@@ -86,6 +57,7 @@ impl Core {
             wg_connected: false,
             target_destination: None,
         };
+
         Ok(core)
     }
 
@@ -107,6 +79,80 @@ impl Core {
             }
         }
         receiver
+    }
+
+    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
+        tracing::debug!(%cmd, "handling command");
+        match cmd {
+            Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
+                Some(dest) => {
+                    self.target_destination = Some(dest.clone());
+                    self.act_on_target();
+                    Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
+                }
+                None => {
+                    tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
+                    Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
+                }
+            },
+            Command::Disconnect => {
+                self.target_destination = None;
+                self.act_on_target();
+                let conn = self.connection.clone();
+                match conn {
+                    Some(c) => Ok(Response::disconnect(command::DisconnectResponse::new(
+                        c.destination().clone().into(),
+                    ))),
+                    None => Ok(Response::disconnect(command::DisconnectResponse::not_connected())),
+                }
+            }
+            Command::Status => {
+                let wg_status = self
+                    .wg
+                    .as_ref()
+                    .map(|_| command::WireGuardStatus::new(self.wg_connected))
+                    .unwrap_or(command::WireGuardStatus::manual());
+                let status = match (
+                    self.target_destination.clone(),
+                    self.connection.clone().map(|c| c.destination()),
+                    self.session_connected,
+                ) {
+                    (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
+                    (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
+                    (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
+                    (None, None, _) => command::Status::disconnected(),
+                };
+
+                let destinations = self.config.destinations();
+                Ok(Response::status(command::StatusResponse::new(
+                    wg_status,
+                    status,
+                    destinations
+                        .values()
+                        .map(|v| {
+                            let dest = v.clone();
+                            dest.into()
+                        })
+                        .collect(),
+                )))
+            }
+        }
+    }
+
+    pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
+        tracing::debug!(%event, "handling event");
+        match event {
+            Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
+            Event::DropConnection => self.on_drop_connection(),
+        }
+    }
+
+    pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
+        let (state, config, wireguard) = setup_from_config(config_path)?;
+        self.config = config;
+        self.state = state;
+        self.wg = wireguard;
+        Ok(())
     }
 
     fn act_on_target(&mut self) {
@@ -179,78 +225,6 @@ impl Core {
                 }
             }
         });
-    }
-
-    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
-        tracing::info!(%cmd, "handling command");
-        match cmd {
-            Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
-                Some(dest) => {
-                    self.target_destination = Some(dest.clone());
-                    self.act_on_target();
-                    Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
-                }
-                None => {
-                    tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
-                    Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
-                }
-            },
-            Command::Disconnect => {
-                self.target_destination = None;
-                self.act_on_target();
-                let conn = self.connection.clone();
-                match conn {
-                    Some(c) => Ok(Response::disconnect(command::DisconnectResponse::new(
-                        c.destination().clone().into(),
-                    ))),
-                    None => Ok(Response::disconnect(command::DisconnectResponse::not_connected())),
-                }
-            }
-            Command::Status => {
-                let wg_status = self
-                    .wg
-                    .as_ref()
-                    .map(|_| command::WireGuardStatus::new(self.wg_connected))
-                    .unwrap_or(command::WireGuardStatus::manual());
-                let status = match (
-                    self.target_destination.clone(),
-                    self.connection.clone().map(|c| c.destination()),
-                    self.session_connected,
-                ) {
-                    (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
-                    (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
-                    (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
-                    (None, None, _) => command::Status::disconnected(),
-                };
-
-                let destinations = self.config.destinations();
-                Ok(Response::status(command::StatusResponse::new(
-                    wg_status,
-                    status,
-                    destinations
-                        .values()
-                        .map(|v| {
-                            let dest = v.clone();
-                            dest.into()
-                        })
-                        .collect(),
-                )))
-            }
-        }
-    }
-
-    pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
-        tracing::info!(%event, "handling event");
-        match event {
-            Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
-            Event::DropConnection => self.on_drop_connection(),
-        }
-    }
-
-    pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        _ = config::read(config_path)?;
-        // self.config = config;
-        Err(Error::NotImplemented)
     }
 
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
@@ -379,6 +353,38 @@ impl Core {
             }
         }
     }
+}
+
+fn setup_from_config(config_path: &Path) -> Result<(State, Config, Option<Box<dyn WireGuard>>), Error> {
+    let config = config::read(config_path)?;
+    let wireguard = if config.wireguard().manual_mode.is_some() {
+        tracing::warn!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
+        None
+    } else {
+        match wireguard::best_flavor() {
+            Ok(wg) => Some(wg),
+            Err(e) => {
+                tracing::error!(error = ?e, "could not determine WireGuard handling mode");
+                print_manual_instructions();
+                return Err(Error::WireGuardManualModeMissing);
+            }
+        }
+    };
+
+    let mut state = match state::read() {
+        Err(state::Error::NoFile) => {
+            tracing::info!("no service state file found - clean start");
+            Ok(state::State::default())
+        }
+        x => x,
+    }?;
+
+    // only triggerd in WireGuard handling mode
+    if let (Some(wg), None) = (&wireguard, &state.wg_private_key()) {
+        let priv_key = wg.generate_key()?;
+        state.set_wg_private_key(priv_key.clone())?;
+    }
+    Ok((state, config, wireguard))
 }
 
 fn print_manual_instructions() {
