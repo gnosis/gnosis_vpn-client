@@ -3,7 +3,7 @@ use std::thread;
 
 use thiserror::Error;
 
-use gnosis_vpn_lib::command::{self, Command, ConnectResponse, DisconnectResponse, Response};
+use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
 use gnosis_vpn_lib::state;
@@ -188,11 +188,11 @@ impl Core {
                 Some(dest) => {
                     self.target_destination = Some(dest.clone());
                     self.act_on_target();
-                    Ok(Response::connect(ConnectResponse::new(dest.clone().into())))
+                    Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
                 }
                 None => {
                     tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
-                    Ok(Response::connect(ConnectResponse::peer_id_not_found()))
+                    Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
                 }
             },
             Command::ConnectMeta((_key, _value)) => {
@@ -208,13 +208,13 @@ impl Core {
                         tracing::info!(current = %c.destination(), "disconnecting from current destination");
                         c.dismantle();
                         self.disconnect_wg();
-                        Ok(Response::disconnect(DisconnectResponse::new(
+                        Ok(Response::disconnect(command::DisconnectResponse::new(
                             c.destination().clone().into(),
                         )))
                     }
                     None => {
                         tracing::info!("no connection to disconnect");
-                        Ok(Response::disconnect(DisconnectResponse::not_connected()))
+                        Ok(Response::disconnect(command::DisconnectResponse::not_connected()))
                     }
                 }
             }
@@ -224,10 +224,14 @@ impl Core {
                     .as_ref()
                     .map(|_| command::WireGuardStatus::new(self.wg_connected))
                     .unwrap_or(command::WireGuardStatus::manual());
-                let status = match (self.target_destination, self.connection, self.session_connected) {
+                let status = match (
+                    self.target_destination.clone(),
+                    self.connection.clone().map(|c| c.destination()),
+                    self.session_connected,
+                ) {
                     (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
                     (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
-                    (None, Some(conn), _) => command::Status::disconnecting(conn.destination().into()),
+                    (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
                     (None, None, _) => command::Status::disconnected(),
                 };
 
@@ -237,9 +241,9 @@ impl Core {
                     status,
                     destinations
                         .iter()
-                        .map(|(k, v)| {
+                        .map(|(_k, v)| {
                             let dest = v.clone();
-                            (k.clone(), dest.into())
+                            dest.into()
                         })
                         .collect(),
                 )))
