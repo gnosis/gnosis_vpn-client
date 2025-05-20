@@ -25,6 +25,7 @@ At the minimum add your HOPD node's API credentials.
 Ensure you have a forwardable TCP/UDP port configured that matches `internal_connection_port`.
 
 If you run on MacOS, uncomment `[wireguard.manual_mode]` and provide your own WireGuard public key.
+If you run on Linux and want to use automatic WireGuard handling, you need to install [WireGuard tools](https://www.wireguard.com/install/).
 
 - start the client via `./gnosis_vpn -c ./config.toml` on a separate terminal or run it as a service
 - you can instruct the client via the control application `./gnosis_vpn-ctl`, run `./gnosis_vpn-ctl --help` for a list of commands
