@@ -10,7 +10,7 @@ use url::Url;
 use crate::connection::Destination as ConnDestination;
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
-use crate::wireguard::config::Config as WireGuardConfig;
+use crate::wireguard::config::{self, Config as WireGuardConfig};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -136,6 +136,7 @@ impl Config {
 
     pub fn wireguard(&self) -> WireGuardConfig {
         let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
-        WireGuardConfig::new(&listen_port, &None)
+        let allowed_ips = self.wireguard.as_ref().and_then(|wg| wg.allowed_ips.clone());
+        WireGuardConfig::new(listen_port, allowed_ips, None::<config::ManualMode>)
     }
 }

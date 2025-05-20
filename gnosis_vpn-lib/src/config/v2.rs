@@ -87,6 +87,7 @@ struct ConnectionTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct WireGuard {
     listen_port: Option<u16>,
+    allowed_ips: Option<String>,
     manual_mode: Option<WgManualMode>,
 }
 
@@ -118,7 +119,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "listen_port" {
+                    if k == "listen_port" || k == "allowed_ips" {
                         continue;
                     }
                     if k == "manual_mode" {
@@ -316,12 +317,13 @@ impl Config {
 
     pub fn wireguard(&self) -> WireGuardConfig {
         let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
+        let allowed_ips = self.wireguard.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let manual_mode = self
             .wireguard
             .as_ref()
             .and_then(|wg| wg.manual_mode.as_ref())
-            .map(|wgm| WireGuardManualMode::new(wgm.public_key.as_str()));
-        WireGuardConfig::new(&listen_port, &manual_mode)
+            .map(|wgm| WireGuardManualMode::new(wgm.public_key.clone()));
+        WireGuardConfig::new(listen_port, allowed_ips, manual_mode)
     }
 }
 
@@ -378,6 +380,7 @@ target_type = "sealed"
 
 [wireguard]
 listen_port = 51820
+allowed_ips = "10.128.0.1/9"
 # only specify this if you want to manually connect via WireGuard
 manual_mode = { public_key = "VbezNcrZstuGTkXc7uNwHHB1BA8fLgL8IAQO/pWTpSw=" }
 "#####;

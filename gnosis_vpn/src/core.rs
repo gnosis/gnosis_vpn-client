@@ -52,7 +52,7 @@ impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
         let cs = setup_from_config(config_path)?;
 
-        let core = Core {
+        Ok(Core {
             config: cs.config,
             state: cs.state,
             wg: cs.wg,
@@ -62,9 +62,7 @@ impl Core {
             session_connected: false,
             wg_connected: false,
             target_destination: None,
-        };
-
-        Ok(core)
+        })
     }
 
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
@@ -244,7 +242,7 @@ impl Core {
             let interface_info = wireguard::InterfaceInfo {
                 private_key: privkey.clone(),
                 address: conninfo.registration.address(),
-                allowed_ips: None,
+                allowed_ips: self.config.wireguard().allowed_ips,
                 listen_port: self.config.wireguard().listen_port,
             };
             let peer_info = wireguard::PeerInfo {
@@ -282,7 +280,7 @@ impl Core {
             let interface_info = wireguard::InterfaceInfo {
                 private_key: "<WireGuard private key>".to_string(),
                 address: conninfo.registration.address(),
-                allowed_ips: None,
+                allowed_ips: self.config.wireguard().allowed_ips,
                 listen_port: self.config.wireguard().listen_port,
             };
             let peer_info = wireguard::PeerInfo {

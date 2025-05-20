@@ -2,6 +2,7 @@
 pub struct Config {
     pub listen_port: Option<u16>,
     pub manual_mode: Option<ManualMode>,
+    pub allowed_ips: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -10,18 +11,36 @@ pub struct ManualMode {
 }
 
 impl Config {
-    pub fn new(listen_port: &Option<u16>, manual_mode: &Option<ManualMode>) -> Self {
+    pub(crate) fn new<L, M, S>(listen_port: Option<L>, allowed_ips: Option<M>, manual_mode: Option<S>) -> Self
+    where
+        L: Into<u16>,
+        M: Into<String>,
+        S: Into<ManualMode>,
+    {
         Config {
-            listen_port: *listen_port,
-            manual_mode: manual_mode.clone(),
+            listen_port: listen_port.map(Into::into),
+            allowed_ips: allowed_ips.map(Into::into),
+            manual_mode: manual_mode.map(Into::into),
         }
     }
 }
 
 impl ManualMode {
-    pub fn new(public_key: &str) -> Self {
+    pub(crate) fn new<K: Into<String>>(public_key: K) -> Self {
         ManualMode {
-            public_key: public_key.to_string(),
+            public_key: public_key.into(),
         }
+    }
+}
+
+impl From<&str> for ManualMode {
+    fn from(s: &str) -> Self {
+        ManualMode::new(s)
+    }
+}
+
+impl From<String> for ManualMode {
+    fn from(s: String) -> Self {
+        ManualMode::new(s)
     }
 }
