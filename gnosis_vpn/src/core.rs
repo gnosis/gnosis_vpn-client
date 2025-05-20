@@ -344,6 +344,8 @@ impl Core {
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
             _ = sender.send(());
+        } else {
+            self.act_on_target();
         }
         Ok(())
     }
