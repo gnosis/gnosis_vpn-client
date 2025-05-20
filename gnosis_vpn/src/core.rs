@@ -204,18 +204,10 @@ impl Core {
                 self.act_on_target();
                 let conn = self.connection.clone();
                 match conn {
-                    Some(mut c) => {
-                        tracing::info!(current = %c.destination(), "disconnecting from current destination");
-                        c.dismantle();
-                        self.disconnect_wg();
-                        Ok(Response::disconnect(command::DisconnectResponse::new(
-                            c.destination().clone().into(),
-                        )))
-                    }
-                    None => {
-                        tracing::info!("no connection to disconnect");
-                        Ok(Response::disconnect(command::DisconnectResponse::not_connected()))
-                    }
+                    Some(c) => Ok(Response::disconnect(command::DisconnectResponse::new(
+                        c.destination().clone().into(),
+                    ))),
+                    None => Ok(Response::disconnect(command::DisconnectResponse::not_connected())),
                 }
             }
             Command::Status => {
