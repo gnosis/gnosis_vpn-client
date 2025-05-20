@@ -18,28 +18,36 @@ fn main() {
         }
     };
 
-    let exit = -pretty_print(&resp);
+    if args.json {
+        json_print(&resp)
+    } else {
+        pretty_print(&resp)
+    };
+
+    let exit = determine_exitcode(&resp);
     process::exit(exit);
 }
 
-fn pretty_print(resp: &Response) -> ExitCode {
-    // pretty print for users
+fn json_print(resp: &Response) {
+    match serde_json::to_string_pretty(resp) {
+        Ok(s) => println!("{}", s),
+        Err(e) => eprintln!("Error serializing response to JSON: {}", e),
+    }
+}
+
+fn pretty_print(resp: &Response) {
     match resp {
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
             println!("Connecting to {}", dest);
-            return exitcode::OK;
         }
         Response::Connect(command::ConnectResponse::PeerIdNotFound) => {
             eprintln!("Peer ID not found in available destinations");
-            return exitcode::UNAVAILABLE;
         }
         Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
             println!("Disconnecting from {}", dest);
-            return exitcode::OK;
         }
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
-            return exitcode::PROTOCOL;
         }
         Response::Status(command::StatusResponse {
             wireguard,
@@ -53,7 +61,16 @@ fn pretty_print(resp: &Response) -> ExitCode {
                 str_resp.push_str(&format!("  - {}\n", dest));
             }
             println!("{}", str_resp);
-            return exitcode::OK;
         }
+    }
+}
+
+fn determine_exitcode(resp: &Response) -> ExitCode {
+    match resp {
+        Response::Connect(command::ConnectResponse::Connecting(..)) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::PeerIdNotFound) => exitcode::UNAVAILABLE,
+        Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
+        Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
+        Response::Status(..) => exitcode::OK,
     }
 }
