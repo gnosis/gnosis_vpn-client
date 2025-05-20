@@ -195,10 +195,6 @@ impl Core {
                     Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
                 }
             },
-            Command::ConnectMeta((_key, _value)) => {
-                // build meta map and look for destination
-                Err(Error::NotImplemented)
-            }
             Command::Disconnect => {
                 self.target_destination = None;
                 self.act_on_target();

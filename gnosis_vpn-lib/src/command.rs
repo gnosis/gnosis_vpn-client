@@ -12,7 +12,6 @@ use crate::peer_id::PeerId;
 pub enum Command {
     Status,
     Connect(PeerId),
-    ConnectMeta((String, String)),
     Disconnect,
 }
 
@@ -20,7 +19,6 @@ pub enum Command {
 pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
-    ConnectMeta(ConnectResponse),
     Disconnect(DisconnectResponse),
 }
 
@@ -160,6 +158,39 @@ impl From<ConnectionDestination> for Destination {
         Destination {
             peer_id: destination.peer_id,
             meta: destination.meta,
+        }
+    }
+}
+
+impl fmt::Display for Destination {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let meta = self
+            .meta
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "Peer ID: {}, {}", self.peer_id, meta)
+    }
+}
+
+impl fmt::Display for WireGuardStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            WireGuardStatus::Up => write!(f, "Up"),
+            WireGuardStatus::Down => write!(f, "Down"),
+            WireGuardStatus::ManuallyManaged => write!(f, "Manually Managed"),
+        }
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Status::Connecting(dest) => write!(f, "Connecting to {}", dest),
+            Status::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
+            Status::Connected(dest) => write!(f, "Connected to {}", dest),
+            Status::Disconnected => write!(f, "Disconnected"),
         }
     }
 }
