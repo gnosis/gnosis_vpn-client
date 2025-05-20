@@ -52,13 +52,13 @@ Prepare the configuration file:
 - set the `internal_connection_port` to the configured port from the requirement
 - uncomment `[wireguard.manual_mode]` and provide your own WireGuard public key
 
-Run the service
+Run the service and provide a unix communication socket:
 - start the client via `./gnosis_vpn -c ./config.toml -s ./gnosis_vpn.sock`
 - see if you spot critical errors or actionable warnings before "enter listening mode"
 
 Instruct the service via the control application `./gnosis_vpn-ctl` from a separate terminal
-- check available destinations with `./gnosis_vpn-ctl status`
-- connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination peer id>`
+- check available destinations with `./gnosis_vpn-ctl -s ./gnosis_vpn.sock status`
+- connect to a destination of your choice by running `./gnosis_vpn-ctl -s ./gnosis_vpn.sock connect <destination peer id>`
 
 Once a HOPRD tunnel was created, configure WireGuard manually
 - use config sample instructions printed by the service binary as a starting point
