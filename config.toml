@@ -45,4 +45,4 @@ path = { intermediates = [
 [wireguard]
 listen_port = 51820
 # only specify this if you want to manually connect via WireGuard
-manual_mode = { public_key = "VbezNcrZstuGTkXc7uNwHHB1BA8fLgL8IAQO/pWTpSw=" }
+# manual_mode = { public_key = "<your WireGuard public key>" }

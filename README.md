@@ -3,19 +3,12 @@
 The client establishes a VPN connection to a remote endpoint.
 It acts as a monitoring/management layer of hoprd session handling and WireGuard setup (Linux only).
 
-## Onboarding
+## General concept
 
-Follow [ONBOARDING](./ONBOARDING.md) guide to use GnosisVPN.
-
-## General usage
-
-The client is meant to run as a service binary with privileged access.
+The client (`gnosis_vpn`) is meant to run as a service binary with privileged access.
+We offer a control application (`gnosis_vpn-ctl`) that can be used to manage the client.
+The default socket for communicating with the client is `/var/run/gnosisvpn.sock`.
 The default configuration file is located in `/etc/gnosisvpn/config.toml`.
-However you can start the client with
-
-`GNOSISVPN_CONFIG_PATH=<config_file> GNOSISVPN_SOCKET_PATH=<socket_path> ./gnosis_vpn-<system-arch>`
-
-from userspace (`socket_path` being some accessible file location, e.g. ./gnosisvpn.sock).
 
 A minimal configuration file is [config.toml](./config.toml).
 Use [documented-config.toml](./documented-config.toml) as a full reference.
@@ -24,6 +17,21 @@ Use [documented-config.toml](./documented-config.toml) as a full reference.
 
 `GNOSISVPN_CONFIG_PATH` - path to the configuration file
 `GNOSISVPN_SOCKET_PATH` - path to the control socket
+
+## Usage
+
+Take the [minimal configuration](./config.toml) file as a starting point.
+At the minimum add your HOPD node's API credentials.
+Ensure you have a forwardable TCP/UDP port configured that matches `internal_connection_port`.
+
+If you run on MacOS, uncomment `[wireguard.manual_mode]` and provide your own WireGuard public key.
+
+- start the client via `./gnosis_vpn -c ./config.toml` on a separate terminal or run it as a service
+- you can instruct the client via the control application `./gnosis_vpn-ctl`, run `./gnosis_vpn-ctl --help` for a list of commands
+- check available destinations with `./gnosis_vpn-ctl status`
+- connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination peer id>`
+- in manual mode, follow the instructions to connect your WireGuard session, otherwise wait for the connection to establish
+- configure your browsers proxy to use an HTTP proxy at 10.128.0.1:3128
 
 ## Deployment
 

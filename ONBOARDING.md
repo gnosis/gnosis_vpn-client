@@ -1,4 +1,6 @@
-# Onboarding
+# Onboarding - DEPRECATED
+
+DEPRECATION WARNING: The latest version of GnosisVPN no longer requires manual onboarding - see [Usage](README.md#Usage) for details.
 
 Setting up the current version of GnosisVPN PoC can be somewhat complex, as it was designed as a technical proof of concept rather than a full-fledged product.
 If you are not comfortable editing configuration files or using your terminal, or if you are unable to [run HOPR's `hoprd` node](https://docs.hoprnet.org/node/run-a-node-overview), please wait for the next version, which will offer a more streamlined user experience.
