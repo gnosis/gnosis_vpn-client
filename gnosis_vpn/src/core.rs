@@ -42,14 +42,20 @@ pub enum Error {
     WireGuardManualModeMissing,
 }
 
+struct ConfigSetup {
+    state: State,
+    config: Config,
+    wg: Option<Box<dyn WireGuard>>,
+}
+
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
-        let (state, config, wireguard) = setup_from_config(config_path)?;
+        let cs = setup_from_config(config_path)?;
 
         let core = Core {
-            config,
-            state,
-            wg: wireguard,
+            config: cs.config,
+            state: cs.state,
+            wg: cs.wg,
             sender,
             shutdown_sender: None,
             connection: None,
@@ -148,10 +154,10 @@ impl Core {
     }
 
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        let (state, config, wireguard) = setup_from_config(config_path)?;
-        self.config = config;
-        self.state = state;
-        self.wg = wireguard;
+        let cs = setup_from_config(config_path)?;
+        self.config = cs.config;
+        self.state = cs.state;
+        self.wg = cs.wg;
         Ok(())
     }
 
@@ -236,7 +242,7 @@ impl Core {
         self.session_connected = true;
         if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
             // automatic wg connection
-            tracing::info!("iniating wireguard connection");
+            tracing::debug!("initiating WireGuard connection");
             let interface_info = wireguard::InterfaceInfo {
                 private_key: privkey.clone(),
                 address: conninfo.registration.address(),
@@ -252,7 +258,6 @@ impl Core {
             match wg.connect_session(&connect_session) {
                 Ok(_) => {
                     self.wg_connected = true;
-                    tracing::info!("established wireguard connection");
                     tracing::info!(
                         r"
 
@@ -270,7 +275,7 @@ impl Core {
                     Ok(())
                 }
                 Err(e) => {
-                    tracing::warn!(warn = ?e, "failed to establish wireguard connection");
+                    tracing::warn!(warn = ?e, "failed to establish WireGuard connection");
                     Err(Error::WireGuard(e))
                 }
             }
@@ -355,7 +360,7 @@ impl Core {
     }
 }
 
-fn setup_from_config(config_path: &Path) -> Result<(State, Config, Option<Box<dyn WireGuard>>), Error> {
+fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
     let config = config::read(config_path)?;
     let wireguard = if config.wireguard().manual_mode.is_some() {
         tracing::warn!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
@@ -384,7 +389,11 @@ fn setup_from_config(config_path: &Path) -> Result<(State, Config, Option<Box<dy
         let priv_key = wg.generate_key()?;
         state.set_wg_private_key(priv_key.clone())?;
     }
-    Ok((state, config, wireguard))
+    Ok(ConfigSetup {
+        state,
+        config,
+        wg: wireguard,
+    })
 }
 
 fn print_manual_instructions() {
