@@ -10,6 +10,8 @@ mod userspace;
 pub enum Error {
     #[error("implementation pending: {0}")]
     NotYetImplemented(String),
+    #[error("implementation not available")]
+    NotAvailable,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("encoding error: {0}")]
@@ -51,7 +53,10 @@ pub fn best_flavor() -> Result<Box<dyn WireGuard>, Error> {
     if userspace::available().is_ok() {
         return Ok(Box::new(userspace::UserSpace::new()));
     }
-    tooling::available().map(|_| Box::new(tooling::Tooling::new()) as Box<dyn WireGuard>)
+    if tooling::available().is_ok() {
+        return Ok(Box::new(tooling::Tooling::new()));
+    }
+    Err(Error::NotAvailable)
 }
 
 pub trait WireGuard: Debug {

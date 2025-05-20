@@ -10,14 +10,18 @@ use crate::wireguard::{ConnectSession, Error, /*VerifySession,*/ WireGuard};
 #[derive(Debug)]
 pub struct Tooling {}
 
-pub fn available() -> Result<bool, Error> {
+pub fn available() -> Result<(), Error> {
     let code = Command::new("which")
         .arg("wg-quick")
         // suppress log output
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
-    Ok(code.success())
+    if code.success() {
+        Ok(())
+    } else {
+        Err(Error::NotAvailable)
+    }
 }
 
 impl Tooling {
