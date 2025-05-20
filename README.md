@@ -18,21 +18,54 @@ Use [documented-config.toml](./documented-config.toml) as a full reference.
 `GNOSISVPN_CONFIG_PATH` - path to the configuration file
 `GNOSISVPN_SOCKET_PATH` - path to the control socket
 
-## Usage
+## Usage with automated WireGuard handling
 
-Take the [minimal configuration](./config.toml) file as a starting point.
-At the minimum add your HOPD node's API credentials.
-Ensure you have a forwardable TCP/UDP port configured that matches `internal_connection_port`.
+Ensure these requirements are met:
+- [WireGuard tools](https://www.wireguard.com/install/) needs to be installed
+- an additional TCP/UDP port needs to be accessible on your HOPRD node (this is called the `internal_connection_port` and default to 1422)
+- able to run with privileged (sudo) access to handle WireGuard sessions
 
-If you run on MacOS, uncomment `[wireguard.manual_mode]` and provide your own WireGuard public key.
-If you run on Linux and want to use automatic WireGuard handling, you need to install [WireGuard tools](https://www.wireguard.com/install/).
+Prepare the configuration file:
+- take the [minimal configuration](./config.toml) file as a starting point
+- insert your HOPRD node's API credentials
+- set the `internal_connection_port` to the configured port from the requirement
 
-- start the client via `sudo ./gnosis_vpn -c ./config.toml` on a separate terminal or run it as a service
-- you can instruct the client via the control application `./gnosis_vpn-ctl`, run `./gnosis_vpn-ctl --help` for a list of commands
+Run the service
+- start the client via `sudo ./gnosis_vpn -c ./config.toml`
+- see if you spot critical errors or actionable warnings before "enter listening mode"
+
+Instruct the service via the control application `./gnosis_vpn-ctl` from a separate terminal
 - check available destinations with `./gnosis_vpn-ctl status`
 - connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination peer id>`
-- in manual mode, follow the instructions to connect your WireGuard session, otherwise wait for the connection to establish
-- configure your browsers proxy to use an HTTP proxy at 10.128.0.1:3128
+
+Once a VPN tunnel was created, configure your browsers proxy settings
+- Use HTTP proxy at 10.128.0.1:3128 to start browsing with GnosisVPN
+
+## Usage with manual WireGuard handling
+
+Ensure this requirement is met:
+- an additional TCP/UDP port needs to be accessible on your HOPRD node (this is called the `internal_connection_port` and default to 1422)
+
+Prepare the configuration file:
+- take the [minimal configuration](./config.toml) file as a starting point
+- insert your HOPRD node's API credentials
+- set the `internal_connection_port` to the configured port from the requirement
+- uncomment `[wireguard.manual_mode]` and provide your own WireGuard public key
+
+Run the service
+- start the client via `./gnosis_vpn -c ./config.toml -s ./gnosis_vpn.sock`
+- see if you spot critical errors or actionable warnings before "enter listening mode"
+
+Instruct the service via the control application `./gnosis_vpn-ctl` from a separate terminal
+- check available destinations with `./gnosis_vpn-ctl status`
+- connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination peer id>`
+
+Once a HOPRD tunnel was created, configure WireGuard manually
+- use config sample instructions printed by the service binary as a starting point
+- connect manually to the printed WireGuard endpoint
+
+Once a WireGuard tunnel was created, configure your browsers proxy settings
+- Use HTTP proxy at 10.128.0.1:3128 to start browsing with GnosisVPN
 
 ## Deployment
 
