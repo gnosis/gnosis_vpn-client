@@ -181,9 +181,7 @@ impl Core {
                 tracing::info!(destination = %dest, "establishing new connection");
                 self.connect(&dest);
             }
-            (None, None) => {
-                tracing::info!("no connection to disconnect");
-            }
+            (None, None) => {}
         };
     }
 
@@ -389,6 +387,13 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
         let priv_key = wg.generate_key()?;
         state.set_wg_private_key(priv_key.clone())?;
     }
+
+    // print destinations warning
+    if config.destinations().is_empty() {
+        tracing::warn!(">> No destinations found in configuration file <<");
+        tracing::warn!(">> Please check https://gnosisvpn.com/servers for more information <<");
+    }
+
     Ok(ConfigSetup {
         state,
         config,

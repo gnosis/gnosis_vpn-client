@@ -56,9 +56,14 @@ fn pretty_print(resp: &Response) {
         }) => {
             let mut str_resp = format!("WireGuard status: {}\n", wireguard);
             str_resp.push_str(&format!("Status: {}\n", status));
-            str_resp.push_str("Available destinations:\n");
-            for dest in available_destinations {
-                str_resp.push_str(&format!("  - {}\n", dest));
+            if available_destinations.is_empty() {
+                str_resp
+                    .push_str("No available destinations. Check https://gnosisvpn.com/servers for more information.\n");
+            } else {
+                str_resp.push_str("Available destinations:\n");
+                for dest in available_destinations {
+                    str_resp.push_str(&format!("  - {}\n", dest));
+                }
             }
             println!("{}", str_resp);
         }
