@@ -27,7 +27,7 @@ Ensure you have a forwardable TCP/UDP port configured that matches `internal_con
 If you run on MacOS, uncomment `[wireguard.manual_mode]` and provide your own WireGuard public key.
 If you run on Linux and want to use automatic WireGuard handling, you need to install [WireGuard tools](https://www.wireguard.com/install/).
 
-- start the client via `./gnosis_vpn -c ./config.toml` on a separate terminal or run it as a service
+- start the client via `sudo ./gnosis_vpn -c ./config.toml` on a separate terminal or run it as a service
 - you can instruct the client via the control application `./gnosis_vpn-ctl`, run `./gnosis_vpn-ctl --help` for a list of commands
 - check available destinations with `./gnosis_vpn-ctl status`
 - connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination peer id>`
