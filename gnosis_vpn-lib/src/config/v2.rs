@@ -93,6 +93,97 @@ struct WgManualMode {
     public_key: String,
 }
 
+pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
+    let mut wrong_keys = Vec::new();
+    for (key, value) in table.iter() {
+        // version plain key
+        if key == "version" {
+            continue;
+        }
+        // hoprnode simple struct
+        if key == "hoprd_node" {
+            if let Some(hopr_node) = value.as_table() {
+                for (k, _v) in hopr_node.iter() {
+                    if k == "endpoint" || k == "api_token" || k == "internal_connection_port" {
+                        continue;
+                    }
+                    wrong_keys.push(format!("hoprd_node.{}", k));
+                }
+            }
+            continue;
+        }
+        // wireguard nested struct
+        if key == "wireguard" {
+            if let Some(wg) = value.as_table() {
+                for (k, v) in wg.iter() {
+                    if k == "listen_port" {
+                        continue;
+                    }
+                    if k == "manual_mode" {
+                        if let Some(manual_mode) = v.as_table() {
+                            for (k, _v) in manual_mode.iter() {
+                                if k == "public_key" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("wireguard.manual_mode.{}", k));
+                            }
+                        }
+                        continue;
+                    };
+                    wrong_keys.push(format!("wireguard.{}", k));
+                }
+            }
+            continue;
+        }
+        // connection nested struct
+        if key == "connection" {
+            if let Some(connection) = value.as_table() {
+                for (k, v) in connection.iter() {
+                    if k == "listen_host" {
+                        continue;
+                    }
+                    if k == "session_timeout" {
+                        continue;
+                    }
+                    if k == "bridge" || k == "wg" {
+                        if let Some(prot) = v.as_table() {
+                            for (k, _v) in prot.iter() {
+                                if k == "capabilities" || k == "target" || k == "target_type" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.bridge.{}", k));
+                            }
+                        }
+                        continue;
+                    }
+                    wrong_keys.push(format!("connection.{}", k));
+                }
+            }
+            continue;
+        }
+        // destinations hashmap of simple structs
+        if key == "destinations" {
+            if let Some(destinations) = value.as_table() {
+                for (peer_id, v) in destinations.iter() {
+                    if let Some(dest) = v.as_table() {
+                        for (k, _v) in dest.iter() {
+                            if k == "meta" || k == "path" {
+                                continue;
+                            }
+                            wrong_keys.push(format!("destinations.{}.{}", peer_id, k));
+                        }
+                        continue;
+                    }
+                    wrong_keys.push(format!("destinations.{}", peer_id));
+                }
+            }
+            continue;
+        }
+        wrong_keys.push(key.clone());
+    }
+    wrong_keys
+}
+
 impl From<SessionCapability> for session::Capability {
     fn from(val: SessionCapability) -> Self {
         match val {

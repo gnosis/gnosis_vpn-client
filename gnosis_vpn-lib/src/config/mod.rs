@@ -42,10 +42,15 @@ pub fn read(path: &Path) -> Result<Config, Error> {
         }
     })?;
 
+    let table = content.parse::<toml::Table>()?;
     let res_v2 = toml::from_str::<v2::Config>(&content);
     match res_v2 {
         Ok(config) => {
             if config.version == 2 {
+                let wrong_keys = v2::wrong_keys(&table);
+                for key in wrong_keys.iter() {
+                    tracing::warn!("ignoring unsupported key in configuration file: {}", key);
+                }
                 Ok(Config::V2(config))
             } else {
                 Err(Error::VersionMismatch(config.version))
