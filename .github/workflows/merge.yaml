@@ -51,7 +51,7 @@ jobs:
       - delete-artifacts
     uses: ./.github/workflows/build-binaries.yaml
     with:
-      branch: ${{ github.event.pull_request.head.ref }}
+      branch: ${{ github.event.pull_request.base.ref }}
       runner: ${{ matrix.binary.runner }}
       architecture: ${{ matrix.binary.architecture }}
       version_type: "pr"
