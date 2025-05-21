@@ -44,4 +44,4 @@ path = { intermediates = [
 
 # only specify this if you want to manually connect via WireGuard
 # [wireguard.manual_mode]
-# public_key = "<your WireGuard public key>" 
+# public_key = "<your WireGuard public key>"
