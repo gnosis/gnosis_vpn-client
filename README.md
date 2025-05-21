@@ -10,7 +10,7 @@ We offer a control application (`gnosis_vpn-ctl`) that can be used to manage the
 The default socket for communicating with the client is `/var/run/gnosisvpn.sock`.
 The default configuration file is located in `/etc/gnosisvpn/config.toml`.
 
-A minimal configuration file is [config.toml](./config.toml).
+The minimal configuration file [config.toml](./config.toml) can be used to ease the setup.
 Use [documented-config.toml](./documented-config.toml) as a full reference.
 
 ### Env vars
