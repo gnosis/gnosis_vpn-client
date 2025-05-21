@@ -1,8 +1,5 @@
-use clap::Parser;
 use ctrlc::Error as CtrlcError;
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config;
-use gnosis_vpn_lib::socket;
 use notify::{RecursiveMode, Watcher};
 use std::fs;
 use std::io::{Read, Write};
@@ -12,24 +9,13 @@ use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::Level;
 
-mod backoff;
+mod cli;
 mod core;
-mod entry_node;
 mod event;
-mod exit_node;
-mod remote_data;
-mod session;
 
-/// Gnosis VPN system service - offers interaction commands on Gnosis VPN to other applications.
-#[derive(Debug, Parser)]
-#[command(version)]
-struct Cli {}
-
-#[tracing::instrument(level = Level::DEBUG)]
 fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode> {
-    let (sender, receiver) = crossbeam_channel::bounded(100);
+    let (sender, receiver) = crossbeam_channel::bounded(2);
     match ctrlc::set_handler(move || match sender.send(()) {
         Ok(_) => (),
         Err(e) => {
@@ -52,8 +38,9 @@ fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode
     }
 }
 
-#[tracing::instrument(level = Level::DEBUG)]
-fn config_channel() -> Result<
+fn config_channel(
+    config_path: &Path,
+) -> Result<
     (
         notify::RecommendedWatcher,
         crossbeam_channel::Receiver<notify::Result<notify::Event>>,
@@ -62,8 +49,7 @@ fn config_channel() -> Result<
 > {
     let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
 
-    let path = config::path();
-    let parent = match path.parent() {
+    let parent = match config_path.parent() {
         Some(dir) => dir,
         None => {
             tracing::error!("config path has no parent");
@@ -100,7 +86,6 @@ fn config_channel() -> Result<
     Ok((watcher, receiver))
 }
 
-#[tracing::instrument(level = Level::DEBUG)]
 fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net::UnixStream>, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
@@ -153,8 +138,7 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
     Ok(receiver)
 }
 
-#[tracing::instrument(skip(res_stream), level = Level::DEBUG) ]
-fn incoming_stream(state: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) -> () {
+fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) {
     let mut stream: net::UnixStream = match res_stream {
         Ok(strm) => strm,
         Err(e) => {
@@ -176,33 +160,36 @@ fn incoming_stream(state: &mut core::Core, res_stream: Result<net::UnixStream, c
             return;
         }
     };
-    tracing::debug!(command = %cmd, "parsed command");
 
-    let res = match state.handle_cmd(&cmd) {
+    tracing::debug!(command = %cmd, "incoming command");
+
+    let resp = match core.handle_cmd(&cmd) {
         Ok(res) => res,
         Err(e) => {
-            // Log the error and its chain in one line
-            let error_chain: Vec<String> = e.chain().map(|cause| cause.to_string()).collect();
-            tracing::error!(?error_chain, "error handling command");
+            tracing::error!(error = ?e, "error handling command");
             return;
         }
     };
 
-    if let Some(resp) = res {
-        tracing::info!(response = %resp);
-        if let Err(e) = stream.write_all(resp.as_bytes()) {
-            tracing::error!(error = ?e, "error writing response");
+    let str_resp = match serde_json::to_string(&resp) {
+        Ok(res) => res,
+        Err(e) => {
+            tracing::error!(error = ?e, "error serializing response");
             return;
         }
-        if let Err(e) = stream.flush() {
-            tracing::error!(error = ?e, "error flushing stream");
-            return;
-        }
+    };
+
+    if let Err(e) = stream.write_all(str_resp.as_bytes()) {
+        tracing::error!(error = %e, "error writing response");
+        return;
+    }
+
+    if let Err(e) = stream.flush() {
+        tracing::error!(error = ?e, "error flushing stream")
     }
 }
 
-#[tracing::instrument(skip(res_event), level = Level::DEBUG) ]
-fn incoming_event(state: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) -> () {
+fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) {
     let event: event::Event = match res_event {
         Ok(evt) => evt,
         Err(e) => {
@@ -211,12 +198,12 @@ fn incoming_event(state: &mut core::Core, res_event: Result<event::Event, crossb
         }
     };
 
-    match state.handle_event(event) {
+    tracing::debug!(event = %event, "incoming event");
+
+    match core.handle_event(event) {
         Ok(_) => (),
         Err(e) => {
-            // Log the error and its chain in one line
-            let error_chain: Vec<String> = e.chain().map(|cause| cause.to_string()).collect();
-            tracing::error!(?error_chain, "error handling event");
+            tracing::error!(error = ?e, "error handling event")
         }
     }
 }
@@ -224,9 +211,9 @@ fn incoming_event(state: &mut core::Core, res_event: Result<event::Event, crossb
 // handling fs config events with a grace period to avoid duplicate reads without delay
 const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
 
-#[tracing::instrument(skip(res_event), level = Level::DEBUG) ]
 fn incoming_config_fs_event(
     res_event: Result<notify::Result<notify::Event>, crossbeam_channel::RecvError>,
+    config_path: &Path,
 ) -> Option<crossbeam_channel::Receiver<Instant>> {
     let event: notify::Result<notify::Event> = match res_event {
         Ok(evt) => evt,
@@ -236,10 +223,12 @@ fn incoming_config_fs_event(
         }
     };
 
+    tracing::debug!(event = ?event, "incoming config event");
+
     match event {
         Ok(notify::Event { kind, paths, attrs: _ })
             if kind == notify::event::EventKind::Create(notify::event::CreateKind::File)
-                && paths == vec![config::path()] =>
+                && paths == vec![config_path] =>
         {
             tracing::debug!("config file created");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
@@ -249,14 +238,14 @@ fn incoming_config_fs_event(
                 == notify::event::EventKind::Modify(notify::event::ModifyKind::Data(
                     notify::event::DataChange::Any,
                 ))
-                && paths == vec![config::path()] =>
+                && paths == vec![config_path] =>
         {
             tracing::debug!("config file modified");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
         }
         Ok(notify::Event { kind, paths, attrs: _ })
             if kind == notify::event::EventKind::Remove(notify::event::RemoveKind::File)
-                && paths == vec![config::path()] =>
+                && paths == vec![config_path] =>
         {
             tracing::debug!("config file removed");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
@@ -269,14 +258,14 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(socket_path: &Path) -> exitcode::ExitCode {
+fn daemon(socket_path: &Path, config_path: &Path) -> exitcode::ExitCode {
     let ctrlc_receiver = match ctrlc_channel() {
         Ok(receiver) => receiver,
         Err(exit) => return exit,
     };
 
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = match config_channel() {
+    let (_config_watcher, config_receiver) = match config_channel(config_path) {
         Ok(receiver) => receiver,
         Err(exit) => return exit,
     };
@@ -286,7 +275,7 @@ fn daemon(socket_path: &Path) -> exitcode::ExitCode {
         Err(exit) => return exit,
     };
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver);
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, config_path);
 
     // cleanup
     match fs::remove_file(socket_path) {
@@ -303,9 +292,16 @@ fn loop_daemon(
     ctrlc_receiver: &crossbeam_channel::Receiver<()>,
     config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
+    config_path: &Path,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let mut state = core::Core::init(sender);
+    let mut core = match core::Core::init(config_path, sender) {
+        Ok(core) => core,
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to initialize core logic");
+            return exitcode::OSERR;
+        }
+    };
 
     let mut read_config_receiver: crossbeam_channel::Receiver<Instant> = crossbeam_channel::never();
     let mut shutdown_receiver: crossbeam_channel::Receiver<()> = crossbeam_channel::never();
@@ -322,33 +318,36 @@ fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                    match state.shutdown() {
-                        Ok(r) => shutdown_receiver = r,
-                        Err(e) => {
-                            tracing::error!(error = ?e, "failed to initiate shutdown");
-                            return exitcode::OSERR;
-                        }
-                    }
+                    shutdown_receiver = core.shutdown();
                 }
             }
             recv(shutdown_receiver) -> _ => {
                 return exitcode::OK;
             }
-            recv(socket_receiver) -> stream => incoming_stream(&mut state, stream),
-            recv(core_receiver) -> event => incoming_event(&mut state, event),
+            recv(socket_receiver) -> stream => incoming_stream(&mut core, stream),
+            recv(core_receiver) -> event => incoming_event(&mut core, event),
             recv(config_receiver) -> event => {
-                let resp = incoming_config_fs_event(event);
+                let resp = incoming_config_fs_event(event, config_path);
                 if let Some(r) = resp {
                     read_config_receiver = r
                 }
             },
-            recv(read_config_receiver) -> _ => state.update_config(),
+            recv(read_config_receiver) -> _ => {
+                match core.update_config(config_path) {
+                    Ok(_) => {
+                        tracing::info!("updated configuration - resetting application");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, "failed to update configuration - staying on current configuration");
+                    }
+                }
+            }
         }
     }
 }
 
 fn main() {
-    let _args = Cli::parse();
+    let args = cli::parse();
 
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
@@ -358,9 +357,7 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    let socket_path = socket::path();
-
-    let exit = daemon(&socket_path);
+    let exit = daemon(&args.socket_path, &args.config_path);
 
     if exit != exitcode::OK {
         tracing::warn!("abnormal exit");

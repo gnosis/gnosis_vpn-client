@@ -1,17 +1,19 @@
 use std::fmt::Debug;
 use thiserror::Error;
 
+pub mod config;
 mod kernel;
 mod tooling;
 mod userspace;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug)]
 pub enum Error {
     #[error("implementation pending: {0}")]
     NotYetImplemented(String),
-    // cannot use IO error because it does not allow Clone or Copy
+    #[error("implementation not available")]
+    NotAvailable,
     #[error("IO error: {0}")]
-    IO(String),
+    IO(#[from] std::io::Error),
     #[error("encoding error: {0}")]
     FromUtf8Error(#[from] std::string::FromUtf8Error),
     #[error("toml error: {0}")]
@@ -20,15 +22,17 @@ pub enum Error {
     Monitoring(String),
     #[error("wireguard error: {0}")]
     WgError(String),
+    #[error("Unable to determine project directories")]
+    ProjectDirs,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConnectSession {
     pub interface: InterfaceInfo,
     pub peer: PeerInfo,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct InterfaceInfo {
     pub private_key: String,
     pub address: String,
@@ -36,41 +40,23 @@ pub struct InterfaceInfo {
     pub listen_port: Option<u16>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PeerInfo {
     pub public_key: String,
     pub endpoint: String,
 }
 
-/*
-pub struct VerifySession {
-    peer_public_key: String,
-    private_key: String,
-}
-*/
-
-pub fn best_flavor() -> (Option<Box<dyn WireGuard>>, Vec<Error>) {
-    let mut errors: Vec<Error> = Vec::new();
-
-    match kernel::available() {
-        Ok(true) => return (Some(Box::new(kernel::Kernel::new())), errors),
-        Ok(false) => (),
-        Err(e) => errors.push(e),
+pub fn best_flavor() -> Result<Box<dyn WireGuard>, Error> {
+    if kernel::available().is_ok() {
+        return Ok(Box::new(kernel::Kernel::new()));
     }
-
-    match userspace::available() {
-        Ok(true) => return (Some(Box::new(userspace::UserSpace::new())), errors),
-        Ok(false) => (),
-        Err(e) => errors.push(e),
+    if userspace::available().is_ok() {
+        return Ok(Box::new(userspace::UserSpace::new()));
     }
-
-    match tooling::available() {
-        Ok(true) => return (Some(Box::new(tooling::Tooling::new())), errors),
-        Ok(false) => (),
-        Err(e) => errors.push(e),
+    if tooling::available().is_ok() {
+        return Ok(Box::new(tooling::Tooling::new()));
     }
-
-    (None, errors)
+    Err(Error::NotAvailable)
 }
 
 pub trait WireGuard: Debug {
@@ -78,16 +64,53 @@ pub trait WireGuard: Debug {
     fn connect_session(&self, session: &ConnectSession) -> Result<(), Error>;
     fn public_key(&self, priv_key: &str) -> Result<String, Error>;
     fn close_session(&self) -> Result<(), Error>;
-    // fn verify_session(&self, session: &VerifySession) -> Result<(), Error>;
 }
 
-/*
-impl VerifySession {
-    pub fn new(peer_public_key: &str, private_key: &str) -> Self {
-        Self {
-            peer_public_key: peer_public_key.to_string(),
-            private_key: private_key.to_string(),
+impl ConnectSession {
+    pub fn new(interface: &InterfaceInfo, peer: &PeerInfo) -> Self {
+        ConnectSession {
+            interface: interface.clone(),
+            peer: peer.clone(),
         }
     }
+
+    pub fn to_file_string(&self) -> String {
+        let allowed_ips = match &self.interface.allowed_ips {
+            Some(allowed_ips) => allowed_ips.clone(),
+            None => {
+                self.interface
+                    .address
+                    .split('.')
+                    .take(2)
+                    .collect::<Vec<&str>>()
+                    .join(".")
+                    + ".0.0/9"
+            }
+        };
+        let listen_port_line = self
+            .interface
+            .listen_port
+            .map(|port| format!("ListenPort = {}\n", port))
+            .unwrap_or_default();
+
+        format!(
+            "[Interface]
+PrivateKey = {private_key}
+Address = {address}
+{listen_port_line}
+
+[Peer]
+PublicKey = {public_key}
+Endpoint = {endpoint}
+AllowedIPs = {allowed_ips}
+PersistentKeepalive = 30
+",
+            private_key = self.interface.private_key,
+            address = self.interface.address,
+            public_key = self.peer.public_key,
+            endpoint = self.peer.endpoint,
+            allowed_ips = allowed_ips,
+            listen_port_line = listen_port_line,
+        )
+    }
 }
-*/
