@@ -130,7 +130,8 @@ pub enum Opcode {
     CloseMsg = 27,
     Call = 28,
 
-    OpenAt = 29,  // fd, buf_ptr, buf_len, flags
+    OpenAt = 29, // fd, buf_ptr, buf_len, flags
+    Flink = 30,
 }
 
 impl Opcode {
@@ -172,6 +173,7 @@ impl Opcode {
             28 => Call,
 
             29 => OpenAt,
+            30 => Flink,
 
             _ => return None,
         })

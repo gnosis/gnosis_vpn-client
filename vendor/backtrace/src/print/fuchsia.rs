@@ -3,7 +3,7 @@ use core::mem::{size_of, transmute};
 use core::slice::from_raw_parts;
 use libc::c_char;
 
-extern "C" {
+unsafe extern "C" {
     // dl_iterate_phdr takes a callback that will receive a dl_phdr_info pointer
     // for every DSO that has been linked into the process. dl_iterate_phdr also
     // ensures that the dynamic linker is locked from start to finish of the
@@ -148,7 +148,7 @@ impl<'a> NoteIter<'a> {
     // can be anything but the range must be valid for this to be safe.
     unsafe fn new(base: *const u8, size: usize) -> Self {
         NoteIter {
-            base: from_raw_parts(base, size),
+            base: unsafe { from_raw_parts(base, size) },
             error: false,
         }
     }
@@ -196,7 +196,7 @@ impl<'a> Iterator for NoteIter<'a> {
     type Item = Note<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         // Check if we've reached the end.
-        if self.base.len() == 0 || self.error {
+        if self.base.is_empty() || self.error {
             return None;
         }
         // We transmute out an nhdr but we carefully consider the resulting

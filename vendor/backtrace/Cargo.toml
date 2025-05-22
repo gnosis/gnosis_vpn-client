@@ -11,12 +11,13 @@
 
 [package]
 edition = "2021"
-rust-version = "1.65.0"
+rust-version = "1.82.0"
 name = "backtrace"
-version = "0.3.74"
+version = "0.3.75"
 authors = ["The Rust Project Developers"]
 build = false
 exclude = ["/ci/"]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -29,6 +30,19 @@ documentation = "https://docs.rs/backtrace"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rust-lang/backtrace-rs"
+
+[features]
+coresymbolication = []
+dbghelp = []
+default = ["std"]
+dl_iterate_phdr = []
+dladdr = []
+kernel32 = []
+libunwind = []
+ruzstd = ["dep:ruzstd"]
+serialize-serde = ["serde"]
+std = []
+unix-backtrace = []
 
 [lib]
 name = "backtrace"
@@ -104,19 +118,10 @@ features = ["derive"]
 optional = true
 
 [dev-dependencies.libloading]
-version = "0.7"
+version = "0.8"
 
-[features]
-coresymbolication = []
-dbghelp = []
-default = ["std"]
-dl_iterate_phdr = []
-dladdr = []
-kernel32 = []
-libunwind = []
-serialize-serde = ["serde"]
-std = []
-unix-backtrace = []
+[target.'cfg(any(windows, target_os = "cygwin"))'.dependencies.windows-targets]
+version = "0.52.6"
 
 [target.'cfg(not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))))'.dependencies.addr2line]
 version = "0.24.0"
@@ -143,8 +148,10 @@ features = [
 ]
 default-features = false
 
-[target."cfg(windows)".dependencies.windows-targets]
-version = "0.52.6"
+[target.'cfg(not(all(windows, target_env = "msvc", not(target_vendor = "uwp"))))'.dependencies.ruzstd]
+version = "0.7.3"
+optional = true
+default-features = false
 
 [lints.rust]
 unexpected_cfgs = "allow"

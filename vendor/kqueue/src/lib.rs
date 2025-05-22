@@ -1,7 +1,6 @@
 use kqueue_sys::{kevent, kqueue};
-use libc::{pid_t, uintptr_t};
-use std::convert::{AsRef, Into, TryFrom, TryInto};
-use std::default::Default;
+use libc::{close, pid_t, uintptr_t};
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Error, Result};
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
@@ -44,6 +43,11 @@ pub struct Watched {
 /// Each `Watcher` is backed by a `kqueue(2)` queue. These resources are freed
 /// on the `Watcher`s destruction. If the destructor cannot run for whatever
 /// reason, the underlying kernel object will be leaked.
+///
+/// Files and file descriptors given to the `Watcher` are presumed to be owned
+/// by the `Watcher`, and will be closed when they're removed from the `Watcher`
+/// or on `Drop`. In a future version, the API will make this explicit via
+/// `OwnedFd`s
 #[derive(Debug)]
 pub struct Watcher {
     watched: Vec<Watched>,
@@ -333,7 +337,7 @@ impl Watcher {
     }
 
     fn delete_kevents(&self, ident: Ident, filter: EventFilter) -> Result<()> {
-        let kev = vec![kevent::new(
+        let kev = &[kevent::new(
             ident.as_usize(),
             filter,
             EventFlag::EV_DELETE,
@@ -381,7 +385,7 @@ impl Watcher {
     ///
     /// *NB*: This matches the `filename` that this item was initially added under.
     /// If a file has been moved, it will not be removable by the new name.
-    pub fn remove_filename<P: AsRef<Path>>(
+    pub fn remove_filename<P: AsRef<Path> + Debug>(
         &mut self,
         filename: P,
         filter: EventFilter,
@@ -404,11 +408,24 @@ impl Watcher {
             })
             .collect();
 
+        if fd == 0 {
+            return Err(Error::new(
+                io::ErrorKind::NotFound,
+                format!("{filename:?} was not being watched"),
+            ));
+        }
+
         self.watched = new_watched;
-        self.delete_kevents(Ident::Fd(fd), filter)
+        let ret = self.delete_kevents(Ident::Fd(fd), filter);
+        let close_err = unsafe { close(fd) };
+        if close_err != 0 {
+            Err(Error::from_raw_os_error(close_err))
+        } else {
+            ret
+        }
     }
 
-    /// Removes an fd from a `Watcher`
+    /// Removes an fd from a `Watcher`. This closes the fd.
     pub fn remove_fd(&mut self, fd: RawFd, filter: EventFilter) -> Result<()> {
         let new_watched = self
             .watched
@@ -423,7 +440,13 @@ impl Watcher {
             .collect();
 
         self.watched = new_watched;
-        self.delete_kevents(Ident::Fd(fd), filter)
+        let ret = self.delete_kevents(Ident::Fd(fd), filter);
+        let close_err = unsafe { close(fd) };
+        if close_err != 0 {
+            Err(Error::from_raw_os_error(close_err))
+        } else {
+            ret
+        }
     }
 
     /// Removes a `File` from a `Watcher`
@@ -435,28 +458,30 @@ impl Watcher {
     /// be called before `Watcher.iter()` or `Watcher.poll()` to actually
     /// start listening for events.
     pub fn watch(&mut self) -> Result<()> {
-        let mut kevs: Vec<kevent> = Vec::new();
+        let kevs: Vec<kevent> = self
+            .watched
+            .iter()
+            .map(|watched| {
+                let raw_ident = match watched.ident {
+                    Ident::Fd(fd) => fd as uintptr_t,
+                    Ident::Filename(fd, _) => fd as uintptr_t,
+                    Ident::Pid(pid) => pid as uintptr_t,
+                    Ident::Signal(sig) => sig as uintptr_t,
+                    Ident::Timer(ident) => ident as uintptr_t,
+                };
 
-        for watched in &self.watched {
-            let raw_ident = match watched.ident {
-                Ident::Fd(fd) => fd as uintptr_t,
-                Ident::Filename(fd, _) => fd as uintptr_t,
-                Ident::Pid(pid) => pid as uintptr_t,
-                Ident::Signal(sig) => sig as uintptr_t,
-                Ident::Timer(ident) => ident as uintptr_t,
-            };
-
-            kevs.push(kevent::new(
-                raw_ident,
-                watched.filter,
-                if self.opts.clear {
-                    EventFlag::EV_ADD | EventFlag::EV_CLEAR
-                } else {
-                    EventFlag::EV_ADD
-                },
-                watched.flags,
-            ));
-        }
+                kevent::new(
+                    raw_ident,
+                    watched.filter,
+                    if self.opts.clear {
+                        EventFlag::EV_ADD | EventFlag::EV_CLEAR
+                    } else {
+                        EventFlag::EV_ADD
+                    },
+                    watched.flags,
+                )
+            })
+            .collect();
 
         let ret = unsafe {
             kevent(
@@ -501,7 +526,7 @@ impl Watcher {
 
     /// Creates an iterator that iterates over the queue. This iterator will block
     /// until a new event is received.
-    pub fn iter(&self) -> EventIter {
+    pub fn iter(&self) -> EventIter<'_> {
         EventIter { watcher: self }
     }
 }
@@ -600,7 +625,7 @@ impl Event {
                 } else if ev.fflags.contains(FilterFlag::NOTE_CHILD) {
                     Proc::Child(ev.data as libc::pid_t)
                 } else {
-                    panic!("not supported: {:?}", ev.fflags)
+                    panic!("proc filterflag not supported: {0:?}", ev.fflags)
                 };
 
                 EventData::Proc(inner)
@@ -627,7 +652,7 @@ impl Event {
 
                 EventData::Vnode(inner)
             }
-            _ => panic!("not supported"),
+            _ => panic!("eventfilter not supported: {0:?}", ev.filter),
         };
 
         let ident = match ev.filter {
@@ -667,7 +692,7 @@ impl Event {
     }
 }
 
-impl<'a> Iterator for EventIter<'a> {
+impl Iterator for EventIter<'_> {
     type Item = Event;
 
     // rather than call kevent(2) each time, we can likely optimize and
@@ -685,7 +710,7 @@ impl<'a> Iterator for EventIter<'a> {
 mod tests {
     use super::{EventData, EventFilter, FilterFlag, Ident, Vnode, Watcher};
     use std::fs;
-    use std::io::Write;
+    use std::io::{ErrorKind, Write};
     use std::os::unix::io::{AsRawFd, FromRawFd};
     use std::path::Path;
     use std::thread;
@@ -909,5 +934,17 @@ mod tests {
         }
         let ev = watcher.iter().next().expect("didn't get an event");
         assert!(matches!(ev.data, EventData::Vnode(Vnode::CloseWrite)));
+    }
+
+    #[test]
+    fn test_not_found_remove_watch() {
+        let mut watcher = Watcher::new().unwrap();
+
+        let ret = watcher.remove_filename("foo", EventFilter::EVFILT_VNODE);
+        assert!(ret.is_err());
+
+        let err = ret.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "\"foo\" was not being watched");
     }
 }

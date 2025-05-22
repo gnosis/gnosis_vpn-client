@@ -29,10 +29,24 @@ pub(crate) fn expr2(i: &mut &str) -> Result<Expr> {
     expr.parse_next(&mut tokens)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Token<'s> {
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Token<'s> {
     kind: TokenKind,
     raw: &'s str,
+}
+
+impl fmt::Debug for Token<'_> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Customized for brevity for a better `winnow/debug` experience
+        match self.kind {
+            TokenKind::Value => Debug::fmt(self.raw, fmt),
+            TokenKind::Oper(oper) => Debug::fmt(&oper, fmt),
+            TokenKind::OpenParen => fmt.write_str("OpenParen"),
+            TokenKind::CloseParen => fmt.write_str("CloseParen"),
+            TokenKind::Unknown => fmt.write_str("Unknown"),
+            TokenKind::Eof => fmt.write_str("Eof"),
+        }
+    }
 }
 
 impl PartialEq<TokenKind> for Token<'_> {
@@ -42,7 +56,7 @@ impl PartialEq<TokenKind> for Token<'_> {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum TokenKind {
+pub(crate) enum TokenKind {
     Value,
     Oper(Oper),
     OpenParen,
@@ -58,7 +72,7 @@ impl<'i> Parser<Tokens<'i>, &'i Token<'i>, ContextError> for TokenKind {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Oper {
+pub(crate) enum Oper {
     Add,
     Sub,
     Mul,

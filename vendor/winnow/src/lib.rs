@@ -7,7 +7,7 @@
 //! - [Tutorial][_tutorial::chapter_0]
 //! - [Special Topics][_topic]
 //! - [Discussions](https://github.com/winnow-rs/winnow/discussions)
-//! - [CHANGELOG](https://github.com/winnow-rs/winnow/blob/v0.7.7/CHANGELOG.md) (includes major version migration
+//! - [CHANGELOG](https://github.com/winnow-rs/winnow/blob/v0.7.10/CHANGELOG.md) (includes major version migration
 //!   guides)
 //!
 //! ## Aspirations
@@ -17,8 +17,8 @@
 //! In roughly priority order:
 //! 1. Support writing parser declaratively while not getting in the way of imperative-style
 //!    parsing when needed, working as an open-ended toolbox rather than a close-ended framework.
-//! 2. Flexible enough to be used for any application, including parsing binary data, strings, or
-//!    separate lexing and parsing phases
+//! 2. Flexible enough to be used for any application, including parsing strings, binary data,
+//!    or separate [lexing and parsing phases][_topic::lexing]
 //! 3. Zero-cost abstractions, making it easy to write high performance parsers
 //! 4. Easy to use, making it trivial for one-off uses
 //!
@@ -100,6 +100,37 @@ pub(crate) mod lib {
             borrow, boxed, cmp, collections, convert, fmt, hash, iter, mem, ops, result, slice,
             str, string, vec,
         };
+    }
+}
+
+pub(crate) mod util {
+    #[allow(dead_code)]
+    pub(crate) fn from_fn<F: Fn(&mut core::fmt::Formatter<'_>) -> core::fmt::Result>(
+        f: F,
+    ) -> FromFn<F> {
+        FromFn(f)
+    }
+
+    pub(crate) struct FromFn<F>(F)
+    where
+        F: Fn(&mut core::fmt::Formatter<'_>) -> core::fmt::Result;
+
+    impl<F> core::fmt::Debug for FromFn<F>
+    where
+        F: Fn(&mut core::fmt::Formatter<'_>) -> core::fmt::Result,
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            (self.0)(f)
+        }
+    }
+
+    impl<F> core::fmt::Display for FromFn<F>
+    where
+        F: Fn(&mut core::fmt::Formatter<'_>) -> core::fmt::Result,
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            (self.0)(f)
+        }
     }
 }
 

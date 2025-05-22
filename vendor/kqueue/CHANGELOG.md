@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.1
+
+Fixes:
+
+* Don't try and remove file descriptor 0 when removing unwatched filenames
+
+## 1.1.0
+
+Adds:
+
+* Better error messages for panics
+* Rust Edition 2021
+
+Fixes:
+
+* Don't leak file descriptors when removing filenames from being watched
+* Reduce memory usage when starting a new watcher
+* Don't leak file descriptors when removing fd's from being watched (see commit
+  for rationale)
+
 ## 1.0.8
 
 Adds:

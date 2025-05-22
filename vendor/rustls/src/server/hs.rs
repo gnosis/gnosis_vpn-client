@@ -21,8 +21,8 @@ use crate::msgs::enums::{CertificateType, Compression, ExtensionType, NamedGroup
 #[cfg(feature = "tls12")]
 use crate::msgs::handshake::SessionId;
 use crate::msgs::handshake::{
-    ClientHelloPayload, ConvertProtocolNameList, ConvertServerNameList, HandshakePayload,
-    KeyExchangeAlgorithm, Random, ServerExtension,
+    ClientHelloPayload, HandshakePayload, KeyExchangeAlgorithm, Random, ServerExtension,
+    ServerNamePayload, SingleProtocolName,
 };
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
@@ -48,6 +48,9 @@ pub(super) fn can_resume(
     // the request to resume the session if the server_name extension contains
     // a different name. Instead, it proceeds with a full handshake to
     // establish a new session."
+    //
+    // RFC 8446: "The server MUST ensure that it selects
+    // a compatible PSK (if any) and cipher suite."
     resumedata.cipher_suite == suite.suite()
         && (resumedata.extended_ms == using_ems || (resumedata.extended_ms && !using_ems))
         && &resumedata.sni == sni
@@ -79,23 +82,20 @@ impl ExtensionProcessing {
         let our_protocols = &config.alpn_protocols;
         let maybe_their_protocols = hello.alpn_extension();
         if let Some(their_protocols) = maybe_their_protocols {
-            let their_protocols = their_protocols.to_slices();
-
-            if their_protocols
-                .iter()
-                .any(|protocol| protocol.is_empty())
-            {
-                return Err(PeerMisbehaved::OfferedEmptyApplicationProtocol.into());
-            }
-
             cx.common.alpn_protocol = our_protocols
                 .iter()
-                .find(|protocol| their_protocols.contains(&protocol.as_slice()))
+                .find(|ours| {
+                    their_protocols
+                        .iter()
+                        .any(|theirs| theirs.as_ref() == ours.as_slice())
+                })
                 .cloned();
             if let Some(selected_protocol) = &cx.common.alpn_protocol {
                 debug!("Chosen ALPN protocol {:?}", selected_protocol);
                 self.exts
-                    .push(ServerExtension::make_alpn(&[selected_protocol]));
+                    .push(ServerExtension::Protocols(SingleProtocolName::new(
+                        selected_protocol.clone(),
+                    )));
             } else if !our_protocols.is_empty() {
                 return Err(cx.common.send_fatal_alert(
                     AlertDescription::NoApplicationProtocol,
@@ -345,9 +345,9 @@ impl ExpectClientHello {
         // Are we doing TLS1.3?
         let maybe_versions_ext = client_hello.versions_extension();
         let version = if let Some(versions) = maybe_versions_ext {
-            if versions.contains(&ProtocolVersion::TLSv1_3) && tls13_enabled {
+            if versions.tls13 && tls13_enabled {
                 ProtocolVersion::TLSv1_3
-            } else if !versions.contains(&ProtocolVersion::TLSv1_2) || !tls12_enabled {
+            } else if !versions.tls12 || !tls12_enabled {
                 return Err(cx.common.send_fatal_alert(
                     AlertDescription::ProtocolVersion,
                     PeerIncompatible::Tls12NotOfferedOrEnabled,
@@ -699,23 +699,23 @@ pub(super) fn process_client_hello<'m>(
     // send an Illegal Parameter alert instead of the Internal Error alert
     // (or whatever) that we'd send if this were checked later or in a
     // different way.
+    //
+    // [RFC6066][] specifies that literal IP addresses are illegal in
+    // `ServerName`s with a `name_type` of `host_name`.
+    //
+    // Some clients incorrectly send such extensions: we choose to
+    // successfully parse these (into `ServerNamePayload::IpAddress`)
+    // but then act like the client sent no `server_name` extension.
+    //
+    // [RFC6066]: https://datatracker.ietf.org/doc/html/rfc6066#section-3
     let sni: Option<DnsName<'_>> = match client_hello.sni_extension() {
-        Some(sni) => {
-            if sni.has_duplicate_names_for_type() {
-                return Err(cx.common.send_fatal_alert(
-                    AlertDescription::DecodeError,
-                    PeerMisbehaved::DuplicateServerNameTypes,
-                ));
-            }
-
-            if let Some(hostname) = sni.single_hostname() {
-                Some(hostname.to_lowercase_owned())
-            } else {
-                return Err(cx.common.send_fatal_alert(
-                    AlertDescription::IllegalParameter,
-                    PeerMisbehaved::ServerNameMustContainOneHostName,
-                ));
-            }
+        Some(ServerNamePayload::SingleDnsName(dns_name)) => Some(dns_name.to_lowercase_owned()),
+        Some(ServerNamePayload::IpAddress) => None,
+        Some(ServerNamePayload::Invalid) => {
+            return Err(cx.common.send_fatal_alert(
+                AlertDescription::IllegalParameter,
+                PeerMisbehaved::ServerNameMustContainOneHostName,
+            ));
         }
         None => None,
     };

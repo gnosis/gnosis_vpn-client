@@ -359,31 +359,51 @@ impl DerefMut for SetSighandlerData {
 }
 pub use crate::sigabi::*;
 
+/// UNSTABLE
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 #[repr(C)]
-pub struct RtSigInfo {
-    pub arg: usize,
-    pub code: i32,
-    pub uid: u32,
-    pub pid: u32, // TODO: usize?
+pub struct ProcSchemeAttrs {
+    pub pid: u32,
+    pub euid: u32,
+    pub egid: u32,
+    pub ens: u32,
+    pub debug_name: [u8; 32],
 }
-
-impl Deref for RtSigInfo {
+impl Deref for ProcSchemeAttrs {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, mem::size_of::<Self>()) }
+    }
+}
+impl DerefMut for ProcSchemeAttrs {
+    fn deref_mut(&mut self) -> &mut [u8] {
         unsafe {
-            slice::from_raw_parts(
-                self as *const RtSigInfo as *const u8,
-                mem::size_of::<RtSigInfo>(),
+            slice::from_raw_parts_mut(
+                self as *mut ProcSchemeAttrs as *mut u8,
+                mem::size_of::<ProcSchemeAttrs>(),
             )
         }
     }
 }
-
-impl DerefMut for RtSigInfo {
+#[derive(Copy, Clone, Debug, Default)]
+#[repr(C)]
+pub struct CtxtStsBuf {
+    pub status: usize,
+    pub excp: crate::Exception,
+}
+impl Deref for CtxtStsBuf {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, mem::size_of::<Self>()) }
+    }
+}
+impl DerefMut for CtxtStsBuf {
     fn deref_mut(&mut self) -> &mut [u8] {
         unsafe {
-            slice::from_raw_parts_mut(self as *mut RtSigInfo as *mut u8, mem::size_of::<RtSigInfo>())
+            slice::from_raw_parts_mut(
+                self as *mut CtxtStsBuf as *mut u8,
+                mem::size_of::<CtxtStsBuf>(),
+            )
         }
     }
 }

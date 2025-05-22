@@ -82,8 +82,7 @@ pub use {
     error::{DerTypeId, Error, InvalidNameContext},
     rpk_entity::RawPublicKeyEntity,
     trust_anchor::anchor_from_trusted_cert,
-    verify_cert::KeyUsage,
-    verify_cert::VerifiedPath,
+    verify_cert::{KeyUsage, RequiredEkuNotFoundContext, VerifiedPath},
 };
 
 #[cfg(feature = "alloc")]
@@ -98,7 +97,9 @@ pub mod ring {
 
     #[cfg(feature = "alloc")]
     pub use super::ring_algs::{
-        RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
+        RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA256_ABSENT_PARAMS,
+        RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA384_ABSENT_PARAMS,
+        RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_2048_8192_SHA512_ABSENT_PARAMS,
         RSA_PKCS1_3072_8192_SHA384, RSA_PSS_2048_8192_SHA256_LEGACY_KEY,
         RSA_PSS_2048_8192_SHA384_LEGACY_KEY, RSA_PSS_2048_8192_SHA512_LEGACY_KEY,
     };
@@ -110,7 +111,9 @@ pub mod aws_lc_rs {
     pub use super::aws_lc_rs_algs::{
         ECDSA_P256_SHA256, ECDSA_P256_SHA384, ECDSA_P384_SHA256, ECDSA_P384_SHA384,
         ECDSA_P521_SHA256, ECDSA_P521_SHA384, ECDSA_P521_SHA512, ED25519,
-        RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
+        RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA256_ABSENT_PARAMS,
+        RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA384_ABSENT_PARAMS,
+        RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_2048_8192_SHA512_ABSENT_PARAMS,
         RSA_PKCS1_3072_8192_SHA384, RSA_PSS_2048_8192_SHA256_LEGACY_KEY,
         RSA_PSS_2048_8192_SHA384_LEGACY_KEY, RSA_PSS_2048_8192_SHA512_LEGACY_KEY,
     };
@@ -136,6 +139,12 @@ pub static ALL_VERIFICATION_ALGS: &[&dyn pki_types::SignatureVerificationAlgorit
     ring::RSA_PKCS1_2048_8192_SHA384,
     #[cfg(all(feature = "ring", feature = "alloc"))]
     ring::RSA_PKCS1_2048_8192_SHA512,
+    #[cfg(all(feature = "ring", feature = "alloc"))]
+    ring::RSA_PKCS1_2048_8192_SHA256_ABSENT_PARAMS,
+    #[cfg(all(feature = "ring", feature = "alloc"))]
+    ring::RSA_PKCS1_2048_8192_SHA384_ABSENT_PARAMS,
+    #[cfg(all(feature = "ring", feature = "alloc"))]
+    ring::RSA_PKCS1_2048_8192_SHA512_ABSENT_PARAMS,
     #[cfg(all(feature = "ring", feature = "alloc"))]
     ring::RSA_PKCS1_3072_8192_SHA384,
     #[cfg(all(feature = "ring", feature = "alloc"))]
@@ -166,6 +175,12 @@ pub static ALL_VERIFICATION_ALGS: &[&dyn pki_types::SignatureVerificationAlgorit
     aws_lc_rs::RSA_PKCS1_2048_8192_SHA384,
     #[cfg(feature = "aws-lc-rs")]
     aws_lc_rs::RSA_PKCS1_2048_8192_SHA512,
+    #[cfg(feature = "aws-lc-rs")]
+    aws_lc_rs::RSA_PKCS1_2048_8192_SHA256_ABSENT_PARAMS,
+    #[cfg(feature = "aws-lc-rs")]
+    aws_lc_rs::RSA_PKCS1_2048_8192_SHA384_ABSENT_PARAMS,
+    #[cfg(feature = "aws-lc-rs")]
+    aws_lc_rs::RSA_PKCS1_2048_8192_SHA512_ABSENT_PARAMS,
     #[cfg(feature = "aws-lc-rs")]
     aws_lc_rs::RSA_PKCS1_3072_8192_SHA384,
     #[cfg(feature = "aws-lc-rs")]
