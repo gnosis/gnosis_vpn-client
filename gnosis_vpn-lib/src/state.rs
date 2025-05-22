@@ -8,20 +8,20 @@ use crate::dirs;
 
 #[derive(Default, Debug, Deserialize, Serialize)]
 pub struct State {
-    pub wg_private_key: Option<String>,
+    wg_private_key: Option<String>,
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[error("state folder error")]
+    #[error("State folder error")]
     NoStateFolder,
-    #[error("state file not found")]
+    #[error("State file not found")]
     NoFile,
-    #[error("error determining parent folder")]
+    #[error("Error determining parent folder")]
     NoParentFolder,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("error serializing/deserializing state: {0}")]
+    #[error("Serialization/Deserialization error: {0}")]
     BinCodeError(#[from] bincode::Error),
 }
 
@@ -33,10 +33,7 @@ fn path() -> Option<PathBuf> {
 }
 
 pub fn read() -> Result<State, Error> {
-    let p = match path() {
-        Some(p) => p,
-        None => return Err(Error::NoStateFolder),
-    };
+    let p = path().ok_or(Error::NoStateFolder)?;
     let content = fs::read(p).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
@@ -54,14 +51,15 @@ impl State {
         self.write()
     }
 
+    pub fn wg_private_key(&self) -> Option<String> {
+        self.wg_private_key.clone()
+    }
+
     fn write(&self) -> Result<(), Error> {
-        let path = match path() {
-            Some(p) => p,
-            None => return Err(Error::NoStateFolder),
-        };
-        let content = bincode::serialize(&self).map_err(Error::BinCodeError)?;
+        let path = path().ok_or(Error::NoStateFolder)?;
+        let content = bincode::serialize(&self)?;
         let parent = path.parent().ok_or(Error::NoParentFolder)?;
-        fs::create_dir_all(parent).map_err(Error::IO)?;
+        fs::create_dir_all(parent)?;
         fs::write(path, content).map_err(Error::IO)
     }
 }

@@ -1,941 +1,408 @@
-use anyhow::Result;
-use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::config::Config;
-use gnosis_vpn_lib::peer_id::PeerId;
-use gnosis_vpn_lib::state::State;
-use gnosis_vpn_lib::{config, log_output, state, wireguard};
-use rand::Rng;
-use reqwest::blocking;
-use std::collections::HashMap;
-use std::fmt;
-use std::time;
-use std::time::SystemTime;
-use tracing::instrument;
-use url::Url;
+use std::path::Path;
+use std::thread;
 
-use crate::backoff;
-use crate::backoff::FromIteratorToSeries;
-use crate::entry_node;
-use crate::entry_node::{EntryNode, Path};
+use thiserror::Error;
+
+use gnosis_vpn_lib::command::{self, Command, Response};
+use gnosis_vpn_lib::config::{self, Config};
+use gnosis_vpn_lib::connection::{self, Connection, Destination};
+use gnosis_vpn_lib::state::{self, State};
+use gnosis_vpn_lib::wireguard::{self, WireGuard};
+
 use crate::event::Event;
-use crate::exit_node::ExitNode;
-use crate::remote_data;
-use crate::remote_data::RemoteData;
-use crate::session;
-use crate::session::Session;
 
 #[derive(Debug)]
 pub struct Core {
-    // http client
-    client: blocking::Client,
     // configuration data
     config: Config,
-    // event transmitter
+    // global event transmitter
     sender: crossbeam_channel::Sender<Event>,
-    // potential non critial user visible errors
-    issues: Vec<Issue>,
     // internal persistent application state
-    state: state::State,
-    // wg interface,
-    wg: Option<Box<dyn wireguard::WireGuard>>,
-    // random generator
-    rng: rand::rngs::ThreadRng,
+    state: State,
+    // wg interface, will be None if manual mode is used
+    wg: Option<Box<dyn WireGuard>>,
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
-    status: Status,
-    entry_node: Option<EntryNode>,
-    exit_node: Option<ExitNode>,
-    fetch_data: FetchData,
-    session: Option<Session>,
+    connection: Option<connection::Connection>,
+    session_connected: bool,
+    wg_connected: bool,
+    target_destination: Option<Destination>,
 }
 
-#[derive(Debug)]
-struct FetchData {
-    addresses: RemoteData,
-    open_session: RemoteData,
-    list_sessions: RemoteData,
-    close_session: RemoteData,
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Configuration error: {0}")]
+    Config(#[from] config::Error),
+    #[error("State error: {0}")]
+    State(#[from] state::Error),
+    #[error("WireGuard error: {0}")]
+    WireGuard(#[from] wireguard::Error),
+    #[error("Missing manual_mode configuration")]
+    WireGuardManualModeMissing,
 }
 
-#[derive(Debug)]
-enum Status {
-    Idle,
-    OpeningSession {
-        start_time: SystemTime,
-    },
-    MonitoringSession {
-        start_time: SystemTime,
-        cancel_sender: crossbeam_channel::Sender<()>,
-    },
-    ClosingSession {
-        start_time: SystemTime,
-    },
-}
-
-#[derive(Debug)]
-enum Issue {
-    Config(config::Error),
-    State(state::Error),
-    WireGuardInit(wireguard::Error),
-    WireGuard(wireguard::Error),
-}
-
-fn read_config() -> (Config, Option<Issue>) {
-    match config::read() {
-        Ok(cfg) => {
-            tracing::info!("read config without issues");
-            (cfg, None)
-        }
-        Err(config::Error::NoFile) => {
-            tracing::info!("no config - using default");
-            (Config::default(), None)
-        }
-        Err(e) => {
-            tracing::warn!(warn = ?e, "failed to read config file");
-            (Config::default(), Some(Issue::Config(e)))
-        }
-    }
-}
-
-fn read_state() -> (State, Option<Issue>) {
-    match state::read() {
-        Ok(state) => (state, None),
-        Err(state::Error::NoFile) => (State::default(), None),
-        Err(e) => {
-            tracing::warn!(warn = ?e, "failed to read state file");
-            (State::default(), Some(Issue::State(e)))
-        }
-    }
+struct ConfigSetup {
+    state: State,
+    config: Config,
+    wg: Option<Box<dyn WireGuard>>,
 }
 
 impl Core {
-    pub fn init(sender: crossbeam_channel::Sender<Event>) -> Core {
-        let (config, conf_issue) = read_config();
-        let mut issues = conf_issue.map(|i| vec![i]).unwrap_or(Vec::new());
-        let (wg, wg_errors) = wireguard::best_flavor();
-        let mut wg_issues = wg_errors.iter().map(|i| Issue::WireGuardInit(i.clone())).collect();
-        issues.append(&mut wg_issues);
-        let (state, state_issue) = read_state();
-        if let Some(issue) = state_issue {
-            issues.push(issue);
-        }
+    pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
+        let cs = setup_from_config(config_path)?;
 
-        let mut core = Core {
-            config,
-            issues,
-            status: Status::Idle,
-            entry_node: None,
-            exit_node: None,
-            client: blocking::Client::new(),
-            fetch_data: FetchData {
-                addresses: RemoteData::NotAsked,
-                open_session: RemoteData::NotAsked,
-                list_sessions: RemoteData::NotAsked,
-                close_session: RemoteData::NotAsked,
-            },
-            state,
-            wg,
-            rng: rand::thread_rng(),
+        Ok(Core {
+            config: cs.config,
+            state: cs.state,
+            wg: cs.wg,
             sender,
-            session: None,
             shutdown_sender: None,
-        };
-        core.setup();
-        core
+            connection: None,
+            session_connected: false,
+            wg_connected: false,
+            target_destination: None,
+        })
     }
 
-    pub fn shutdown(&mut self) -> Result<crossbeam_channel::Receiver<()>> {
+    pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
-        self.check_close_session()?;
-        Ok(receiver)
+        match &mut self.connection {
+            Some(conn) => {
+                tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
+                self.target_destination = None;
+                conn.dismantle();
+                self.disconnect_wg();
+            }
+            None => {
+                tracing::debug!("direct shutdown - no connection to disconnect");
+                if let Some(s) = self.shutdown_sender.as_ref() {
+                    _ = s.send(());
+                };
+            }
+        }
+        receiver
     }
 
-    fn setup(&mut self) {
-        self.setup_wg_priv_key();
-        if let Err(e) = self.setup_from_config() {
-            tracing::error!(error = ?e, "failed setup from config");
-        }
-    }
-
-    fn wg_priv_key(&self) -> Option<String> {
-        if let Some(key) = &self.config.wireguard.as_ref().and_then(|wg| wg.private_key.clone()) {
-            return Some(key.clone());
-        }
-        if let Some(key) = &self.state.wg_private_key {
-            return Some(key.clone());
-        }
-        None
-    }
-
-    fn setup_wg_priv_key(&mut self) {
-        // if wg is available check private key
-        // gengerate a new one if none
-        if let (Some(wg), Some(_), None) = (&self.wg, &self.config.wireguard, &self.wg_priv_key()) {
-            let priv_key = match wg.generate_key() {
-                Ok(priv_key) => priv_key,
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to generate wireguard private key");
-                    self.replace_issue(Issue::WireGuard(e));
-                    return;
+    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
+        tracing::debug!(%cmd, "handling command");
+        match cmd {
+            Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
+                Some(dest) => {
+                    self.target_destination = Some(dest.clone());
+                    self.act_on_target();
+                    Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
                 }
-            };
-            match self.state.set_wg_private_key(priv_key.clone()) {
-                Ok(_) => match wg.public_key(priv_key.as_str()) {
-                    Ok(pub_key) => {
-                        tracing::info!("****** Generated wireguard private key ******");
-                        tracing::info!(public_key = %pub_key, "****** Use this pub_key for onboarding ******");
-                    }
-                    Err(e) => {
-                        tracing::error!(error = ?e, "failed to generate wireguard public key");
-                        self.replace_issue(Issue::WireGuard(e));
-                    }
-                },
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to write wireguard private key to state");
-                    self.replace_issue(Issue::State(e));
+                None => {
+                    tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
+                    Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
                 }
-            };
+            },
+            Command::Disconnect => {
+                self.target_destination = None;
+                self.act_on_target();
+                let conn = self.connection.clone();
+                match conn {
+                    Some(c) => Ok(Response::disconnect(command::DisconnectResponse::new(
+                        c.destination().clone().into(),
+                    ))),
+                    None => Ok(Response::disconnect(command::DisconnectResponse::not_connected())),
+                }
+            }
+            Command::Status => {
+                let wg_status = self
+                    .wg
+                    .as_ref()
+                    .map(|_| command::WireGuardStatus::new(self.wg_connected))
+                    .unwrap_or(command::WireGuardStatus::manual());
+                let status = match (
+                    self.target_destination.clone(),
+                    self.connection.clone().map(|c| c.destination()),
+                    self.session_connected,
+                ) {
+                    (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
+                    (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
+                    (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
+                    (None, None, _) => command::Status::disconnected(),
+                };
+
+                let destinations = self.config.destinations();
+                Ok(Response::status(command::StatusResponse::new(
+                    wg_status,
+                    status,
+                    destinations
+                        .values()
+                        .map(|v| {
+                            let dest = v.clone();
+                            dest.into()
+                        })
+                        .collect(),
+                )))
+            }
         }
     }
 
-    fn setup_from_config(&mut self) -> Result<()> {
-        self.check_close_session()?;
-        if let (Some(entry_node), Some(session)) = (&self.config.hoprd_node, &self.config.connection) {
-            let en_endpoint = entry_node.endpoint.clone();
-            let en_api_token = entry_node.api_token.clone();
-            let internal_port = entry_node.internal_connection_port.map(|port| format!(":{}", port));
-            let en_listen_host = session.listen_host.clone().or(internal_port);
-            let path = session.path.clone().unwrap_or_default();
-            let en_path = match path {
-                config::SessionPathConfig::Hop(hop) => Path::Hop(hop),
-                config::SessionPathConfig::Intermediates(ids) => Path::Intermediates(ids.clone()),
-            };
-            let xn_peer_id = session.destination;
-
-            // convert config to old application struture
-            self.entry_node = Some(EntryNode::new(
-                &en_endpoint,
-                &en_api_token,
-                en_listen_host.as_deref(),
-                en_path,
-            ));
-            self.exit_node = Some(ExitNode { peer_id: xn_peer_id });
-
-            self.fetch_data.addresses = RemoteData::Fetching {
-                started_at: SystemTime::now(),
-            };
-            self.fetch_addresses()?;
-            self.check_open_session()?;
+    pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
+        tracing::debug!(%event, "handling event");
+        match event {
+            Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
+            Event::DropConnection => self.on_drop_connection(),
         }
+    }
+
+    pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
+        let cs = setup_from_config(config_path)?;
+        self.config = cs.config;
+        self.state = cs.state;
+        self.wg = cs.wg;
         Ok(())
     }
 
-    #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
-    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Option<String>> {
-        match cmd {
-            Command::Status => Ok(self.status()),
-            Command::EntryNode {
-                endpoint,
-                api_token,
-                listen_host,
-                hop,
-                intermediate_id,
-            } => self.entry_node(endpoint, api_token, listen_host, hop, intermediate_id),
-            Command::ExitNode { peer_id } => self.exit_node(peer_id),
-        }
+    fn act_on_target(&mut self) {
+        match (self.target_destination.clone(), &mut self.connection) {
+            (Some(dest), Some(conn)) => {
+                if conn.has_destination(&dest) {
+                    tracing::info!(destination = %dest, "already connecting to target destination");
+                } else {
+                    tracing::info!(current = %conn.destination(), target = %dest, "disconnecting from current destination to connect to target destination");
+                    conn.dismantle();
+                    self.disconnect_wg();
+                }
+            }
+            (None, Some(conn)) => {
+                tracing::info!(current = %conn.destination(), "disconnecting from current destination");
+                conn.dismantle();
+                self.disconnect_wg();
+            }
+            (Some(dest), None) => {
+                tracing::info!(destination = %dest, "establishing new connection");
+                self.connect(&dest);
+            }
+            (None, None) => {}
+        };
     }
 
-    #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
-    pub fn handle_event(&mut self, event: Event) -> Result<()> {
-        match event {
-            Event::FetchAddresses(evt) => self.evt_fetch_addresses(evt),
-            Event::FetchOpenSession(evt) => self.evt_fetch_open_session(evt),
-            Event::FetchListSessions(evt) => self.evt_fetch_list_sessions(evt),
-            Event::FetchCloseSession(evt) => self.evt_fetch_close_session(evt),
-            Event::CheckSession => self.evt_check_session(),
-        }
-    }
+    fn connect(&mut self, destination: &Destination) {
+        let wg_pub_key = match self.wg_public_key() {
+            Some(wg_pub_key) => wg_pub_key,
+            None => {
+                tracing::error!("Unable to create connection without WireGuard public key");
+                tracing::error!(
+                    ">> If you intend to use manual WireGuard mode, please set the public key in the configuration file: <<"
+                );
+                tracing::error!(">> [wireguard] <<");
+                tracing::error!(r#">> manual_mode = {{ public_key = "<wg public key" }} <<"#);
+                return;
+            }
+        };
 
-    #[instrument(level = tracing::Level::INFO, skip(self), ret(level = tracing::Level::DEBUG))]
-    pub fn update_config(&mut self) {
-        tracing::info!("update config");
-        let (config, issue) = read_config();
-        self.config = config;
-        if let Some(issue) = issue {
-            self.replace_issue(issue);
-        }
-        self.setup();
-    }
-
-    fn replace_issue(&mut self, issue: Issue) {
-        // remove existing config issue
-        self.issues.retain(|i| {
-            !matches!(
-                (i, &issue),
-                (Issue::Config(_), Issue::Config(_))
-                    | (Issue::WireGuard(_), Issue::WireGuard(_))
-                    | (Issue::State(_), Issue::State(_))
-            )
-        });
-        self.issues.push(issue);
-    }
-
-    fn evt_fetch_addresses(&mut self, evt: remote_data::Event) -> Result<()> {
-        match evt {
-            remote_data::Event::Response(value) => {
-                self.fetch_data.addresses = RemoteData::Success;
-                match &mut self.entry_node {
-                    Some(en) => {
-                        let addresses = serde_json::from_value::<entry_node::Addresses>(value)?;
-                        en.addresses = Some(addresses);
-                        tracing::info!("fetched addresses");
-                        Ok(())
-                    }
-                    None => {
-                        tracing::warn!("unexpected internal state: no entry node");
-                        anyhow::bail!("unexpected internal state: no entry node");
+        let (s, r) = crossbeam_channel::bounded(1);
+        let mut conn = Connection::new(&self.config.entry_node(), destination, &wg_pub_key, s);
+        conn.establish();
+        self.connection = Some(conn);
+        let sender = self.sender.clone();
+        thread::spawn(move || loop {
+            crossbeam_channel::select! {
+                recv(r) -> event => {
+                    match event {
+                        Ok(connection::Event::Connected(conninfo)) => {
+                            _ = sender.send(Event::ConnectWg(conninfo)).map_err(|error| {
+                                tracing::error!(error = %error, "failed to send ConnectWg event");
+                            });
+                        }
+                        Ok(connection::Event::Disconnected) => {
+                            tracing::info!("connection hickup");
+                        }
+                        Ok(connection::Event::Dismantled) => {
+                            _ = sender.send(Event::DropConnection).map_err(|error| {
+                                tracing::error!(error = %error, "failed to send DropConnection event");
+                            });
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
                     }
                 }
             }
-            remote_data::Event::Error(err) => match &self.fetch_data.addresses {
-                RemoteData::RetryFetching {
-                    backoffs: old_backoffs, ..
-                } => {
-                    let mut backoffs = old_backoffs.clone();
-                    self.repeat_fetch_addresses(err, &mut backoffs);
-                    tracing::warn!("retrying fetch addresses");
-                    Ok(())
-                }
-                RemoteData::Fetching { .. } => {
-                    let mut backoffs = backoff::get_addresses().to_vec();
-                    self.repeat_fetch_addresses(err, &mut backoffs);
-                    tracing::info!("retrying fetch addresses");
-                    Ok(())
-                }
-                _ => {
-                    tracing::warn!("unexpected internal state: remote data result while not fetching");
-                    anyhow::bail!("unexpected internal state: remote data result while not fetching");
-                }
-            },
-            remote_data::Event::Retry => self.fetch_addresses(),
-        }
+        });
     }
 
-    fn evt_fetch_open_session(&mut self, evt: remote_data::Event) -> Result<()> {
-        match evt {
-            remote_data::Event::Response(value) => {
-                let session = serde_json::from_value::<Session>(value)?;
-                let session_port = session.port;
-                self.session = Some(session);
-                self.fetch_data.open_session = RemoteData::Success;
-                let next_check = self.rng.gen_range(5..13);
-                let cancel_sender =
-                    session::schedule_check_session(time::Duration::from_secs(next_check), &self.sender);
-                self.status = Status::MonitoringSession {
-                    start_time: SystemTime::now(),
-                    cancel_sender,
-                };
+    fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
+        tracing::debug!(?conninfo, "on session ready");
+        if self.session_connected {
+            tracing::info!("already connected - might be connection hickup");
+            return Ok(());
+        }
+        self.session_connected = true;
+        if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
+            // automatic wg connection
+            tracing::debug!("initiating WireGuard connection");
+            let interface_info = wireguard::InterfaceInfo {
+                private_key: privkey.clone(),
+                address: conninfo.registration.address(),
+                allowed_ips: self.config.wireguard().allowed_ips,
+                listen_port: self.config.wireguard().listen_port,
+            };
+            let peer_info = wireguard::PeerInfo {
+                public_key: conninfo.registration.server_public_key(),
+                endpoint: conninfo.endpoint,
+            };
+            let connect_session = wireguard::ConnectSession::new(&interface_info, &peer_info);
 
-                // prepare session path for printing
-                let session_path = {
-                    let (en, path) = match &self.entry_node {
-                        Some(en) => (en.to_string(), en.path.to_string()),
-                        None => ("<entry_node>".to_string(), "<path>".to_string()),
-                    };
-
-                    let xn = match &self.config.connection {
-                        Some(conn) => match conn.target.as_ref().and_then(|t| t.host.clone()) {
-                            Some(host) => format!(
-                                "({})({})",
-                                log_output::peer_id(conn.destination.to_string().as_str()),
-                                host
-                            ),
-                            None => format!("({})", log_output::peer_id(conn.destination.to_string().as_str())),
-                        },
-                        None => "<exitnode>".to_string(),
-                    };
-
-                    if path.is_empty() {
-                        format!("{} <-> {}", en, xn)
-                    } else {
-                        format!("{} <-> {} <-> {}", en, path, xn)
-                    }
-                };
-
-                // connect wireguard session if possible
-                if let (Some(wg), Some(_), Some(privkey), Some(wg_conf), Some(en_host)) = (
-                    &self.wg,
-                    &self.config.wireguard,
-                    &self.wg_priv_key(),
-                    &self.config.wireguard,
-                    &self.config.hoprd_node.as_ref().and_then(|en| en.endpoint.host()),
-                ) {
-                    let peer_info = wireguard::PeerInfo {
-                        public_key: wg_conf.server_public_key.clone(),
-                        endpoint: format!("{}:{}", en_host, session_port),
-                    };
-                    let interface_info = wireguard::InterfaceInfo {
-                        private_key: privkey.clone(),
-                        address: wg_conf.address.clone(),
-                        allowed_ips: wg_conf.allowed_ips.clone(),
-                        listen_port: wg_conf.listen_port,
-                    };
-                    let info = wireguard::ConnectSession {
-                        interface: interface_info,
-                        peer: peer_info,
-                    };
-
-                    match wg.connect_session(&info) {
-                        Ok(_) => {
-                            tracing::info!("opened session and wireguard connection");
-                            tracing::info!(
-                                r"
-
-    /---==========================---\
-    |   VPN CONNECTION ESTABLISHED   |
-    \---==========================---/
-
-    route: {}
-",
-                                session_path
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(warn = ?e, "openend session but failed to connect wireguard session");
-                            self.replace_issue(Issue::WireGuard(e));
-                        }
-                    }
-                } else {
-                    tracing::info!("opened session without handling wireguard");
-
+            match wg.connect_session(&connect_session) {
+                Ok(_) => {
+                    self.wg_connected = true;
                     tracing::info!(
                         r"
 
-    /---============================---\
-    |   HOPRD CONNECTION ESTABLISHED   |
-    \---============================---/
+            /---==========================---\
+            |   VPN CONNECTION ESTABLISHED   |
+            \---==========================---/
 
-    route: {}
-",
-                        session_path
+            route: {}
+        ",
+                        self.connection
+                            .as_ref()
+                            .map(|c| c.pretty_print_path())
+                            .unwrap_or("<unknown>".to_string())
                     );
-                }
-
-                Ok(())
-            }
-            remote_data::Event::Error(err) => match &self.fetch_data.open_session {
-                RemoteData::RetryFetching {
-                    backoffs: old_backoffs, ..
-                } => {
-                    let mut backoffs = old_backoffs.clone();
-                    self.repeat_fetch_open_session(err, &mut backoffs);
-                    tracing::warn!("retrying open session");
                     Ok(())
                 }
-                RemoteData::Fetching { .. } => {
-                    let mut backoffs = backoff::open_session().to_vec();
-                    self.repeat_fetch_open_session(err, &mut backoffs);
-                    tracing::info!("retrying open session");
-                    Ok(())
-                }
-                _ => {
-                    tracing::warn!("unexpected internal state: remote data result while not fetching");
-                    anyhow::bail!("unexpected internal state: remote data result while not fetching");
-                }
-            },
-            remote_data::Event::Retry => self.fetch_open_session(),
-        }
-    }
-
-    fn evt_fetch_list_sessions(&mut self, evt: remote_data::Event) -> Result<()> {
-        match evt {
-            remote_data::Event::Response(value) => {
-                self.fetch_data.list_sessions = RemoteData::Success;
-                let res_sessions = serde_json::from_value::<Vec<session::Session>>(value);
-                match res_sessions {
-                    Ok(sessions) => self.verify_session(&sessions),
-                    Err(e) => {
-                        self.status = Status::Idle;
-                        tracing::warn!(warn = ?e, "failed to parse sessions");
-                        anyhow::bail!("stopped monitoring - failed to parse sessions: {}", e);
-                    }
+                Err(e) => {
+                    tracing::warn!(warn = ?e, "failed to establish WireGuard connection");
+                    Err(Error::WireGuard(e))
                 }
             }
-            remote_data::Event::Error(err) => match &self.fetch_data.list_sessions {
-                RemoteData::RetryFetching {
-                    backoffs: old_backoffs, ..
-                } => {
-                    let mut backoffs = old_backoffs.clone();
-                    tracing::warn!("retrying list sessions");
-                    self.repeat_fetch_list_sessions(err, &mut backoffs)
-                }
-                RemoteData::Fetching { .. } => {
-                    let mut backoffs = backoff::list_sessions().to_vec();
-                    tracing::info!("retrying list sessions");
-                    self.repeat_fetch_list_sessions(err, &mut backoffs)
-                }
-                _ => {
-                    tracing::warn!("unexpected internal state: remote data result while not fetching");
-                    anyhow::bail!("unexpected internal state: remote data result while not fetching");
-                }
-            },
-            remote_data::Event::Retry => self.fetch_list_sessions(),
-        }
-    }
-
-    fn evt_fetch_close_session(&mut self, evt: remote_data::Event) -> Result<()> {
-        match evt {
-            remote_data::Event::Response(_) => {
-                self.fetch_data.close_session = RemoteData::Success;
-                self.status = Status::Idle;
-                tracing::info!("closed session");
-                if let Some(sender) = &self.shutdown_sender {
-                    let res = sender.send(());
-                    match res {
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(warn = ?e, "failed sending shutdown event after closing session");
-                        }
-                    }
-                    Ok(())
-                } else {
-                    self.check_open_session()
-                }
-            }
-            remote_data::Event::Error(err) => match &self.fetch_data.close_session {
-                RemoteData::RetryFetching {
-                    backoffs: old_backoffs, ..
-                } => {
-                    let mut backoffs = old_backoffs.clone();
-                    tracing::warn!("retrying close session");
-                    self.repeat_fetch_close_session(err, &mut backoffs)
-                }
-                RemoteData::Fetching { .. } => {
-                    let mut backoffs = backoff::close_session().to_vec();
-                    tracing::info!("retrying close session");
-                    self.repeat_fetch_close_session(err, &mut backoffs)
-                }
-                _ => {
-                    tracing::warn!("unexpected internal state: remote data result while not fetching");
-                    anyhow::bail!("unexpected internal state: remote data result while not fetching");
-                }
-            },
-            remote_data::Event::Retry => self.fetch_close_session(),
-        }
-    }
-
-    fn evt_check_session(&mut self) -> Result<()> {
-        match (&self.status, &self.fetch_data.list_sessions) {
-            (_, RemoteData::Fetching { .. }) | (_, RemoteData::RetryFetching { .. }) => {
-                tracing::info!("skipping session check because already ongoing");
-                Ok(())
-            }
-            (Status::MonitoringSession { .. }, _) => {
-                self.fetch_data.list_sessions = RemoteData::Fetching {
-                    started_at: SystemTime::now(),
-                };
-                self.fetch_list_sessions()
-            }
-            _ => {
-                tracing::warn!("skipping session check because not monitoring session");
-                Ok(())
-            }
-        }
-    }
-
-    fn repeat_fetch_addresses(&mut self, error: remote_data::CustomError, backoffs: &mut Vec<time::Duration>) {
-        if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = entry_node::schedule_retry_query_addresses(backoff, &self.sender);
-            self.fetch_data.addresses = RemoteData::RetryFetching {
-                error,
-                cancel_sender,
-                backoffs: backoffs.clone(),
-            };
         } else {
-            self.fetch_data.addresses = RemoteData::Failure { error };
-        }
-    }
-
-    fn repeat_fetch_open_session(&mut self, error: remote_data::CustomError, backoffs: &mut Vec<time::Duration>) {
-        if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = session::schedule_retry_open(backoff, &self.sender);
-            self.fetch_data.open_session = RemoteData::RetryFetching {
-                error,
-                cancel_sender,
-                backoffs: backoffs.clone(),
+            // manual wg connection
+            let interface_info = wireguard::InterfaceInfo {
+                private_key: "<WireGuard private key>".to_string(),
+                address: conninfo.registration.address(),
+                allowed_ips: self.config.wireguard().allowed_ips,
+                listen_port: self.config.wireguard().listen_port,
             };
-        } else {
-            self.fetch_data.open_session = RemoteData::Failure { error };
-            self.status = Status::Idle;
-        }
-    }
-
-    fn repeat_fetch_list_sessions(
-        &mut self,
-        error: remote_data::CustomError,
-        backoffs: &mut Vec<time::Duration>,
-    ) -> Result<()> {
-        if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = entry_node::schedule_retry_list_sessions(backoff, &self.sender);
-            self.fetch_data.list_sessions = RemoteData::RetryFetching {
-                error,
-                cancel_sender,
-                backoffs: backoffs.clone(),
+            let peer_info = wireguard::PeerInfo {
+                public_key: conninfo.registration.server_public_key(),
+                endpoint: conninfo.endpoint,
             };
+            let connect_session = wireguard::ConnectSession::new(&interface_info, &peer_info);
+            tracing::info!(
+                r"
+
+            /---============================---\
+            |   HOPRD CONNECTION ESTABLISHED   |
+            \---============================---/
+
+            route: {}
+
+            --- ready for manual WireGuard connection (wg-quick configuration blueprint) ---
+
+{}
+
+            ",
+                self.connection
+                    .as_ref()
+                    .map(|c| c.pretty_print_path())
+                    .unwrap_or("<unknown>".to_string()),
+                connect_session.to_file_string()
+            );
             Ok(())
+        }
+    }
+
+    fn on_drop_connection(&mut self) -> Result<(), Error> {
+        tracing::debug!("on drop connection");
+        self.session_connected = false;
+        self.connection = None;
+        if let Some(sender) = self.shutdown_sender.as_ref() {
+            tracing::debug!("shutting down after disconnecting");
+            _ = sender.send(());
         } else {
-            self.fetch_data.list_sessions = RemoteData::Failure { error };
-            if let Status::MonitoringSession { .. } = self.status {
-                self.check_close_session()
-            } else {
-                tracing::warn!("unexpected internal state: failed list session call while not monitoring session");
-                anyhow::bail!("unexpected internal state: failed list session call while not monitoring session");
-            }
-        }
-    }
-
-    fn repeat_fetch_close_session(
-        &mut self,
-        error: remote_data::CustomError,
-        backoffs: &mut Vec<time::Duration>,
-    ) -> Result<()> {
-        if let Some(backoff) = backoffs.pop() {
-            let cancel_sender = session::schedule_retry_close(backoff, &self.sender);
-            self.fetch_data.close_session = RemoteData::RetryFetching {
-                error,
-                cancel_sender,
-                backoffs: backoffs.clone(),
-            };
-            Ok(())
-        } else {
-            self.fetch_data.close_session = RemoteData::Failure { error };
-            if let Status::ClosingSession { .. } = self.status {
-                self.status = Status::Idle;
-                Ok(())
-            } else {
-                tracing::warn!("unexpected internal state: failed close session call while not closing session");
-                anyhow::bail!("unexpected internal state: failed close session call while not closing session");
-            }
-        }
-    }
-
-    fn status(&self) -> Option<String> {
-        tracing::info!("respond with status");
-        Some(self.to_string())
-    }
-
-    fn entry_node(
-        &mut self,
-        endpoint: &Url,
-        api_token: &str,
-        listen_host: &Option<String>,
-        hop: &Option<u8>,
-        intermediate_id: &Option<PeerId>,
-    ) -> Result<Option<String>> {
-        self.check_close_session()?;
-
-        // TODO move this to library and enhance CLI to only allow one option
-        // hop has precedence over intermediate_id
-        let path = match (hop, intermediate_id) {
-            (Some(h), _) => Path::Hop(*h),
-            (_, Some(id)) => Path::Intermediates(vec![*id]),
-            _ => Path::Hop(1),
-        };
-        self.entry_node = Some(EntryNode::new(endpoint, api_token, listen_host.as_deref(), path));
-        self.fetch_data.addresses = RemoteData::Fetching {
-            started_at: SystemTime::now(),
-        };
-        self.fetch_addresses()?;
-        self.check_open_session()?;
-        tracing::info!("set entry node");
-        Ok(None)
-    }
-
-    fn exit_node(&mut self, peer_id: &PeerId) -> Result<Option<String>> {
-        self.check_close_session()?;
-        self.exit_node = Some(ExitNode { peer_id: *peer_id });
-        self.check_open_session()?;
-        tracing::info!("set exit node");
-        Ok(None)
-    }
-
-    #[instrument(level = tracing::Level::INFO, skip(self))]
-    fn check_open_session(&mut self) -> Result<()> {
-        if !matches!(&self.status, Status::Idle) {
-            tracing::info!(status = ?self.status, "need Idle status to open session");
-            return Ok(());
-        }
-
-        if self.entry_node.is_none() {
-            tracing::info!("need hoprd node parameters to open session");
-            return Ok(());
-        }
-        if self.config.connection.is_none() {
-            tracing::info!("need connection parameters to open session");
-            return Ok(());
-        }
-        self.status = Status::OpeningSession {
-            start_time: SystemTime::now(),
-        };
-        self.fetch_data.open_session = RemoteData::Fetching {
-            started_at: SystemTime::now(),
-        };
-        self.fetch_open_session()
-    }
-
-    fn check_close_session(&mut self) -> Result<()> {
-        self.cancel_fetch_addresses();
-        self.cancel_fetch_open_session();
-        self.cancel_fetch_list_sessions();
-        self.cancel_fetch_close_session();
-        self.cancel_session_monitoring();
-        match &self.status {
-            Status::MonitoringSession { .. } => {
-                self.status = Status::ClosingSession {
-                    start_time: SystemTime::now(),
-                };
-
-                // close wireguard session if possible
-                if let (Some(wg), Some(_)) = (&self.wg, &self.config.wireguard) {
-                    match wg.close_session() {
-                        Ok(_) => {
-                            tracing::info!("closed wireguard connection");
-                        }
-                        Err(e) => {
-                            tracing::warn!(warn = ?e, "error closing wireguard connection");
-                            self.replace_issue(Issue::WireGuard(e));
-                        }
-                    }
-                };
-
-                // close hoprd session
-                self.fetch_data.close_session = RemoteData::Fetching {
-                    started_at: SystemTime::now(),
-                };
-                self.fetch_close_session()
-            }
-            _ => {
-                if let Some(sender) = &self.shutdown_sender {
-                    let res = sender.send(());
-                    match res {
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(warn = ?e, "failed sending shutdown event after canceling ongoing requests");
-                        }
-                    };
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn fetch_addresses(&mut self) -> Result<()> {
-        match &self.entry_node {
-            Some(en) => {
-                tracing::info!("querying addresses");
-                en.query_addresses(&self.client, &self.sender)
-            }
-            _ => {
-                tracing::warn!("no entry node to fetch addresses");
-                Ok(())
-            }
-        }
-    }
-
-    fn fetch_open_session(&mut self) -> Result<()> {
-        if let (Some(en), Some(session)) = (&self.entry_node, &self.config.connection) {
-            let open_session = session::OpenSession {
-                endpoint: en.endpoint.clone(),
-                api_token: en.api_token.clone(),
-                destination: session.destination.to_string(),
-                listen_host: en.listen_host.clone(),
-                path: session.path.clone(),
-                target: session.target.clone(),
-                capabilities: session.capabilities.clone(),
-            };
-            tracing::info!("opening session");
-            session::open(&self.client, &self.sender, &open_session)?;
-        } else {
-            tracing::warn!("no entry node or session to open");
+            self.act_on_target();
         }
         Ok(())
     }
 
-    fn fetch_list_sessions(&mut self) -> Result<()> {
-        match &self.entry_node {
-            Some(en) => {
-                tracing::info!("querying list sessions");
-                en.list_sessions(&self.client, &self.sender)
-            }
-            _ => {
-                tracing::warn!("no entry node to query list sessions");
-                Ok(())
-            }
-        }
-    }
-
-    fn fetch_close_session(&mut self) -> Result<()> {
-        match (&self.entry_node, &self.session) {
-            (Some(en), Some(sess)) => {
-                tracing::info!("closing session");
-                sess.close(&self.client, &self.sender, en)
-            }
-            _ => {
-                tracing::warn!("no entry node or session to close");
-                Ok(())
-            }
-        }
-    }
-
-    fn verify_session(&mut self, sessions: &[session::Session]) -> Result<()> {
-        match (&self.session, &self.status) {
-            (Some(sess), Status::MonitoringSession { start_time, .. }) => {
-                if sess.verify_open(sessions) {
-                    tracing::info!(session = ?sess, since = log_output::elapsed(start_time), "verified session open");
-                    let next_check = self.rng.gen_range(5..13);
-                    let cancel_sender =
-                        session::schedule_check_session(time::Duration::from_secs(next_check), &self.sender);
-                    self.status = Status::MonitoringSession {
-                        start_time: *start_time,
-                        cancel_sender,
-                    };
-                    Ok(())
-                } else {
-                    tracing::warn!(session = ?sess, "session no longer open");
-                    self.status = Status::Idle;
-                    self.check_open_session()
+    fn wg_public_key(&self) -> Option<String> {
+        self.config.wireguard().manual_mode.map(|mm| mm.public_key).or_else(|| {
+            if let (Some(wg), Some(privkey)) = (&self.wg, &self.state.wg_private_key()) {
+                match wg.public_key(privkey.as_str()) {
+                    Ok(pubkey) => Some(pubkey),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Unable to generate public key from private key");
+                        None
+                    }
                 }
+            } else {
+                None
             }
-            (Some(_sess), _) => {
-                tracing::warn!("unexpected internal state: session verification while not monitoring session");
-                anyhow::bail!("unexpected internal state: session verification while not monitoring session");
-            }
-            (None, _status) => {
-                tracing::warn!("unexpected internal state: session verification while no session");
-                anyhow::bail!("unexpected internal state: session verification while no session");
-            }
-        }
+        })
     }
 
-    fn cancel_fetch_addresses(&self) {
-        if let RemoteData::RetryFetching { cancel_sender, .. } = &self.fetch_data.addresses {
-            let res = cancel_sender.send(());
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed sending cancel query addresses");
+    fn disconnect_wg(&mut self) {
+        if let Some(wg) = &self.wg {
+            match wg.close_session() {
+                Ok(_) => {
+                    self.wg_connected = false;
+                    tracing::info!("WireGuard connection closed");
                 }
-            }
-        }
-    }
-
-    fn cancel_fetch_open_session(&self) {
-        if let RemoteData::RetryFetching { cancel_sender, .. } = &self.fetch_data.open_session {
-            let res = cancel_sender.send(());
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed sending cancel open session");
-                }
-            }
-        }
-    }
-
-    fn cancel_fetch_list_sessions(&self) {
-        if let RemoteData::RetryFetching { cancel_sender, .. } = &self.fetch_data.list_sessions {
-            let res = cancel_sender.send(());
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed sending cancel list sessions");
-                }
-            }
-        }
-    }
-
-    fn cancel_fetch_close_session(&self) {
-        if let RemoteData::RetryFetching { cancel_sender, .. } = &self.fetch_data.close_session {
-            let res = cancel_sender.send(());
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed sending cancel close session");
-                }
-            }
-        }
-    }
-
-    fn cancel_session_monitoring(&self) {
-        if let Status::MonitoringSession { cancel_sender, .. } = &self.status {
-            let res = cancel_sender.send(());
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed sending cancel monitoring session");
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to close WireGuard connection");
                 }
             }
         }
     }
 }
 
-impl fmt::Display for ExitNode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let peer = self.peer_id.to_string();
-        let print = HashMap::from([("peer_id", peer.as_str())]);
-        let val = log_output::serialize(&print);
-        write!(f, "{}", val)
-    }
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let val = match self {
-            Status::Idle => "idle",
-            Status::OpeningSession { start_time } => {
-                &format!("opening session since {}", log_output::elapsed(start_time)).to_string()
+fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
+    let config = config::read(config_path)?;
+    let wireguard = if config.wireguard().manual_mode.is_some() {
+        tracing::warn!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
+        None
+    } else {
+        match wireguard::best_flavor() {
+            Ok(wg) => Some(wg),
+            Err(e) => {
+                tracing::error!(error = ?e, "could not determine WireGuard handling mode");
+                print_manual_instructions();
+                return Err(Error::WireGuardManualModeMissing);
             }
-            Status::MonitoringSession { start_time, .. } => {
-                &format!("monitoring session since {}", log_output::elapsed(start_time)).to_string()
-            }
-            Status::ClosingSession { start_time } => {
-                &format!("closing session since {}", log_output::elapsed(start_time)).to_string()
-            }
-        };
-        write!(f, "{}", val)
-    }
-}
-
-impl fmt::Display for Core {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut print = HashMap::new();
-        if self.config == Config::default() {
-            print.insert("config", "<default>".to_string());
         }
-        if !self.issues.is_empty() {
-            print.insert(
-                "issues",
-                self.issues
-                    .iter()
-                    .map(|i| i.to_string())
-                    .collect::<Vec<String>>()
-                    .join(" | "),
-            );
+    };
+
+    let mut state = match state::read() {
+        Err(state::Error::NoFile) => {
+            tracing::info!("no service state file found - clean start");
+            Ok(state::State::default())
         }
-        let val = log_output::serialize(&print);
-        write!(f, "{}", val)
+        x => x,
+    }?;
+
+    // only triggerd in WireGuard handling mode
+    if let (Some(wg), None) = (&wireguard, &state.wg_private_key()) {
+        let priv_key = wg.generate_key()?;
+        state.set_wg_private_key(priv_key.clone())?;
     }
+
+    // print destinations warning
+    if config.destinations().is_empty() {
+        tracing::warn!(">> No destinations found in configuration file <<");
+        tracing::warn!(">> Please check https://gnosisvpn.com/servers for more information <<");
+    }
+
+    Ok(ConfigSetup {
+        state,
+        config,
+        wg: wireguard,
+    })
 }
 
-impl fmt::Display for Issue {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let val = match self {
-            Issue::Config(e) => format!("config file issue: {}", e),
-            Issue::WireGuardInit(e) => format!("wireguard initialization issue: {}", e),
-            Issue::State(e) => format!("storage issue: {}", e),
-            Issue::WireGuard(e) => format!("wireguard issue: {}", e),
-        };
-        write!(f, "{}", val)
-    }
+fn print_manual_instructions() {
+    tracing::error!(
+        ">> If you intend to use manual WireGuard mode, please set the public key in the configuration file: <<"
+    );
+    tracing::error!(">> [wireguard] <<");
+    tracing::error!(r#">> manual_mode = {{ public_key = "<wg public key" }} <<"#);
 }
