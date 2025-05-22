@@ -393,8 +393,8 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                // assume session is close when not found
-                let not_found = session_not_found(&res);
+                // assume session is closed when not found
+                let not_found = matches!(res, Err(session::Error::SessionNotFound));
                 if !not_found {
                     res?;
                 }
@@ -430,7 +430,9 @@ impl Connection {
                 },
             }
                     */
-            InternalEvent::Ping(res) => {
+            InternalEvent::Ping(res) =>
+            {
+                #[allow(clippy::collapsible_else_if)]
                 if res.is_ok() {
                     if let PhaseUp::MonitorMainSession(session, since, _registration) = self.phase_up.clone() {
                         tracing::info!(%session, "session verified open since {}", log_output::elapsed(&since));
@@ -669,13 +671,5 @@ impl Display for InternalEvent {
             InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({:?})", res),
             InternalEvent::Ping(res) => write!(f, "Ping({:?})", res),
         }
-    }
-}
-
-fn session_not_found(res: &Result<(), session::Error>) -> bool {
-    if let Err(session::Error::SessionNotFound) = res {
-        true
-    } else {
-        false
     }
 }
