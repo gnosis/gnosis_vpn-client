@@ -66,6 +66,8 @@ pub enum Error {
     RemoteData(remote_data::CustomError),
     #[error("Session listen host already used")]
     ListenHostAlreadyUsed,
+    #[error("Session not found")]
+    SessionNotFound,
 }
 
 impl Target {
@@ -231,6 +233,8 @@ impl Session {
 
         match fetch_res {
             Ok((status, _)) if status.is_success() => Ok(()),
+            // Ok((404, Ok(Object {"status": String("INVALID_INPUT")})))
+            Ok((status, _)) if status == StatusCode::NOT_FOUND => Err(Error::SessionNotFound),
             Ok((status, Ok(json))) => {
                 let e = remote_data::CustomError {
                     reqw_err: None,

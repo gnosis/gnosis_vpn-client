@@ -393,7 +393,11 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                res?;
+                // assume session is close when not found
+                let not_found = session_not_found(&res);
+                if !not_found {
+                    res?;
+                }
                 match self.phase_up.clone() {
                     PhaseUp::CloseBridgeSession(_session, registration) => {
                         self.phase_up = PhaseUp::PrepareMainSession(registration);
@@ -665,5 +669,13 @@ impl Display for InternalEvent {
             InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({:?})", res),
             InternalEvent::Ping(res) => write!(f, "Ping({:?})", res),
         }
+    }
+}
+
+fn session_not_found(res: &Result<(), session::Error>) -> bool {
+    if let Err(session::Error::SessionNotFound) = res {
+        true
+    } else {
+        false
     }
 }
