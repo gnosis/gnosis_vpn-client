@@ -11,12 +11,11 @@ pub enum Error {
 pub fn ping() -> Result<(), Error> {
     let res = ping::ping(
         IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)), // address
-        Some(Duration::from_secs(10)),            // timeout
-        None,                                     // ttl - number of jumps
+        Some(Duration::from_secs(3)),             // default timeout 4 sec
+        Some(5),                                  // ttl - number of jumps
         None,                                     // ident - Identifier
         Some(1),                                  // Seq Count
         None,                                     // Custom Payload
     )?;
-    tracing::info!(?res, "ping");
     Ok(res)
 }
