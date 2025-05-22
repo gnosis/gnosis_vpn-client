@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::entry_node::EntryNode;
 use crate::log_output;
+use crate::monitor;
 use crate::session::{self, Session};
 use crate::wg_client::{self, Registration};
 
@@ -576,6 +577,7 @@ impl Connection {
             let after = crossbeam_channel::after(delay);
             crossbeam_channel::select! {
                 recv(after) -> _ => {
+                    monitor::ping();
                     let res = Session::list(&client, &params);
                     _ = s.send(InternalEvent::ListSessions(res));
                 }
