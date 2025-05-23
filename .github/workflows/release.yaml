@@ -67,6 +67,7 @@ jobs:
         run: |
           architectures=("aarch64-linux" "x86_64-linux" "armv7l-linux" "aarch64-darwin" "x86_64-darwin" )
           mkdir -p binaries
+          gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
           for architecture in "${architectures[@]}"; do
               echo "Downloading from GCP binary gnosis_vpn-${architecture}"
               gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture} --destination=./binaries --local-filename=gnosis_vpn-${architecture}
@@ -75,7 +76,6 @@ jobs:
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}" --clobber
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}" --clobber
           done
-          gh release edit v${{ steps.environment.outputs.release_version }} --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Bump Version
