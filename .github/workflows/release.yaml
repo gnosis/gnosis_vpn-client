@@ -74,8 +74,8 @@ jobs:
               echo "Uploading binary gnosis_vpn-${architecture}"
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}" --clobber
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}" --clobber
-              gh release edit v${{ steps.environment.outputs.release_version }} --generate-notes
           done
+          gh release edit v${{ steps.environment.outputs.release_version }} --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Bump Version
