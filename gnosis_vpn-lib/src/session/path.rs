@@ -27,7 +27,7 @@ impl Display for Path {
             Path::Intermediates(intermediates) => {
                 let i = intermediates
                     .iter()
-                    .map(|peer_id| format!("({})", log_output::peer_id(peer_id.to_string().as_str())))
+                    .map(|peer_id| format!("(r{})", log_output::peer_id(peer_id.to_string().as_str())))
                     .collect::<Vec<_>>()
                     .join("->");
                 format!("->{}->", i)
