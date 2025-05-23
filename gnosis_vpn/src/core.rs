@@ -235,7 +235,7 @@ impl Core {
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
         tracing::debug!(?conninfo, "on session ready");
         if self.session_connected {
-            tracing::info!("reconnecting previously connected session - might be connection hickup");
+            tracing::info!("reconnecting previously connected session - might be connection hiccup");
             return Ok(());
         }
         self.session_connected = true;
