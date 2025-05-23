@@ -43,9 +43,12 @@ pub enum Error {
 #[derive(Clone, Debug)]
 enum PhaseUp {
     Ready,
+    FixBridgeSession,
+    FixBridgeSessionClosing(Session),
     WgRegistration(Session),
     CloseBridgeSession(Session, Registration),
     PrepareMainSession(Registration),
+    FixMainSession(Registration),
     MonitorMainSession(Session, SystemTime, Registration),
     MainSessionBroken(Session, Registration),
 }
@@ -64,6 +67,7 @@ enum PhaseDown {
 enum InternalEvent {
     OpenSession(Result<Session, session::Error>),
     CloseSession(Result<(), session::Error>),
+    ListSessions(Result<Vec<Session>, session::Error>),
     RegisterWg(Result<Registration, wg_client::Error>),
     UnregisterWg(Result<(), wg_client::Error>),
     Ping(Result<(), monitor::Error>),
@@ -332,10 +336,13 @@ impl Connection {
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
-            PhaseUp::Ready => self.open_bridge_session(),
+            PhaseUp::Ready => self.open_session(&session::Protocol::Tcp),
+            PhaseUp::FixBridgeSession => self.list_sessions(&session::Protocol::Tcp),
+            PhaseUp::FixBridgeSessionClosing(session) => self.close_session(&session),
             PhaseUp::WgRegistration(session) => self.register_wg(&session),
             PhaseUp::CloseBridgeSession(session, _registration) => self.close_session(&session),
-            PhaseUp::PrepareMainSession(_registration) => self.open_main_session(),
+            PhaseUp::PrepareMainSession(_registration) => self.open_session(&session::Protocol::Udp),
+            PhaseUp::FixMainSession(_registration) => self.list_sessions(&session::Protocol::Udp),
             PhaseUp::MonitorMainSession(_session, _since, _registration) => self.ping(),
             PhaseUp::MainSessionBroken(session, _registration) => self.close_session(&session),
         }
@@ -345,7 +352,7 @@ impl Connection {
         tracing::debug!(phase_down = %self.phase_down, "Dismantling connection");
         match self.phase_down.clone() {
             PhaseDown::CloseMainSession(session, _since, _registration) => self.close_session(&session),
-            PhaseDown::PrepareBridgeSession(_registration) => self.open_bridge_session(),
+            PhaseDown::PrepareBridgeSession(_registration) => self.open_session(&session::Protocol::Tcp),
             PhaseDown::WgUnregistration(session, _registration) => self.unregister_wg(&session),
             PhaseDown::CloseBridgeSession(session) => self.close_session(&session),
             PhaseDown::Retired => self.shutdown(),
@@ -355,14 +362,27 @@ impl Connection {
     fn act_event_up(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::OpenSession(res) => {
-                let session = res?;
+                let listen_host_used = matches!(res, Err(session::Error::ListenHostAlreadyUsed));
                 match self.phase_up.clone() {
                     PhaseUp::Ready => {
-                        self.phase_up = PhaseUp::WgRegistration(session.clone());
+                        if listen_host_used {
+                            tracing::warn!("Listen host already used - trying to close existing session");
+                            self.phase_up = PhaseUp::FixBridgeSession;
+                            self.backoff = BackoffState::Inactive;
+                            return Ok(());
+                        };
+                        self.phase_up = PhaseUp::WgRegistration(res?.clone());
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
                     PhaseUp::PrepareMainSession(registration) => {
+                        if listen_host_used {
+                            tracing::warn!("Listen host already used - trying to close existing session");
+                            self.phase_up = PhaseUp::FixMainSession(registration.clone());
+                            self.backoff = BackoffState::Inactive;
+                            return Ok(());
+                        };
+                        let session = res?;
                         self.phase_up =
                             PhaseUp::MonitorMainSession(session.clone(), SystemTime::now(), registration.clone());
                         self.backoff = BackoffState::Inactive;
@@ -383,9 +403,8 @@ impl Connection {
                 }
             }
             InternalEvent::RegisterWg(res) => {
-                let registration = res?;
                 if let PhaseUp::WgRegistration(session) = self.phase_up.clone() {
-                    self.phase_up = PhaseUp::CloseBridgeSession(session, registration);
+                    self.phase_up = PhaseUp::CloseBridgeSession(session, res?);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
                 } else {
@@ -406,6 +425,11 @@ impl Connection {
                     }
                     PhaseUp::MainSessionBroken(_session, registration) => {
                         self.phase_up = PhaseUp::PrepareMainSession(registration);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    PhaseUp::FixBridgeSessionClosing(_session) => {
+                        self.phase_up = PhaseUp::Ready;
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
@@ -432,7 +456,24 @@ impl Connection {
                     }
                 }
             }
-            evt => Err(InternalError::UnexecptedEvent(evt)),
+            InternalEvent::ListSessions(res) => {
+                let sessions = res?;
+                let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
+                match open_session {
+                    Some(session) => {
+                        tracing::info!(%session, "Found conflicting session - closing");
+                        self.phase_up = PhaseUp::FixBridgeSessionClosing(session.clone());
+                        self.backoff = BackoffState::Inactive;
+                    }
+                    None => {
+                        tracing::info!("No conflicting session found - proceed as normal");
+                        self.phase_up = PhaseUp::Ready;
+                        self.backoff = BackoffState::Inactive;
+                    }
+                };
+                Ok(())
+            }
+            InternalEvent::UnregisterWg(res) => Err(InternalError::UnexecptedEvent(InternalEvent::UnregisterWg(res))),
         }
     }
 
@@ -492,13 +533,14 @@ impl Connection {
         r
     }
 
-    fn open_main_session(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::OpenSession::main(
-            &self.entry_node,
-            &self.destination.peer_id,
-            &self.destination.wg.capabilities,
-            &self.destination.path,
-            &self.destination.wg.target,
+    fn open_session(&mut self, protocol: &session::Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
+        let params = session::OpenSession::new(
+            self.entry_node.clone(),
+            self.destination.peer_id,
+            self.destination.wg.capabilities.clone(),
+            self.destination.path.clone(),
+            self.destination.wg.target.clone(),
+            protocol.clone(),
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -528,22 +570,16 @@ impl Connection {
         r
     }
 
-    fn open_bridge_session(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::OpenSession::bridge(
-            &self.entry_node,
-            &self.destination.peer_id,
-            &self.destination.bridge.capabilities,
-            &self.destination.path,
-            &self.destination.bridge.target,
-        );
+    fn list_sessions(&mut self, protocol: &session::Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
+        let params = session::ListSession::new(&self.entry_node, protocol);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
-            let res = Session::open(&client, &params);
-            _ = s.send(InternalEvent::OpenSession(res));
+            let res = Session::list(&client, &params);
+            _ = s.send(InternalEvent::ListSessions(res));
         });
         r
     }
@@ -590,11 +626,14 @@ impl Display for PhaseUp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PhaseUp::Ready => write!(f, "Ready"),
+            PhaseUp::FixBridgeSession => write!(f, "FixBridgeSession"),
+            PhaseUp::FixBridgeSessionClosing(session) => write!(f, "FixBridgeSessionClosing({})", session),
             PhaseUp::WgRegistration(session) => write!(f, "WgRegistration({})", session),
             PhaseUp::CloseBridgeSession(session, registration) => {
                 write!(f, "CloseBridgeSession({}, {})", session, registration)
             }
             PhaseUp::PrepareMainSession(registration) => write!(f, "PrepareMainSession({})", registration),
+            PhaseUp::FixMainSession(registration) => write!(f, "FixMainSession({})", registration),
             PhaseUp::MonitorMainSession(session, since, registration) => write!(
                 f,
                 "MonitorMainSession({}, since {}, {})",
@@ -633,9 +672,12 @@ impl From<PhaseUp> for PhaseDown {
     fn from(phase_up: PhaseUp) -> Self {
         match phase_up {
             PhaseUp::Ready => PhaseDown::Retired,
+            PhaseUp::FixBridgeSession => PhaseDown::Retired,
+            PhaseUp::FixBridgeSessionClosing(_session) => PhaseDown::Retired,
             PhaseUp::WgRegistration(session) => PhaseDown::CloseBridgeSession(session),
             PhaseUp::CloseBridgeSession(session, registration) => PhaseDown::WgUnregistration(session, registration),
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
+            PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::MonitorMainSession(session, since, registration) => {
                 PhaseDown::CloseMainSession(session, since, registration)
             }
@@ -652,6 +694,7 @@ impl Display for InternalEvent {
             InternalEvent::RegisterWg(res) => write!(f, "RegisterWg({:?})", res),
             InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({:?})", res),
             InternalEvent::Ping(res) => write!(f, "Ping({:?})", res),
+            InternalEvent::ListSessions(res) => write!(f, "ListSessions({:?})", res),
         }
     }
 }

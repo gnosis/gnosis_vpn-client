@@ -95,37 +95,21 @@ impl Target {
 }
 
 impl OpenSession {
-    pub fn bridge(
-        entry_node: &EntryNode,
-        destination: &PeerId,
-        capabilities: &[Capability],
-        path: &Path,
-        target: &Target,
+    pub fn new(
+        entry_node: EntryNode,
+        destination: PeerId,
+        capabilities: Vec<Capability>,
+        path: Path,
+        target: Target,
+        protocol: Protocol,
     ) -> Self {
         OpenSession {
-            entry_node: entry_node.clone(),
-            destination: *destination,
-            capabilities: capabilities.to_owned(),
-            path: path.clone(),
-            target: target.clone(),
-            protocol: Protocol::Tcp,
-        }
-    }
-
-    pub fn main(
-        entry_node: &EntryNode,
-        destination: &PeerId,
-        capabilities: &[Capability],
-        path: &Path,
-        target: &Target,
-    ) -> Self {
-        OpenSession {
-            entry_node: entry_node.clone(),
-            destination: *destination,
-            capabilities: capabilities.to_owned(),
-            path: path.clone(),
-            target: target.clone(),
-            protocol: Protocol::Udp,
+            entry_node,
+            destination,
+            capabilities,
+            path,
+            target,
+            protocol,
         }
     }
 }
