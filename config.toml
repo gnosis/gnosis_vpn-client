@@ -5,6 +5,7 @@
 # However you can override this by using `GNOSISVPN_CONFIG_PATH` env var
 ###
 
+# general config file version
 version = 2
 
 [hoprd_node]
@@ -18,7 +19,6 @@ api_token = "<your hoprd node API token>"
 # This port is an additional port used to establish the tunnel connection on your hoprd node.
 # In general, if you want to establish a connection on a specific port, simply provide that port here.
 internal_connection_port = 1422
-# general config file version
 
 ###
 ## destinations section - configure available target destinations
