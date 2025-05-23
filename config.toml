@@ -42,6 +42,10 @@ path = { intermediates = [
   "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr",
 ] }
 
-# only specify this if you want to manually connect via WireGuard
+###
+## wireguard section - specific VPN-related settings
+
+# [wireguard]
+# If you manually handle the WireGuard interface, you need to specify a public_key here
 # [wireguard.manual_mode]
 # public_key = "<your WireGuard public key>"

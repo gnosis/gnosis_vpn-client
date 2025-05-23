@@ -90,4 +90,5 @@ path = { intermediates = [
 # allowed_ips = "10.128.0.1/9"
 # GnosisVPN will handle this automatically, but can only do so on supported platforms.
 # If you manually handle the WireGuard interface, you need to specify a public_key here
-# manual_mode = { public_key = "<your WireGuard public key>" }
+# [wireguard.manual_mode]
+# public_key = "<your WireGuard public key>"
