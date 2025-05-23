@@ -49,6 +49,7 @@ enum PhaseUp {
     CloseBridgeSession(Session, Registration),
     PrepareMainSession(Registration),
     FixMainSession(Registration),
+    FixMainSessionClosing(Session, Registration),
     MonitorMainSession(Session, SystemTime, Registration),
     MainSessionBroken(Session, Registration),
 }
@@ -343,6 +344,7 @@ impl Connection {
             PhaseUp::CloseBridgeSession(session, _registration) => self.close_session(&session),
             PhaseUp::PrepareMainSession(_registration) => self.open_session(self.main_session_params()),
             PhaseUp::FixMainSession(_registration) => self.list_sessions(&session::Protocol::Udp),
+            PhaseUp::FixMainSessionClosing(session, _registration) => self.close_session(&session),
             PhaseUp::MonitorMainSession(_session, _since, _registration) => self.ping(),
             PhaseUp::MainSessionBroken(session, _registration) => self.close_session(&session),
         }
@@ -433,6 +435,11 @@ impl Connection {
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
+                    PhaseUp::FixMainSessionClosing(_session, registration) => {
+                        self.phase_up = PhaseUp::PrepareMainSession(registration);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
@@ -459,19 +466,33 @@ impl Connection {
             InternalEvent::ListSessions(res) => {
                 let sessions = res?;
                 let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
-                match open_session {
-                    Some(session) => {
+                match (open_session, self.phase_up.clone()) {
+                    (Some(session), PhaseUp::FixBridgeSession) => {
                         tracing::info!(%session, "Found conflicting session - closing");
                         self.phase_up = PhaseUp::FixBridgeSessionClosing(session.clone());
                         self.backoff = BackoffState::Inactive;
+                        Ok(())
                     }
-                    None => {
+                    (Some(session), PhaseUp::FixMainSession(reg)) => {
+                        tracing::info!(%session, "Found conflicting session - closing");
+                        self.phase_up = PhaseUp::FixMainSessionClosing(session.clone(), reg);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    (None, PhaseUp::FixBridgeSession) => {
                         tracing::info!("No conflicting session found - proceed as normal");
                         self.phase_up = PhaseUp::Ready;
                         self.backoff = BackoffState::Inactive;
+                        Ok(())
                     }
-                };
-                Ok(())
+                    (None, PhaseUp::FixMainSession(reg)) => {
+                        tracing::info!("No conflicting session found - proceed as normal");
+                        self.phase_up = PhaseUp::PrepareMainSession(reg);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    _ => Err(InternalError::UnexpectedPhase),
+                }
             }
             InternalEvent::UnregisterWg(res) => Err(InternalError::UnexecptedEvent(InternalEvent::UnregisterWg(res))),
         }
@@ -646,6 +667,9 @@ impl Display for PhaseUp {
             }
             PhaseUp::PrepareMainSession(registration) => write!(f, "PrepareMainSession({})", registration),
             PhaseUp::FixMainSession(registration) => write!(f, "FixMainSession({})", registration),
+            PhaseUp::FixMainSessionClosing(session, registration) => {
+                write!(f, "FixMainSessionClosing({}, {})", session, registration)
+            }
             PhaseUp::MonitorMainSession(session, since, registration) => write!(
                 f,
                 "MonitorMainSession({}, since {}, {})",
@@ -690,6 +714,7 @@ impl From<PhaseUp> for PhaseDown {
             PhaseUp::CloseBridgeSession(session, registration) => PhaseDown::WgUnregistration(session, registration),
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
+            PhaseUp::FixMainSessionClosing(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::MonitorMainSession(session, since, registration) => {
                 PhaseDown::CloseMainSession(session, since, registration)
             }
