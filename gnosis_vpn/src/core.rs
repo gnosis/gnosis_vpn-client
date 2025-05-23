@@ -320,7 +320,7 @@ impl Core {
     }
 
     fn on_session_disconnect(&mut self) -> Result<(), Error> {
-        tracing::info!("session hickup detected - reconnecting");
+        tracing::info!("session hiccup detected - reconnecting");
         self.session_connected = false;
         Ok(())
     }
