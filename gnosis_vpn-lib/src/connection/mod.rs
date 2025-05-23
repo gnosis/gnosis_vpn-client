@@ -336,12 +336,12 @@ impl Connection {
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
-            PhaseUp::Ready => self.open_session(&session::Protocol::Tcp),
+            PhaseUp::Ready => self.open_session(self.bridge_session_params()),
             PhaseUp::FixBridgeSession => self.list_sessions(&session::Protocol::Tcp),
             PhaseUp::FixBridgeSessionClosing(session) => self.close_session(&session),
             PhaseUp::WgRegistration(session) => self.register_wg(&session),
             PhaseUp::CloseBridgeSession(session, _registration) => self.close_session(&session),
-            PhaseUp::PrepareMainSession(_registration) => self.open_session(&session::Protocol::Udp),
+            PhaseUp::PrepareMainSession(_registration) => self.open_session(self.main_session_params()),
             PhaseUp::FixMainSession(_registration) => self.list_sessions(&session::Protocol::Udp),
             PhaseUp::MonitorMainSession(_session, _since, _registration) => self.ping(),
             PhaseUp::MainSessionBroken(session, _registration) => self.close_session(&session),
@@ -352,7 +352,7 @@ impl Connection {
         tracing::debug!(phase_down = %self.phase_down, "Dismantling connection");
         match self.phase_down.clone() {
             PhaseDown::CloseMainSession(session, _since, _registration) => self.close_session(&session),
-            PhaseDown::PrepareBridgeSession(_registration) => self.open_session(&session::Protocol::Tcp),
+            PhaseDown::PrepareBridgeSession(_registration) => self.open_session(self.bridge_session_params()),
             PhaseDown::WgUnregistration(session, _registration) => self.unregister_wg(&session),
             PhaseDown::CloseBridgeSession(session) => self.close_session(&session),
             PhaseDown::Retired => self.shutdown(),
@@ -533,15 +533,7 @@ impl Connection {
         r
     }
 
-    fn open_session(&mut self, protocol: &session::Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::OpenSession::new(
-            self.entry_node.clone(),
-            self.destination.peer_id,
-            self.destination.wg.capabilities.clone(),
-            self.destination.path.clone(),
-            self.destination.wg.target.clone(),
-            protocol.clone(),
-        );
+    fn open_session(&mut self, params: session::OpenSession) -> crossbeam_channel::Receiver<InternalEvent> {
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -619,6 +611,26 @@ impl Connection {
             tracing::error!(%error, "Failed sending dismantled event");
         });
         crossbeam_channel::never()
+    }
+
+    fn bridge_session_params(&self) -> session::OpenSession {
+        session::OpenSession::bridge(
+            self.entry_node.clone(),
+            self.destination.peer_id,
+            self.destination.bridge.capabilities.clone(),
+            self.destination.path.clone(),
+            self.destination.bridge.target.clone(),
+        )
+    }
+
+    fn main_session_params(&self) -> session::OpenSession {
+        session::OpenSession::main(
+            self.entry_node.clone(),
+            self.destination.peer_id,
+            self.destination.wg.capabilities.clone(),
+            self.destination.path.clone(),
+            self.destination.wg.target.clone(),
+        )
     }
 }
 
