@@ -47,7 +47,17 @@ fn config_channel(
     ),
     exitcode::ExitCode,
 > {
-    let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
+    match param_config_path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::error!(config_file=%param_config_path.display(), "cannot find configuration file");
+            return Err(exitcode::NOINPUT);
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "error checking configuration file path");
+            return Err(exitcode::IOERR);
+        }
+    };
 
     let config_path = match fs::canonicalize(param_config_path) {
         Ok(path) => path,
@@ -64,6 +74,8 @@ fn config_channel(
             return Err(exitcode::UNAVAILABLE);
         }
     };
+
+    let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
 
     let mut watcher = match notify::recommended_watcher(sender) {
         Ok(watcher) => watcher,
