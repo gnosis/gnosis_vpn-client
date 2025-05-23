@@ -39,7 +39,7 @@ fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode
 }
 
 fn config_channel(
-    config_path: &Path,
+    param_config_path: &Path,
 ) -> Result<
     (
         notify::RecommendedWatcher,
@@ -47,7 +47,25 @@ fn config_channel(
     ),
     exitcode::ExitCode,
 > {
-    let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
+    match param_config_path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::error!(config_file=%param_config_path.display(), "cannot find configuration file");
+            return Err(exitcode::NOINPUT);
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "error checking configuration file path");
+            return Err(exitcode::IOERR);
+        }
+    };
+
+    let config_path = match fs::canonicalize(param_config_path) {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(error = ?e, "error canonicalizing config path");
+            return Err(exitcode::IOERR);
+        }
+    };
 
     let parent = match config_path.parent() {
         Some(dir) => dir,
@@ -57,15 +75,7 @@ fn config_channel(
         }
     };
 
-    if !parent.exists() {
-        match fs::create_dir(parent) {
-            Ok(_) => (),
-            Err(e) => {
-                tracing::error!(error = ?e, "error creating config directory");
-                return Err(exitcode::IOERR);
-            }
-        }
-    }
+    let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
 
     let mut watcher = match notify::recommended_watcher(sender) {
         Ok(watcher) => watcher,
