@@ -296,11 +296,10 @@
 //!
 //!   See [manual::_06_fips] for more details.
 //!
-//! - `prefer-post-quantum`: for the [`aws-lc-rs`]-backed provider, prioritizes post-quantum secure
-//!   key exchange by default (using X25519MLKEM768).  This feature merely alters the order
-//!   of `rustls::crypto::aws_lc_rs::DEFAULT_KX_GROUPS`.  We expect to add this feature
-//!   to the default set in a future minor release.  See [the manual][x25519mlkem768-manual]
-//!   for more details.
+//! - `prefer-post-quantum` (enabled by default): for the [`aws-lc-rs`]-backed provider,
+//!   prioritizes post-quantum secure key exchange by default (using X25519MLKEM768).
+//!   This feature merely alters the order of `rustls::crypto::aws_lc_rs::DEFAULT_KX_GROUPS`.
+//!   See [the manual][x25519mlkem768-manual] for more details.
 //!
 //! - `custom-provider`: disables implicit use of built-in providers (`aws-lc-rs` or `ring`). This forces
 //!   applications to manually install one, for instance, when using a custom `CryptoProvider`.
@@ -488,7 +487,7 @@ pub mod internal {
                 CertificateChain, ClientExtension, ClientHelloPayload, DistinguishedName,
                 EchConfigContents, EchConfigPayload, HandshakeMessagePayload, HandshakePayload,
                 HpkeKeyConfig, HpkeSymmetricCipherSuite, KeyShareEntry, Random, ServerExtension,
-                ServerName, SessionId,
+                SessionId,
             };
         }
         pub mod message {
@@ -546,6 +545,7 @@ pub mod unbuffered {
 // The public interface is:
 pub use crate::builder::{ConfigBuilder, ConfigSide, WantsVerifier, WantsVersions};
 pub use crate::common_state::{CommonState, HandshakeKind, IoState, Side};
+pub use crate::conn::kernel;
 #[cfg(feature = "std")]
 pub use crate::conn::{Connection, Reader, Writer};
 pub use crate::conn::{ConnectionCommon, SideData};
@@ -554,8 +554,9 @@ pub use crate::enums::{
     ProtocolVersion, SignatureAlgorithm, SignatureScheme,
 };
 pub use crate::error::{
-    CertRevocationListError, CertificateError, EncryptedClientHelloError, Error, InconsistentKeys,
-    InvalidMessage, OtherError, PeerIncompatible, PeerMisbehaved,
+    CertRevocationListError, CertificateError, EncryptedClientHelloError, Error,
+    ExtendedKeyPurpose, InconsistentKeys, InvalidMessage, OtherError, PeerIncompatible,
+    PeerMisbehaved,
 };
 pub use crate::key_log::{KeyLog, NoKeyLog};
 #[cfg(feature = "std")]

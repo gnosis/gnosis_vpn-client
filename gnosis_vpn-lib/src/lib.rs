@@ -10,5 +10,6 @@ pub mod state;
 pub mod wireguard;
 
 mod dirs;
+mod monitor;
 mod remote_data;
 mod wg_client;

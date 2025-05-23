@@ -25,7 +25,6 @@ pub(crate) fn duration_to_timespec(d: Duration) -> timespec {
 mod tests {
     use super::duration_to_timespec;
     use std::time::Duration;
-    use std::{i64, u32};
 
     #[test]
     fn test_basic_duration_to_ts() {

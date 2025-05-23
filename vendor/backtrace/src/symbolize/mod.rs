@@ -63,7 +63,7 @@ pub fn resolve<F: FnMut(&Symbol)>(addr: *mut c_void, cb: F) {
     unsafe { resolve_unsynchronized(addr, cb) }
 }
 
-/// Resolve a previously capture frame to a symbol, passing the symbol to the
+/// Resolve a previously captured frame to a symbol, passing the symbol to the
 /// specified closure.
 ///
 /// This function performs the same function as `resolve` except that it takes a
@@ -159,7 +159,7 @@ pub unsafe fn resolve_unsynchronized<F>(addr: *mut c_void, mut cb: F)
 where
     F: FnMut(&Symbol),
 {
-    imp::resolve(ResolveWhat::Address(addr), &mut cb)
+    unsafe { imp::resolve(ResolveWhat::Address(addr), &mut cb) }
 }
 
 /// Same as `resolve_frame`, only unsafe as it's unsynchronized.
@@ -175,7 +175,7 @@ pub unsafe fn resolve_frame_unsynchronized<F>(frame: &Frame, mut cb: F)
 where
     F: FnMut(&Symbol),
 {
-    imp::resolve(ResolveWhat::Frame(frame), &mut cb)
+    unsafe { imp::resolve(ResolveWhat::Frame(frame), &mut cb) }
 }
 
 /// A trait representing the resolution of a symbol in a file.

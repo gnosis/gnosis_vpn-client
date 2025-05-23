@@ -82,44 +82,6 @@ impl WireGuard for Tooling {
         Ok(())
     }
 
-    /*
-    fn verify_session(&self, session: &VerifySession) -> Result<(), Error> {
-        let output = Command::new("wg")
-            .arg("show")
-            .arg(NETWORK)
-            .arg("latest-handshakes")
-            .output()
-            .map_err(|e| Error::IO(e.to_string()))?;
-
-        tracing::info!("wg show output: {:?}", output);
-        if !output.status.success() {
-            let err = String::from_utf8(output.stderr).map_err(Error::FromUtf8Error)?;
-            return Err(Error::Monitoring(err));
-        }
-
-        let output = String::from_utf8(output.stdout).map_err(Error::FromUtf8Error)?;
-        let parts: Vec<&str> = output.split_whitespace().collect();
-        if parts.len() != 2 {
-            return Err(Error::Monitoring("unexpected output from wg show".to_string()));
-        }
-        let first = parts[0];
-        let second = parts[0];
-        if first == session.peer_public_key && second == "0" {
-            return Err(Error::Monitoring("wg server peer has not handshaked".to_string()));
-        }
-        let split = output.split(" ");
-        tracing::info!("wg show split: {:?}", split);
-        if split.take(1).collect::<Vec<&str>>().join("") != session.peer_public_key {
-            return Err(Error::Monitoring("wg server peer does now match".to_string()));
-        }
-        if split.take(1).collect::<Vec<&str>>().join("") == "0" {
-            tracing::warn!("Handshake not working, it seems that your public key is not yet registered");
-            return Err(Error::Monitoring("wg server peer has not handshaked".to_string()));
-        }
-        Ok(())
-    }
-    */
-
     fn public_key(&self, priv_key: &str) -> Result<String, Error> {
         let mut command = Command::new("wg")
             .arg("pubkey")

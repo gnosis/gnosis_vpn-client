@@ -10,6 +10,7 @@ version = 2
 
 ###
 ## hoprd node section - your hoprd node that acts as the connection entry point
+
 [hoprd_node]
 
 # URL pointing to the API access of your hoprd node with scheme and port (e.g., `http://192.168.0.89:3001`)
@@ -27,6 +28,7 @@ internal_connection_port = 1422
 
 ###
 ## destinations section - configure available target destinations
+
 [destinations]
 
 # exit node peer ID (where the connection should terminate)
@@ -58,17 +60,6 @@ path = { intermediates = [
 ###
 ## connection section - adjust for more fine grained connection control
 
-[connection]
-listen_host = "0.0.0.0:1422"
-
-[connection.bridge]
-capabilities = ["segmentation", "retransmission"]
-target = "127.0.0.1:8000"
-
-[connection.wg]
-capabilities = ["segmentation"]
-target = "127.0.0.1:51820"
-
 # [connection]
 # listen host - specify the internal listen host on your hoprd node.
 # If you have a firewall running and can only use static ports, you need to adjust this setting.
@@ -82,12 +73,12 @@ target = "127.0.0.1:51820"
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission" ]
-# target = "127.0.0.1:8000"
+# target = "172.30.0.1:8000"
 
 # determine specific connection parameters for persistent main connection
 # [connection.wg]
 # capabilities = [ "segmentation" ]
-# target = "127.0.0.1:51820"
+# target = "172.30.0.1:51820"
 
 ###
 ## wireguard section - specific VPN-related settings

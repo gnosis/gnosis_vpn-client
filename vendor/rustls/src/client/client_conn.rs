@@ -16,6 +16,7 @@ use crate::conn::{ConnectionCore, UnbufferedConnectionCommon};
 use crate::crypto::{CryptoProvider, SupportedKxGroup};
 use crate::enums::{CipherSuite, ProtocolVersion, SignatureScheme};
 use crate::error::Error;
+use crate::kernel::KernelConnection;
 use crate::log::trace;
 use crate::msgs::enums::NamedGroup;
 use crate::msgs::handshake::ClientExtension;
@@ -702,11 +703,25 @@ mod connection {
         /// we behave in the TLS protocol, `name` is the
         /// name of the server we want to talk to.
         pub fn new(config: Arc<ClientConfig>, name: ServerName<'static>) -> Result<Self, Error> {
-            Ok(Self {
-                inner: ConnectionCore::for_client(config, name, Vec::new(), Protocol::Tcp)?.into(),
-            })
+            Self::new_with_alpn(Arc::clone(&config), name, config.alpn_protocols.clone())
         }
 
+        /// Make a new ClientConnection with custom ALPN protocols.
+        pub fn new_with_alpn(
+            config: Arc<ClientConfig>,
+            name: ServerName<'static>,
+            alpn_protocols: Vec<Vec<u8>>,
+        ) -> Result<Self, Error> {
+            Ok(Self {
+                inner: ConnectionCommon::from(ConnectionCore::for_client(
+                    config,
+                    name,
+                    alpn_protocols,
+                    Vec::new(),
+                    Protocol::Tcp,
+                )?),
+            })
+        }
         /// Returns an `io::Write` implementer you can write bytes to
         /// to send TLS1.3 early data (a.k.a. "0-RTT data") to the server.
         ///
@@ -821,6 +836,7 @@ impl ConnectionCore<ClientConnectionData> {
     pub(crate) fn for_client(
         config: Arc<ClientConfig>,
         name: ServerName<'static>,
+        alpn_protocols: Vec<Vec<u8>>,
         extra_exts: Vec<ClientExtension>,
         proto: Protocol,
     ) -> Result<Self, Error> {
@@ -838,7 +854,7 @@ impl ConnectionCore<ClientConnectionData> {
             sendable_plaintext: None,
         };
 
-        let state = hs::start_handshake(name, extra_exts, config, &mut cx)?;
+        let state = hs::start_handshake(name, alpn_protocols, extra_exts, config, &mut cx)?;
         Ok(Self::new(state, data, common_state))
     }
 
@@ -859,15 +875,49 @@ impl UnbufferedClientConnection {
     /// Make a new ClientConnection. `config` controls how we behave in the TLS protocol, `name` is
     /// the name of the server we want to talk to.
     pub fn new(config: Arc<ClientConfig>, name: ServerName<'static>) -> Result<Self, Error> {
+        Self::new_with_alpn(Arc::clone(&config), name, config.alpn_protocols.clone())
+    }
+
+    /// Make a new UnbufferedClientConnection with custom ALPN protocols.
+    pub fn new_with_alpn(
+        config: Arc<ClientConfig>,
+        name: ServerName<'static>,
+        alpn_protocols: Vec<Vec<u8>>,
+    ) -> Result<Self, Error> {
         Ok(Self {
-            inner: ConnectionCore::for_client(config, name, Vec::new(), Protocol::Tcp)?.into(),
+            inner: UnbufferedConnectionCommon::from(ConnectionCore::for_client(
+                config,
+                name,
+                alpn_protocols,
+                Vec::new(),
+                Protocol::Tcp,
+            )?),
         })
     }
 
     /// Extract secrets, so they can be used when configuring kTLS, for example.
     /// Should be used with care as it exposes secret key material.
+    #[deprecated = "dangerous_extract_secrets() does not support session tickets or \
+                    key updates, use dangerous_into_kernel_connection() instead"]
     pub fn dangerous_extract_secrets(self) -> Result<ExtractedSecrets, Error> {
         self.inner.dangerous_extract_secrets()
+    }
+
+    /// Extract secrets and a [`KernelConnection`] object.
+    ///
+    /// This allows you use rustls to manage keys and then manage encryption and
+    /// decryption yourself (e.g. for kTLS).
+    ///
+    /// Should be used with care as it exposes secret key material.
+    ///
+    /// See the [`crate::kernel`] documentations for details on prerequisites
+    /// for calling this method.
+    pub fn dangerous_into_kernel_connection(
+        self,
+    ) -> Result<(ExtractedSecrets, KernelConnection<ClientConnectionData>), Error> {
+        self.inner
+            .core
+            .dangerous_into_kernel_connection()
     }
 }
 
@@ -969,7 +1019,6 @@ impl std::error::Error for EarlyDataError {}
 #[derive(Debug)]
 pub struct ClientConnectionData {
     pub(super) early_data: EarlyData,
-    pub(super) resumption_ciphersuite: Option<SupportedCipherSuite>,
     pub(super) ech_status: EchStatus,
 }
 
@@ -977,7 +1026,6 @@ impl ClientConnectionData {
     fn new() -> Self {
         Self {
             early_data: EarlyData::new(),
-            resumption_ciphersuite: None,
             ech_status: EchStatus::NotOffered,
         }
     }

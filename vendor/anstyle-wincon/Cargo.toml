@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.66.0"
 name = "anstyle-wincon"
-version = "3.0.7"
+version = "3.0.8"
 build = false
 include = [
     "build.rs",
@@ -105,8 +105,8 @@ version = "1.0.0"
 [dev-dependencies.lexopt]
 version = "0.3.0"
 
-[target."cfg(windows)".dependencies.once_cell]
-version = "1.20.2"
+[target."cfg(windows)".dependencies.once_cell_polyfill]
+version = "1.56.0"
 
 [target."cfg(windows)".dependencies.windows-sys]
 version = "0.59.0"

@@ -170,6 +170,56 @@ pub const O_ACCMODE: usize = O_RDONLY | O_WRONLY | O_RDWR;
 
 // The top 48 bits of PTRACE_* are reserved, for now
 
+// NOT ABI STABLE!
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(usize)]
+pub enum ContextStatus {
+    Runnable,
+    Blocked,
+    NotYetStarted,
+    Dead,
+    ForceKilled,
+    Stopped,
+    UnhandledExcp,
+    #[default]
+    Other, // reserved
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+pub enum ContextVerb {
+    Stop = 1,
+    Unstop = 2,
+    Interrupt = 3,
+    ForceKill = usize::MAX,
+}
+impl ContextVerb {
+    pub fn try_from_raw(raw: usize) -> Option<Self> {
+        Some(match raw {
+            1 => Self::Stop,
+            2 => Self::Unstop,
+            3 => Self::Interrupt,
+            usize::MAX => Self::ForceKill,
+            _ => return None,
+        })
+    }
+}
+
+// NOT ABI STABLE!
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum ProcSchemeVerb {
+    Iopl = 255,
+}
+impl ProcSchemeVerb {
+    pub fn try_from_raw(verb: u8) -> Option<Self> {
+        Some(match verb {
+            255 => Self::Iopl,
+            _ => return None,
+        })
+    }
+}
+
 bitflags! {
     pub struct PtraceFlags: u64 {
         /// Stop before a syscall is handled. Send PTRACE_FLAG_IGNORE to not
@@ -222,90 +272,15 @@ pub const SEEK_SET: usize = 0;
 pub const SEEK_CUR: usize = 1;
 pub const SEEK_END: usize = 2;
 
-pub const SIGHUP: usize = 1;
-pub const SIGINT: usize = 2;
-pub const SIGQUIT: usize = 3;
-pub const SIGILL: usize = 4;
-pub const SIGTRAP: usize = 5;
-pub const SIGABRT: usize = 6;
-pub const SIGBUS: usize = 7;
-pub const SIGFPE: usize = 8;
-pub const SIGKILL: usize = 9;
-pub const SIGUSR1: usize = 10;
-pub const SIGSEGV: usize = 11;
-pub const SIGUSR2: usize = 12;
-pub const SIGPIPE: usize = 13;
-pub const SIGALRM: usize = 14;
-pub const SIGTERM: usize = 15;
-pub const SIGSTKFLT: usize = 16;
 pub const SIGCHLD: usize = 17;
-pub const SIGCONT: usize = 18;
-pub const SIGSTOP: usize = 19;
 pub const SIGTSTP: usize = 20;
 pub const SIGTTIN: usize = 21;
 pub const SIGTTOU: usize = 22;
-pub const SIGURG: usize = 23;
-pub const SIGXCPU: usize = 24;
-pub const SIGXFSZ: usize = 25;
-pub const SIGVTALRM: usize = 26;
-pub const SIGPROF: usize = 27;
-pub const SIGWINCH: usize = 28;
-pub const SIGIO: usize = 29;
-pub const SIGPWR: usize = 30;
-pub const SIGSYS: usize = 31;
-
-bitflags! {
-    pub struct WaitFlags: usize {
-        const WNOHANG =    0x01;
-        const WUNTRACED =  0x02;
-        const WCONTINUED = 0x08;
-    }
-}
 
 pub const ADDRSPACE_OP_MMAP: usize = 0;
 pub const ADDRSPACE_OP_MUNMAP: usize = 1;
 pub const ADDRSPACE_OP_MPROTECT: usize = 2;
 pub const ADDRSPACE_OP_TRANSFER: usize = 3;
-
-/// True if status indicates the child is stopped.
-pub fn wifstopped(status: usize) -> bool {
-    (status & 0xff) == 0x7f
-}
-
-/// If wifstopped(status), the signal that stopped the child.
-pub fn wstopsig(status: usize) -> usize {
-    (status >> 8) & 0xff
-}
-
-/// True if status indicates the child continued after a stop.
-pub fn wifcontinued(status: usize) -> bool {
-    status == 0xffff
-}
-
-/// True if STATUS indicates termination by a signal.
-pub fn wifsignaled(status: usize) -> bool {
-    ((status & 0x7f) + 1) as i8 >= 2
-}
-
-/// If wifsignaled(status), the terminating signal.
-pub fn wtermsig(status: usize) -> usize {
-    status & 0x7f
-}
-
-/// True if status indicates normal termination.
-pub fn wifexited(status: usize) -> bool {
-    wtermsig(status) == 0
-}
-
-/// If wifexited(status), the exit status.
-pub fn wexitstatus(status: usize) -> usize {
-    (status >> 8) & 0xff
-}
-
-/// True if status indicates a core dump was created.
-pub fn wcoredump(status: usize) -> bool {
-    (status & 0x80) != 0
-}
 
 bitflags! {
     pub struct MremapFlags: usize {
@@ -335,14 +310,17 @@ bitflags! {
 }
 bitflags! {
     pub struct CallFlags: usize {
-        // unused
-        const BIT0 = 1 << 0;
-        const BIT1 = 1 << 1;
-        const BIT2 = 1 << 2;
-        const BIT3 = 1 << 3;
-        const BIT4 = 1 << 4;
-        const BIT5 = 1 << 5;
-        const BIT6 = 1 << 6;
-        const BIT7 = 1 << 7;
+        // reserved
+        const RSVD0 = 1 << 0;
+        const RSVD1 = 1 << 1;
+        const RSVD2 = 1 << 2;
+        const RSVD3 = 1 << 3;
+        const RSVD4 = 1 << 4;
+        const RSVD5 = 1 << 5;
+        const RSVD6 = 1 << 6;
+        const RSVD7 = 1 << 7;
+
+        /// Remove the fd from the caller's file table before sending the message.
+        const CONSUME = 1 << 8;
     }
 }

@@ -1,4 +1,4 @@
-use reqwest::blocking;
+use reqwest::{blocking, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp;
@@ -64,6 +64,10 @@ pub enum Error {
     Deserialize(#[from] serde_json::Error),
     #[error("Error making http request")]
     RemoteData(remote_data::CustomError),
+    #[error("Session listen host already used")]
+    ListenHostAlreadyUsed,
+    #[error("Session not found")]
+    SessionNotFound,
 }
 
 impl Target {
@@ -185,6 +189,8 @@ impl Session {
                 let session = serde_json::from_value::<Self>(json)?;
                 Ok(session)
             }
+            // Ok((409, Ok(Object {"status": String("LISTEN_HOST_ALREADY_USED")})))
+            Ok((status, _)) if status == StatusCode::CONFLICT => Err(Error::ListenHostAlreadyUsed),
             Ok((status, Ok(json))) => {
                 let e = remote_data::CustomError {
                     reqw_err: None,
@@ -227,6 +233,8 @@ impl Session {
 
         match fetch_res {
             Ok((status, _)) if status.is_success() => Ok(()),
+            // Ok((404, Ok(Object {"status": String("INVALID_INPUT")})))
+            Ok((status, _)) if status == StatusCode::NOT_FOUND => Err(Error::SessionNotFound),
             Ok((status, Ok(json))) => {
                 let e = remote_data::CustomError {
                     reqw_err: None,

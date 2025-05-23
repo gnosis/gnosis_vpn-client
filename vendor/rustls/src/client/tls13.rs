@@ -15,6 +15,7 @@ use crate::common_state::{
     CommonState, HandshakeFlightTls13, HandshakeKind, KxState, Protocol, Side, State,
 };
 use crate::conn::ConnectionRandoms;
+use crate::conn::kernel::{Direction, KernelContext, KernelState};
 use crate::crypto::{ActiveKeyExchange, SharedSecret};
 use crate::enums::{
     AlertDescription, ContentType, HandshakeType, ProtocolVersion, SignatureScheme,
@@ -45,7 +46,7 @@ use crate::tls13::{
     Tls13CipherSuite, construct_client_verify_message, construct_server_verify_message,
 };
 use crate::verify::{self, DigitallySignedStruct};
-use crate::{KeyLog, compress, crypto};
+use crate::{ConnectionTrafficSecrets, KeyLog, compress, crypto};
 
 // Extensions we expect in plaintext in the ServerHello.
 static ALLOWED_PLAINTEXT_EXTS: &[ExtensionType] = &[
@@ -63,6 +64,8 @@ static DISALLOWED_TLS13_EXTS: &[ExtensionType] = &[
     ExtensionType::ExtendedMasterSecret,
 ];
 
+/// `early_data_key_schedule` is `Some` if we sent the
+/// "early_data" extension to the server.
 pub(super) fn handle_server_hello(
     config: Arc<ClientConfig>,
     cx: &mut ClientContext<'_>,
@@ -72,7 +75,7 @@ pub(super) fn handle_server_hello(
     mut randoms: ConnectionRandoms,
     suite: &'static Tls13CipherSuite,
     mut transcript: HandshakeHash,
-    early_key_schedule: Option<KeyScheduleEarly>,
+    early_data_key_schedule: Option<KeyScheduleEarly>,
     mut hello: ClientHelloDetails,
     our_key_share: Box<dyn ActiveKeyExchange>,
     mut sent_tls13_fake_ccs: bool,
@@ -98,7 +101,7 @@ pub(super) fn handle_server_hello(
             )
         })?;
 
-    let key_schedule_pre_handshake = match (server_hello.psk_index(), early_key_schedule) {
+    let key_schedule_pre_handshake = match (server_hello.psk_index(), early_data_key_schedule) {
         (Some(selected_psk), Some(early_key_schedule)) => {
             match &resuming_session {
                 Some(resuming) => {
@@ -339,7 +342,6 @@ pub(super) fn prepare_resumption(
 ) {
     let resuming_suite = resuming_session.suite();
     cx.common.suite = Some(resuming_suite.into());
-    cx.data.resumption_ciphersuite = Some(resuming_suite.into());
     // The EarlyData extension MUST be supplied together with the
     // PreSharedKey extension.
     let max_early_data_size = resuming_session.max_early_data_size();
@@ -472,7 +474,7 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
         self.transcript.add_message(&m);
 
         validate_encrypted_extensions(cx.common, &self.hello, exts)?;
-        hs::process_alpn_protocol(cx.common, &self.config, exts.alpn_protocol())?;
+        hs::process_alpn_protocol(cx.common, &self.hello.alpn_protocols, exts.alpn_protocol())?;
         hs::process_client_cert_type_extension(cx.common, &self.config, exts.client_cert_type())?;
         hs::process_server_cert_type_extension(cx.common, &self.config, exts.server_cert_type())?;
 
@@ -1083,7 +1085,7 @@ impl State<ClientConnectionData> for ExpectCertificate {
                 PeerMisbehaved::BadCertChainExtensions,
             ));
         }
-        let end_entity_ocsp = cert_chain.end_entity_ocsp();
+        let end_entity_ocsp = cert_chain.end_entity_ocsp().to_vec();
         let server_cert = ServerCertDetails::new(
             cert_chain
                 .into_certificate_chain()
@@ -1459,16 +1461,13 @@ struct ExpectTraffic {
 }
 
 impl ExpectTraffic {
-    fn handle_new_ticket_tls13(
+    fn handle_new_ticket_impl(
         &mut self,
-        cx: &mut ClientContext<'_>,
+        cx: &mut KernelContext<'_>,
         nst: &NewSessionTicketPayloadTls13,
     ) -> Result<(), Error> {
         if nst.has_duplicate_extension() {
-            return Err(cx.common.send_fatal_alert(
-                AlertDescription::IllegalParameter,
-                PeerMisbehaved::DuplicateNewSessionTicketExtensions,
-            ));
+            return Err(PeerMisbehaved::DuplicateNewSessionTicketExtensions.into());
         }
 
         let handshake_hash = self.transcript.current_hash();
@@ -1482,9 +1481,8 @@ impl ExpectTraffic {
             self.suite,
             Arc::clone(&nst.ticket),
             secret.as_ref(),
-            cx.common
-                .peer_certificates
-                .clone()
+            cx.peer_certificates
+                .cloned()
                 .unwrap_or_default(),
             &self.config.verifier,
             &self.config.client_auth_cert_resolver,
@@ -1495,14 +1493,14 @@ impl ExpectTraffic {
                 .unwrap_or_default(),
         );
 
-        if cx.common.is_quic() {
+        if cx.is_quic() {
             if let Some(sz) = nst.max_early_data_size() {
                 if sz != 0 && sz != 0xffff_ffff {
                     return Err(PeerMisbehaved::InvalidMaxEarlyDataSize.into());
                 }
             }
 
-            if let Some(quic_params) = &cx.common.quic.params {
+            if let Some(quic_params) = &cx.quic.params {
                 value.set_quic_params(quic_params);
             }
         }
@@ -1510,6 +1508,26 @@ impl ExpectTraffic {
         self.session_storage
             .insert_tls13_ticket(self.server_name.clone(), value);
         Ok(())
+    }
+
+    fn handle_new_ticket_tls13(
+        &mut self,
+        cx: &mut ClientContext<'_>,
+        nst: &NewSessionTicketPayloadTls13,
+    ) -> Result<(), Error> {
+        if nst.has_duplicate_extension() {
+            return Err(cx.common.send_fatal_alert(
+                AlertDescription::IllegalParameter,
+                PeerMisbehaved::DuplicateNewSessionTicketExtensions,
+            ));
+        }
+
+        let mut kcx = KernelContext {
+            peer_certificates: cx.common.peer_certificates.as_ref(),
+            protocol: cx.common.protocol,
+            quic: &cx.common.quic,
+        };
+        self.handle_new_ticket_impl(&mut kcx, nst)
     }
 
     fn handle_key_update(
@@ -1600,8 +1618,30 @@ impl State<ClientConnectionData> for ExpectTraffic {
             .extract_secrets(Side::Client)
     }
 
+    fn into_external_state(self: Box<Self>) -> Result<Box<dyn KernelState + 'static>, Error> {
+        Ok(self)
+    }
+
     fn into_owned(self: Box<Self>) -> hs::NextState<'static> {
         self
+    }
+}
+
+impl KernelState for ExpectTraffic {
+    fn update_secrets(&mut self, dir: Direction) -> Result<ConnectionTrafficSecrets, Error> {
+        self.key_schedule
+            .refresh_traffic_secret(match dir {
+                Direction::Transmit => Side::Client,
+                Direction::Receive => Side::Server,
+            })
+    }
+
+    fn handle_new_session_ticket(
+        &mut self,
+        cx: &mut KernelContext<'_>,
+        message: &NewSessionTicketPayloadTls13,
+    ) -> Result<(), Error> {
+        self.handle_new_ticket_impl(cx, message)
     }
 }
 
@@ -1636,7 +1676,27 @@ impl State<ClientConnectionData> for ExpectQuicTraffic {
             .export_keying_material(output, label, context)
     }
 
+    fn into_external_state(self: Box<Self>) -> Result<Box<dyn KernelState + 'static>, Error> {
+        Ok(self)
+    }
+
     fn into_owned(self: Box<Self>) -> hs::NextState<'static> {
         self
+    }
+}
+
+impl KernelState for ExpectQuicTraffic {
+    fn update_secrets(&mut self, _: Direction) -> Result<ConnectionTrafficSecrets, Error> {
+        Err(Error::General(
+            "KeyUpdate is not supported for QUIC connections".into(),
+        ))
+    }
+
+    fn handle_new_session_ticket(
+        &mut self,
+        cx: &mut KernelContext<'_>,
+        nst: &NewSessionTicketPayloadTls13,
+    ) -> Result<(), Error> {
+        self.0.handle_new_ticket_impl(cx, nst)
     }
 }

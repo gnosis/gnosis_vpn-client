@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.63"
 name = "hyper-util"
-version = "0.1.11"
+version = "0.1.12"
 authors = ["Sean McArthur <sean@seanmonstar.com>"]
 build = false
 autolib = false
@@ -58,6 +58,16 @@ client-legacy = [
     "dep:socket2",
     "tokio/sync",
     "dep:libc",
+]
+client-proxy = [
+    "client",
+    "dep:base64",
+    "dep:ipnet",
+    "dep:percent-encoding",
+]
+client-proxy-system = [
+    "dep:system-configuration",
+    "dep:windows-registry",
 ]
 default = []
 full = [
@@ -129,6 +139,14 @@ required-features = [
 name = "legacy_client"
 path = "tests/legacy_client.rs"
 
+[[test]]
+name = "proxy"
+path = "tests/proxy.rs"
+
+[dependencies.base64]
+version = "0.22"
+optional = true
+
 [dependencies.bytes]
 version = "1.7.1"
 
@@ -149,8 +167,16 @@ version = "1.0.0"
 [dependencies.hyper]
 version = "1.6.0"
 
+[dependencies.ipnet]
+version = "2.9"
+optional = true
+
 [dependencies.libc]
 version = "0.2"
+optional = true
+
+[dependencies.percent-encoding]
+version = "2.3"
 optional = true
 
 [dependencies.pin-project-lite]
@@ -202,3 +228,11 @@ version = "0.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies.pnet_datalink]
 version = "0.35.0"
+
+[target.'cfg(target_os = "macos")'.dependencies.system-configuration]
+version = "0.6.1"
+optional = true
+
+[target."cfg(windows)".dependencies.windows-registry]
+version = "0.4"
+optional = true

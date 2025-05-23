@@ -11,11 +11,11 @@ pub(crate) fn handle_vnode_extras(ff: FilterFlag) -> Vnode {
     } else if ff.contains(FilterFlag::NOTE_OPEN) {
         Vnode::Open
     } else {
-        panic!("not supported")
+        panic!("vnode filterflag not supported: {ff:?}")
     }
 }
 
 #[cfg(not(target_os = "freebsd"))]
-pub(crate) fn handle_vnode_extras(_ff: FilterFlag) -> Vnode {
-    panic!("not supported")
+pub(crate) fn handle_vnode_extras(ff: FilterFlag) -> Vnode {
+    panic!("vnode filterflag not supported: {ff:?}")
 }

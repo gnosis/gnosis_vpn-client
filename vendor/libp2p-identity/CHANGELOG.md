@@ -1,3 +1,8 @@
+## 0.2.11
+
+- Switch from `libsecp256` to `k256` for secp256k1 support.
+  See [PR 5892](https://github.com/libp2p/rust-libp2p/pull/5892)
+
 ## 0.2.10
 
 - Deprecate `void` crate.
@@ -10,7 +15,7 @@
 
 ## 0.2.8
 
-- Bump `ring` to `0.17.5.
+- Bump `ring` to `0.17.5`.
   See [PR 4779](https://github.com/libp2p/rust-libp2p/pull/4779).
 
 ## 0.2.7

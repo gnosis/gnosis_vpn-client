@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "This is an example file")]
+
 use std::env;
 use std::io::Result;
 
@@ -16,7 +18,7 @@ fn watch_file(filename: &str) -> Result<()> {
 
     println!("Watching for events, press Ctrl+C to stop...");
     for ev in watcher.iter() {
-        println!("{:?}", ev);
+        println!("{ev:?}");
     }
 
     Ok(())
@@ -25,7 +27,7 @@ fn watch_file(filename: &str) -> Result<()> {
 fn main() {
     if let Some(filename) = env::args().nth(1) {
         if let Err(err) = watch_file(&filename) {
-            println!("{:?}", err);
+            println!("{err:?}");
         }
     } else {
         println!("Usage: cargo run --example file <filename>");

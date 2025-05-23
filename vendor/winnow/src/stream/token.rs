@@ -20,9 +20,11 @@ use crate::stream::UpdateSlice;
 /// - Any `PartialEq` type (e.g. a `TokenKind` or `&str`) can be used with
 ///   [`literal`][crate::token::literal]
 /// - A `PartialEq` for `&str` allows for using `&str` as a parser for tokens
+/// - [`ContainsToken`][crate::stream::ContainsToken] for `T` to for parsing with token sets
+/// - [`Location`] for `T` to extract spans from tokens
 ///
 /// See also [Lexing and Parsing][crate::_topic::lexing].
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct TokenSlice<'t, T> {
     initial: &'t [T],
     input: &'t [T],
@@ -95,6 +97,12 @@ impl<T> crate::lib::std::ops::Deref for TokenSlice<'_, T> {
 
     fn deref(&self) -> &Self::Target {
         self.input
+    }
+}
+
+impl<T: core::fmt::Debug> core::fmt::Debug for TokenSlice<'_, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.input.fmt(f)
     }
 }
 
@@ -178,7 +186,12 @@ where
 
     #[inline(always)]
     fn raw(&self) -> &dyn crate::lib::std::fmt::Debug {
-        &self.input
+        #![allow(deprecated)]
+        self.input.raw()
+    }
+
+    fn trace(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.input.trace(f)
     }
 }
 

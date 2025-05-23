@@ -28,11 +28,6 @@ pub fn dup2(fd: usize, newfd: usize, buf: &[u8]) -> Result<usize> {
     unsafe { syscall4(SYS_DUP2, fd, newfd, buf.as_ptr() as usize, buf.len()) }
 }
 
-/// Exit the current process
-pub fn exit(status: usize) -> Result<usize> {
-    unsafe { syscall1(SYS_EXIT, status) }
-}
-
 /// Change file permissions
 pub fn fchmod(fd: usize, mode: u16) -> Result<usize> {
     unsafe { syscall2(SYS_FCHMOD, fd, mode as usize) }
@@ -77,17 +72,16 @@ pub fn fpath(fd: usize, buf: &mut [u8]) -> Result<usize> {
     unsafe { syscall3(SYS_FPATH, fd, buf.as_mut_ptr() as usize, buf.len()) }
 }
 
+/// Create a link to a file
+pub fn flink<T: AsRef<str>>(fd: usize, path: T) -> Result<usize> {
+    let path = path.as_ref();
+    unsafe { syscall3(SYS_FLINK, fd, path.as_ptr() as usize, path.len()) }
+}
+
 /// Rename a file
 pub fn frename<T: AsRef<str>>(fd: usize, path: T) -> Result<usize> {
     let path = path.as_ref();
-    unsafe {
-        syscall3(
-            SYS_FRENAME,
-            fd,
-            path.as_ptr() as usize,
-            path.len(),
-        )
-    }
+    unsafe { syscall3(SYS_FRENAME, fd, path.as_ptr() as usize, path.len()) }
 }
 
 /// Get metadata about a file
@@ -154,71 +148,6 @@ pub unsafe fn futex(
     )
 }
 
-/// Get the effective group ID
-pub fn getegid() -> Result<usize> {
-    unsafe { syscall0(SYS_GETEGID) }
-}
-
-/// Get the effective namespace
-pub fn getens() -> Result<usize> {
-    unsafe { syscall0(SYS_GETENS) }
-}
-
-/// Get the effective user ID
-pub fn geteuid() -> Result<usize> {
-    unsafe { syscall0(SYS_GETEUID) }
-}
-
-/// Get the current group ID
-pub fn getgid() -> Result<usize> {
-    unsafe { syscall0(SYS_GETGID) }
-}
-
-/// Get the current namespace
-pub fn getns() -> Result<usize> {
-    unsafe { syscall0(SYS_GETNS) }
-}
-
-/// Get the current process ID
-pub fn getpid() -> Result<usize> {
-    unsafe { syscall0(SYS_GETPID) }
-}
-
-/// Get the process group ID
-pub fn getpgid(pid: usize) -> Result<usize> {
-    unsafe { syscall1(SYS_GETPGID, pid) }
-}
-
-/// Get the parent process ID
-pub fn getppid() -> Result<usize> {
-    unsafe { syscall0(SYS_GETPPID) }
-}
-
-/// Get the current user ID
-pub fn getuid() -> Result<usize> {
-    unsafe { syscall0(SYS_GETUID) }
-}
-
-/// Set the I/O privilege level
-///
-/// # Errors
-///
-/// * `EPERM` - `uid != 0`
-/// * `EINVAL` - `level > 3`
-pub unsafe fn iopl(level: usize) -> Result<usize> {
-    syscall1(SYS_IOPL, level)
-}
-
-/// Send a signal `sig` to the process identified by `pid`
-pub fn kill(pid: usize, sig: usize) -> Result<usize> {
-    unsafe { syscall2(SYS_KILL, pid, sig) }
-}
-
-/// Create a link to a file
-pub unsafe fn link(old: *const u8, new: *const u8) -> Result<usize> {
-    syscall2(SYS_LINK, old as usize, new as usize)
-}
-
 /// Seek to `offset` bytes in a file descriptor
 pub fn lseek(fd: usize, offset: isize, whence: usize) -> Result<usize> {
     unsafe { syscall3(SYS_LSEEK, fd, offset as usize, whence) }
@@ -248,28 +177,13 @@ pub fn nanosleep(req: &TimeSpec, rem: &mut TimeSpec) -> Result<usize> {
 /// Open a file
 pub fn open<T: AsRef<str>>(path: T, flags: usize) -> Result<usize> {
     let path = path.as_ref();
-    unsafe {
-        syscall3(
-            SYS_OPEN,
-            path.as_ptr() as usize,
-            path.len(),
-            flags,
-        )
-    }
+    unsafe { syscall3(SYS_OPEN, path.as_ptr() as usize, path.len(), flags) }
 }
 
 /// Open a file at a specific path
 pub fn openat<T: AsRef<str>>(fd: usize, path: T, flags: usize) -> Result<usize> {
     let path = path.as_ref();
-    unsafe {
-        syscall4(
-            SYS_OPENAT,
-            fd,
-            path.as_ptr() as usize,
-            path.len(),
-            flags,
-        )
-    }
+    unsafe { syscall4(SYS_OPENAT, fd, path.as_ptr() as usize, path.len(), flags) }
 }
 
 /// Read from a file descriptor into a buffer
@@ -280,66 +194,13 @@ pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize> {
 /// Remove a directory
 pub fn rmdir<T: AsRef<str>>(path: T) -> Result<usize> {
     let path = path.as_ref();
-    unsafe {
-        syscall2(
-            SYS_RMDIR,
-            path.as_ptr() as usize,
-            path.len(),
-        )
-    }
-}
-
-/// Set the process group ID
-pub fn setpgid(pid: usize, pgid: usize) -> Result<usize> {
-    unsafe { syscall2(SYS_SETPGID, pid, pgid) }
-}
-
-/// Set the current process group IDs
-pub fn setregid(rgid: usize, egid: usize) -> Result<usize> {
-    unsafe { syscall2(SYS_SETREGID, rgid, egid) }
-}
-
-/// Make a new scheme namespace
-pub fn setrens(rns: usize, ens: usize) -> Result<usize> {
-    unsafe { syscall2(SYS_SETRENS, rns, ens) }
-}
-
-/// Set the current process user IDs
-pub fn setreuid(ruid: usize, euid: usize) -> Result<usize> {
-    unsafe { syscall2(SYS_SETREUID, ruid, euid) }
+    unsafe { syscall2(SYS_RMDIR, path.as_ptr() as usize, path.len()) }
 }
 
 /// Remove a file
 pub fn unlink<T: AsRef<str>>(path: T) -> Result<usize> {
     let path = path.as_ref();
-    unsafe {
-        syscall2(
-            SYS_UNLINK,
-            path.as_ptr() as usize,
-            path.len(),
-        )
-    }
-}
-
-/// Convert a virtual address to a physical one
-///
-/// # Errors
-///
-/// * `EPERM` - `uid != 0`
-pub unsafe fn virttophys(virtual_address: usize) -> Result<usize> {
-    syscall1(SYS_VIRTTOPHYS, virtual_address)
-}
-
-/// Check if a child process has exited or received a signal
-pub fn waitpid(pid: usize, status: &mut usize, options: WaitFlags) -> Result<usize> {
-    unsafe {
-        syscall3(
-            SYS_WAITPID,
-            pid,
-            status as *mut usize as usize,
-            options.bits(),
-        )
-    }
+    unsafe { syscall2(SYS_UNLINK, path.as_ptr() as usize, path.len()) }
 }
 
 /// Write a buffer to a file descriptor
