@@ -412,39 +412,21 @@ impl Connection {
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
-            /*
-                    // Some(Object {"status": String("LISTEN_HOST_ALREADY_USED")}) })))
-                    Err(session::Error::RemoteData(remote_data::CustomError {
-                        status: Some(StatusCode::CONFLICT),
-                        value: Some(json),
-                        reqw_err: _,
-                    })) => {
-                        if json["status"] == "LISTEN_HOST_ALREADY_USED" {
-                            // TODO hanlde dismantling on existing port
-                        }
-                        tracing::error!(?json, "Failed to open bridge session - CONFLICT");
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "Failed to open bridge session");
-                    }
-                },
-            }
-                    */
             InternalEvent::Ping(res) =>
             {
                 #[allow(clippy::collapsible_else_if)]
                 if res.is_ok() {
                     if let PhaseUp::MonitorMainSession(session, since, _registration) = self.phase_up.clone() {
-                        tracing::info!(%session, "session verified open since {}", log_output::elapsed(&since));
+                        tracing::info!(%session, "session verified open for {}", log_output::elapsed(&since));
                         Ok(())
                     } else {
                         Err(InternalError::UnexpectedPhase)
                     }
                 } else {
-                    if let PhaseUp::MonitorMainSession(session, since, registration) = self.phase_up.clone() {
-                        tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&since));
+                    if let PhaseUp::MonitorMainSession(session, _since, registration) = self.phase_up.clone() {
+                        tracing::warn!(%session, "Session ping failed");
                         self.phase_up = PhaseUp::MainSessionBroken(session, registration);
-                        Ok(())
+                        self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
                     } else {
                         Err(InternalError::UnexpectedPhase)
                     }

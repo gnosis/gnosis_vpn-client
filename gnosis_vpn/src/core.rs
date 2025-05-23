@@ -147,6 +147,7 @@ impl Core {
         tracing::debug!(%event, "handling event");
         match event {
             Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
+            Event::Disconnected => self.on_session_disconnect(),
             Event::DropConnection => self.on_drop_connection(),
         }
     }
@@ -212,7 +213,9 @@ impl Core {
                             });
                         }
                         Ok(connection::Event::Disconnected) => {
-                            tracing::info!("connection hickup");
+                            _ = sender.send(Event::Disconnected).map_err(|error| {
+                                tracing::error!(error = %error, "failed to send Disconnected event");
+                            });
                         }
                         Ok(connection::Event::Dismantled) => {
                             _ = sender.send(Event::DropConnection).map_err(|error| {
@@ -232,10 +235,14 @@ impl Core {
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
         tracing::debug!(?conninfo, "on session ready");
         if self.session_connected {
-            tracing::info!("already connected - might be connection hickup");
+            tracing::info!("reconnecting previously connected session - might be connection hickup");
             return Ok(());
         }
         self.session_connected = true;
+        if self.wg_connected {
+            tracing::debug!("WireGuard connection already established");
+            return Ok(());
+        }
         if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
             // automatic wg connection
             tracing::debug!("initiating WireGuard connection");
@@ -310,6 +317,12 @@ impl Core {
             );
             Ok(())
         }
+    }
+
+    fn on_session_disconnect(&mut self) -> Result<(), Error> {
+        tracing::info!("session hickup detected - reconnecting");
+        self.session_connected = false;
+        Ok(())
     }
 
     fn on_drop_connection(&mut self) -> Result<(), Error> {
