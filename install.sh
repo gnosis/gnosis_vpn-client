@@ -3,7 +3,7 @@
 set -euo pipefail
 
 platform() {
-    declare os,arch,arch_tag
+    declare os arch arch_tag
     os="$(uname | tr '[:upper:]' '[:lower:]')"
     arch="$(uname -m)"
 
@@ -18,7 +18,7 @@ platform() {
 }
 
 download_binary() {
-    declare binary,latest_tag,url
+    declare binary latest_tag url
     latest_tag="$1"
     binary="$2"
 
@@ -27,51 +27,75 @@ download_binary() {
     curl -L --fail --show-error --retry 3 "${url}" -o "${url}"
 }
 
-foo() {
-    declare latest_tag
+destinations() {
+    declare network
+    local network="$1"
+    if [[ "$network" == "rotsee" ]]; then
+        echo "[destinations]
+
+[destinations.12D3KooWDNcj8phBXj9ZJkAxSmjbwNUzEWtSsg6K6BeuKCAyZuCU]
+meta = { location = \"USA\", state = \"Iowa\" }
+# path = { intermediates = [ \"12D3KooWRT74aKgHF36HwqvvxQiLCL1GVFRSv6eEFQ71wtY2vVvt\" ] }
+path = { hops = 0 }
+
+[destinations.12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ]
+meta = { location = \"UK\", city = \"London\" }
+# path = { intermediates = [ \"12D3KooWC69bPoKYzBYP95GXAumqeMKqxcrtb2vFYLuf4N16R2Lk\" ] }
+path = { hops = 0 }
+"
+    else
+        echo "[destinations]
+
+[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
+meta = { location = \"Germany\" }
+path = { intermediates = [ \"12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP\" ] }
+
+[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
+meta = { location = \"USA\" }
+path = { intermediates = [ \"12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ\" ] }
+
+[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
+meta = { location = \"Spain\" }
+path = { intermediates = [ \"12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr\" ] }
+"
+    fi
+}
+
+main() {
+    declare api_endpoint api_token network latest_tag platform_tag dests
+    read -r -p "HOPRD API endpoint: " api_endpoint
+    read -r -p "HOPRD API access token: " api_token
+
+    network=$(curl -H "Content-Type: application/json" \
+        -H "x-auth-token: $api_token" "${api_endpoint}/api/v3/node/info" \
+        | grep -Po '(?<="network":\")[^"]*')
 
     latest_tag=$(curl -L -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" \
         | grep -Po '(?<="tag_name": \")[^"]*')
+
+    platform_tag=$(platform)
+
+    mkdir -p ./gnosis_vpn
+    pushd ./gnosis_vpn > /dev/null
+
+    download_binary "$latest_tag" "gnosis_vpn-${platform_tag}"
+    mv "./gnosis_vpn-${platform_tag}" ./gnosis_vpn
+    download_binary "$latest_tag" "gnosis_vpn-ctl-${platform_tag}"
+    mv "./gnosis_vpn-ctl-${platform_tag}" ./gnosis_vpn-ctl
+
+    chmod +x ./gnosis_vpn
+    chmod +x ./gnosis_vpn-ctl
+
+    dests=$(destinations "$network")
+    echo "[hoprd_node]
+api_endpoint = \"${api_endpoint}\"
+api_token = \"${api_token}\"
+
+$dests
+" > ./config.toml
+
+    popd > /dev/null
 }
-
-main() {
-
-}
-
-
-# Prompt user for API configuration
-read -p "Enter your API endpoint (e.g., https://api.node.local:8080): " API_ENDPOINT
-read -p "Enter your API access token: " -s API_TOKEN
-echo
-
-# Verify API access
-echo "Verifying API access..."
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${API_TOKEN}" \
-  "${API_ENDPOINT}/info")
-
-if [[ "$HTTP_STATUS" -ne 200 ]]; then
-  echo "Failed to verify API access (HTTP $HTTP_STATUS). Please check your endpoint and token."
-  exit 1
-fi
-
-API_INFO=$(curl -s \
-  -H "Authorization: Bearer ${API_TOKEN}" \
-  "${API_ENDPOINT}/info")
-
-# Generate config file
-CONFIG_FILE="config.json"
-cat > "$CONFIG_FILE" <<EOF
-{
-  "api_endpoint": "${API_ENDPOINT}",
-  "api_token": "${API_TOKEN}",
-  "node_info": $API_INFO
-}
-EOF
-
-echo "Configuration written to $INSTALL_DIR/$CONFIG_FILE"
-
-echo "Installation complete. Binaries and config are in $INSTALL_DIR."
 
 main
