@@ -6,7 +6,8 @@ NON_INTERACTIVE=""
 INSTALL_FOLDER="${INSTALL_FOLDER:-./gnosis_vpn}"
 HOPRD_API_ENDPOINT="${HOPRD_API_ENDPOINT:-}"
 HOPRD_API_TOKEN="${HOPRD_API_TOKEN:-}"
-HOPRD_SESSION_PORT="${HOPRD_SESSION_PORT:-}"
+HOPRD_SESSION_PORT="${HOPRD_SESSION_PORT:-1422}"
+FUN_RETURN_VALUE=""
 
 parse_arguments() {
     while [[ "$#" -gt 0 ]]; do
@@ -79,22 +80,109 @@ print_intro() {
         echo ""
     else
         read -r -n 1 -s -p "Press any key to continue or Ctrl+C to exit..."
-        echo ""
     fi
 }
 
 install_folder() {
     declare install_dir
-    if [[ -z "${NON_INTERACTIVE}" ]]; then
+    if [[ -n "${NON_INTERACTIVE}" ]]; then
         echo "[NON-INTERACTIVE] Using installation directory: ${INSTALL_FOLDER}"
         sleep 1
-    else
-        read -r -p "Installation directory [${INSTALL_FOLDER}]: " install_dir
+        return
     fi
+
+    echo ""
+    echo "Please specify the installation directory for GnosisVPN."
+    echo "Downloaded binaries will be placed in this directory."
+    echo "The configuration file will also be created in this directory."
+    read -r -p "Installation directory [${INSTALL_FOLDER}]: " install_dir
     INSTALL_FOLDER="${install_dir:-$INSTALL_FOLDER}"
 }
 
-platform() {
+api_access() {
+    if [[ -n "${NON_INTERACTIVE}" ]]; then
+        echo "[NON-INTERACTIVE] Using HOPRD API endpoint: ${HOPRD_API_ENDPOINT:-}"
+        sleep 1
+        echo "[NON-INTERACTIVE] Using HOPRD API token: ${HOPRD_API_TOKEN:-}"
+        sleep 1
+        return
+    fi
+
+    echo ""
+    echo "GnosisVPN uses your HOPRD node as entry connection point."
+    echo "Therefore, you need to provide the API endpoint and token for your HOPRD node."
+    echo "For convenience you can just paste your admin interface URL here."
+    declare admin_url
+    read -r -p "HOPRD admin interface URL [if empty will prompt for API_ENDPOINT and API_TOKEN separately]: " admin_url
+
+    declare api_endpoint api_token
+    api_endpoint=""
+    api_token=""
+    if [[ -n "${admin_url}" ]]; then
+        echo "Parsing admin URL..."
+        api_endpoint=$(echo "$admin_url" | grep -oP '(?<=apiEndpoint=)[^&]+' || true)
+        api_token=$(echo "$admin_url" | grep -oP '(?<=apiToken=)[^&]+' || true)
+    fi
+    if [[ -z "${api_endpoint}" ]]; then
+        if [[ -n "${admin_url}" ]]; then
+            echo "Error: Could not parse API endpoint from the provided URL."
+        fi
+        read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT}]: " api_endpoint
+    else
+        echo "Using parsed API endpoint: ${api_endpoint}"
+    fi
+    if [[ -z "${api_token}" ]]; then
+        if [[ -n "${admin_url}" ]]; then
+            echo "Error: Could not parse API token from the provided URL."
+        fi
+        read -r -p "HOPRD API token [${HOPRD_API_TOKEN}]: " api_token
+    else
+        echo "Using parsed API token: ${api_token}"
+    fi
+
+    HOPRD_API_ENDPOINT="${api_endpoint:-$HOPRD_API_ENDPOINT}"
+    HOPRD_API_TOKEN="${api_token:-$HOPRD_API_TOKEN}"
+}
+
+session_port() {
+    if [[ -n "${NON_INTERACTIVE}" ]]; then
+        echo "[NON-INTERACTIVE] Using HOPRD session port: ${HOPRD_SESSION_PORT}"
+        sleep 1
+        return
+    fi
+
+    echo ""
+    echo "GnosisVPN requires a port for internal connections."
+    echo "This port will be used for both TCP and UDP connections."
+    read -r -p "HOPRD session port [${HOPRD_SESSION_PORT}]: " session_port
+    HOPRD_SESSION_PORT="${session_port:-$HOPRD_SESSION_PORT}"
+}
+
+fetch_network() {
+    echo ""
+    echo "Accessing HOPRD API to determine network"
+    declare network
+    network=$(curl -L --progress-bar \
+        -H "Content-Type: application/json" \
+        -H "x-auth-token: $HOPRD_API_TOKEN" \
+        "${HOPRD_API_ENDPOINT}/api/v3/node/info" \
+        | grep -Po '(?<="network":\")[^"]*')
+    echo "Detected network: $network"
+    FUN_RETURN_VALUE="$network"
+}
+
+fetch_latest_tag() {
+    echo ""
+    echo "Fetching the latest GnosisVPN release tag from GitHub..."
+    latest_tag=$(curl -L --progress-bar \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" \
+        | grep -Po '(?<="tag_name": \")[^"]*')
+    echo "GnosisVPN version found: $latest_tag"
+    FUN_RETURN_VALUE="$latest_tag"
+}
+
+run_platform() {
     declare os arch arch_tag
     os="$(uname | tr '[:upper:]' '[:lower:]')"
     arch="$(uname -m)"
@@ -106,7 +194,17 @@ platform() {
       *) echo "Unsupported architecture: $arch"; exit 1;;
     esac
 
-    echo "$arch_tag-$os"
+    echo ""
+    echo "Detected architecture: $arch_tag-$os"
+    FUN_RETURN_VALUE="$arch_tag-$os"
+}
+
+enter_install_dir() {
+    mkdir -p "${INSTALL_FOLDER}"
+    pushd "${INSTALL_FOLDER}" > /dev/null || {
+        echo "Failed to create or access installation directory: $INSTALL_FOLDER"
+        exit 1
+    }
 }
 
 download_binary() {
@@ -116,6 +214,7 @@ download_binary() {
 
     url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${latest_tag}/${binary}"
 
+    echo ""
     echo "Downloading ${binary} from ${url}..."
     curl -L --progress-bar "${url}" -o "${binary}"
 }
@@ -154,37 +253,50 @@ path = { intermediates = [ \"12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKS
     fi
 }
 
+generate_config() {
+    echo "# Generated by GnosisVPN install script
+
+version = 2
+
+[hoprd_node]
+endpoint = \"${HOPRD_API_ENDPOINT}\"
+api_token = \"${HOPRD_API_TOKEN}\"
+
+internal_connection_port = ${HOPRD_SESSION_PORT}
+
+$dests
+" > ./config.toml
+    echo "Configuration file generated at ${INSTALL_FOLDER}/config.toml"
+}
+
+print_outro() {
+    echo ""
+    echo "GnosisVPN installation completed successfully!"
+    echo ""
+    echo "You can now run the GnosisVPN client using the following commands:"
+    echo "  - Start the client: sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml"
+    echo "  - Instruct the client: ${INSTALL_FOLDER}/gnosis_vpn-ctl status"
+    echo "  - Check available commands: ${INSTALL_FOLDER}/gnosis_vpn-ctl --help"
+    echo ""
+    echo "Configuration file is located at: ${INSTALL_FOLDER}/config.toml"
+    echo "You can edit this file to change settings as needed."
+}
+
 main() {
     print_intro
     install_folder
-    determine_api_access
-    declare network latest_tag platform_tag dests
+    api_access
+    session_port
 
-    session_port="${HOPRD_SESSION_PORT:-}"
-    if [[ -z "${session_port}" ]]; then
-        read -r -p "HOPRD session port (default 1422): " session_port
-        session_port="${session_port:-1422}"
-    fi
+    declare network latest_tag platform_tag
+    fetch_network
+    network=${FUN_RETURN_VALUE}
+    fetch_latest_tag
+    latest_tag=${FUN_RETURN_VALUE}
+    run_platform
+    platform_tag=${FUN_RETURN_VALUE}
 
-    network=$(curl -L -H "Content-Type: application/json" \
-        -H "x-auth-token: $api_token" "${api_endpoint}/api/v3/node/info" \
-        | grep -Po '(?<="network":\")[^"]*')
-
-    echo "Detected network: $network"
-
-    latest_tag=$(curl -L -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" \
-        | grep -Po '(?<="tag_name": \")[^"]*')
-
-    platform_tag=$(platform)
-
-    echo "Detected platform: $platform_tag"
-
-    mkdir -p "$install_dir"
-    pushd "$install_dir" > /dev/null || {
-        echo "Failed to create or access installation directory: $install_dir"
-        exit 1
-    }
+    enter_install_dir
 
     download_binary "$latest_tag" "gnosis_vpn-${platform_tag}"
     mv "./gnosis_vpn-${platform_tag}" ./gnosis_vpn
@@ -195,20 +307,10 @@ main() {
     chmod +x ./gnosis_vpn-ctl
 
     dests=$(destinations "$network")
-    echo "# Generated by GnosisVPN install script
-
-version = 2
-
-[hoprd_node]
-endpoint = \"${api_endpoint}\"
-api_token = \"${api_token}\"
-
-internal_connection_port = ${session_port}
-
-$dests
-" > ./config.toml
+    generate_config "$dests"
 
     popd > /dev/null
+    print_outro
 }
 
 parse_arguments "$@"
