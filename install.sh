@@ -24,7 +24,8 @@ download_binary() {
 
     url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${latest_tag}/${binary}"
 
-    curl -L --fail --show-error --retry 3 "${url}" -o "${url}"
+    echo "Downloading ${binary} from ${url}..."
+    curl -L --progress-bar "${url}" -o "${binary}"
 }
 
 destinations() {
@@ -70,11 +71,15 @@ main() {
         -H "x-auth-token: $api_token" "${api_endpoint}/api/v3/node/info" \
         | grep -Po '(?<="network":\")[^"]*')
 
+    echo "Detected network: $network"
+
     latest_tag=$(curl -L -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" \
         | grep -Po '(?<="tag_name": \")[^"]*')
 
     platform_tag=$(platform)
+
+    echo "Detected platform: $platform_tag"
 
     mkdir -p ./gnosis_vpn
     pushd ./gnosis_vpn > /dev/null
