@@ -75,6 +75,7 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
                 err.into()
             }
         })?
+        .error_for_status()?
         .json::<Registration>()?;
 
     Ok(resp)

@@ -179,15 +179,16 @@ impl Session {
             .json(&json)
             .timeout(open_session.entry_node.session_timeout)
             .headers(headers)
-            .send()?
-            .json::<Self>()
+            .send()
             .map_err(|err| {
                 if err.status() == Some(StatusCode::CONFLICT) {
                     Error::ListenHostAlreadyUsed
                 } else {
                     err.into()
                 }
-            })?;
+            })?
+            .error_for_status()?
+            .json::<Self>()?;
         Ok(resp)
     }
 
@@ -225,6 +226,7 @@ impl Session {
             .timeout(list_session.entry_node.session_timeout)
             .headers(headers)
             .send()?
+            .error_for_status()?
             .json::<Vec<Session>>()?;
 
         Ok(resp)
