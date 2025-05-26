@@ -203,7 +203,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Error: Could not parse API endpoint from the provided URL."
         fi
-        read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT:<blank>}]: " api_endpoint
+        read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
     else
         echo "Using parsed API endpoint: ${api_endpoint}"
     fi
@@ -211,7 +211,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Error: Could not parse API token from the provided URL."
         fi
-        read -r -p "HOPRD API token [${HOPRD_API_TOKEN:<blank>}]: " api_token
+        read -r -p "HOPRD API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
     else
         echo "Using parsed API token: ${api_token}"
     fi
