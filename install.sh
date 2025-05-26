@@ -436,8 +436,8 @@ path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr
 version = 2
 
 [hoprd_node]
-endpoint = \"${HOPRD_API_ENDPOINT}\"
-api_token = \"${HOPRD_API_TOKEN}\"
+endpoint = "${HOPRD_API_ENDPOINT}"
+api_token = "${HOPRD_API_TOKEN}"
 
 internal_connection_port = ${HOPRD_SESSION_PORT}
 
