@@ -185,9 +185,9 @@ prompt_api_access() {
     echo ""
     echo "GnosisVPN uses your HOPRD node as entry connection point."
     echo "Therefore, you need to provide the API endpoint and token for your HOPRD node."
-    echo "For convenience you can just paste your admin interface URL here."
+    echo "If connected to your HOPRD node via HOPR Admin UI, paste it's full URL."
     declare admin_url
-    read -r -p "HOPRD admin interface URL [if empty will prompt for API_ENDPOINT and API_TOKEN separately]: " admin_url
+    read -r -p "HOPRD admin interface URL [if left empty will prompt for API_ENDPOINT and API_TOKEN separately]: " admin_url
 
     declare api_endpoint api_token
     api_endpoint=""
