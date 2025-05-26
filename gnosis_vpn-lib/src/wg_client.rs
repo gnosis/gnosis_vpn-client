@@ -68,6 +68,7 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
         .timeout(std::time::Duration::from_secs(30))
         .headers(headers)
         .send()
+        // connection error needs to be mapped before response
         .map_err(|err| {
             if err.is_connect() {
                 Error::SocketConnect
@@ -94,6 +95,7 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
         .timeout(std::time::Duration::from_secs(10))
         .headers(headers)
         .send()
+        // connection error needs to be mapped before response
         .map_err(|err| {
             if err.is_connect() {
                 Error::SocketConnect

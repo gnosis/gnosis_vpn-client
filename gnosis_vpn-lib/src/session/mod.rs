@@ -179,15 +179,17 @@ impl Session {
             .json(&json)
             .timeout(open_session.entry_node.session_timeout)
             .headers(headers)
-            .send()
+            .send()?
+            .error_for_status()
+            // response error can only be mapped after sending
             .map_err(|err| {
+                tracing::info!("foobar {}", err);
                 if err.status() == Some(StatusCode::CONFLICT) {
                     Error::ListenHostAlreadyUsed
                 } else {
                     err.into()
                 }
             })?
-            .error_for_status()?
             .json::<Self>()?;
         Ok(resp)
     }
@@ -202,15 +204,16 @@ impl Session {
             .delete(url)
             .timeout(close_session.entry_node.session_timeout)
             .headers(headers)
-            .send()
+            .send()?
+            .error_for_status()
+            // response error can only be mapped after sending
             .map_err(|err| {
                 if err.status() == Some(StatusCode::NOT_FOUND) {
                     Error::SessionNotFound
                 } else {
                     err.into()
                 }
-            })?
-            .error_for_status()?;
+            })?;
         Ok(())
     }
 
