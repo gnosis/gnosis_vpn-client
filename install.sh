@@ -168,7 +168,10 @@ prompt_install_dir() {
 }
 
 # from https://stackoverflow.com/a/37840948
-urldecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
+urldecode() {
+    : "${*//+/ }"
+    echo -e "${_//%/\\x}"
+}
 
 prompt_api_access() {
     if [[ -n ${NON_INTERACTIVE} ]]; then
