@@ -25,11 +25,11 @@ pub struct Input {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Error parsing url")]
+    #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Error converting json to struct")]
+    #[error("Error converting json to struct: {0}")]
     Deserialize(#[from] serde_json::Error),
-    #[error("Error making http request")]
+    #[error("Error making http request: {0}")]
     RemoteData(remote_data::CustomError),
     #[error("Invalid port")]
     InvalidPort,
@@ -91,6 +91,8 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
             };
             Err(Error::RemoteData(e))
         }
+        // Err(RemoteData(CustomError { reqw_err: Some(reqwest::Error { kind: Request, url: "http://178.254.33.145:1422/api/v1/clients/register", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error",
+        // Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }), status: None, value: None })))
         Err(e) => {
             let e = remote_data::CustomError {
                 reqw_err: Some(e),
