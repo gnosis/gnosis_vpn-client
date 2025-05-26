@@ -8,6 +8,7 @@ HOPRD_API_ENDPOINT="${HOPRD_API_ENDPOINT:-}"
 HOPRD_API_TOKEN="${HOPRD_API_TOKEN:-}"
 HOPRD_SESSION_PORT="${HOPRD_SESSION_PORT:-1422}"
 FUN_RETURN_VALUE=""
+IS_MACOS=""
 WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 
 parse_arguments() {
@@ -203,6 +204,7 @@ run_platform() {
   declare os arch arch_tag
   os="$(uname | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
+    if [[ "${os}" == "darwin" ]]; then IS_MACOS="yes"; fi
 
   case "$arch" in
   x86_64 | amd64) arch_tag="x86_64" ;;
@@ -230,27 +232,20 @@ prompt_wg_public_key() {
 }
 
 check_wireguard() {
-    declare is_macos
-    if [[ "${platform_tag}" == *"-darwin" ]]; then
-        is_macos="yes"
-    else
-        is_macos=""
-    fi
-
     if [[ -n ${NON_INTERACTIVE} ]]; then
         if [[ -n ${WG_PUBLIC_KEY} ]]; then
             echo "[NON-INTERACTIVE] Using provided WireGuard public key: ${WG_PUBLIC_KEY}"
             sleep 1
             return
         fi
-        if [[ -n ${is_macos} ]]; then
+        if [[ -n ${IS_MACOS} ]]; then
             echo "[NON-INTERACTIVE] WireGuard public key is required for macOS. Cannot continue non interactive installation."
             echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable."
             exit 1
         fi
     fi
 
-    if [[ -n ${is_macos} ]]; then
+    if [[ -n ${IS_MACOS} ]]; then
         echo ""
         echo "MacOS detected - GnosisVPN cannot manage your WireGuard tunnel automatically yet."
         prompt_wg_public_key
@@ -317,6 +312,17 @@ fetch_binaries() {
 
   chmod +x ./gnosis_vpn
   chmod +x ./gnosis_vpn-ctl
+
+  if [[ -n ${IS_MACOS} ]]; then
+    echo "Detected macOS - GnosisVPN binaries need to be removed from apple quarantine mode."
+    echo "We will run these two commands with sudo to get required privileges:"
+    echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn"
+    echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn-ctl"
+    echo "These are the only commands that require sudo privileges."
+    sleep 1
+    sudo xattr -dr com.apple.quarantine ./gnosis_vpn
+    sudo xattr -dr com.apple.quarantine ./gnosis_vpn-ctl
+  fi
 }
 
 destinations() {
