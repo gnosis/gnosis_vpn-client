@@ -56,14 +56,14 @@ pub struct ListSession {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Invalid header")]
+    #[error("Invalid header: {0}")]
     Header(#[from] remote_data::HeaderError),
-    #[error("Error parsing url")]
+    #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Error converting json to struct")]
+    #[error("Error converting json to struct: {0}")]
     Deserialize(#[from] serde_json::Error),
-    #[error("Error making http request")]
-    RemoteData(remote_data::CustomError),
+    #[error("Error making http request: {0}")]
+    RequestError(#[from] reqwest::Error),
     #[error("Session listen host already used")]
     ListenHostAlreadyUsed,
     #[error("Session not found")]
@@ -176,46 +176,21 @@ impl Session {
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
 
         tracing::debug!(?headers, body = ?json, %url, "post open session");
-        let fetch_res = client
+        let resp = client
             .post(url)
             .json(&json)
             .timeout(open_session.entry_node.session_timeout)
             .headers(headers)
-            .send()
-            .map(|res| (res.status(), res.json::<serde_json::Value>()));
-
-        match fetch_res {
-            Ok((status, Ok(json))) if status.is_success() => {
-                let session = serde_json::from_value::<Self>(json)?;
-                Ok(session)
-            }
-            // Ok((409, Ok(Object {"status": String("LISTEN_HOST_ALREADY_USED")})))
-            Ok((status, _)) if status == StatusCode::CONFLICT => Err(Error::ListenHostAlreadyUsed),
-            Ok((status, Ok(json))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: None,
-                    status: Some(status),
-                    value: Some(json),
-                };
-                Err(Error::RemoteData(e))
-            }
-            Ok((status, Err(e))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: Some(status),
-                    value: None,
-                };
-                Err(Error::RemoteData(e))
-            }
-            Err(e) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: None,
-                    value: None,
-                };
-                Err(Error::RemoteData(e))
-            }
-        }
+            .send()?
+            .json::<Self>()
+            .map_err(|err| {
+                if err.status() == Some(StatusCode::CONFLICT) {
+                    Error::ListenHostAlreadyUsed
+                } else {
+                    err.into()
+                }
+            })?;
+        Ok(resp)
     }
 
     pub fn close(&self, client: &blocking::Client, close_session: &CloseSession) -> Result<(), Error> {
@@ -224,42 +199,20 @@ impl Session {
         let url = close_session.entry_node.endpoint.join(path.as_str())?;
 
         tracing::debug!(?headers, %url, "delete session");
-        let fetch_res = client
+        client
             .delete(url)
             .timeout(close_session.entry_node.session_timeout)
             .headers(headers)
             .send()
-            .map(|res| (res.status(), res.json::<serde_json::Value>()));
-
-        match fetch_res {
-            Ok((status, _)) if status.is_success() => Ok(()),
-            // Ok((404, Ok(Object {"status": String("INVALID_INPUT")})))
-            Ok((status, _)) if status == StatusCode::NOT_FOUND => Err(Error::SessionNotFound),
-            Ok((status, Ok(json))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: None,
-                    status: Some(status),
-                    value: Some(json),
-                };
-                Err(Error::RemoteData(e))
-            }
-            Ok((status, Err(e))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: Some(status),
-                    value: None,
-                };
-                Err(Error::RemoteData(e))
-            }
-            Err(e) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: None,
-                    value: None,
-                };
-                Err(Error::RemoteData(e))
-            }
-        }
+            .map_err(|err| {
+                if err.status() == Some(StatusCode::NOT_FOUND) {
+                    Error::SessionNotFound
+                } else {
+                    err.into()
+                }
+            })?
+            .error_for_status()?;
+        Ok(())
     }
 
     pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Session>, Error> {
@@ -269,43 +222,14 @@ impl Session {
 
         tracing::debug!(?headers, %url, "list sessions");
 
-        let fetch_res = client
+        let resp = client
             .get(url)
             .timeout(list_session.entry_node.session_timeout)
             .headers(headers)
-            .send()
-            .map(|res| (res.status(), res.json::<serde_json::Value>()));
+            .send()?
+            .json::<Vec<Session>>()?;
 
-        match fetch_res {
-            Ok((status, Ok(json))) if status.is_success() => {
-                let sessions = serde_json::from_value::<Vec<Session>>(json)?;
-                Ok(sessions)
-            }
-            Ok((status, Ok(json))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: None,
-                    status: Some(status),
-                    value: Some(json),
-                };
-                Err(Error::RemoteData(e))
-            }
-            Ok((status, Err(e))) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: Some(status),
-                    value: None,
-                };
-                Err(Error::RemoteData(e))
-            }
-            Err(e) => {
-                let e = remote_data::CustomError {
-                    reqw_err: Some(e),
-                    status: None,
-                    value: None,
-                };
-                Err(Error::RemoteData(e))
-            }
-        }
+        Ok(resp)
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {

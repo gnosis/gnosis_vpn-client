@@ -30,7 +30,9 @@ pub enum Error {
     #[error("Error converting json to struct: {0}")]
     Deserialize(#[from] serde_json::Error),
     #[error("Error making http request: {0}")]
-    RemoteData(remote_data::CustomError),
+    RequestError(#[from] reqwest::Error),
+    #[error("Error connecting on specified port")]
+    SocketConnectError,
     #[error("Invalid port")]
     InvalidPort,
 }
@@ -62,46 +64,22 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post register client");
-    let fetch_res = client
+    let resp = client
         .post(url)
         .json(&json)
         .timeout(std::time::Duration::from_secs(30))
         .headers(headers)
-        .send()
-        .map(|res| (res.status(), res.json::<serde_json::Value>()));
+        .send()?
+        .json::<Registration>()
+        .map_err(|err| {
+            if err.is_connect() {
+                Error::SocketConnectError
+            } else {
+                err.into()
+            }
+        })?;
 
-    match fetch_res {
-        Ok((status, Ok(json))) if status.is_success() => {
-            let session = serde_json::from_value::<Registration>(json)?;
-            Ok(session)
-        }
-        Ok((status, Ok(json))) => {
-            let e = remote_data::CustomError {
-                reqw_err: None,
-                status: Some(status),
-                value: Some(json),
-            };
-            Err(Error::RemoteData(e))
-        }
-        Ok((status, Err(e))) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: Some(status),
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-        // Err(RemoteData(CustomError { reqw_err: Some(reqwest::Error { kind: Request, url: "http://178.254.33.145:1422/api/v1/clients/register", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error",
-        // Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }), status: None, value: None })))
-        Err(e) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: None,
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-    }
+    Ok(resp)
 }
 
 pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error> {
@@ -111,41 +89,21 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post unregister client");
-    let fetch_res = client
+    client
         .post(url)
         .json(&json)
         .timeout(std::time::Duration::from_secs(10))
         .headers(headers)
         .send()
-        .map(|res| (res.status(), res.json::<serde_json::Value>()));
-
-    match fetch_res {
-        Ok((status, _json)) if status.is_success() => Ok(()),
-        Ok((status, Ok(json))) => {
-            let e = remote_data::CustomError {
-                reqw_err: None,
-                status: Some(status),
-                value: Some(json),
-            };
-            Err(Error::RemoteData(e))
-        }
-        Ok((status, Err(e))) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: Some(status),
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-        Err(e) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: None,
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-    }
+        .map_err(|err| {
+            if err.is_connect() {
+                Error::SocketConnectError
+            } else {
+                err.into()
+            }
+        })?
+        .error_for_status()?;
+    Ok(())
 }
 
 impl Display for Registration {
