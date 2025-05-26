@@ -179,7 +179,7 @@
             ];
 
             programs.shfmt.enable = true;
-            settings.formatter.shfmt.includes = [ "*.sh" ];
+            settings.formatter.shfmt.options = lib.mkForce [ "-s" "-w" "-i" "4" ];
 
 
             programs.yamlfmt.enable = true;
