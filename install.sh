@@ -78,12 +78,12 @@ print_intro() {
   echo "  - An additional open port on your node for GnosisVPN to connect to."
   echo ""
   echo "Note:"
-  echo '  GnosisVPN uses a port called `internal_connection_port` for both TCP and UDP connections.'
+  echo "  GnosisVPN uses a port called 'internal_connection_port' for both TCP and UDP connections."
   echo ""
   echo "This installer will:"
   echo "  - Download the GnosisVPN client and control application."
   echo "  - Prompt you for API access to your HOPRD node."
-  echo '  - Prompt you for the `internal_connection_port`.'
+  echo "  - Prompt you for the 'internal_connection_port'."
   echo "  - Generate a configuration file based on your input."
   echo ""
 
