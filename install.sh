@@ -183,9 +183,9 @@ fetch_network() {
   network=$(curl -L --progress-bar \
     -H "Content-Type: application/json" \
     -H "x-auth-token: $HOPRD_API_TOKEN" \
-    "${HOPRD_API_ENDPOINT}/api/v3/node/info" \
-    | grep '"network":' \
-    | sed -E 's/.*"network": *"([^"]*)".*/\1/')
+    "${HOPRD_API_ENDPOINT}/api/v3/node/info" |
+    grep '"network":' |
+    sed -E 's/.*"network": *"([^"]*)".*/\1/')
   echo "Detected network: $network"
   FUN_RETURN_VALUE="$network"
 }
