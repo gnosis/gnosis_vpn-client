@@ -13,6 +13,21 @@ VERSION_TAG=""
 IS_MACOS=""
 WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --non-interactive          Run the script in non-interactive mode."
+    echo "  -i, --install-folder       Specify the installation folder (default: ./gnosis_vpn)."
+    echo "  --api-endpoint             HOPRD API endpoint (default: empty, will prompt)."
+    echo "  --api-token                HOPRD API token (default: empty, will prompt)."
+    echo "  --session-port             HOPRD session port (default: 1422, will prompt)."
+    echo "  --wireguard-public-key     WireGuard public key (required for macOS, optional otherwise)."
+    echo "  --version-tag              Specify a specific version tag to install."
+    echo "  --help                     Show this help message and exit."
+    exit 0
+}
+
 check_reqs() {
     if ! command -v curl &>/dev/null; then
         echo "Error: curl is required to run this script. Please install curl and try again."
@@ -38,6 +53,7 @@ check_reqs() {
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
+        --help) usage ;;
         --non-interactive) NON_INTERACTIVE="yes" ;;
         -i | --install-folder)
             if [[ -n ${2:-} ]]; then
