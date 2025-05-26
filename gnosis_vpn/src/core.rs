@@ -414,8 +414,11 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
 
 fn print_manual_instructions() {
     tracing::error!(
-        ">> If you intend to use manual WireGuard mode, please set the public key in the configuration file: <<"
+        r#"
+>>!!>> If you intend to use manual WireGuard mode, please set the public key in the configuration file:
+>>!!>> [wireguard]
+>>!!>> manual_mode = {{ public_key = "<wg public key" }}
+
+"#
     );
-    tracing::error!(">> [wireguard] <<");
-    tracing::error!(r#">> manual_mode = {{ public_key = "<wg public key" }} <<"#);
 }
