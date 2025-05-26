@@ -58,12 +58,7 @@ jobs:
         run: |
           release_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
           echo "release_version=${release_version}" >> $GITHUB_OUTPUT
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "gnosis_vpn-client - v${{ steps.environment.outputs.release_version }}"
-          tag_name: v${{ steps.environment.outputs.release_version }}
-      - name: Publish binaries
+      - name: Create release and publish binaries
         run: |
           architectures=("aarch64-linux" "x86_64-linux" "armv7l-linux" "aarch64-darwin" "x86_64-darwin" )
           mkdir -p binaries
