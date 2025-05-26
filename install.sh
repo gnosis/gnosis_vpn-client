@@ -163,7 +163,7 @@ prompt_install_dir() {
     echo "Please specify the installation directory for GnosisVPN."
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
-    read -r -p "Installation directory [${INSTALL_FOLDER}]: " install_dir
+    read -r -p "Installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
     INSTALL_FOLDER="${install_dir:-$INSTALL_FOLDER}"
 }
 
@@ -187,7 +187,7 @@ prompt_api_access() {
     echo "Therefore, you need to provide the API endpoint and token for your HOPRD node."
     echo "If connected to your HOPRD node via HOPR Admin UI, paste it's full URL."
     declare admin_url
-    read -r -p "HOPRD admin interface URL [leave empty to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
+    read -r -p "HOPRD admin interface URL [leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
 
     declare api_endpoint api_token
     api_endpoint=""
@@ -203,7 +203,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Error: Could not parse API endpoint from the provided URL."
         fi
-        read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT}]: " api_endpoint
+        read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
     else
         echo "Using parsed API endpoint: ${api_endpoint}"
     fi
@@ -211,7 +211,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Error: Could not parse API token from the provided URL."
         fi
-        read -r -p "HOPRD API token [${HOPRD_API_TOKEN}]: " api_token
+        read -r -p "HOPRD API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
     else
         echo "Using parsed API token: ${api_token}"
     fi
@@ -230,14 +230,14 @@ prompt_session_port() {
     echo ""
     echo "GnosisVPN requires a port for internal connections."
     echo "This port will be used for both TCP and UDP connections."
-    read -r -p "HOPRD session port [${HOPRD_SESSION_PORT}]: " session_port
+    read -r -p "HOPRD session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
     HOPRD_SESSION_PORT="${session_port:-$HOPRD_SESSION_PORT}"
 }
 
 fetch_network() {
     echo ""
     echo "Accessing HOPRD API to determine network"
-    HOPR_NETWORK=$(curl -L --progress-bar \
+    HOPR_NETWORK=$(curl --fail -L --progress-bar \
         -H "Content-Type: application/json" \
         -H "x-auth-token: $HOPRD_API_TOKEN" \
         "${HOPRD_API_ENDPOINT}/api/v3/node/info" |
@@ -262,7 +262,7 @@ fetch_version_tag() {
 
     echo ""
     echo "Fetching the latest GnosisVPN release tag from GitHub..."
-    VERSION_TAG=$(curl -L --progress-bar \
+    VERSION_TAG=$(curl --fail -L --progress-bar \
         -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" |
         grep '"tag_name":' |
@@ -297,7 +297,7 @@ prompt_wg_public_key() {
     echo "In order to provide the underlying connection, GnosisVPN needs your WireGuard public key."
     echo "Go ahead and create an empty tunnel in your favorite WireGuard application and copy the public key."
     declare wg_pub_key
-    read -r -p "WireGuard public key [${WG_PUBLIC_KEY}]: " wg_pub_key
+    read -r -p "WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
     WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
 }
 
@@ -366,13 +366,13 @@ download_binary() {
 
     echo ""
     echo "Downloading ${binary} from ${url}..."
-    curl -L --progress-bar "${url}" -o "${binary}"
+    curl --fail -L --progress-bar "${url}" -o "${binary}"
 }
 
 fetch_binaries() {
-    download_binary "$LATEST_TAG" "gnosis_vpn-${PLATFORM}"
+    download_binary "gnosis_vpn-${PLATFORM}"
     mv "./gnosis_vpn-${PLATFORM}" ./gnosis_vpn
-    download_binary "$LATEST_TAG" "gnosis_vpn-ctl-${PLATFORM}"
+    download_binary "gnosis_vpn-ctl-${PLATFORM}"
     mv "./gnosis_vpn-ctl-${PLATFORM}" ./gnosis_vpn-ctl
 
     chmod +x ./gnosis_vpn
