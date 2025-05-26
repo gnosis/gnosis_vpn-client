@@ -9,7 +9,7 @@ HOPRD_API_TOKEN="${HOPRD_API_TOKEN:-}"
 HOPRD_SESSION_PORT="${HOPRD_SESSION_PORT:-1422}"
 PLATFORM=""
 HOPR_NETWORK=""
-LATEST_TAG=""
+VERSION_TAG=""
 IS_MACOS=""
 WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 
@@ -81,6 +81,15 @@ parse_arguments() {
                 shift
             else
                 echo "Error: --wireguard-public-key requires a non-empty argument."
+                exit 1
+            fi
+            ;;
+        --version-tag)
+            if [[ -n ${2:-} ]]; then
+                VERSION_TAG="$2"
+                shift
+            else
+                echo "Error: --version-tag requires a non-empty argument."
                 exit 1
             fi
             ;;
@@ -212,15 +221,25 @@ fetch_network() {
     echo "Detected network: $HOPR_NETWORK"
 }
 
-fetch_latest_tag() {
+fetch_version_tag() {
+    if [[ -n ${VERSION_TAG} ]]; then
+    echo ""
+        echo "Verifying provided version tag: ${VERSION_TAG}"
+        curl --fail -L --progress-bar \
+         -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/tags/${VERSION_TAG}" \
+          || (echo "Error: Provided version tag '${VERSION_TAG}' is not valid or does not exist."; exit 1)
+        return
+    fi
+
     echo ""
     echo "Fetching the latest GnosisVPN release tag from GitHub..."
-    LATEST_TAG=$(curl -L --progress-bar \
+    VERSION_TAG=$(curl -L --progress-bar \
         -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" |
         grep '"tag_name":' |
         sed -E 's/.*"tag_name": *"([^"]*)".*/\1/')
-    echo "GnosisVPN version found: $LATEST_TAG"
+    echo "GnosisVPN version found: ${VERSION_TAG}"
 }
 
 check_platform() {
@@ -313,11 +332,9 @@ exit_install_dir() {
 }
 
 download_binary() {
-    declare binary latest_tag url
-    latest_tag="$1"
-    binary="$2"
-
-    url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${latest_tag}/${binary}"
+    declare binary url
+    binary="$1"
+    url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${VERSION_TAG}/${binary}"
 
     echo ""
     echo "Downloading ${binary} from ${url}..."
@@ -423,7 +440,7 @@ main() {
     prompt_session_port
 
     fetch_network
-    fetch_latest_tag
+    fetch_version_tag
     check_platform
     prompt_wireguard
 
