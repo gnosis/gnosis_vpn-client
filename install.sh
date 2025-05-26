@@ -138,8 +138,8 @@ api_access() {
   api_token=""
   if [[ -n ${admin_url} ]]; then
     echo "Parsing admin URL..."
-    api_endpoint=$(echo "$admin_url" | grep -oP '(?<=apiEndpoint=)[^&]+' || true)
-    api_token=$(echo "$admin_url" | grep -oP '(?<=apiToken=)[^&]+' || true)
+    api_endpoint=$(echo "$admin_url" | grep -o 'apiEndpoint=[^&]*' | sed 's/apiEndpoint=//' || true)
+    api_token=$(echo "$admin_url" | grep -o 'apiToken=[^&]*' | sed 's/apiToken=//' || true)
   fi
   if [[ -z ${api_endpoint} ]]; then
     if [[ -n ${admin_url} ]]; then
@@ -183,8 +183,9 @@ fetch_network() {
   network=$(curl -L --progress-bar \
     -H "Content-Type: application/json" \
     -H "x-auth-token: $HOPRD_API_TOKEN" \
-    "${HOPRD_API_ENDPOINT}/api/v3/node/info" |
-    grep -Po '(?<="network":\")[^"]*')
+    "${HOPRD_API_ENDPOINT}/api/v3/node/info" \
+    | grep '"network":' \
+    | sed -E 's/.*"network": *"([^"]*)".*/\1/')
   echo "Detected network: $network"
   FUN_RETURN_VALUE="$network"
 }
@@ -195,7 +196,8 @@ fetch_latest_tag() {
   latest_tag=$(curl -L --progress-bar \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" |
-    grep -Po '(?<="tag_name": \")[^"]*')
+    grep '"tag_name":' |
+    sed -E 's/.*"tag_name": *"([^"]*)".*/\1/')
   echo "GnosisVPN version found: $latest_tag"
   FUN_RETURN_VALUE="$latest_tag"
 }
