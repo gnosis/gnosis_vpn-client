@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::dirs;
-use crate::wireguard::{ConnectSession, Error, /*VerifySession,*/ WireGuard};
+use crate::wireguard::{ConnectSession, Error, WireGuard};
 
 #[derive(Debug)]
 pub struct Tooling {}

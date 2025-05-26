@@ -1,10 +1,13 @@
+use boringtun::noise::Tunn;
+use boringtun::x25519::StaticSecret;
+
 use crate::wireguard::{ConnectSession, Error, WireGuard};
 
 #[derive(Debug)]
 pub struct UserSpace {}
 
 pub fn available() -> Result<bool, Error> {
-    Err(Error::NotYetImplemented("userspace".to_string()))
+    Ok(true)
 }
 
 impl UserSpace {
@@ -15,7 +18,7 @@ impl UserSpace {
 
 impl WireGuard for UserSpace {
     fn generate_key(&self) -> Result<String, Error> {
-        Err(Error::NotYetImplemented("userspace".to_string()))
+        StaticSecret::random_from_rng(&mut rand::thread_rng())
     }
 
     fn connect_session(&self, _session: &ConnectSession) -> Result<(), Error> {
