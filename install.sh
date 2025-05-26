@@ -78,12 +78,12 @@ print_intro() {
   echo "  - An additional open port on your node for GnosisVPN to connect to."
   echo ""
   echo "Note:"
-  echo "  GnosisVPN uses a port called \`internal_connection_port\` for both TCP and UDP connections."
+  echo '  GnosisVPN uses a port called `internal_connection_port` for both TCP and UDP connections.'
   echo ""
   echo "This installer will:"
   echo "  - Download the GnosisVPN client and control application."
   echo "  - Prompt you for API access to your HOPRD node."
-  echo "  - Prompt you for the \`internal_connection_port\`."
+  echo '  - Prompt you for the `internal_connection_port`.'
   echo "  - Generate a configuration file based on your input."
   echo ""
 
@@ -204,7 +204,7 @@ run_platform() {
   declare os arch arch_tag
   os="$(uname | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
-    if [[ "${os}" == "darwin" ]]; then IS_MACOS="yes"; fi
+  if [[ ${os} == "darwin" ]]; then IS_MACOS="yes"; fi
 
   case "$arch" in
   x86_64 | amd64) arch_tag="x86_64" ;;
@@ -222,59 +222,59 @@ run_platform() {
 }
 
 prompt_wg_public_key() {
-        echo "GnosisVPN will only be able to run in manual mode, where you need to manage your WireGuard tunnel manually."
-        echo "However GnosisVPN will try to help you with that."
-        echo "In order to provide the underlying connection, GnosisVPN needs your WireGuard public key."
-        echo "Go ahead and create an empty tunnel in your favorite WireGuard application and copy the public key."
-        declare wg_pub_key
-        read -r -p "WireGuard public key [${WG_PUBLIC_KEY}]: " wg_pub_key
-        WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
+  echo "GnosisVPN will only be able to run in manual mode, where you need to manage your WireGuard tunnel manually."
+  echo "However GnosisVPN will try to help you with that."
+  echo "In order to provide the underlying connection, GnosisVPN needs your WireGuard public key."
+  echo "Go ahead and create an empty tunnel in your favorite WireGuard application and copy the public key."
+  declare wg_pub_key
+  read -r -p "WireGuard public key [${WG_PUBLIC_KEY}]: " wg_pub_key
+  WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
 }
 
 check_wireguard() {
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        if [[ -n ${WG_PUBLIC_KEY} ]]; then
-            echo "[NON-INTERACTIVE] Using provided WireGuard public key: ${WG_PUBLIC_KEY}"
-            sleep 1
-            return
-        fi
-        if [[ -n ${IS_MACOS} ]]; then
-            echo "[NON-INTERACTIVE] WireGuard public key is required for macOS. Cannot continue non interactive installation."
-            echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable."
-            exit 1
-        fi
+  if [[ -n ${NON_INTERACTIVE} ]]; then
+    if [[ -n ${WG_PUBLIC_KEY} ]]; then
+      echo "[NON-INTERACTIVE] Using provided WireGuard public key: ${WG_PUBLIC_KEY}"
+      sleep 1
+      return
     fi
-
     if [[ -n ${IS_MACOS} ]]; then
-        echo ""
-        echo "MacOS detected - GnosisVPN cannot manage your WireGuard tunnel automatically yet."
-        prompt_wg_public_key
-        return
+      echo "[NON-INTERACTIVE] WireGuard public key is required for macOS. Cannot continue non interactive installation."
+      echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable."
+      exit 1
     fi
+  fi
 
-    declare wg_fail
-    wg_fail=""
-    if ! command -v wg &> /dev/null; then
-        echo "Probing for wg command failed."
-        wg_fail="yes"
-    fi
-    if [[ -z $wg_fail ]] && ! command -v wg-quick &> /dev/null; then
-        echo "Probing for wg-quick command failed."
-        wg_fail="yes"
-    fi
+  if [[ -n ${IS_MACOS} ]]; then
+    echo ""
+    echo "MacOS detected - GnosisVPN cannot manage your WireGuard tunnel automatically yet."
+    prompt_wg_public_key
+    return
+  fi
 
-    if [[ -n $wg_fail ]]; then
+  declare wg_fail
+  wg_fail=""
+  if ! command -v wg &>/dev/null; then
+    echo "Probing for wg command failed."
+    wg_fail="yes"
+  fi
+  if [[ -z $wg_fail ]] && ! command -v wg-quick &>/dev/null; then
+    echo "Probing for wg-quick command failed."
+    wg_fail="yes"
+  fi
+
+  if [[ -n $wg_fail ]]; then
 
     if [[ -n ${NON_INTERACTIVE} ]]; then
-            echo "[NON-INTERACTIVE] WireGuard tools are not installed. Cannot continue non interactive installation."
-            echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable."
-            exit 1
+      echo "[NON-INTERACTIVE] WireGuard tools are not installed. Cannot continue non interactive installation."
+      echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable."
+      exit 1
     fi
 
-        echo ""
-        echo "WireGuard tools are not installed."
-        prompt_wg_public_key
-    fi
+    echo ""
+    echo "WireGuard tools are not installed."
+    prompt_wg_public_key
+  fi
 }
 
 enter_install_dir() {
@@ -302,9 +302,9 @@ download_binary() {
 }
 
 fetch_binaries() {
-    declare latest_tag platform_tag
-    latest_tag="$1"
-    platform_tag="$2"
+  declare latest_tag platform_tag
+  latest_tag="$1"
+  platform_tag="$2"
   download_binary "$latest_tag" "gnosis_vpn-${platform_tag}"
   mv "./gnosis_vpn-${platform_tag}" ./gnosis_vpn
   download_binary "$latest_tag" "gnosis_vpn-ctl-${platform_tag}"
@@ -360,14 +360,14 @@ path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr
 }
 
 generate_config() {
-    declare wg_section
-    wg_section=""
-    if [[ -n ${WG_PUBLIC_KEY} ]]; then
-        wg_section="
+  declare wg_section
+  wg_section=""
+  if [[ -n ${WG_PUBLIC_KEY} ]]; then
+    wg_section="
 [wireguard.manual_mode]
 public_key = \"${WG_PUBLIC_KEY}\"
         "
-    fi
+  fi
   echo "# Generated by GnosisVPN install script
 
 version = 2
