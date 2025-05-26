@@ -7,13 +7,6 @@ pub enum HeaderError {
     InvalidHeader(#[from] reqwest::header::InvalidHeaderValue),
 }
 
-#[derive(Debug)]
-pub struct CustomError {
-    pub reqw_err: Option<reqwest::Error>,
-    pub status: Option<reqwest::StatusCode>,
-    pub value: Option<serde_json::Value>,
-}
-
 pub fn authentication_headers(api_token: &str) -> Result<HeaderMap, HeaderError> {
     let mut headers = json_headers();
     let mut hv_token = HeaderValue::from_str(api_token)?;

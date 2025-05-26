@@ -25,12 +25,12 @@ pub struct Input {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Error parsing url")]
+    #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Error converting json to struct")]
-    Deserialize(#[from] serde_json::Error),
-    #[error("Error making http request")]
-    RemoteData(remote_data::CustomError),
+    #[error("Error making http request: {0:?}")]
+    Request(#[from] reqwest::Error),
+    #[error("Error connecting on specified port")]
+    SocketConnect,
     #[error("Invalid port")]
     InvalidPort,
 }
@@ -62,44 +62,18 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post register client");
-    let fetch_res = client
+    let resp = client
         .post(url)
         .json(&json)
         .timeout(std::time::Duration::from_secs(30))
         .headers(headers)
         .send()
-        .map(|res| (res.status(), res.json::<serde_json::Value>()));
+        // connection error needs to be mapped before response
+        .map_err(map_socket_connect_error)?
+        .error_for_status()?
+        .json::<Registration>()?;
 
-    match fetch_res {
-        Ok((status, Ok(json))) if status.is_success() => {
-            let session = serde_json::from_value::<Registration>(json)?;
-            Ok(session)
-        }
-        Ok((status, Ok(json))) => {
-            let e = remote_data::CustomError {
-                reqw_err: None,
-                status: Some(status),
-                value: Some(json),
-            };
-            Err(Error::RemoteData(e))
-        }
-        Ok((status, Err(e))) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: Some(status),
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-        Err(e) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: None,
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-    }
+    Ok(resp)
 }
 
 pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error> {
@@ -109,40 +83,23 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post unregister client");
-    let fetch_res = client
+    client
         .post(url)
         .json(&json)
         .timeout(std::time::Duration::from_secs(10))
         .headers(headers)
         .send()
-        .map(|res| (res.status(), res.json::<serde_json::Value>()));
+        // connection error needs to be mapped before response
+        .map_err(map_socket_connect_error)?
+        .error_for_status()?;
+    Ok(())
+}
 
-    match fetch_res {
-        Ok((status, _json)) if status.is_success() => Ok(()),
-        Ok((status, Ok(json))) => {
-            let e = remote_data::CustomError {
-                reqw_err: None,
-                status: Some(status),
-                value: Some(json),
-            };
-            Err(Error::RemoteData(e))
-        }
-        Ok((status, Err(e))) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: Some(status),
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
-        Err(e) => {
-            let e = remote_data::CustomError {
-                reqw_err: Some(e),
-                status: None,
-                value: None,
-            };
-            Err(Error::RemoteData(e))
-        }
+fn map_socket_connect_error(err: reqwest::Error) -> Error {
+    if err.is_connect() {
+        Error::SocketConnect
+    } else {
+        err.into()
     }
 }
 
