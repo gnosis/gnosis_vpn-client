@@ -13,10 +13,16 @@ The default configuration file is located in `/etc/gnosisvpn/config.toml`.
 The minimal configuration file [config.toml](./config.toml) can be used to ease the setup.
 Use [documented-config.toml](./documented-config.toml) as a full reference.
 
-### Env vars
+## Installation
 
-`GNOSISVPN_CONFIG_PATH` - path to the configuration file
-`GNOSISVPN_SOCKET_PATH` - path to the control socket
+Use the [installer](./installer.sh) script to download GnosisVPN and generate an initial config.
+Or use this oneliner: `bash <(curl -s https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/refs/heads/main/install.sh)`.
+
+## General usage
+
+Check available params and env vars via:
+
+`gnosis_vpn --help`
 
 ## Usage with automated WireGuard handling
 
