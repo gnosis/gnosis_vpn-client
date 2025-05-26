@@ -370,9 +370,9 @@ download_binary() {
 }
 
 fetch_binaries() {
-    download_binary "$LATEST_TAG" "gnosis_vpn-${PLATFORM}"
+    download_binary "$VERSION_TAG" "gnosis_vpn-${PLATFORM}"
     mv "./gnosis_vpn-${PLATFORM}" ./gnosis_vpn
-    download_binary "$LATEST_TAG" "gnosis_vpn-ctl-${PLATFORM}"
+    download_binary "$VERSION_TAG" "gnosis_vpn-ctl-${PLATFORM}"
     mv "./gnosis_vpn-ctl-${PLATFORM}" ./gnosis_vpn-ctl
 
     chmod +x ./gnosis_vpn
