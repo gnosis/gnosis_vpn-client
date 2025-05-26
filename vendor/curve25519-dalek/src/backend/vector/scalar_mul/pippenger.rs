@@ -123,7 +123,8 @@ pub mod spec {
             });
 
             // Take the high column as an initial value to avoid wasting time doubling the identity element in `fold()`.
-            let hi_column = columns.next().expect("should have more than zero digits");
+            // `unwrap()` always succeeds because we know we have more than zero digits.
+            let hi_column = columns.next().unwrap();
 
             Some(
                 columns

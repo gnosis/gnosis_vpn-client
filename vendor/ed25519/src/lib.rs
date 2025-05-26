@@ -1,8 +1,7 @@
 #![no_std]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![doc(html_logo_url = "https://raw.githubusercontent.com/RustCrypto/meta/master/logo_small.png")]
-#![allow(non_snake_case)]
 #![forbid(unsafe_code)]
 #![warn(
     clippy::unwrap_used,
@@ -48,7 +47,7 @@
 //! }
 //!
 //! pub struct HelloVerifier<V> {
-//!     pub verifying_key: V
+//!     pub verify_key: V
 //! }
 //!
 //! impl<V> HelloVerifier<V>
@@ -60,7 +59,7 @@
 //!         person: &str,
 //!         signature: &ed25519::Signature
 //!     ) -> Result<(), ed25519::Error> {
-//!         self.verifying_key.verify(format_message(person).as_bytes(), signature)
+//!         self.verify_key.verify(format_message(person).as_bytes(), signature)
 //!     }
 //! }
 //!
@@ -78,9 +77,6 @@
 //! Below is an example of how a hypothetical consumer of the code above can
 //! instantiate and use the previously defined `HelloSigner` and `HelloVerifier`
 //! types with [`ed25519-dalek`] as the signing/verification provider:
-//!
-//! *NOTE: requires [`ed25519-dalek`] v2 or newer for compatibility with
-//! `ed25519` v2.2+*.
 //!
 //! ```
 //! use ed25519_dalek::{Signer, Verifier, Signature};
@@ -105,7 +101,7 @@
 //! # }
 //! #
 //! # pub struct HelloVerifier<V> {
-//! #     pub verifying_key: V
+//! #     pub verify_key: V
 //! # }
 //! #
 //! # impl<V> HelloVerifier<V>
@@ -117,7 +113,7 @@
 //! #         person: &str,
 //! #         signature: &Signature
 //! #     ) -> Result<(), ed25519::Error> {
-//! #         self.verifying_key.verify(format_message(person).as_bytes(), signature)
+//! #         self.verify_key.verify(format_message(person).as_bytes(), signature)
 //! #     }
 //! # }
 //! #
@@ -128,19 +124,19 @@
 //!
 //! /// `HelloSigner` defined above instantiated with `ed25519-dalek` as
 //! /// the signing provider.
-//! pub type DalekHelloSigner = HelloSigner<ed25519_dalek::SigningKey>;
+//! pub type DalekHelloSigner = HelloSigner<ed25519_dalek::Keypair>;
 //!
-//! let signing_key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+//! let signing_key = ed25519_dalek::Keypair::generate(&mut OsRng);
 //! let signer = DalekHelloSigner { signing_key };
 //! let person = "Joe"; // Message to sign
 //! let signature = signer.sign(person);
 //!
 //! /// `HelloVerifier` defined above instantiated with `ed25519-dalek`
 //! /// as the signature verification provider.
-//! pub type DalekHelloVerifier = HelloVerifier<ed25519_dalek::VerifyingKey>;
+//! pub type DalekHelloVerifier = HelloVerifier<ed25519_dalek::PublicKey>;
 //!
-//! let verifying_key: ed25519_dalek::VerifyingKey = signer.signing_key.verifying_key();
-//! let verifier = DalekHelloVerifier { verifying_key };
+//! let verify_key: ed25519_dalek::PublicKey = signer.signing_key.public;
+//! let verifier = DalekHelloVerifier { verify_key };
 //! assert!(verifier.verify(person, &signature).is_ok());
 //! ```
 //!
@@ -154,7 +150,7 @@
 //! instantiate and use the previously defined `HelloSigner` and `HelloVerifier`
 //! types with [`ring-compat`] as the signing/verification provider:
 //!
-//! ```
+//! ```ignore
 //! use ring_compat::signature::{
 //!     ed25519::{Signature, SigningKey, VerifyingKey},
 //!     Signer, Verifier
@@ -180,7 +176,7 @@
 //! # }
 //! #
 //! # pub struct HelloVerifier<V> {
-//! #     pub verifying_key: V
+//! #     pub verify_key: V
 //! # }
 //! #
 //! # impl<V> HelloVerifier<V>
@@ -192,7 +188,7 @@
 //! #         person: &str,
 //! #         signature: &Signature
 //! #     ) -> Result<(), ed25519::Error> {
-//! #         self.verifying_key.verify(format_message(person).as_bytes(), signature)
+//! #         self.verify_key.verify(format_message(person).as_bytes(), signature)
 //! #     }
 //! # }
 //! #
@@ -208,8 +204,8 @@
 //! let mut ed25519_seed = [0u8; 32];
 //! OsRng.fill_bytes(&mut ed25519_seed);
 //!
-//! let signing_key = SigningKey::from_bytes(&ed25519_seed);
-//! let verifying_key = signing_key.verifying_key();
+//! let signing_key = SigningKey::from_seed(&ed25519_seed).unwrap();
+//! let verify_key = signing_key.verify_key();
 //!
 //! let signer = RingHelloSigner { signing_key };
 //! let person = "Joe"; // Message to sign
@@ -219,7 +215,7 @@
 //! /// as the signature verification provider.
 //! pub type RingHelloVerifier = HelloVerifier<VerifyingKey>;
 //!
-//! let verifier = RingHelloVerifier { verifying_key };
+//! let verifier = RingHelloVerifier { verify_key };
 //! assert!(verifier.verify(person, &signature).is_ok());
 //! ```
 //!
@@ -262,136 +258,114 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-mod hex;
-
 #[cfg(feature = "pkcs8")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pkcs8")))]
 pub mod pkcs8;
 
 #[cfg(feature = "serde")]
 mod serde;
 
-pub use signature::{self, Error, SignatureEncoding};
+pub use signature::{self, Error};
 
 #[cfg(feature = "pkcs8")]
-pub use crate::pkcs8::{KeypairBytes, PublicKeyBytes};
+pub use crate::pkcs8::KeypairBytes;
 
-use core::fmt;
+use core::{fmt, str};
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-/// Size of a single component of an Ed25519 signature.
-const COMPONENT_SIZE: usize = 32;
-
-/// Size of an `R` or `s` component of an Ed25519 signature when serialized
-/// as bytes.
-pub type ComponentBytes = [u8; COMPONENT_SIZE];
-
-/// Ed25519 signature serialized as a byte array.
-pub type SignatureBytes = [u8; Signature::BYTE_SIZE];
+/// Length of an Ed25519 signature in bytes.
+#[deprecated(since = "1.3.0", note = "use ed25519::Signature::BYTE_SIZE instead")]
+pub const SIGNATURE_LENGTH: usize = Signature::BYTE_SIZE;
 
 /// Ed25519 signature.
-///
-/// This type represents a container for the byte serialization of an Ed25519
-/// signature, and does not necessarily represent well-formed field or curve
-/// elements.
-///
-/// Signature verification libraries are expected to reject invalid field
-/// elements at the time a signature is verified.
 #[derive(Copy, Clone, Eq, PartialEq)]
-#[repr(C)]
-pub struct Signature {
-    R: ComponentBytes,
-    s: ComponentBytes,
-}
+pub struct Signature([u8; Signature::BYTE_SIZE]);
 
 impl Signature {
     /// Size of an encoded Ed25519 signature in bytes.
-    pub const BYTE_SIZE: usize = COMPONENT_SIZE * 2;
+    pub const BYTE_SIZE: usize = 64;
 
     /// Parse an Ed25519 signature from a byte slice.
-    pub fn from_bytes(bytes: &SignatureBytes) -> Self {
-        let mut R = ComponentBytes::default();
-        let mut s = ComponentBytes::default();
+    pub fn from_bytes(bytes: &[u8]) -> signature::Result<Self> {
+        let result = bytes.try_into().map(Self).map_err(|_| Error::new())?;
 
-        let components = bytes.split_at(COMPONENT_SIZE);
-        R.copy_from_slice(components.0);
-        s.copy_from_slice(components.1);
+        // Perform a partial reduction check on the signature's `s` scalar.
+        // When properly reduced, at least the three highest bits of the scalar
+        // will be unset so as to fit within the order of ~2^(252.5).
+        //
+        // This doesn't ensure that `s` is fully reduced (which would require a
+        // full reduction check in the event that the 4th most significant bit
+        // is set), however it will catch a number of invalid signatures
+        // relatively inexpensively.
+        if result.0[Signature::BYTE_SIZE - 1] & 0b1110_0000 != 0 {
+            return Err(Error::new());
+        }
 
-        Self { R, s }
-    }
-
-    /// Parse an Ed25519 signature from its `R` and `s` components.
-    pub fn from_components(R: ComponentBytes, s: ComponentBytes) -> Self {
-        Self { R, s }
-    }
-
-    /// Parse an Ed25519 signature from a byte slice.
-    ///
-    /// # Returns
-    /// - `Ok` on success
-    /// - `Err` if the input byte slice is not 64-bytes
-    pub fn from_slice(bytes: &[u8]) -> signature::Result<Self> {
-        SignatureBytes::try_from(bytes)
-            .map(Into::into)
-            .map_err(|_| Error::new())
-    }
-
-    /// Bytes for the `R` component of a signature.
-    pub fn r_bytes(&self) -> &ComponentBytes {
-        &self.R
-    }
-
-    /// Bytes for the `s` component of a signature.
-    pub fn s_bytes(&self) -> &ComponentBytes {
-        &self.s
+        Ok(result)
     }
 
     /// Return the inner byte array.
-    pub fn to_bytes(&self) -> SignatureBytes {
-        let mut ret = [0u8; Self::BYTE_SIZE];
-        let (R, s) = ret.split_at_mut(COMPONENT_SIZE);
-        R.copy_from_slice(&self.R);
-        s.copy_from_slice(&self.s);
-        ret
+    pub fn to_bytes(self) -> [u8; Self::BYTE_SIZE] {
+        self.0
     }
 
     /// Convert this signature into a byte vector.
     #[cfg(feature = "alloc")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
     pub fn to_vec(&self) -> Vec<u8> {
-        self.to_bytes().to_vec()
+        self.0.to_vec()
+    }
+
+    /// DEPRECATED: Create a new signature from a byte array.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if an invalid signature is encountered.
+    ///
+    /// Use [`Signature::from_bytes`] or [`Signature::try_from`] instead for
+    /// a fallible conversion.
+    #[deprecated(since = "1.3.0", note = "use ed25519::Signature::from_bytes instead")]
+    pub fn new(bytes: [u8; Self::BYTE_SIZE]) -> Self {
+        Self::from_bytes(&bytes[..]).expect("invalid signature")
     }
 }
 
-impl SignatureEncoding for Signature {
-    type Repr = SignatureBytes;
-
-    fn to_bytes(&self) -> SignatureBytes {
-        self.to_bytes()
+impl signature::Signature for Signature {
+    fn from_bytes(bytes: &[u8]) -> signature::Result<Self> {
+        Self::from_bytes(bytes)
     }
 }
 
-impl From<Signature> for SignatureBytes {
-    fn from(sig: Signature) -> SignatureBytes {
-        sig.to_bytes()
+impl AsRef<[u8]> for Signature {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
-impl From<&Signature> for SignatureBytes {
-    fn from(sig: &Signature) -> SignatureBytes {
-        sig.to_bytes()
+impl From<Signature> for [u8; Signature::BYTE_SIZE] {
+    fn from(sig: Signature) -> [u8; Signature::BYTE_SIZE] {
+        sig.0
     }
 }
 
-impl From<SignatureBytes> for Signature {
-    fn from(bytes: SignatureBytes) -> Self {
-        Signature::from_bytes(&bytes)
+impl From<&Signature> for [u8; Signature::BYTE_SIZE] {
+    fn from(sig: &Signature) -> [u8; Signature::BYTE_SIZE] {
+        sig.0
     }
 }
 
-impl From<&SignatureBytes> for Signature {
-    fn from(bytes: &SignatureBytes) -> Self {
-        Signature::from_bytes(bytes)
+/// DEPRECATED: use `TryFrom<&[u8]>` instead.
+///
+/// # Warning
+///
+/// This conversion will panic if a signature is invalid.
+// TODO(tarcieri): remove this in the next breaking release
+impl From<[u8; Signature::BYTE_SIZE]> for Signature {
+    fn from(bytes: [u8; Signature::BYTE_SIZE]) -> Signature {
+        #[allow(deprecated)]
+        Signature::new(bytes)
     }
 }
 
@@ -399,21 +373,81 @@ impl TryFrom<&[u8]> for Signature {
     type Error = Error;
 
     fn try_from(bytes: &[u8]) -> signature::Result<Self> {
-        Self::from_slice(bytes)
+        Self::from_bytes(bytes)
     }
 }
 
 impl fmt::Debug for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ed25519::Signature")
-            .field("R", &hex::ComponentFormatter(self.r_bytes()))
-            .field("s", &hex::ComponentFormatter(self.s_bytes()))
-            .finish()
+        write!(f, "ed25519::Signature({})", self)
     }
 }
 
 impl fmt::Display for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:X}", self)
+    }
+}
+
+impl fmt::LowerHex for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::UpperHex for Signature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{:02X}", byte)?;
+        }
+        Ok(())
+    }
+}
+
+/// Decode a signature from hexadecimal.
+///
+/// Upper and lower case hexadecimal are both accepted, however mixed case is
+/// rejected.
+// TODO(tarcieri): use `base16ct`?
+impl str::FromStr for Signature {
+    type Err = Error;
+
+    fn from_str(hex: &str) -> signature::Result<Self> {
+        if hex.as_bytes().len() != Signature::BYTE_SIZE * 2 {
+            return Err(Error::new());
+        }
+
+        let mut upper_case = None;
+
+        // Ensure all characters are valid and case is not mixed
+        for &byte in hex.as_bytes() {
+            match byte {
+                b'0'..=b'9' => (),
+                b'a'..=b'z' => match upper_case {
+                    Some(true) => return Err(Error::new()),
+                    Some(false) => (),
+                    None => upper_case = Some(false),
+                },
+                b'A'..=b'Z' => match upper_case {
+                    Some(true) => (),
+                    Some(false) => return Err(Error::new()),
+                    None => upper_case = Some(true),
+                },
+                _ => return Err(Error::new()),
+            }
+        }
+
+        let mut result = [0u8; Self::BYTE_SIZE];
+        for (digit, byte) in hex.as_bytes().chunks_exact(2).zip(result.iter_mut()) {
+            *byte = str::from_utf8(digit)
+                .ok()
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+                .ok_or_else(Error::new)?;
+        }
+
+        Self::try_from(&result[..])
     }
 }

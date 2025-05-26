@@ -26,18 +26,26 @@ Ed25519 implementations, including HSMs or Cloud KMS services.
 
 ## Minimum Supported Rust Version
 
-This crate requires **Rust 1.60** at a minimum.
+This crate requires **Rust 1.57** at a minimum.
 
-Our policy is to allow MSRV to be raised in future released without that
-qualifing as a SemVer-breaking change, but it will be accompanied by a minor
-version bump, ensuring if you lock to a minor version MSRV will be preserved
-for the default feature set.
+Previous 1.x releases of this crate supported an MSRV of 1.47. If you would
+like to use this crate with earlier releases of Rust, add the following version
+constraint in your project's Cargo.toml to constrain it to the supported
+version range:
+
+```toml
+[dependencies]
+ed25519 = ">=1, <1.4" # ed25519 1.4 requires MSRV 1.57
+```
+
+Note that is our policy that we may change the MSRV in the future, but it will
+be accompanied by a minor version bump.
 
 ## SemVer Policy
 
 - All on-by-default features of this library are covered by SemVer
 - MSRV is considered exempt from SemVer as noted above
-- The `pkcs8` module is exempted as it uses a pre-1.0 dependency, however,
+- The `pkcs8` module is exempted as it uses a pre-1.0 dependency, however, 
   breaking changes to this module will be accompanied by a minor version bump.
 
 ## License
@@ -64,7 +72,7 @@ dual licensed as above, without any additional terms or conditions.
 [build-image]: https://github.com/RustCrypto/signatures/actions/workflows/ed25519.yml/badge.svg
 [build-link]: https://github.com/RustCrypto/signatures/actions/workflows/ed25519.yml
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[rustc-image]: https://img.shields.io/badge/rustc-1.60+-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.57+-blue.svg
 [chat-image]: https://img.shields.io/badge/zulip-join_chat-blue.svg
 [chat-link]: https://rustcrypto.zulipchat.com/#narrow/stream/260048-signatures
 
@@ -74,7 +82,7 @@ dual licensed as above, without any additional terms or conditions.
 
 [//]: # (footnotes)
 
-[1]: https://en.wikipedia.org/wiki/EdDSA#Ed25519
+[1]: https://en.wikipedia.org/wiki/EdDSA
 [2]: https://tools.ietf.org/html/rfc8032
 [3]: https://docs.rs/ed25519/latest/ed25519/struct.Signature.html
 [4]: https://docs.rs/signature/latest/signature/trait.Signer.html

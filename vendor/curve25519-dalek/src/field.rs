@@ -23,7 +23,7 @@
 //! Field operations defined in terms of other field operations, such as
 //! field inversion or square roots, are defined here.
 
-#![allow(unused_qualifications)]
+use core::cmp::{Eq, PartialEq};
 
 use cfg_if::cfg_if;
 
@@ -37,6 +37,11 @@ use crate::constants;
 
 cfg_if! {
     if #[cfg(curve25519_dalek_backend = "fiat")] {
+        #[cfg(curve25519_dalek_bits = "32")]
+        pub use backend::serial::fiat_u32::field::*;
+        #[cfg(curve25519_dalek_bits = "64")]
+        pub use backend::serial::fiat_u64::field::*;
+
         /// A `FieldElement` represents an element of the field
         /// \\( \mathbb Z / (2\^{255} - 19)\\).
         ///
@@ -45,7 +50,7 @@ cfg_if! {
         ///
         /// Using formally-verified field arithmetic from fiat-crypto.
         #[cfg(curve25519_dalek_bits = "32")]
-        pub(crate) type FieldElement = backend::serial::fiat_u32::field::FieldElement2625;
+        pub type FieldElement = backend::serial::fiat_u32::field::FieldElement2625;
 
         /// A `FieldElement` represents an element of the field
         /// \\( \mathbb Z / (2\^{255} - 19)\\).
@@ -55,21 +60,25 @@ cfg_if! {
         ///
         /// Using formally-verified field arithmetic from fiat-crypto.
         #[cfg(curve25519_dalek_bits = "64")]
-        pub(crate) type FieldElement = backend::serial::fiat_u64::field::FieldElement51;
+        pub type FieldElement = backend::serial::fiat_u64::field::FieldElement51;
     } else if #[cfg(curve25519_dalek_bits = "64")] {
+        pub use crate::backend::serial::u64::field::*;
+
         /// A `FieldElement` represents an element of the field
         /// \\( \mathbb Z / (2\^{255} - 19)\\).
         ///
         /// The `FieldElement` type is an alias for one of the platform-specific
         /// implementations.
-        pub(crate) type FieldElement = backend::serial::u64::field::FieldElement51;
+        pub type FieldElement = backend::serial::u64::field::FieldElement51;
     } else {
+        pub use backend::serial::u32::field::*;
+
         /// A `FieldElement` represents an element of the field
         /// \\( \mathbb Z / (2\^{255} - 19)\\).
         ///
         /// The `FieldElement` type is an alias for one of the platform-specific
         /// implementations.
-        pub(crate) type FieldElement = backend::serial::u32::field::FieldElement2625;
+        pub type FieldElement = backend::serial::u32::field::FieldElement2625;
     }
 }
 
@@ -98,7 +107,7 @@ impl FieldElement {
     /// # Return
     ///
     /// If negative, return `Choice(1)`.  Otherwise, return `Choice(0)`.
-    pub(crate) fn is_negative(&self) -> Choice {
+    pub fn is_negative(&self) -> Choice {
         let bytes = self.as_bytes();
         (bytes[0] & 1).into()
     }
@@ -108,7 +117,7 @@ impl FieldElement {
     /// # Return
     ///
     /// If zero, return `Choice(1)`.  Otherwise, return `Choice(0)`.
-    pub(crate) fn is_zero(&self) -> Choice {
+    pub fn is_zero(&self) -> Choice {
         let zero = [0u8; 32];
         let bytes = self.as_bytes();
 
@@ -154,11 +163,11 @@ impl FieldElement {
         (t19, t3)
     }
 
-    /// Given a slice of pub(crate)lic `FieldElements`, replace each with its inverse.
+    /// Given a slice of public `FieldElements`, replace each with its inverse.
     ///
     /// When an input `FieldElement` is zero, its value is unchanged.
     #[cfg(feature = "alloc")]
-    pub(crate) fn batch_invert(inputs: &mut [FieldElement]) {
+    pub fn batch_invert(inputs: &mut [FieldElement]) {
         // Montgomery’s Trick and Fast Implementation of Masked AES
         // Genelle, Prouff and Quisquater
         // Section 3.2
@@ -203,7 +212,7 @@ impl FieldElement {
     /// This function returns zero on input zero.
     #[rustfmt::skip] // keep alignment of explanatory comments
     #[allow(clippy::let_and_return)]
-    pub(crate) fn invert(&self) -> FieldElement {
+    pub fn invert(&self) -> FieldElement {
         // The bits of p-2 = 2^255 -19 -2 are 11010111111...11.
         //
         //                                 nonzero bits of exponent
@@ -240,7 +249,7 @@ impl FieldElement {
     /// - `(Choice(0), zero)        ` if `v` is zero and `u` is nonzero;
     /// - `(Choice(0), +sqrt(i*u/v))` if `u/v` is nonsquare (so `i*u/v` is square).
     ///
-    pub(crate) fn sqrt_ratio_i(u: &FieldElement, v: &FieldElement) -> (Choice, FieldElement) {
+    pub fn sqrt_ratio_i(u: &FieldElement, v: &FieldElement) -> (Choice, FieldElement) {
         // Using the same trick as in ed25519 decoding, we merge the
         // inversion, the square root, and the square test as follows.
         //
@@ -300,7 +309,7 @@ impl FieldElement {
     /// - `(Choice(0), zero)           ` if `self` is zero;
     /// - `(Choice(0), +sqrt(i/self))  ` if `self` is a nonzero nonsquare;
     ///
-    pub(crate) fn invsqrt(&self) -> (Choice, FieldElement) {
+    pub fn invsqrt(&self) -> (Choice, FieldElement) {
         FieldElement::sqrt_ratio_i(&FieldElement::ONE, self)
     }
 }
@@ -308,6 +317,7 @@ impl FieldElement {
 #[cfg(test)]
 mod test {
     use crate::field::*;
+    use subtle::ConditionallyNegatable;
 
     /// Random element a of GF(2^255-19), from Sage
     /// a = 1070314506888354081329385823235218444233221\

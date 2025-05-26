@@ -5,14 +5,18 @@
 //!
 //! Using them incorrectly can introduce security vulnerabilities. Please
 //! carefully read the documentation before attempting to use them.
+//!
+//! To use them, enable the `hazmat-preview` crate feature. Note that this
+//! feature is semi-unstable and not subject to regular 1.x SemVer guarantees.
+//! However, any breaking changes will be accompanied with a minor version bump.
 
-use crate::Error;
+use crate::{Error, Signature};
 
-#[cfg(feature = "rand_core")]
-use crate::rand_core::CryptoRngCore;
+#[cfg(feature = "rand-preview")]
+use crate::rand_core::{CryptoRng, RngCore};
 
 /// Sign the provided message prehash, returning a digital signature.
-pub trait PrehashSigner<S> {
+pub trait PrehashSigner<S: Signature> {
     /// Attempt to sign the given message digest, returning a digital signature
     /// on success, or an error if something went wrong.
     ///
@@ -29,8 +33,9 @@ pub trait PrehashSigner<S> {
 }
 
 /// Sign the provided message prehash using the provided external randomness source, returning a digital signature.
-#[cfg(feature = "rand_core")]
-pub trait RandomizedPrehashSigner<S> {
+#[cfg(feature = "rand-preview")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rand-preview")))]
+pub trait RandomizedPrehashSigner<S: Signature> {
     /// Attempt to sign the given message digest, returning a digital signature
     /// on success, or an error if something went wrong.
     ///
@@ -45,13 +50,13 @@ pub trait RandomizedPrehashSigner<S> {
     /// implementation to decide.
     fn sign_prehash_with_rng(
         &self,
-        rng: &mut impl CryptoRngCore,
+        rng: impl CryptoRng + RngCore,
         prehash: &[u8],
     ) -> Result<S, Error>;
 }
 
 /// Verify the provided message prehash using `Self` (e.g. a public key)
-pub trait PrehashVerifier<S> {
+pub trait PrehashVerifier<S: Signature> {
     /// Use `Self` to verify that the provided signature for a given message
     /// `prehash` is authentic.
     ///

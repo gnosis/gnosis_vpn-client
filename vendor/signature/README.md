@@ -1,4 +1,4 @@
-# [RustCrypto]: Digital Signature Algorithms
+# RustCrypto: Digital Signature Algorithms
 
 [![crate][crate-image]][crate-link]
 [![Docs][docs-image]][docs-link]
@@ -8,16 +8,20 @@
 [![Project Chat][chat-image]][chat-link]
 
 This crate contains traits which provide generic, object-safe APIs for
-generating and verifying [digital signatures].
+generating and verifying [digital signatures][1].
 
-Used by the [`dsa`], [`ecdsa`], [`ed25519`], and [`rsa`] crates maintained by
-the [RustCrypto] organization, as well as [`ed25519-dalek`].
+Used by the [`ecdsa`][2] and [`ed25519`][3] crates, with forthcoming support
+in the [`rsa`][4] crate.
+
+See also the [Signatory][5] crate for trait wrappers for using these traits
+with many popular Rust cryptography crates, including `ed25519-dalek`, *ring*,
+`secp256k1-rs`, and `sodiumoxide`.
 
 [Documentation][docs-link]
 
 ## Minimum Supported Rust Version
 
-Rust **1.60** or higher.
+Rust **1.56** or higher.
 
 Minimum supported Rust version can be changed in the future, but it will be
 done with a minor version bump.
@@ -26,11 +30,10 @@ done with a minor version bump.
 
 - All on-by-default features of this library are covered by SemVer
 - MSRV is considered exempt from SemVer as noted above
-- The `derive` feature is stable and covered by SemVer
-- The off-by-default features `digest` and `rand_core` are unstable features 
-  which are also considered exempt from SemVer as they correspond to pre-1.0
-  crates which are still subject to changes. Breaking changes to these features
-  will, like MSRV, be done with a minor version bump.
+- The off-by-default features `derive-preview` and `digest-preview` are
+  unstable "preview" features which are also considered exempt from SemVer.
+  Breaking changes to these features will, like MSRV, be done with a minor
+  version bump.
 
 ## License
 
@@ -56,16 +59,14 @@ dual licensed as above, without any additional terms or conditions.
 [build-image]: https://github.com/RustCrypto/traits/actions/workflows/signature.yml/badge.svg
 [build-link]: https://github.com/RustCrypto/traits/actions/workflows/signature.yml
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[rustc-image]: https://img.shields.io/badge/rustc-1.60+-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.56+-blue.svg
 [chat-image]: https://img.shields.io/badge/zulip-join_chat-blue.svg
 [chat-link]: https://rustcrypto.zulipchat.com/#narrow/stream/260048-signatures
 
-[//]: # (links)
+[//]: # (general links)
 
-[RustCrypto]: https://github.com/RustCrypto/
-[digital signatures]: https://en.wikipedia.org/wiki/Digital_signature
-[`dsa`]: https://github.com/RustCrypto/signatures/tree/master/dsa
-[`ecdsa`]: https://github.com/RustCrypto/signatures/tree/master/ecdsa
-[`ed25519`]: https://github.com/RustCrypto/signatures/tree/master/ed25519
-[`ed25519-dalek`]: https://github.com/dalek-cryptography/ed25519-dalek
-[`rsa`]: https://github.com/RustCrypto/RSA
+[1]: https://en.wikipedia.org/wiki/Digital_signature
+[2]: https://github.com/RustCrypto/signatures/tree/master/ecdsa
+[3]: https://github.com/RustCrypto/signatures/tree/master/ed25519
+[4]: https://github.com/RustCrypto/RSA
+[5]: https://docs.rs/signatory

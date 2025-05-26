@@ -12,7 +12,7 @@
 [package]
 edition = "2018"
 name = "fiat-crypto"
-version = "0.2.9"
+version = "0.1.20"
 authors = ["Fiat Crypto library authors <jgross@mit.edu>"]
 description = "Fiat-crypto generated Rust"
 homepage = "https://github.com/mit-plv/fiat-crypto"

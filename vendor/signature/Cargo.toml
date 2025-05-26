@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.56"
 name = "signature"
-version = "2.2.0"
+version = "1.6.4"
 authors = ["RustCrypto Developers"]
 description = "Traits for cryptographic signature algorithms (e.g. ECDSA, Ed25519)"
 documentation = "https://docs.rs/signature"
@@ -39,31 +39,34 @@ rustdoc-args = [
     "docsrs",
 ]
 
-[dependencies.derive]
-version = "2"
-optional = true
-package = "signature_derive"
-
 [dependencies.digest]
-version = "0.10.6"
+version = "0.10.3"
 optional = true
 default-features = false
 
 [dependencies.rand_core]
-version = "0.6.4"
+version = "0.6"
 optional = true
 default-features = false
 
+[dependencies.signature_derive]
+version = "=1.0.0-pre.7"
+optional = true
+
 [dev-dependencies.hex-literal]
-version = "0.4"
+version = "0.3"
 
 [dev-dependencies.sha2]
 version = "0.10"
 default-features = false
 
 [features]
-alloc = []
-std = [
-    "alloc",
-    "rand_core?/std",
+default = ["std"]
+derive-preview = [
+    "digest-preview",
+    "signature_derive",
 ]
+digest-preview = ["digest"]
+hazmat-preview = []
+rand-preview = ["rand_core"]
+std = []

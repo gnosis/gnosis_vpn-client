@@ -14,17 +14,16 @@
 //! Please lock to a specific minor version of the `ed25519` crate to avoid
 //! breaking changes when using this module.
 
-pub use pkcs8::{
-    spki, DecodePrivateKey, DecodePublicKey, Error, ObjectIdentifier, PrivateKeyInfo, Result,
-};
+pub use pkcs8::{DecodePrivateKey, DecodePublicKey};
 
 #[cfg(feature = "alloc")]
 pub use pkcs8::{spki::EncodePublicKey, EncodePrivateKey};
 
-#[cfg(feature = "alloc")]
-pub use pkcs8::der::{asn1::BitStringRef, Document, SecretDocument};
-
 use core::fmt;
+use pkcs8::ObjectIdentifier;
+
+#[cfg(feature = "alloc")]
+use pkcs8::der::{Document, SecretDocument};
 
 #[cfg(feature = "pem")]
 use {
@@ -42,7 +41,7 @@ use zeroize::Zeroize;
 pub const ALGORITHM_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
 /// Ed25519 Algorithm Identifier.
-pub const ALGORITHM_ID: pkcs8::AlgorithmIdentifierRef<'static> = pkcs8::AlgorithmIdentifierRef {
+pub const ALGORITHM_ID: pkcs8::AlgorithmIdentifier<'static> = pkcs8::AlgorithmIdentifier {
     oid: ALGORITHM_OID,
     parameters: None,
 };
@@ -74,7 +73,7 @@ pub struct KeypairBytes {
     /// Ed25519 public key (if available).
     ///
     /// Compressed Edwards-y encoded curve point.
-    pub public_key: Option<PublicKeyBytes>,
+    pub public_key: Option<[u8; Self::BYTE_SIZE / 2]>,
 }
 
 impl KeypairBytes {
@@ -84,12 +83,9 @@ impl KeypairBytes {
     /// Parse raw keypair from a 64-byte input.
     pub fn from_bytes(bytes: &[u8; Self::BYTE_SIZE]) -> Self {
         let (sk, pk) = bytes.split_at(Self::BYTE_SIZE / 2);
-
         Self {
             secret_key: sk.try_into().expect("secret key size error"),
-            public_key: Some(PublicKeyBytes(
-                pk.try_into().expect("public key size error"),
-            )),
+            public_key: Some(pk.try_into().expect("public key size error")),
         }
     }
 
@@ -104,13 +100,15 @@ impl KeypairBytes {
             let mut result = [0u8; Self::BYTE_SIZE];
             let (sk, pk) = result.split_at_mut(Self::BYTE_SIZE / 2);
             sk.copy_from_slice(&self.secret_key);
-            pk.copy_from_slice(public_key.as_ref());
+            pk.copy_from_slice(public_key);
             Some(result)
         } else {
             None
         }
     }
 }
+
+impl DecodePrivateKey for KeypairBytes {}
 
 impl Drop for KeypairBytes {
     fn drop(&mut self) {
@@ -120,18 +118,19 @@ impl Drop for KeypairBytes {
 }
 
 #[cfg(feature = "alloc")]
+#[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
 impl EncodePrivateKey for KeypairBytes {
-    fn to_pkcs8_der(&self) -> Result<SecretDocument> {
+    fn to_pkcs8_der(&self) -> pkcs8::Result<SecretDocument> {
         // Serialize private key as nested OCTET STRING
         let mut private_key = [0u8; 2 + (Self::BYTE_SIZE / 2)];
         private_key[0] = 0x04;
         private_key[1] = 0x20;
         private_key[2..].copy_from_slice(&self.secret_key);
 
-        let private_key_info = PrivateKeyInfo {
+        let private_key_info = pkcs8::PrivateKeyInfo {
             algorithm: ALGORITHM_ID,
             private_key: &private_key,
-            public_key: self.public_key.as_ref().map(|pk| pk.0.as_slice()),
+            public_key: self.public_key.as_ref().map(AsRef::as_ref),
         };
 
         let result = SecretDocument::encode_msg(&private_key_info)?;
@@ -143,14 +142,14 @@ impl EncodePrivateKey for KeypairBytes {
     }
 }
 
-impl TryFrom<PrivateKeyInfo<'_>> for KeypairBytes {
-    type Error = Error;
+impl TryFrom<pkcs8::PrivateKeyInfo<'_>> for KeypairBytes {
+    type Error = pkcs8::Error;
 
-    fn try_from(private_key: PrivateKeyInfo<'_>) -> Result<Self> {
+    fn try_from(private_key: pkcs8::PrivateKeyInfo<'_>) -> pkcs8::Result<Self> {
         private_key.algorithm.assert_algorithm_oid(ALGORITHM_OID)?;
 
         if private_key.algorithm.parameters.is_some() {
-            return Err(Error::ParametersMalformed);
+            return Err(pkcs8::Error::ParametersMalformed);
         }
 
         // Ed25519 PKCS#8 keys are represented as a nested OCTET STRING
@@ -162,15 +161,15 @@ impl TryFrom<PrivateKeyInfo<'_>> for KeypairBytes {
         // - 0x04: OCTET STRING tag
         // - 0x20: 32-byte length
         let secret_key = match private_key.private_key {
-            [0x04, 0x20, rest @ ..] => rest.try_into().map_err(|_| Error::KeyMalformed),
-            _ => Err(Error::KeyMalformed),
+            [0x04, 0x20, rest @ ..] => rest.try_into().map_err(|_| pkcs8::Error::KeyMalformed),
+            _ => Err(pkcs8::Error::KeyMalformed),
         }?;
 
+        // TODO(tarcieri): parse public key
         let public_key = private_key
             .public_key
-            .map(|bytes| bytes.try_into().map_err(|_| Error::KeyMalformed))
-            .transpose()?
-            .map(PublicKeyBytes);
+            .map(|bytes| bytes.try_into().map_err(|_| pkcs8::Error::KeyMalformed))
+            .transpose()?;
 
         Ok(Self {
             secret_key,
@@ -180,9 +179,9 @@ impl TryFrom<PrivateKeyInfo<'_>> for KeypairBytes {
 }
 
 impl TryFrom<&[u8]> for KeypairBytes {
-    type Error = Error;
+    type Error = pkcs8::Error;
 
-    fn try_from(der_bytes: &[u8]) -> Result<Self> {
+    fn try_from(der_bytes: &[u8]) -> pkcs8::Result<Self> {
         Self::from_pkcs8_der(der_bytes)
     }
 }
@@ -196,10 +195,11 @@ impl fmt::Debug for KeypairBytes {
 }
 
 #[cfg(feature = "pem")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pem")))]
 impl str::FromStr for KeypairBytes {
-    type Err = Error;
+    type Err = pkcs8::Error;
 
-    fn from_str(pem: &str) -> Result<Self> {
+    fn from_str(pem: &str) -> pkcs8::Result<Self> {
         Self::from_pkcs8_pem(pem)
     }
 }
@@ -220,7 +220,6 @@ impl str::FromStr for KeypairBytes {
 ///
 /// Note that this type operates on raw bytes and performs no validation that
 /// public keys represent valid compressed Ed25519 y-coordinates.
-#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct PublicKeyBytes(pub [u8; Self::BYTE_SIZE]);
 
 impl PublicKeyBytes {
@@ -239,57 +238,61 @@ impl AsRef<[u8; Self::BYTE_SIZE]> for PublicKeyBytes {
     }
 }
 
+impl DecodePublicKey for PublicKeyBytes {}
+
 #[cfg(feature = "alloc")]
+#[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
 impl EncodePublicKey for PublicKeyBytes {
-    fn to_public_key_der(&self) -> spki::Result<Document> {
-        pkcs8::SubjectPublicKeyInfoRef {
+    fn to_public_key_der(&self) -> pkcs8::spki::Result<Document> {
+        pkcs8::SubjectPublicKeyInfo {
             algorithm: ALGORITHM_ID,
-            subject_public_key: BitStringRef::new(0, &self.0)?,
+            subject_public_key: &self.0,
         }
         .try_into()
     }
 }
 
-impl TryFrom<spki::SubjectPublicKeyInfoRef<'_>> for PublicKeyBytes {
-    type Error = spki::Error;
+impl TryFrom<pkcs8::spki::SubjectPublicKeyInfo<'_>> for PublicKeyBytes {
+    type Error = pkcs8::spki::Error;
 
-    fn try_from(spki: spki::SubjectPublicKeyInfoRef<'_>) -> spki::Result<Self> {
+    fn try_from(spki: pkcs8::spki::SubjectPublicKeyInfo<'_>) -> pkcs8::spki::Result<Self> {
         spki.algorithm.assert_algorithm_oid(ALGORITHM_OID)?;
 
         if spki.algorithm.parameters.is_some() {
-            return Err(spki::Error::KeyMalformed);
+            return Err(pkcs8::spki::Error::KeyMalformed);
         }
 
         spki.subject_public_key
-            .as_bytes()
-            .ok_or(spki::Error::KeyMalformed)?
             .try_into()
             .map(Self)
-            .map_err(|_| spki::Error::KeyMalformed)
+            .map_err(|_| pkcs8::spki::Error::KeyMalformed)
     }
 }
 
 impl TryFrom<&[u8]> for PublicKeyBytes {
-    type Error = spki::Error;
+    type Error = pkcs8::spki::Error;
 
-    fn try_from(der_bytes: &[u8]) -> spki::Result<Self> {
+    fn try_from(der_bytes: &[u8]) -> pkcs8::spki::Result<Self> {
         Self::from_public_key_der(der_bytes)
     }
 }
 
 impl TryFrom<KeypairBytes> for PublicKeyBytes {
-    type Error = spki::Error;
+    type Error = pkcs8::spki::Error;
 
-    fn try_from(keypair: KeypairBytes) -> spki::Result<PublicKeyBytes> {
+    fn try_from(keypair: KeypairBytes) -> pkcs8::spki::Result<PublicKeyBytes> {
         PublicKeyBytes::try_from(&keypair)
     }
 }
 
 impl TryFrom<&KeypairBytes> for PublicKeyBytes {
-    type Error = spki::Error;
+    type Error = pkcs8::spki::Error;
 
-    fn try_from(keypair: &KeypairBytes) -> spki::Result<PublicKeyBytes> {
-        keypair.public_key.ok_or(spki::Error::KeyMalformed)
+    fn try_from(keypair: &KeypairBytes) -> pkcs8::spki::Result<PublicKeyBytes> {
+        keypair
+            .public_key
+            .map(PublicKeyBytes)
+            .ok_or(pkcs8::spki::Error::KeyMalformed)
     }
 }
 
@@ -306,15 +309,17 @@ impl fmt::Debug for PublicKeyBytes {
 }
 
 #[cfg(feature = "pem")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pem")))]
 impl str::FromStr for PublicKeyBytes {
-    type Err = spki::Error;
+    type Err = pkcs8::spki::Error;
 
-    fn from_str(pem: &str) -> spki::Result<Self> {
+    fn from_str(pem: &str) -> pkcs8::spki::Result<Self> {
         Self::from_public_key_pem(pem)
     }
 }
 
 #[cfg(feature = "pem")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pem")))]
 impl ToString for PublicKeyBytes {
     fn to_string(&self) -> String {
         self.to_public_key_pem(Default::default())
@@ -323,9 +328,10 @@ impl ToString for PublicKeyBytes {
 }
 
 #[cfg(feature = "pem")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pem")))]
 #[cfg(test)]
 mod tests {
-    use super::{KeypairBytes, PublicKeyBytes};
+    use super::KeypairBytes;
     use hex_literal::hex;
 
     const SECRET_KEY_BYTES: [u8; 32] =
@@ -338,7 +344,7 @@ mod tests {
     fn to_bytes() {
         let valid_keypair = KeypairBytes {
             secret_key: SECRET_KEY_BYTES,
-            public_key: Some(PublicKeyBytes(PUBLIC_KEY_BYTES)),
+            public_key: Some(PUBLIC_KEY_BYTES),
         };
 
         assert_eq!(

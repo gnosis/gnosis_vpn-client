@@ -24,25 +24,8 @@
     feature = "ed25519",
     feature = "rsa"
 ))]
-use quick_protobuf::{BytesReader, Writer};
-
-#[cfg(feature = "ecdsa")]
-use crate::ecdsa;
-#[cfg(any(
-    feature = "ecdsa",
-    feature = "secp256k1",
-    feature = "ed25519",
-    feature = "rsa"
-))]
-#[cfg(feature = "ed25519")]
-use crate::ed25519;
-#[cfg(any(
-    feature = "ecdsa",
-    feature = "secp256k1",
-    feature = "ed25519",
-    feature = "rsa"
-))]
 use crate::error::OtherVariantError;
+use crate::error::{DecodingError, SigningError};
 #[cfg(any(
     feature = "ecdsa",
     feature = "secp256k1",
@@ -50,14 +33,33 @@ use crate::error::OtherVariantError;
     feature = "rsa"
 ))]
 use crate::proto;
+#[cfg(any(
+    feature = "ecdsa",
+    feature = "secp256k1",
+    feature = "ed25519",
+    feature = "rsa"
+))]
+use quick_protobuf::{BytesReader, Writer};
+#[cfg(any(
+    feature = "ecdsa",
+    feature = "secp256k1",
+    feature = "ed25519",
+    feature = "rsa"
+))]
+use std::convert::TryFrom;
+
+#[cfg(feature = "ed25519")]
+use crate::ed25519;
+
 #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
 use crate::rsa;
+
 #[cfg(feature = "secp256k1")]
 use crate::secp256k1;
-use crate::{
-    error::{DecodingError, SigningError},
-    KeyType,
-};
+
+#[cfg(feature = "ecdsa")]
+use crate::ecdsa;
+use crate::KeyType;
 
 /// Identity keypair of a node.
 ///
@@ -75,6 +77,7 @@ use crate::{
 /// let mut bytes = std::fs::read("private.pk8").unwrap();
 /// let keypair = Keypair::rsa_from_pkcs8(&mut bytes);
 /// ```
+///
 #[derive(Debug, Clone)]
 pub struct Keypair {
     keypair: KeyPairInner,
@@ -99,7 +102,7 @@ enum KeyPairInner {
 
 impl Keypair {
     /// Generate a new Ed25519 keypair.
-    #[cfg(all(feature = "ed25519", feature = "rand"))]
+    #[cfg(feature = "ed25519")]
     pub fn generate_ed25519() -> Keypair {
         Keypair {
             keypair: KeyPairInner::Ed25519(ed25519::Keypair::generate()),
@@ -107,7 +110,7 @@ impl Keypair {
     }
 
     /// Generate a new Secp256k1 keypair.
-    #[cfg(all(feature = "secp256k1", feature = "rand"))]
+    #[cfg(feature = "secp256k1")]
     pub fn generate_secp256k1() -> Keypair {
         Keypair {
             keypair: KeyPairInner::Secp256k1(secp256k1::Keypair::generate()),
@@ -115,7 +118,7 @@ impl Keypair {
     }
 
     /// Generate a new ECDSA keypair.
-    #[cfg(all(feature = "ecdsa", feature = "rand"))]
+    #[cfg(feature = "ecdsa")]
     pub fn generate_ecdsa() -> Keypair {
         Keypair {
             keypair: KeyPairInner::Ecdsa(ecdsa::Keypair::generate()),
@@ -337,70 +340,6 @@ impl Keypair {
             KeyPairInner::Secp256k1(_) => KeyType::Secp256k1,
             #[cfg(feature = "ecdsa")]
             KeyPairInner::Ecdsa(_) => KeyType::Ecdsa,
-        }
-    }
-
-    /// Deterministically derive a new secret from this [`Keypair`],
-    /// taking into account the provided domain.
-    ///
-    /// This works for all key types except RSA where it returns `None`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # fn main() {
-    /// # use libp2p_identity as identity;
-    /// let key = identity::Keypair::generate_ed25519();
-    ///
-    /// let new_key = key
-    ///     .derive_secret(b"my encryption key")
-    ///     .expect("can derive secret for ed25519");
-    /// # }
-    /// ```
-    #[cfg(any(
-        feature = "ecdsa",
-        feature = "secp256k1",
-        feature = "ed25519",
-        feature = "rsa"
-    ))]
-    pub fn derive_secret(&self, domain: &[u8]) -> Option<[u8; 32]> {
-        let mut okm = [0u8; 32];
-        hkdf::Hkdf::<sha2::Sha256>::new(None, &self.secret()?)
-            .expand(domain, &mut okm)
-            .expect("okm.len() == 32");
-
-        Some(okm)
-    }
-
-    // We build docs with all features so this doesn't need to have any docs.
-    #[cfg(not(any(
-        feature = "ecdsa",
-        feature = "secp256k1",
-        feature = "ed25519",
-        feature = "rsa"
-    )))]
-    pub fn derive_secret(&self, _: &[u8]) -> Option<[u8; 32]> {
-        None
-    }
-
-    /// Return the secret key of the [`Keypair`].
-    #[allow(dead_code)]
-    pub(crate) fn secret(&self) -> Option<[u8; 32]> {
-        match self.keypair {
-            #[cfg(feature = "ed25519")]
-            KeyPairInner::Ed25519(ref inner) => Some(inner.secret().to_bytes()),
-            #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
-            KeyPairInner::Rsa(_) => None,
-            #[cfg(feature = "secp256k1")]
-            KeyPairInner::Secp256k1(ref inner) => Some(inner.secret().to_bytes()),
-            #[cfg(feature = "ecdsa")]
-            KeyPairInner::Ecdsa(ref inner) => Some(
-                inner
-                    .secret()
-                    .to_bytes()
-                    .try_into()
-                    .expect("Ecdsa's private key should be 32 bytes"),
-            ),
         }
     }
 }
@@ -671,7 +610,7 @@ impl TryFrom<proto::PublicKey> for PublicKey {
             )?),
             #[cfg(not(feature = "ed25519"))]
             proto::KeyType::Ed25519 => {
-                tracing::debug!("support for ed25519 was disabled at compile-time");
+                log::debug!("support for ed25519 was disabled at compile-time");
                 Err(DecodingError::missing_feature("ed25519"))
             }
             #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
@@ -684,7 +623,7 @@ impl TryFrom<proto::PublicKey> for PublicKey {
             }
             #[cfg(any(not(feature = "rsa"), target_arch = "wasm32"))]
             proto::KeyType::RSA => {
-                tracing::debug!("support for RSA was disabled at compile-time");
+                log::debug!("support for RSA was disabled at compile-time");
                 Err(DecodingError::missing_feature("rsa"))
             }
             #[cfg(feature = "secp256k1")]
@@ -694,7 +633,7 @@ impl TryFrom<proto::PublicKey> for PublicKey {
                 })?),
             #[cfg(not(feature = "secp256k1"))]
             proto::KeyType::Secp256k1 => {
-                tracing::debug!("support for secp256k1 was disabled at compile-time");
+                log::debug!("support for secp256k1 was disabled at compile-time");
                 Err(DecodingError::missing_feature("secp256k1"))
             }
             #[cfg(feature = "ecdsa")]
@@ -705,7 +644,7 @@ impl TryFrom<proto::PublicKey> for PublicKey {
             )?),
             #[cfg(not(feature = "ecdsa"))]
             proto::KeyType::ECDSA => {
-                tracing::debug!("support for ECDSA was disabled at compile-time");
+                log::debug!("support for ECDSA was disabled at compile-time");
                 Err(DecodingError::missing_feature("ecdsa"))
             }
         }
@@ -819,22 +758,24 @@ impl From<rsa::PublicKey> for PublicKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "peerid")]
+    use crate::PeerId;
+    use base64::prelude::*;
+    use std::str::FromStr;
 
     #[test]
     #[cfg(feature = "ed25519")]
     #[cfg(feature = "peerid")]
-    fn keypair_protobuf_roundtrip_ed25519() {
-        let priv_key = Keypair::from_protobuf_encoding(&hex_literal::hex!(
-            "080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e"
-        ))
-            .unwrap();
+    fn keypair_protobuf_roundtrip() {
+        let expected_keypair = Keypair::generate_ed25519();
+        let expected_peer_id = expected_keypair.public().to_peer_id();
 
-        let pub_key = PublicKey::try_decode_protobuf(&hex_literal::hex!(
-            "080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e"
-        ))
-        .unwrap();
+        let encoded = expected_keypair.to_protobuf_encoding().unwrap();
 
-        roundtrip_protobuf_encoding(&priv_key, &pub_key, KeyType::Ed25519);
+        let keypair = Keypair::from_protobuf_encoding(&encoded).unwrap();
+        let peer_id = keypair.public().to_peer_id();
+
+        assert_eq!(expected_peer_id, peer_id);
     }
 
     #[test]
@@ -905,9 +846,8 @@ mod tests {
 
     #[test]
     fn public_key_implements_hash() {
-        use std::hash::Hash;
-
         use crate::PublicKey;
+        use std::hash::Hash;
 
         fn assert_implements_hash<T: Hash>() {}
 
@@ -916,9 +856,8 @@ mod tests {
 
     #[test]
     fn public_key_implements_ord() {
-        use std::cmp::Ord;
-
         use crate::PublicKey;
+        use std::cmp::Ord;
 
         fn assert_implements_ord<T: Ord>() {}
 
@@ -926,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "ed25519", feature = "rand"))]
+    #[cfg(feature = "ed25519")]
     fn test_publickey_from_ed25519_public_key() {
         let pubkey = Keypair::generate_ed25519().public();
         let ed25519_pubkey = pubkey
@@ -941,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "secp256k1", feature = "rand"))]
+    #[cfg(feature = "secp256k1")]
     fn test_publickey_from_secp256k1_public_key() {
         let pubkey = Keypair::generate_secp256k1().public();
         let secp256k1_pubkey = pubkey
@@ -955,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "ecdsa", feature = "rand"))]
+    #[cfg(feature = "ecdsa")]
     fn test_publickey_from_ecdsa_public_key() {
         let pubkey = Keypair::generate_ecdsa().public();
         let ecdsa_pubkey = pubkey.clone().try_into_ecdsa().expect("A ecdsa keypair");
@@ -963,12 +902,5 @@ mod tests {
 
         assert_eq!(converted_pubkey, pubkey);
         assert_eq!(converted_pubkey.key_type(), KeyType::Ecdsa)
-    }
-
-    #[test]
-    #[cfg(feature = "ecdsa")]
-    fn test_secret_from_ecdsa_private_key() {
-        let keypair = Keypair::generate_ecdsa();
-        assert!(keypair.derive_secret(b"domain separator!").is_some())
     }
 }

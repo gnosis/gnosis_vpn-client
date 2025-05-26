@@ -15,8 +15,9 @@
 
 use core::borrow::Borrow;
 
+use subtle;
+
 use crate::scalar::{clamp_integer, Scalar};
-use subtle::ConstantTimeEq;
 
 // ------------------------------------------------------------------------
 // Public Traits
@@ -40,7 +41,7 @@ pub trait IsIdentity {
 /// constructor.
 impl<T> IsIdentity for T
 where
-    T: ConstantTimeEq + Identity,
+    T: subtle::ConstantTimeEq + Identity,
 {
     fn is_identity(&self) -> bool {
         self.ct_eq(&T::identity()).into()
@@ -258,7 +259,7 @@ pub trait VartimeMultiscalarMul {
             scalars,
             points.into_iter().map(|P| Some(P.borrow().clone())),
         )
-        .expect("should return some point")
+        .unwrap()
     }
 }
 
@@ -364,7 +365,7 @@ pub trait VartimePrecomputedMultiscalarMul: Sized {
             dynamic_scalars,
             dynamic_points.into_iter().map(|P| Some(P.borrow().clone())),
         )
-        .expect("should return some point")
+        .unwrap()
     }
 
     /// Given `static_scalars`, an iterator of public scalars
@@ -408,7 +409,6 @@ pub trait VartimePrecomputedMultiscalarMul: Sized {
 /// This trait is only for debugging/testing, since it should be
 /// impossible for a `curve25519-dalek` user to construct an invalid
 /// point.
-#[allow(dead_code)]
 pub(crate) trait ValidityCheck {
     /// Checks whether the point is on the curve. Not CT.
     fn is_valid(&self) -> bool;

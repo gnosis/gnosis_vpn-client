@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.56"
 name = "ed25519"
-version = "2.2.3"
+version = "1.5.3"
 authors = ["RustCrypto Developers"]
 description = """
 Edwards Digital Signature Algorithm (EdDSA) over Curve25519 (as specified in RFC 8032)
@@ -44,7 +44,7 @@ rustdoc-args = [
 ]
 
 [dependencies.pkcs8]
-version = "0.10"
+version = "0.9"
 optional = true
 
 [dependencies.serde]
@@ -52,12 +52,13 @@ version = "1"
 optional = true
 default-features = false
 
-[dependencies.serde_bytes]
+[dependencies.serde_bytes_crate]
 version = "0.11"
 optional = true
+package = "serde_bytes"
 
 [dependencies.signature]
-version = "2"
+version = "1.3.1"
 default-features = false
 
 [dependencies.zeroize]
@@ -69,33 +70,22 @@ default-features = false
 version = "1"
 
 [dev-dependencies.ed25519-dalek]
-version = "2"
-features = ["rand_core"]
+version = "1"
 
 [dev-dependencies.hex-literal]
-version = "0.4"
+version = "0.3"
 
 [dev-dependencies.rand_core]
-version = "0.6"
+version = "0.5"
 features = ["std"]
 
-[dev-dependencies.ring-compat]
-version = "0.8"
-features = ["signature"]
-default-features = false
-
 [features]
-alloc = ["pkcs8?/alloc"]
+alloc = ["pkcs8/alloc"]
 default = ["std"]
-pem = [
-    "alloc",
-    "pkcs8/pem",
-]
+pem = ["pkcs8/pem"]
 serde_bytes = [
     "serde",
-    "dep:serde_bytes",
+    "serde_bytes_crate",
+    "std",
 ]
-std = [
-    "pkcs8?/std",
-    "signature/std",
-]
+std = ["signature/std"]

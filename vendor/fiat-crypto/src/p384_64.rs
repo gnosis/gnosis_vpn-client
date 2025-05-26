@@ -20,54 +20,18 @@
 #![allow(unused_parens)]
 #![allow(non_camel_case_types)]
 
-/** fiat_p384_u1 represents values of 1 bits, stored in one byte. */
 pub type fiat_p384_u1 = u8;
-/** fiat_p384_i1 represents values of 1 bits, stored in one byte. */
 pub type fiat_p384_i1 = i8;
-/** fiat_p384_u2 represents values of 2 bits, stored in one byte. */
 pub type fiat_p384_u2 = u8;
-/** fiat_p384_i2 represents values of 2 bits, stored in one byte. */
 pub type fiat_p384_i2 = i8;
 
-/** The type fiat_p384_montgomery_domain_field_element is a field element in the Montgomery domain. */
-/** Bounds: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]] */
-#[derive(Clone, Copy)]
-pub struct fiat_p384_montgomery_domain_field_element(pub [u64; 6]);
+/* The type fiat_p384_montgomery_domain_field_element is a field element in the Montgomery domain. */
+/* Bounds: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]] */
+pub type fiat_p384_montgomery_domain_field_element = [u64; 6];
 
-impl core::ops::Index<usize> for fiat_p384_montgomery_domain_field_element {
-    type Output = u64;
-    #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
-    }
-}
-
-impl core::ops::IndexMut<usize> for fiat_p384_montgomery_domain_field_element {
-    #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
-    }
-}
-
-/** The type fiat_p384_non_montgomery_domain_field_element is a field element NOT in the Montgomery domain. */
-/** Bounds: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]] */
-#[derive(Clone, Copy)]
-pub struct fiat_p384_non_montgomery_domain_field_element(pub [u64; 6]);
-
-impl core::ops::Index<usize> for fiat_p384_non_montgomery_domain_field_element {
-    type Output = u64;
-    #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
-    }
-}
-
-impl core::ops::IndexMut<usize> for fiat_p384_non_montgomery_domain_field_element {
-    #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
-    }
-}
+/* The type fiat_p384_non_montgomery_domain_field_element is a field element NOT in the Montgomery domain. */
+/* Bounds: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]] */
+pub type fiat_p384_non_montgomery_domain_field_element = [u64; 6];
 
 
 /// The function fiat_p384_addcarryx_u64 is an addition with carry.
@@ -84,7 +48,7 @@ impl core::ops::IndexMut<usize> for fiat_p384_non_montgomery_domain_field_elemen
 ///   out1: [0x0 ~> 0xffffffffffffffff]
 ///   out2: [0x0 ~> 0x1]
 #[inline]
-pub fn fiat_p384_addcarryx_u64(out1: &mut u64, out2: &mut fiat_p384_u1, arg1: fiat_p384_u1, arg2: u64, arg3: u64) {
+pub fn fiat_p384_addcarryx_u64(out1: &mut u64, out2: &mut fiat_p384_u1, arg1: fiat_p384_u1, arg2: u64, arg3: u64) -> () {
   let x1: u128 = (((arg1 as u128) + (arg2 as u128)) + (arg3 as u128));
   let x2: u64 = ((x1 & (0xffffffffffffffff as u128)) as u64);
   let x3: fiat_p384_u1 = ((x1 >> 64) as fiat_p384_u1);
@@ -106,7 +70,7 @@ pub fn fiat_p384_addcarryx_u64(out1: &mut u64, out2: &mut fiat_p384_u1, arg1: fi
 ///   out1: [0x0 ~> 0xffffffffffffffff]
 ///   out2: [0x0 ~> 0x1]
 #[inline]
-pub fn fiat_p384_subborrowx_u64(out1: &mut u64, out2: &mut fiat_p384_u1, arg1: fiat_p384_u1, arg2: u64, arg3: u64) {
+pub fn fiat_p384_subborrowx_u64(out1: &mut u64, out2: &mut fiat_p384_u1, arg1: fiat_p384_u1, arg2: u64, arg3: u64) -> () {
   let x1: i128 = (((arg2 as i128) - (arg1 as i128)) - (arg3 as i128));
   let x2: fiat_p384_i1 = ((x1 >> 64) as fiat_p384_i1);
   let x3: u64 = ((x1 & (0xffffffffffffffff as i128)) as u64);
@@ -127,7 +91,7 @@ pub fn fiat_p384_subborrowx_u64(out1: &mut u64, out2: &mut fiat_p384_u1, arg1: f
 ///   out1: [0x0 ~> 0xffffffffffffffff]
 ///   out2: [0x0 ~> 0xffffffffffffffff]
 #[inline]
-pub fn fiat_p384_mulx_u64(out1: &mut u64, out2: &mut u64, arg1: u64, arg2: u64) {
+pub fn fiat_p384_mulx_u64(out1: &mut u64, out2: &mut u64, arg1: u64, arg2: u64) -> () {
   let x1: u128 = ((arg1 as u128) * (arg2 as u128));
   let x2: u64 = ((x1 & (0xffffffffffffffff as u128)) as u64);
   let x3: u64 = ((x1 >> 64) as u64);
@@ -147,7 +111,7 @@ pub fn fiat_p384_mulx_u64(out1: &mut u64, out2: &mut u64, arg1: u64, arg2: u64) 
 /// Output Bounds:
 ///   out1: [0x0 ~> 0xffffffffffffffff]
 #[inline]
-pub fn fiat_p384_cmovznz_u64(out1: &mut u64, arg1: fiat_p384_u1, arg2: u64, arg3: u64) {
+pub fn fiat_p384_cmovznz_u64(out1: &mut u64, arg1: fiat_p384_u1, arg2: u64, arg3: u64) -> () {
   let x1: fiat_p384_u1 = (!(!arg1));
   let x2: u64 = ((((((0x0 as fiat_p384_i2) - (x1 as fiat_p384_i2)) as fiat_p384_i1) as i128) & (0xffffffffffffffff as i128)) as u64);
   let x3: u64 = ((x2 & arg3) | ((!x2) & arg2));
@@ -164,7 +128,7 @@ pub fn fiat_p384_cmovznz_u64(out1: &mut u64, arg1: fiat_p384_u1, arg2: u64, arg3
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_mul(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element, arg2: &fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_mul(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element, arg2: &fiat_p384_montgomery_domain_field_element) -> () {
   let x1: u64 = (arg1[1]);
   let x2: u64 = (arg1[2]);
   let x3: u64 = (arg1[3]);
@@ -883,7 +847,7 @@ pub fn fiat_p384_mul(out1: &mut fiat_p384_montgomery_domain_field_element, arg1:
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_square(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_square(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element) -> () {
   let x1: u64 = (arg1[1]);
   let x2: u64 = (arg1[2]);
   let x3: u64 = (arg1[3]);
@@ -1603,7 +1567,7 @@ pub fn fiat_p384_square(out1: &mut fiat_p384_montgomery_domain_field_element, ar
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_add(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element, arg2: &fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_add(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element, arg2: &fiat_p384_montgomery_domain_field_element) -> () {
   let mut x1: u64 = 0;
   let mut x2: fiat_p384_u1 = 0;
   fiat_p384_addcarryx_u64(&mut x1, &mut x2, 0x0, (arg1[0]), (arg2[0]));
@@ -1673,7 +1637,7 @@ pub fn fiat_p384_add(out1: &mut fiat_p384_montgomery_domain_field_element, arg1:
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_sub(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element, arg2: &fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_sub(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element, arg2: &fiat_p384_montgomery_domain_field_element) -> () {
   let mut x1: u64 = 0;
   let mut x2: fiat_p384_u1 = 0;
   fiat_p384_subborrowx_u64(&mut x1, &mut x2, 0x0, (arg1[0]), (arg2[0]));
@@ -1729,7 +1693,7 @@ pub fn fiat_p384_sub(out1: &mut fiat_p384_montgomery_domain_field_element, arg1:
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_opp(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_opp(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element) -> () {
   let mut x1: u64 = 0;
   let mut x2: fiat_p384_u1 = 0;
   fiat_p384_subborrowx_u64(&mut x1, &mut x2, 0x0, (0x0 as u64), (arg1[0]));
@@ -1785,7 +1749,7 @@ pub fn fiat_p384_opp(out1: &mut fiat_p384_montgomery_domain_field_element, arg1:
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_from_montgomery(out1: &mut fiat_p384_non_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_from_montgomery(out1: &mut fiat_p384_non_montgomery_domain_field_element, arg1: &fiat_p384_montgomery_domain_field_element) -> () {
   let x1: u64 = (arg1[0]);
   let mut x2: u64 = 0;
   let mut x3: u64 = 0;
@@ -2269,7 +2233,7 @@ pub fn fiat_p384_from_montgomery(out1: &mut fiat_p384_non_montgomery_domain_fiel
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_to_montgomery(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_non_montgomery_domain_field_element) {
+pub fn fiat_p384_to_montgomery(out1: &mut fiat_p384_montgomery_domain_field_element, arg1: &fiat_p384_non_montgomery_domain_field_element) -> () {
   let x1: u64 = (arg1[1]);
   let x2: u64 = (arg1[2]);
   let x3: u64 = (arg1[3]);
@@ -2905,7 +2869,7 @@ pub fn fiat_p384_to_montgomery(out1: &mut fiat_p384_montgomery_domain_field_elem
 /// Output Bounds:
 ///   out1: [0x0 ~> 0xffffffffffffffff]
 #[inline]
-pub fn fiat_p384_nonzero(out1: &mut u64, arg1: &[u64; 6]) {
+pub fn fiat_p384_nonzero(out1: &mut u64, arg1: &[u64; 6]) -> () {
   let x1: u64 = ((arg1[0]) | ((arg1[1]) | ((arg1[2]) | ((arg1[3]) | ((arg1[4]) | (arg1[5]))))));
   *out1 = x1;
 }
@@ -2922,7 +2886,7 @@ pub fn fiat_p384_nonzero(out1: &mut u64, arg1: &[u64; 6]) {
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
 #[inline]
-pub fn fiat_p384_selectznz(out1: &mut [u64; 6], arg1: fiat_p384_u1, arg2: &[u64; 6], arg3: &[u64; 6]) {
+pub fn fiat_p384_selectznz(out1: &mut [u64; 6], arg1: fiat_p384_u1, arg2: &[u64; 6], arg3: &[u64; 6]) -> () {
   let mut x1: u64 = 0;
   fiat_p384_cmovznz_u64(&mut x1, arg1, (arg2[0]), (arg3[0]));
   let mut x2: u64 = 0;
@@ -2955,7 +2919,7 @@ pub fn fiat_p384_selectznz(out1: &mut [u64; 6], arg1: fiat_p384_u1, arg2: &[u64;
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff]]
 #[inline]
-pub fn fiat_p384_to_bytes(out1: &mut [u8; 48], arg1: &[u64; 6]) {
+pub fn fiat_p384_to_bytes(out1: &mut [u8; 48], arg1: &[u64; 6]) -> () {
   let x1: u64 = (arg1[5]);
   let x2: u64 = (arg1[4]);
   let x3: u64 = (arg1[3]);
@@ -3109,7 +3073,7 @@ pub fn fiat_p384_to_bytes(out1: &mut [u8; 48], arg1: &[u64; 6]) {
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
 #[inline]
-pub fn fiat_p384_from_bytes(out1: &mut [u64; 6], arg1: &[u8; 48]) {
+pub fn fiat_p384_from_bytes(out1: &mut [u64; 6], arg1: &[u8; 48]) -> () {
   let x1: u64 = (((arg1[47]) as u64) << 56);
   let x2: u64 = (((arg1[46]) as u64) << 48);
   let x3: u64 = (((arg1[45]) as u64) << 40);
@@ -3215,7 +3179,7 @@ pub fn fiat_p384_from_bytes(out1: &mut [u64; 6], arg1: &[u8; 48]) {
 ///   0 ≤ eval out1 < m
 ///
 #[inline]
-pub fn fiat_p384_set_one(out1: &mut fiat_p384_montgomery_domain_field_element) {
+pub fn fiat_p384_set_one(out1: &mut fiat_p384_montgomery_domain_field_element) -> () {
   out1[0] = 0xffffffff00000001;
   out1[1] = 0xffffffff;
   out1[2] = (0x1 as u64);
@@ -3233,7 +3197,7 @@ pub fn fiat_p384_set_one(out1: &mut fiat_p384_montgomery_domain_field_element) {
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
 #[inline]
-pub fn fiat_p384_msat(out1: &mut [u64; 7]) {
+pub fn fiat_p384_msat(out1: &mut [u64; 7]) -> () {
   out1[0] = 0xffffffff;
   out1[1] = 0xffffffff00000000;
   out1[2] = 0xfffffffffffffffe;
@@ -3272,7 +3236,7 @@ pub fn fiat_p384_msat(out1: &mut [u64; 7]) {
 ///   out4: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
 ///   out5: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
 #[inline]
-pub fn fiat_p384_divstep(out1: &mut u64, out2: &mut [u64; 7], out3: &mut [u64; 7], out4: &mut [u64; 6], out5: &mut [u64; 6], arg1: u64, arg2: &[u64; 7], arg3: &[u64; 7], arg4: &[u64; 6], arg5: &[u64; 6]) {
+pub fn fiat_p384_divstep(out1: &mut u64, out2: &mut [u64; 7], out3: &mut [u64; 7], out4: &mut [u64; 6], out5: &mut [u64; 6], arg1: u64, arg2: &[u64; 7], arg3: &[u64; 7], arg4: &[u64; 6], arg5: &[u64; 6]) -> () {
   let mut x1: u64 = 0;
   let mut x2: fiat_p384_u1 = 0;
   fiat_p384_addcarryx_u64(&mut x1, &mut x2, 0x0, (!arg1), (0x1 as u64));
@@ -3597,7 +3561,7 @@ pub fn fiat_p384_divstep(out1: &mut u64, out2: &mut [u64; 7], out3: &mut [u64; 7
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
 #[inline]
-pub fn fiat_p384_divstep_precomp(out1: &mut [u64; 6]) {
+pub fn fiat_p384_divstep_precomp(out1: &mut [u64; 6]) -> () {
   out1[0] = 0xfff69400fff18fff;
   out1[1] = 0x2b7feffffd3ff;
   out1[2] = 0xfffedbfffffe97ff;

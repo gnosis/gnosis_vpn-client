@@ -34,7 +34,7 @@
 //! All key types have functions to enable conversion to/from their binary representations.
 
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
-#![allow(unreachable_pub)]
+
 #[cfg(any(
     feature = "ecdsa",
     feature = "secp256k1",
@@ -42,6 +42,7 @@
     feature = "rsa"
 ))]
 mod proto {
+    #![allow(unreachable_pub)]
     include!("generated/mod.rs");
     pub(crate) use self::keys_proto::*;
 }
@@ -113,9 +114,8 @@ pub use keypair::{Keypair, PublicKey};
 #[cfg(feature = "peerid")]
 pub use peer_id::{ParseError, PeerId};
 
-/// The type of key a `KeyPair` is holding.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(clippy::upper_case_acronyms)]
+/// The type of key a `KeyPair` is holding.
 pub enum KeyType {
     Ed25519,
     RSA,

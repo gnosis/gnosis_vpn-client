@@ -15,54 +15,18 @@
 #![allow(unused_parens)]
 #![allow(non_camel_case_types)]
 
-/** fiat_25519_u1 represents values of 1 bits, stored in one byte. */
 pub type fiat_25519_u1 = u8;
-/** fiat_25519_i1 represents values of 1 bits, stored in one byte. */
 pub type fiat_25519_i1 = i8;
-/** fiat_25519_u2 represents values of 2 bits, stored in one byte. */
 pub type fiat_25519_u2 = u8;
-/** fiat_25519_i2 represents values of 2 bits, stored in one byte. */
 pub type fiat_25519_i2 = i8;
 
-/** The type fiat_25519_loose_field_element is a field element with loose bounds. */
-/** Bounds: [[0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000]] */
-#[derive(Clone, Copy)]
-pub struct fiat_25519_loose_field_element(pub [u32; 10]);
+/* The type fiat_25519_loose_field_element is a field element with loose bounds. */
+/* Bounds: [[0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000], [0x0 ~> 0xc000000], [0x0 ~> 0x6000000]] */
+pub type fiat_25519_loose_field_element = [u32; 10];
 
-impl core::ops::Index<usize> for fiat_25519_loose_field_element {
-    type Output = u32;
-    #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
-    }
-}
-
-impl core::ops::IndexMut<usize> for fiat_25519_loose_field_element {
-    #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
-    }
-}
-
-/** The type fiat_25519_tight_field_element is a field element with tight bounds. */
-/** Bounds: [[0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000]] */
-#[derive(Clone, Copy)]
-pub struct fiat_25519_tight_field_element(pub [u32; 10]);
-
-impl core::ops::Index<usize> for fiat_25519_tight_field_element {
-    type Output = u32;
-    #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
-    }
-}
-
-impl core::ops::IndexMut<usize> for fiat_25519_tight_field_element {
-    #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
-    }
-}
+/* The type fiat_25519_tight_field_element is a field element with tight bounds. */
+/* Bounds: [[0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000], [0x0 ~> 0x4000000], [0x0 ~> 0x2000000]] */
+pub type fiat_25519_tight_field_element = [u32; 10];
 
 
 /// The function fiat_25519_addcarryx_u26 is an addition with carry.
@@ -79,7 +43,7 @@ impl core::ops::IndexMut<usize> for fiat_25519_tight_field_element {
 ///   out1: [0x0 ~> 0x3ffffff]
 ///   out2: [0x0 ~> 0x1]
 #[inline]
-pub fn fiat_25519_addcarryx_u26(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) {
+pub fn fiat_25519_addcarryx_u26(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) -> () {
   let x1: u32 = (((arg1 as u32) + arg2) + arg3);
   let x2: u32 = (x1 & 0x3ffffff);
   let x3: fiat_25519_u1 = ((x1 >> 26) as fiat_25519_u1);
@@ -101,7 +65,7 @@ pub fn fiat_25519_addcarryx_u26(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: 
 ///   out1: [0x0 ~> 0x3ffffff]
 ///   out2: [0x0 ~> 0x1]
 #[inline]
-pub fn fiat_25519_subborrowx_u26(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) {
+pub fn fiat_25519_subborrowx_u26(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) -> () {
   let x1: i32 = ((((((arg2 as i64) - (arg1 as i64)) as i32) as i64) - (arg3 as i64)) as i32);
   let x2: fiat_25519_i1 = ((x1 >> 26) as fiat_25519_i1);
   let x3: u32 = (((x1 as i64) & (0x3ffffff as i64)) as u32);
@@ -123,7 +87,7 @@ pub fn fiat_25519_subborrowx_u26(out1: &mut u32, out2: &mut fiat_25519_u1, arg1:
 ///   out1: [0x0 ~> 0x1ffffff]
 ///   out2: [0x0 ~> 0x1]
 #[inline]
-pub fn fiat_25519_addcarryx_u25(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) {
+pub fn fiat_25519_addcarryx_u25(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) -> () {
   let x1: u32 = (((arg1 as u32) + arg2) + arg3);
   let x2: u32 = (x1 & 0x1ffffff);
   let x3: fiat_25519_u1 = ((x1 >> 25) as fiat_25519_u1);
@@ -145,7 +109,7 @@ pub fn fiat_25519_addcarryx_u25(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: 
 ///   out1: [0x0 ~> 0x1ffffff]
 ///   out2: [0x0 ~> 0x1]
 #[inline]
-pub fn fiat_25519_subborrowx_u25(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) {
+pub fn fiat_25519_subborrowx_u25(out1: &mut u32, out2: &mut fiat_25519_u1, arg1: fiat_25519_u1, arg2: u32, arg3: u32) -> () {
   let x1: i32 = ((((((arg2 as i64) - (arg1 as i64)) as i32) as i64) - (arg3 as i64)) as i32);
   let x2: fiat_25519_i1 = ((x1 >> 25) as fiat_25519_i1);
   let x3: u32 = (((x1 as i64) & (0x1ffffff as i64)) as u32);
@@ -165,7 +129,7 @@ pub fn fiat_25519_subborrowx_u25(out1: &mut u32, out2: &mut fiat_25519_u1, arg1:
 /// Output Bounds:
 ///   out1: [0x0 ~> 0xffffffff]
 #[inline]
-pub fn fiat_25519_cmovznz_u32(out1: &mut u32, arg1: fiat_25519_u1, arg2: u32, arg3: u32) {
+pub fn fiat_25519_cmovznz_u32(out1: &mut u32, arg1: fiat_25519_u1, arg2: u32, arg3: u32) -> () {
   let x1: fiat_25519_u1 = (!(!arg1));
   let x2: u32 = ((((((0x0 as fiat_25519_i2) - (x1 as fiat_25519_i2)) as fiat_25519_i1) as i64) & (0xffffffff as i64)) as u32);
   let x3: u32 = ((x2 & arg3) | ((!x2) & arg2));
@@ -178,7 +142,7 @@ pub fn fiat_25519_cmovznz_u32(out1: &mut u32, arg1: fiat_25519_u1, arg2: u32, ar
 ///   eval out1 mod m = (eval arg1 * eval arg2) mod m
 ///
 #[inline]
-pub fn fiat_25519_carry_mul(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element, arg2: &fiat_25519_loose_field_element) {
+pub fn fiat_25519_carry_mul(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element, arg2: &fiat_25519_loose_field_element) -> () {
   let x1: u64 = (((arg1[9]) as u64) * (((arg2[9]) * 0x26) as u64));
   let x2: u64 = (((arg1[9]) as u64) * (((arg2[8]) * 0x13) as u64));
   let x3: u64 = (((arg1[9]) as u64) * (((arg2[7]) * 0x26) as u64));
@@ -344,7 +308,7 @@ pub fn fiat_25519_carry_mul(out1: &mut fiat_25519_tight_field_element, arg1: &fi
 ///   eval out1 mod m = (eval arg1 * eval arg1) mod m
 ///
 #[inline]
-pub fn fiat_25519_carry_square(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element) {
+pub fn fiat_25519_carry_square(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element) -> () {
   let x1: u32 = ((arg1[9]) * 0x13);
   let x2: u32 = (x1 * 0x2);
   let x3: u32 = ((arg1[9]) * 0x2);
@@ -483,7 +447,7 @@ pub fn fiat_25519_carry_square(out1: &mut fiat_25519_tight_field_element, arg1: 
 ///   eval out1 mod m = eval arg1 mod m
 ///
 #[inline]
-pub fn fiat_25519_carry(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element) {
+pub fn fiat_25519_carry(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element) -> () {
   let x1: u32 = (arg1[0]);
   let x2: u32 = ((x1 >> 26) + (arg1[1]));
   let x3: u32 = ((x2 >> 25) + (arg1[2]));
@@ -524,7 +488,7 @@ pub fn fiat_25519_carry(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_2
 ///   eval out1 mod m = (eval arg1 + eval arg2) mod m
 ///
 #[inline]
-pub fn fiat_25519_add(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element, arg2: &fiat_25519_tight_field_element) {
+pub fn fiat_25519_add(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element, arg2: &fiat_25519_tight_field_element) -> () {
   let x1: u32 = ((arg1[0]) + (arg2[0]));
   let x2: u32 = ((arg1[1]) + (arg2[1]));
   let x3: u32 = ((arg1[2]) + (arg2[2]));
@@ -553,7 +517,7 @@ pub fn fiat_25519_add(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_255
 ///   eval out1 mod m = (eval arg1 - eval arg2) mod m
 ///
 #[inline]
-pub fn fiat_25519_sub(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element, arg2: &fiat_25519_tight_field_element) {
+pub fn fiat_25519_sub(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element, arg2: &fiat_25519_tight_field_element) -> () {
   let x1: u32 = ((0x7ffffda + (arg1[0])) - (arg2[0]));
   let x2: u32 = ((0x3fffffe + (arg1[1])) - (arg2[1]));
   let x3: u32 = ((0x7fffffe + (arg1[2])) - (arg2[2]));
@@ -582,7 +546,7 @@ pub fn fiat_25519_sub(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_255
 ///   eval out1 mod m = -eval arg1 mod m
 ///
 #[inline]
-pub fn fiat_25519_opp(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element) {
+pub fn fiat_25519_opp(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element) -> () {
   let x1: u32 = (0x7ffffda - (arg1[0]));
   let x2: u32 = (0x3fffffe - (arg1[1]));
   let x3: u32 = (0x7fffffe - (arg1[2]));
@@ -617,7 +581,7 @@ pub fn fiat_25519_opp(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_255
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff], [0x0 ~> 0xffffffff]]
 #[inline]
-pub fn fiat_25519_selectznz(out1: &mut [u32; 10], arg1: fiat_25519_u1, arg2: &[u32; 10], arg3: &[u32; 10]) {
+pub fn fiat_25519_selectznz(out1: &mut [u32; 10], arg1: fiat_25519_u1, arg2: &[u32; 10], arg3: &[u32; 10]) -> () {
   let mut x1: u32 = 0;
   fiat_25519_cmovznz_u32(&mut x1, arg1, (arg2[0]), (arg3[0]));
   let mut x2: u32 = 0;
@@ -658,7 +622,7 @@ pub fn fiat_25519_selectznz(out1: &mut [u32; 10], arg1: fiat_25519_u1, arg2: &[u
 /// Output Bounds:
 ///   out1: [[0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0x7f]]
 #[inline]
-pub fn fiat_25519_to_bytes(out1: &mut [u8; 32], arg1: &fiat_25519_tight_field_element) {
+pub fn fiat_25519_to_bytes(out1: &mut [u8; 32], arg1: &fiat_25519_tight_field_element) -> () {
   let mut x1: u32 = 0;
   let mut x2: fiat_25519_u1 = 0;
   fiat_25519_subborrowx_u26(&mut x1, &mut x2, 0x0, (arg1[0]), 0x3ffffed);
@@ -839,7 +803,7 @@ pub fn fiat_25519_to_bytes(out1: &mut [u8; 32], arg1: &fiat_25519_tight_field_el
 /// Input Bounds:
 ///   arg1: [[0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0x7f]]
 #[inline]
-pub fn fiat_25519_from_bytes(out1: &mut fiat_25519_tight_field_element, arg1: &[u8; 32]) {
+pub fn fiat_25519_from_bytes(out1: &mut fiat_25519_tight_field_element, arg1: &[u8; 32]) -> () {
   let x1: u32 = (((arg1[31]) as u32) << 18);
   let x2: u32 = (((arg1[30]) as u32) << 10);
   let x3: u32 = (((arg1[29]) as u32) << 2);
@@ -936,7 +900,7 @@ pub fn fiat_25519_from_bytes(out1: &mut fiat_25519_tight_field_element, arg1: &[
 ///   out1 = arg1
 ///
 #[inline]
-pub fn fiat_25519_relax(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element) {
+pub fn fiat_25519_relax(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_25519_tight_field_element) -> () {
   let x1: u32 = (arg1[0]);
   let x2: u32 = (arg1[1]);
   let x3: u32 = (arg1[2]);
@@ -965,7 +929,7 @@ pub fn fiat_25519_relax(out1: &mut fiat_25519_loose_field_element, arg1: &fiat_2
 ///   eval out1 mod m = (121666 * eval arg1) mod m
 ///
 #[inline]
-pub fn fiat_25519_carry_scmul_121666(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element) {
+pub fn fiat_25519_carry_scmul_121666(out1: &mut fiat_25519_tight_field_element, arg1: &fiat_25519_loose_field_element) -> () {
   let x1: u64 = ((0x1db42 as u64) * ((arg1[9]) as u64));
   let x2: u64 = ((0x1db42 as u64) * ((arg1[8]) as u64));
   let x3: u64 = ((0x1db42 as u64) * ((arg1[7]) as u64));

@@ -4,16 +4,9 @@
     html_logo_url = "https://raw.githubusercontent.com/RustCrypto/media/8f1a9894/logo.svg",
     html_favicon_url = "https://raw.githubusercontent.com/RustCrypto/media/8f1a9894/logo.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
-#![warn(
-    clippy::mod_module_files,
-    clippy::unwrap_used,
-    missing_docs,
-    rust_2018_idioms,
-    unused_lifetimes,
-    unused_qualifications
-)]
+#![warn(missing_docs, rust_2018_idioms, unused_qualifications)]
 
 //! # Design
 //!
@@ -50,14 +43,24 @@
 //! ## Implementation
 //!
 //! To accomplish the above goals, the [`Signer`] and [`Verifier`] traits
-//! provided by this are generic over a signature value, and use generic
-//! parameters rather than associated types. Notably, they use such a parameter
-//! for the return value, allowing it to be inferred by the type checker based
-//! on the desired signature type.
+//! provided by this are generic over a [`Signature`] return value, and use
+//! generic parameters rather than associated types. Notably, they use such
+//! a parameter for the return value, allowing it to be inferred by the type
+//! checker based on the desired signature type.
+//!
+//! The [`Signature`] trait is bounded on `AsRef<[u8]>`, enforcing that
+//! signature types are thin wrappers around a "bag-of-bytes"
+//! serialization. Inspiration for this approach comes from the Ed25519
+//! signature system, which was based on the observation that past
+//! systems were not prescriptive about how signatures should be represented
+//! on-the-wire, and that lead to a proliferation of different wire formats
+//! and confusion about which ones should be used. This crate aims to provide
+//! similar simplicity by minimizing the number of steps involved to obtain
+//! a serializable signature.
 //!
 //! ## Alternatives considered
 //!
-//! This crate is based on many years of exploration of how to encapsulate
+//! This crate is based on over two years of exploration of how to encapsulate
 //! digital signature systems in the most flexible, developer-friendly way.
 //! During that time many design alternatives were explored, tradeoffs
 //! compared, and ultimately the provided API was selected.
@@ -70,7 +73,10 @@
 //! - "Bag-of-bytes" serialization precludes signature providers from using
 //!   their own internal representation of a signature, which can be helpful
 //!   for many reasons (e.g. advanced signature system features like batch
-//!   verification).
+//!   verification). Alternatively each provider could define its own signature
+//!   type, using a marker trait to identify the particular signature algorithm,
+//!   have `From` impls for converting to/from `[u8; N]`, and a marker trait
+//!   for identifying a specific signature algorithm.
 //! - Associated types, rather than generic parameters of traits, could allow
 //!   more customization of the types used by a particular signature system,
 //!   e.g. using custom error types.
@@ -92,17 +98,18 @@
 //!   and compiler errors, and in our experience makes them unsuitable for this
 //!   sort of API. We believe such an API is the natural one for signature
 //!   systems, reflecting the natural way they are written absent a trait.
-//! - Associated types preclude multiple implementations of the same trait.
-//!   These parameters are common in signature systems, notably ones which
-//!   support different serializations of a signature (e.g. raw vs ASN.1).
+//! - Associated types preclude multiple (or generic) implementations of the
+//!   same trait. These parameters are common in signature systems, notably
+//!   ones which support different digest algorithms.
 //! - Digital signatures are almost always larger than the present 32-entry
-//!   trait impl limitation on array types, which complicates bounds
+//!   trait impl limitation on array types, which complicates trait signatures
 //!   for these types (particularly things like `From` or `Borrow` bounds).
+//!   This may be more interesting to explore after const generics.
 //!
 //! ## Unstable features
 //!
-//! Despite being post-1.0, this crate includes off-by-default unstable
-//! optional features, each of which depends on a pre-1.0
+//! Despite being post-1.0, this crate includes a number of off-by-default
+//! unstable features named `*-preview`, each of which depends on a pre-1.0
 //! crate.
 //!
 //! These features are considered exempt from SemVer. See the
@@ -110,12 +117,21 @@
 //!
 //! The following unstable features are presently supported:
 //!
-//! - `digest`: enables the [`DigestSigner`] and [`DigestVerifier`]
+//! - `derive-preview`: for implementers of signature systems using
+//!   [`DigestSigner`] and [`DigestVerifier`], the `derive-preview` feature
+//!   can be used to derive [`Signer`] and [`Verifier`] traits which prehash
+//!   the input message using the [`PrehashSignature::Digest`] algorithm for
+//!   a given [`Signature`] type. When the `derive-preview` feature is enabled
+//!   import the proc macros with `use signature::{Signer, Verifier}` and then
+//!   add a `derive(Signer)` or `derive(Verifier)` attribute to the given
+//!   digest signer/verifier type. Enabling this feature also enables `digest`
+//!   support (see immediately below).
+//! - `digest-preview`: enables the [`DigestSigner`] and [`DigestVerifier`]
 //!   traits which are based on the [`Digest`] trait from the [`digest`] crate.
 //!   These traits are used for representing signature systems based on the
 //!   [Fiat-Shamir heuristic] which compute a random challenge value to sign
 //!   by computing a cryptographically secure digest of the input message.
-//! - `rand_core`: enables the [`RandomizedSigner`] trait for signature
+//! - `rand-preview`: enables the [`RandomizedSigner`] trait for signature
 //!   systems which rely on a cryptographically secure random number generator
 //!   for security.
 //!
@@ -127,32 +143,53 @@
 //! [`Digest`]: https://docs.rs/digest/latest/digest/trait.Digest.html
 //! [Fiat-Shamir heuristic]: https://en.wikipedia.org/wiki/Fiat%E2%80%93Shamir_heuristic
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(all(feature = "signature_derive", not(feature = "derive-preview")))]
+compile_error!(
+    "The `signature_derive` feature should not be enabled directly. \
+    Use the `derive-preview` feature instead."
+);
+
+#[cfg(all(feature = "digest", not(feature = "digest-preview")))]
+compile_error!(
+    "The `digest` feature should not be enabled directly. \
+    Use the `digest-preview` feature instead."
+);
+
+#[cfg(all(feature = "rand_core", not(feature = "rand-preview")))]
+compile_error!(
+    "The `rand_core` feature should not be enabled directly. \
+    Use the `rand-preview` feature instead."
+);
+
+#[cfg(feature = "hazmat-preview")]
+#[cfg_attr(docsrs, doc(cfg(feature = "hazmat-preview")))]
 pub mod hazmat;
 
-mod encoding;
 mod error;
 mod keypair;
+mod signature;
 mod signer;
 mod verifier;
 
-#[cfg(feature = "digest")]
-mod prehash_signature;
+#[cfg(feature = "derive-preview")]
+#[cfg_attr(docsrs, doc(cfg(feature = "derive-preview")))]
+pub use signature_derive::{Signer, Verifier};
 
-pub use crate::{encoding::*, error::*, keypair::*, signer::*, verifier::*};
+#[cfg(all(feature = "derive-preview", feature = "digest-preview"))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "derive-preview", feature = "digest-preview")))
+)]
+pub use signature_derive::{DigestSigner, DigestVerifier};
 
-#[cfg(feature = "derive")]
-pub use derive::{Signer, Verifier};
+#[cfg(feature = "digest-preview")]
+pub use digest;
 
-#[cfg(all(feature = "derive", feature = "digest"))]
-pub use derive::{DigestSigner, DigestVerifier};
-
-#[cfg(feature = "digest")]
-pub use {crate::prehash_signature::*, digest};
-
-#[cfg(feature = "rand_core")]
+#[cfg(feature = "rand-preview")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rand-preview")))]
 pub use rand_core;
+
+pub use crate::{error::*, keypair::*, signature::*, signer::*, verifier::*};

@@ -18,19 +18,16 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use std::{fmt, str::FromStr};
-
-#[cfg(feature = "rand")]
 use rand::Rng;
 use sha2::Digest as _;
+use std::{convert::TryFrom, fmt, str::FromStr};
 use thiserror::Error;
 
 /// Local type-alias for multihash.
 ///
 /// Must be big enough to accommodate for `MAX_INLINE_KEY_LENGTH`.
 /// 64 satisfies that and can hold 512 bit hashes which is what the ecosystem typically uses.
-/// Given that this appears in our type-signature,
-/// using a "common" number here makes us more compatible.
+/// Given that this appears in our type-signature, using a "common" number here makes us more compatible.
 type Multihash = multihash::Multihash<64>;
 
 #[cfg(feature = "serde")]
@@ -104,7 +101,6 @@ impl PeerId {
     /// Generates a random peer ID from a cryptographically secure PRNG.
     ///
     /// This is useful for randomly walking on a DHT, or for testing purposes.
-    #[cfg(feature = "rand")]
     pub fn random() -> PeerId {
         let peer_id = rand::thread_rng().gen::<[u8; 32]>();
         PeerId {
@@ -113,12 +109,12 @@ impl PeerId {
     }
 
     /// Returns a raw bytes representation of this `PeerId`.
-    pub fn to_bytes(self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         self.multihash.to_bytes()
     }
 
     /// Returns a base-58 encoded string of this `PeerId`.
-    pub fn to_base58(self) -> String {
+    pub fn to_base58(&self) -> String {
         bs58::encode(self.to_bytes()).into_string()
     }
 }
@@ -193,7 +189,7 @@ impl<'de> Deserialize<'de> for PeerId {
 
         struct PeerIdVisitor;
 
-        impl Visitor<'_> for PeerIdVisitor {
+        impl<'de> Visitor<'de> for PeerIdVisitor {
             type Value = PeerId;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -251,7 +247,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(all(feature = "ed25519", feature = "rand"))]
+    #[cfg(feature = "ed25519")]
     fn peer_id_into_bytes_then_from_bytes() {
         let peer_id = crate::Keypair::generate_ed25519().public().to_peer_id();
         let second = PeerId::from_bytes(&peer_id.to_bytes()).unwrap();
@@ -259,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "ed25519", feature = "rand"))]
+    #[cfg(feature = "ed25519")]
     fn peer_id_to_base58_then_back() {
         let peer_id = crate::Keypair::generate_ed25519().public().to_peer_id();
         let second: PeerId = peer_id.to_base58().parse().unwrap();
@@ -267,7 +263,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rand")]
     fn random_peer_id_is_valid() {
         for _ in 0..5000 {
             let peer_id = PeerId::random();

@@ -1,17 +1,21 @@
 //! `serde` support.
 
-use crate::{Signature, SignatureBytes};
+use crate::Signature;
 use ::serde::{de, ser, Deserialize, Serialize};
 use core::fmt;
 
+#[cfg(feature = "serde_bytes")]
+use serde_bytes_crate as serde_bytes;
+
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl Serialize for Signature {
     fn serialize<S: ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use ser::SerializeTuple;
 
         let mut seq = serializer.serialize_tuple(Signature::BYTE_SIZE)?;
 
-        for byte in self.to_bytes() {
-            seq.serialize_element(&byte)?;
+        for byte in &self.0[..] {
+            seq.serialize_element(byte)?;
         }
 
         seq.end()
@@ -20,6 +24,7 @@ impl Serialize for Signature {
 
 // serde lacks support for deserializing arrays larger than 32-bytes
 // see: <https://github.com/serde-rs/serde/issues/631>
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl<'de> Deserialize<'de> for Signature {
     fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct ByteArrayVisitor;
@@ -48,23 +53,24 @@ impl<'de> Deserialize<'de> for Signature {
             }
         }
 
-        deserializer
-            .deserialize_tuple(Signature::BYTE_SIZE, ByteArrayVisitor)
-            .map(Into::into)
+        let bytes = deserializer.deserialize_tuple(Signature::BYTE_SIZE, ByteArrayVisitor)?;
+        Self::from_bytes(&bytes).map_err(de::Error::custom)
     }
 }
 
 #[cfg(feature = "serde_bytes")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde_bytes")))]
 impl serde_bytes::Serialize for Signature {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bytes(&self.to_bytes())
+        serializer.serialize_bytes(&self.0)
     }
 }
 
 #[cfg(feature = "serde_bytes")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde_bytes")))]
 impl<'de> serde_bytes::Deserialize<'de> for Signature {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -73,7 +79,7 @@ impl<'de> serde_bytes::Deserialize<'de> for Signature {
         struct ByteArrayVisitor;
 
         impl<'de> de::Visitor<'de> for ByteArrayVisitor {
-            type Value = SignatureBytes;
+            type Value = [u8; Signature::BYTE_SIZE];
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("bytestring of length 64")
@@ -91,18 +97,17 @@ impl<'de> serde_bytes::Deserialize<'de> for Signature {
             }
         }
 
-        deserializer
-            .deserialize_bytes(ByteArrayVisitor)
-            .map(Into::into)
+        let bytes = deserializer.deserialize_bytes(ByteArrayVisitor)?;
+        Self::from_bytes(&bytes).map_err(de::Error::custom)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Signature, SignatureBytes};
+    use crate::Signature;
     use hex_literal::hex;
 
-    const SIGNATURE_BYTES: SignatureBytes = hex!(
+    const SIGNATURE_BYTES: [u8; Signature::BYTE_SIZE] = hex!(
         "
         e5564300c360ac729086e2cc806e828a
         84877f1eb8e5d974d873e06522490155
@@ -113,9 +118,15 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let signature = Signature::from_bytes(&SIGNATURE_BYTES);
+        let signature = Signature::from_bytes(&SIGNATURE_BYTES).unwrap();
         let serialized = bincode::serialize(&signature).unwrap();
         let deserialized = bincode::deserialize(&serialized).unwrap();
         assert_eq!(signature, deserialized);
+    }
+
+    #[test]
+    fn overflow() {
+        let bytes = hex!("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        assert!(bincode::deserialize::<Signature>(&bytes).is_err());
     }
 }

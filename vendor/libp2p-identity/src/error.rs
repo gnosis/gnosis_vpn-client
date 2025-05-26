@@ -20,7 +20,8 @@
 
 //! Errors during identity key operations.
 
-use std::{error::Error, fmt};
+use std::error::Error;
+use std::fmt;
 
 use crate::KeyType;
 
@@ -76,7 +77,11 @@ impl DecodingError {
         }
     }
 
-    #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
+    #[cfg(any(
+        all(feature = "rsa", not(target_arch = "wasm32")),
+        feature = "secp256k1",
+        feature = "ecdsa"
+    ))]
     pub(crate) fn encoding_unsupported(key_type: &'static str) -> Self {
         Self {
             msg: format!("encoding {key_type} key to Protobuf is unsupported"),
@@ -106,7 +111,7 @@ pub struct SigningError {
 
 /// An error during encoding of key material.
 impl SigningError {
-    #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
+    #[cfg(any(feature = "secp256k1", feature = "rsa"))]
     pub(crate) fn new<S: ToString>(msg: S) -> Self {
         Self {
             msg: msg.to_string(),
@@ -114,7 +119,7 @@ impl SigningError {
         }
     }
 
-    #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
+    #[cfg(feature = "rsa")]
     pub(crate) fn source(self, source: impl Error + Send + Sync + 'static) -> Self {
         Self {
             source: Some(Box::new(source)),

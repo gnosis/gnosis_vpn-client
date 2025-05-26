@@ -20,17 +20,14 @@
 
 //! Secp256k1 keys.
 
-use core::{cmp, fmt, hash};
-
-use asn1_der::typed::{DerDecodable, Sequence};
-use k256::{
-    ecdsa::Signature,
-    sha2::{Digest as ShaDigestTrait, Sha256},
-    ProjectivePoint,
-};
-use zeroize::Zeroize;
-
 use super::error::DecodingError;
+use asn1_der::typed::{DerDecodable, Sequence};
+use core::cmp;
+use core::fmt;
+use core::hash;
+use libsecp256k1::{Message, Signature};
+use sha2::{Digest as ShaDigestTrait, Sha256};
+use zeroize::Zeroize;
 
 /// A Secp256k1 keypair.
 #[derive(Clone)]
@@ -41,7 +38,6 @@ pub struct Keypair {
 
 impl Keypair {
     /// Generate a new sec256k1 `Keypair`.
-    #[cfg(feature = "rand")]
     pub fn generate() -> Keypair {
         Keypair::from(SecretKey::generate())
     }
@@ -68,7 +64,7 @@ impl fmt::Debug for Keypair {
 /// Promote a Secp256k1 secret key into a keypair.
 impl From<SecretKey> for Keypair {
     fn from(secret: SecretKey) -> Keypair {
-        let public = PublicKey(*secret.0.verifying_key());
+        let public = PublicKey(libsecp256k1::PublicKey::from_secret_key(&secret.0));
         Keypair { secret, public }
     }
 }
@@ -82,7 +78,7 @@ impl From<Keypair> for SecretKey {
 
 /// A Secp256k1 secret key.
 #[derive(Clone)]
-pub struct SecretKey(k256::ecdsa::SigningKey);
+pub struct SecretKey(libsecp256k1::SecretKey);
 
 impl fmt::Debug for SecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -92,9 +88,8 @@ impl fmt::Debug for SecretKey {
 
 impl SecretKey {
     /// Generate a new random Secp256k1 secret key.
-    #[cfg(feature = "rand")]
     pub fn generate() -> SecretKey {
-        SecretKey(k256::ecdsa::SigningKey::random(&mut rand::thread_rng()))
+        SecretKey(libsecp256k1::SecretKey::random(&mut rand::thread_rng()))
     }
 
     /// Create a secret key from a byte slice, zeroing the slice on success.
@@ -104,7 +99,7 @@ impl SecretKey {
     /// Note that the expected binary format is the same as `libsecp256k1`'s.
     pub fn try_from_bytes(mut sk: impl AsMut<[u8]>) -> Result<SecretKey, DecodingError> {
         let sk_bytes = sk.as_mut();
-        let secret = k256::ecdsa::SigningKey::from_slice(sk_bytes)
+        let secret = libsecp256k1::SecretKey::parse_slice(&*sk_bytes)
             .map_err(|e| DecodingError::failed_to_parse("parse secp256k1 secret key", e))?;
         sk_bytes.zeroize();
         Ok(SecretKey(secret))
@@ -134,23 +129,30 @@ impl SecretKey {
     ///
     /// [RFC3278]: https://tools.ietf.org/html/rfc3278#section-8.2
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        use k256::ecdsa::signature::Signer;
+        let generic_array = Sha256::digest(msg);
 
-        Signer::<k256::ecdsa::Signature>::sign(&self.0, msg)
-            .to_der()
-            .to_bytes()
-            .into_vec()
+        // FIXME: Once `generic-array` hits 1.0, we should be able to just use `Into` here.
+        let mut array = [0u8; 32];
+        array.copy_from_slice(generic_array.as_slice());
+
+        let message = Message::parse(&array);
+
+        libsecp256k1::sign(&message, &self.0)
+            .0
+            .serialize_der()
+            .as_ref()
+            .into()
     }
 
     /// Returns the raw bytes of the secret key.
     pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes().into()
+        self.0.serialize()
     }
 }
 
 /// A Secp256k1 public key.
 #[derive(Eq, Clone)]
-pub struct PublicKey(k256::ecdsa::VerifyingKey);
+pub struct PublicKey(libsecp256k1::PublicKey);
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -176,7 +178,7 @@ impl hash::Hash for PublicKey {
 
 impl cmp::PartialOrd for PublicKey {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
+        self.to_bytes().partial_cmp(&other.to_bytes())
     }
 }
 
@@ -189,46 +191,31 @@ impl cmp::Ord for PublicKey {
 impl PublicKey {
     /// Verify the Secp256k1 signature on a message using the public key.
     pub fn verify(&self, msg: &[u8], sig: &[u8]) -> bool {
-        let digest = Sha256::new_with_prefix(msg);
-        self.verify_hash(digest.finalize().as_slice(), sig)
+        self.verify_hash(Sha256::digest(msg).as_ref(), sig)
     }
 
-    /// Verify the Secp256k1 DER-encoded signature on a raw 256-bit message using the public key.  
-    /// Will return false if the hash is not 32 bytes long, or the signature cannot be parsed.
+    /// Verify the Secp256k1 DER-encoded signature on a raw 256-bit message using the public key.
     pub fn verify_hash(&self, msg: &[u8], sig: &[u8]) -> bool {
-        Signature::from_der(sig).is_ok_and(|s| {
-            k256::ecdsa::hazmat::verify_prehashed(
-                &ProjectivePoint::from(self.0.as_affine()),
-                msg.into(),
-                &s,
-            )
-            .is_ok()
-        })
+        Message::parse_slice(msg)
+            .and_then(|m| Signature::parse_der(sig).map(|s| libsecp256k1::verify(&m, &s, &self.0)))
+            .unwrap_or(false)
     }
 
     /// Convert the public key to a byte buffer in compressed form, i.e. with one coordinate
     /// represented by a single bit.
     pub fn to_bytes(&self) -> [u8; 33] {
-        let encoded_point = self.0.to_encoded_point(true);
-        debug_assert!(encoded_point.as_bytes().len() == 33);
-        let mut array: [u8; 33] = [0u8; 33];
-        array.copy_from_slice(encoded_point.as_bytes());
-        array
+        self.0.serialize_compressed()
     }
 
     /// Convert the public key to a byte buffer in uncompressed form.
     pub fn to_bytes_uncompressed(&self) -> [u8; 65] {
-        let encoded_point = self.0.to_encoded_point(false);
-        debug_assert!(encoded_point.as_bytes().len() == 65);
-        let mut array: [u8; 65] = [0u8; 65];
-        array.copy_from_slice(encoded_point.as_bytes());
-        array
+        self.0.serialize()
     }
 
-    /// Decode a public key from a byte slice in the format produced
+    /// Decode a public key from a byte slice in the the format produced
     /// by `encode`.
     pub fn try_from_bytes(k: &[u8]) -> Result<PublicKey, DecodingError> {
-        k256::ecdsa::VerifyingKey::from_sec1_bytes(k)
+        libsecp256k1::PublicKey::parse_slice(k, Some(libsecp256k1::PublicKeyFormat::Compressed))
             .map_err(|e| DecodingError::failed_to_parse("secp256k1 public key", e))
             .map(PublicKey)
     }
@@ -239,13 +226,12 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "rand")]
     fn secp256k1_secret_from_bytes() {
         let sk1 = SecretKey::generate();
         let mut sk_bytes = [0; 32];
-        sk_bytes.copy_from_slice(&sk1.to_bytes()[..]);
+        sk_bytes.copy_from_slice(&sk1.0.serialize()[..]);
         let sk2 = SecretKey::try_from_bytes(&mut sk_bytes).unwrap();
-        assert_eq!(sk1.to_bytes(), sk2.to_bytes());
+        assert_eq!(sk1.0.serialize(), sk2.0.serialize());
         assert_eq!(sk_bytes, [0; 32]);
     }
 }

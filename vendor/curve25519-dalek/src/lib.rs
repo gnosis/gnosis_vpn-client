@@ -10,40 +10,22 @@
 // - Henry de Valence <hdevalence@hdevalence.ca>
 
 #![no_std]
-#![cfg_attr(
-    all(
-        curve25519_dalek_backend = "simd",
-        nightly,
-        any(target_arch = "x86", target_arch = "x86_64")
-    ),
-    feature(stdarch_x86_avx512)
-)]
+#![cfg_attr(all(curve25519_dalek_backend = "simd", nightly), feature(stdsimd))]
 #![cfg_attr(
     all(curve25519_dalek_backend = "simd", nightly),
     feature(avx512_target_feature)
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg, doc_cfg, doc_cfg_hide))]
 #![cfg_attr(docsrs, doc(cfg_hide(docsrs)))]
+#![cfg_attr(allow_unused_unsafe, allow(unused_unsafe))]
 //------------------------------------------------------------------------
 // Documentation:
 //------------------------------------------------------------------------
+#![deny(missing_docs)]
 #![doc(
     html_logo_url = "https://cdn.jsdelivr.net/gh/dalek-cryptography/curve25519-dalek/docs/assets/dalek-logo-clear.png"
 )]
 #![doc = include_str!("../README.md")]
-//------------------------------------------------------------------------
-// Linting:
-//------------------------------------------------------------------------
-#![cfg_attr(allow_unused_unsafe, allow(unused_unsafe))]
-#![warn(
-    clippy::unwrap_used,
-    missing_docs,
-    rust_2018_idioms,
-    unused_lifetimes,
-    unused_qualifications
-)]
-// Requires MSRV 1.77 as it does not allow build.rs gating
-#![allow(unexpected_cfgs)]
 
 //------------------------------------------------------------------------
 // External dependencies:

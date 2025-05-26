@@ -1,5 +1,5 @@
 
-# curve25519-dalek [![](https://buildstats.info/crate/curve25519-dalek)](https://crates.io/crates/curve25519-dalek) [![](https://img.shields.io/docsrs/curve25519-dalek)](https://docs.rs/curve25519-dalek) [![CI](https://github.com/dalek-cryptography/curve25519-dalek/actions/workflows/curve25519-dalek.yml/badge.svg?branch=main)](https://github.com/dalek-cryptography/curve25519-dalek/actions/workflows/curve25519-dalek.yml)
+# curve25519-dalek [![](https://buildstats.info/crate/curve25519-dalek)](https://crates.io/crates/curve25519-dalek) [![](https://img.shields.io/docsrs/curve25519-dalek)](https://docs.rs/curve25519-dalek) [![Rust](https://github.com/dalek-cryptography/curve25519-dalek/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/dalek-cryptography/curve25519-dalek/actions/workflows/rust.yml)
 
 <p align="center">
 <img
@@ -35,13 +35,15 @@ cofactor-related abstraction mismatches.
 To import `curve25519-dalek`, add the following to the dependencies section of
 your project's `Cargo.toml`:
 ```toml
-curve25519-dalek = "4"
+curve25519-dalek = "3"
 ```
 
-If opting into [SemVer-exempted features](#public-api-semver-exemptions) a range
-can be used to scope the tested compatible version range e.g.:
+## Beta
+
+To use the latest prerelease (see changes [below](#breaking-changes-in-400)),
+use the following line in your project's `Cargo.toml`:
 ```toml
-curve25519-dalek = ">= 4.0, < 4.2"
+curve25519-dalek = "4.0.0-rc.3"
 ```
 
 ## Feature Flags
@@ -55,7 +57,6 @@ curve25519-dalek = ">= 4.0, < 4.2"
 | `digest`           |          | Enables `RistrettoPoint::{from_hash, hash_from_bytes}` and `Scalar::{from_hash, hash_from_bytes}`. This is an optional dependency whose version is not subject to SemVer. See [below](#public-api-semver-exemptions) for more details. |
 | `serde`            |          | Enables `serde` serialization/deserialization for all the point and scalar types. |
 | `legacy_compatibility`|       | Enables `Scalar::from_bits`, which allows the user to build unreduced scalars whose arithmetic is broken. Do not use this unless you know what you're doing. |
-| `group`            |          | Enables external `group` and `ff` crate traits |
 
 To disable the default features when using `curve25519-dalek` as a dependency,
 add `default-features = false` to the dependency in your `Cargo.toml`. To
@@ -194,12 +195,12 @@ From 4.x and on, MSRV changes will be accompanied by a minor version bump.
 
 ## Public API SemVer Exemptions
 
-Breaking changes to SemVer-exempted components affecting the public API will be accompanied by
+Breaking changes to SemVer exempted components affecting the public API will be accompanied by
 _some_ version bump. Below are the specific policies:
 
-| Releases | Public API Component(s)                         | Policy              |
-| :---     | :---                                            | :---                |
-| 4.x      | Dependencies `group`, `digest` and `rand_core`  | Minor SemVer bump   |
+| Releases | Public API Component(s)               | Policy              |
+| :---     | :---                                  | :---                |
+| 4.x      | Dependencies `digest` and `rand_core` | Minor SemVer bump   |
 
 # Safety
 
@@ -309,8 +310,8 @@ Thanks also to Ashley Hauck, Lucas Salibian, Manish Goregaokar, Jack Grigg,
 Pratyush Mishra, Michael Rosenberg, @pinkforest, and countless others for their
 contributions.
 
-[ed25519-dalek]: https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek
-[x25519-dalek]: https://github.com/dalek-cryptography/curve25519-dalek/tree/main/x25519-dalek
+[ed25519-dalek]: https://github.com/dalek-cryptography/ed25519-dalek
+[x25519-dalek]: https://github.com/dalek-cryptography/x25519-dalek
 [docs]: https://docs.rs/curve25519-dalek/
 [contributing]: https://github.com/dalek-cryptography/curve25519-dalek/blob/master/CONTRIBUTING.md
 [criterion]: https://github.com/japaric/criterion.rs

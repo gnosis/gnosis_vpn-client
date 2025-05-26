@@ -4,101 +4,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 2.2.3 (2023-10-15)
-### Changed
-- Bump `ring-compat` from 0.7 to 0.8 ([#744])
-- Enable `pkcs8/std` feature when `std` feature is enabled ([#746])
-- Hex-format `Signature` components in `Debug` impl ([#747])
-
-[#744]: https://github.com/RustCrypto/signatures/pull/744
-[#746]: https://github.com/RustCrypto/signatures/pull/746
-[#747]: https://github.com/RustCrypto/signatures/pull/747
-
-## 2.2.2 (2023-08-13)
-### Changed
-- Bump `ed25519-dalek` to v2 ([#738])
-
-[#738]: https://github.com/RustCrypto/signatures/pull/738
-
-## 2.2.1 (2023-04-03)
-### Changed
-- Bump `ring-compat` dev-dependency to v0.7 ([#692])
-- Bump `ed25519-dalek` to v2.0.0-rc.2 ([#693])
-
-[#692]: https://github.com/RustCrypto/signatures/pull/692
-[#693]: https://github.com/RustCrypto/signatures/pull/693
-
-## 2.2.0 (2023-03-01)
-### Changed
-- Bump `pkcs8` dependency to v0.10 ([#665])
-
-[#665]: https://github.com/RustCrypto/signatures/pull/665
-
-## 2.1.0 (2023-01-21)
-### Changed
-- Use namespaced features for `serde_bytes`; MSRV 1.60 ([#628])
-
-[#628]: https://github.com/RustCrypto/signatures/pull/628
-
-## 2.0.1 (2023-01-21)
-### Changed
-- Make `Signature` parsing infallible ([#623])
-
-[#623]: https://github.com/RustCrypto/signatures/pull/623
-
-## 2.0.0 (2023-01-15) [YANKED]
-### Added
-- `pkcs8` re-exports ([#589], [#590], [#591], [#592])
-- `Signature::from_components` method ([#600])
-- Impl `TryFrom<SignatureBytes>` for `Signature` ([#601])
-
-### Changed
-- Use `PublicKeyBytes` as `KeypairBytes::public_key` ([#570])
-- `Signature::from_bytes` takes `SignatureBytes` as an argument ([#593])
-- Store `R` and `s` components separately ([#595])
-- Bump `signature` crate dependency to v2.0 ([#614])
-
-### Removed
-- Deprecated `From<[u8; 64]>` conversion for signature ([#564])
-- `AsRef<[u8]>` impl on `signature` ([#595])
-
-[#564]: https://github.com/RustCrypto/signatures/pull/564
-[#570]: https://github.com/RustCrypto/signatures/pull/570
-[#589]: https://github.com/RustCrypto/signatures/pull/589
-[#590]: https://github.com/RustCrypto/signatures/pull/590
-[#591]: https://github.com/RustCrypto/signatures/pull/591
-[#592]: https://github.com/RustCrypto/signatures/pull/592
-[#593]: https://github.com/RustCrypto/signatures/pull/593
-[#595]: https://github.com/RustCrypto/signatures/pull/595
-[#600]: https://github.com/RustCrypto/signatures/pull/600
-[#601]: https://github.com/RustCrypto/signatures/pull/601
-[#614]: https://github.com/RustCrypto/signatures/pull/614
-
 ## 1.5.3 (2023-01-15)
 ### Changed
 - Fix `signature` version requirement which accidentally matched v2 or above ([#616])
 
 [#616]: https://github.com/RustCrypto/signatures/pull/616
 
-## 1.5.2 (2022-05-16) [YANKED]
+## 1.5.2 (2022-05-16)
 ### Fixed
 - Overflow handling in `serde` deserializers ([#482])
 
 [#482]: https://github.com/RustCrypto/signatures/pull/482
 
-## 1.5.1 (2022-05-15) [YANKED]
+## 1.5.1 (2022-05-15)
 ### Fixed
 - Use `TryInto` in `serde` deserializers ([#479])
 
 [#479]: https://github.com/RustCrypto/signatures/pull/479
 
-## 1.5.0 (2022-05-09) [YANKED]
+## 1.5.0 (2022-05-09)
 ### Changed
 - Bump `pkcs8` dependency to v0.9 ([#473])
 
 [#473]: https://github.com/RustCrypto/signatures/pull/473
 
-## 1.4.1 (2022-03-18) [YANKED]
+## 1.4.1 (2022-03-18)
 ### Added
 - License files ([#447])
 - `pkcs8::PublicKeyBytes` type ([#455])
@@ -133,7 +63,7 @@ be accompanied by a minor version bump.
 [#412]: https://github.com/RustCrypto/signatures/pull/412
 [#428]: https://github.com/RustCrypto/signatures/pull/428
 
-## 1.3.0 (2021-11-18) [YANKED]
+## 1.3.0 (2021-11-18)
 ### Added
 - `Signature::BYTE_SIZE` constant ([#380])
 - PKCS#8 support via `KeypairBytes` type ([#381])
