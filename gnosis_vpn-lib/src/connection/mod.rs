@@ -406,7 +406,7 @@ impl Connection {
             }
             InternalEvent::RegisterWg(res) => {
                 if let PhaseUp::WgRegistration(session) = self.phase_up.clone() {
-                    if matches!(res, Err(wg_client::Error::SocketConnectError)) {
+                    if matches!(res, Err(wg_client::Error::SocketConnect)) {
                         print_port_instructions(session.port);
                     }
                     self.phase_up = PhaseUp::CloseBridgeSession(session, res?);
@@ -531,7 +531,7 @@ impl Connection {
             }
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
-                    if matches!(res, Err(wg_client::Error::SocketConnectError)) {
+                    if matches!(res, Err(wg_client::Error::SocketConnect)) {
                         print_port_instructions(session.port);
                     }
                     res?;
@@ -745,10 +745,12 @@ impl Display for InternalEvent {
 fn print_port_instructions(port: u16) {
     tracing::error!(
         r#"
->>!!>> It appears as if your node does not expose your chosen `internal_connection_port` ({})
->>!!>> Please expose that port for TCP and UDP, forward it in docker-compose.yml or via docker run
->>!!>> Alternatively you could update your configuration file to use a different port
 
+>>!!>> It seems your node isn’t exposing the configured internal_connection_port ({}).
+>>!!>> Please expose that port for both TCP and UDP.
+>>!!>> Additionally add port mappings in your docker-compose.yml or to your docker run statement.
+>>!!>> Please expose that port for TCP and UDP and forward it in docker-compose.yml or via docker run
+>>!!>> Alternatively, update your configuration file to use a different port.
 "#,
         port
     );

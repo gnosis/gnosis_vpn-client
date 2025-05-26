@@ -60,10 +60,8 @@ pub enum Error {
     Header(#[from] remote_data::HeaderError),
     #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Error converting json to struct: {0}")]
-    Deserialize(#[from] serde_json::Error),
-    #[error("Error making http request: {0}")]
-    RequestError(#[from] reqwest::Error),
+    #[error("Error making http request: {0:?}")]
+    Request(#[from] reqwest::Error),
     #[error("Session listen host already used")]
     ListenHostAlreadyUsed,
     #[error("Session not found")]

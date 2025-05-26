@@ -27,12 +27,10 @@ pub struct Input {
 pub enum Error {
     #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Error converting json to struct: {0}")]
-    Deserialize(#[from] serde_json::Error),
-    #[error("Error making http request: {0}")]
-    RequestError(#[from] reqwest::Error),
+    #[error("Error making http request: {0:?}")]
+    Request(#[from] reqwest::Error),
     #[error("Error connecting on specified port")]
-    SocketConnectError,
+    SocketConnect,
     #[error("Invalid port")]
     InvalidPort,
 }
@@ -69,15 +67,15 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
         .json(&json)
         .timeout(std::time::Duration::from_secs(30))
         .headers(headers)
-        .send()?
-        .json::<Registration>()
+        .send()
         .map_err(|err| {
             if err.is_connect() {
-                Error::SocketConnectError
+                Error::SocketConnect
             } else {
                 err.into()
             }
-        })?;
+        })?
+        .json::<Registration>()?;
 
     Ok(resp)
 }
@@ -97,7 +95,7 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
         .send()
         .map_err(|err| {
             if err.is_connect() {
-                Error::SocketConnectError
+                Error::SocketConnect
             } else {
                 err.into()
             }
