@@ -11,6 +11,28 @@ FUN_RETURN_VALUE=""
 IS_MACOS=""
 WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 
+check_reqs() {
+    if ! command -v curl &>/dev/null; then
+        echo "Error: curl is required to run this script. Please install curl and try again."
+        exit 1
+    fi
+
+    if ! command -v grep &>/dev/null; then
+        echo "Error: grep is required to run this script. Please install curl and try again."
+        exit 1
+    fi
+
+    if ! command -v sed &>/dev/null; then
+        echo "Error: sed is required to run this script. Please install curl and try again."
+        exit 1
+    fi
+
+    if ! command -v cat &>/dev/null; then
+        echo "Error: cat is required to run this script. Please install curl and try again."
+        exit 1
+    fi
+}
+
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -425,5 +447,6 @@ main() {
     print_outro
 }
 
+check_reqs
 parse_arguments "$@"
 main
