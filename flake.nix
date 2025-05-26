@@ -180,7 +180,7 @@
 
             programs.shfmt.enable = true;
             settings.formatter.shfmt.includes = [ "*.sh" ];
-
+            settings.formatter.shfmt.indent_size = 4;
 
             programs.yamlfmt.enable = true;
             settings.formatter.yamlfmt.includes = [ ".github/workflows/*.yaml" ];
