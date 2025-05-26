@@ -167,6 +167,9 @@ prompt_install_dir() {
     INSTALL_FOLDER="${install_dir:-$INSTALL_FOLDER}"
 }
 
+# from https://stackoverflow.com/a/37840948
+urldecode() { : "${*//+/ }"; echo -e "${_//%/\\x}"; }
+
 prompt_api_access() {
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "[NON-INTERACTIVE] Using HOPRD API endpoint: ${HOPRD_API_ENDPOINT:-}"
@@ -188,8 +191,10 @@ prompt_api_access() {
     api_token=""
     if [[ -n ${admin_url} ]]; then
         echo "Parsing admin URL..."
-        api_endpoint=$(echo "$admin_url" | grep -o 'apiEndpoint=[^&]*' | sed 's/apiEndpoint=//' || true)
-        api_token=$(echo "$admin_url" | grep -o 'apiToken=[^&]*' | sed 's/apiToken=//' || true)
+        declare decoded_url
+        decoded_url=$(urldecode "$admin_url")
+        api_endpoint=$(echo "$decoded_url" | grep -o 'apiEndpoint=[^&]*' | sed 's/apiEndpoint=//' || true)
+        api_token=$(echo "$decoded_url" | grep -o 'apiToken=[^&]*' | sed 's/apiToken=//' || true)
     fi
     if [[ -z ${api_endpoint} ]]; then
         if [[ -n ${admin_url} ]]; then

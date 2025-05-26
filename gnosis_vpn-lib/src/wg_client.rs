@@ -65,7 +65,7 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
     let resp = client
         .post(url)
         .json(&json)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(15))
         .headers(headers)
         .send()
         // connection error needs to be mapped before response
