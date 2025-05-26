@@ -146,6 +146,7 @@ print_intro() {
         sleep 1
         echo ""
     else
+        echo "Run \"$0 --help\" for usage information."
         read -r -n 1 -s -p "Press any key to continue or Ctrl+C to exit..."
     fi
 }
