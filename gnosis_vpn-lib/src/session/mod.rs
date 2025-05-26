@@ -183,7 +183,6 @@ impl Session {
             .error_for_status()
             // response error can only be mapped after sending
             .map_err(|err| {
-                tracing::info!("foobar {}", err);
                 if err.status() == Some(StatusCode::CONFLICT) {
                     Error::ListenHostAlreadyUsed
                 } else {

@@ -418,7 +418,7 @@ fn print_manual_instructions() {
 
 >>!!>> If you intend to use manual WireGuard mode, please add your public key to the configuration file:
 >>!!>> [wireguard]
->>!!>> manual_mode = {{ public_key = "<wg public key" }}
+>>!!>> manual_mode = {{ public_key = "<wg public key>" }}
 "#
     );
 }

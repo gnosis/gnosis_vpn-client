@@ -69,13 +69,7 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
         .headers(headers)
         .send()
         // connection error needs to be mapped before response
-        .map_err(|err| {
-            if err.is_connect() {
-                Error::SocketConnect
-            } else {
-                err.into()
-            }
-        })?
+        .map_err(map_socket_connect_error)?
         .error_for_status()?
         .json::<Registration>()?;
 
@@ -96,15 +90,17 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
         .headers(headers)
         .send()
         // connection error needs to be mapped before response
-        .map_err(|err| {
-            if err.is_connect() {
-                Error::SocketConnect
-            } else {
-                err.into()
-            }
-        })?
+        .map_err(map_socket_connect_error)?
         .error_for_status()?;
     Ok(())
+}
+
+fn map_socket_connect_error(err: reqwest::Error) -> Error {
+    if err.is_connect() {
+        Error::SocketConnect
+    } else {
+        err.into()
+    }
 }
 
 impl Display for Registration {
