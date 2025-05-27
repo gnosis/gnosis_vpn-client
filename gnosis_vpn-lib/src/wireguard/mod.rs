@@ -24,6 +24,10 @@ pub enum Error {
     WgError(String),
     #[error("Unable to determine project directories")]
     ProjectDirs,
+    #[error("Base64 decoding error: {0}")]
+    Base64Decode(#[from] base64::DecodeError),
+    #[error("Array conversion error: {0}")]
+    ArrayConversion(#[from] std::array::TryFromSliceError),
 }
 
 #[derive(Clone, Debug)]
