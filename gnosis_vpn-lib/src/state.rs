@@ -41,7 +41,7 @@ pub fn read() -> Result<State, Error> {
             Error::IO(e)
         }
     })?;
-    let state: State = bincode::deserialize(&content[..]).map_err(Error::BinCodeError)?;
+    let state: State = bincode::deserialize(&content[..])?;
     Ok(state)
 }
 
