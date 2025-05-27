@@ -146,7 +146,6 @@ print_intro() {
         sleep 1
         echo ""
     else
-        echo "Run \"$0 --help\" for usage information."
         read -r -n 1 -s -p "Press any key to continue or Ctrl+C to exit..."
     fi
 }
@@ -201,7 +200,7 @@ prompt_api_access() {
     fi
     if [[ -z ${api_endpoint} ]]; then
         if [[ -n ${admin_url} ]]; then
-            echo "Error: Could not parse API endpoint from the provided URL."
+            echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
         fi
         read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
     else
@@ -468,7 +467,7 @@ print_outro() {
         echo "Check the client's log output after connecting to get a template for your tunnel configuration."
         echo ""
     fi
-    echo "After establishing a VPN connection you can browse privately by using this HTTP proxy:"
+    echo "After establishing a VPN connection you can browse anonymously by using this HTTP proxy:"
     echo "HTTP(s) Proxy: 10.128.0.1:3128"
     echo ""
 }
