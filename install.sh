@@ -453,11 +453,24 @@ print_outro() {
     echo ""
     echo "You can now run the GnosisVPN client using the following commands:"
     echo "  - Start the client: sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml"
-    echo "  - Instruct the client: ${INSTALL_FOLDER}/gnosis_vpn-ctl status"
-    echo "  - Connect to destination: ${INSTALL_FOLDER}/gnosis_vpn-ctl connect <peer_id>"
+    echo "  - Check client status: ${INSTALL_FOLDER}/gnosis_vpn-ctl status"
+    if [[ $HOPR_NETWORK == "rotsee" ]]; then
+        echo "  - Connect to London: ${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ"
+    else
+        echo "  - Connect to Spain: ${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL"
+    fi
     echo ""
     echo "Configuration file is located at: ${INSTALL_FOLDER}/config.toml"
     echo "You can edit this file to change settings as needed."
+    echo ""
+    if [[ -n "$WG_PUBLIC_KEY" ]]; then
+        echo "Your configuration was set up for WireGuard manual mode."
+        echo "Check the client's log output after connecting to get a template for your tunnel configuration."
+        echo ""
+    fi
+    echo "After establishing a VPN connection you can browse privately by using this HTTP proxy:"
+    echo "HTTP(s) Proxy: 10.128.0.1:3128"
+    echo ""
 }
 
 main() {
