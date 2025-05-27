@@ -1,21 +1,17 @@
-{
-  Entrypoint,
-  env ? [ ],
-  extraContents ? [ ],
-  name,
-  pkgs,
+{ Entrypoint
+, env ? [ ]
+, extraContents ? [ ]
+, name
+, pkgs
 }:
 let
-  contents =
-    with pkgs;
-    [
-      iana-etc
-      cacert
-      bash
-      findutils
-      coreutils
-    ]
-    ++ extraContents;
+  contents = with pkgs; [
+    iana-etc
+    cacert
+    bash
+    findutils
+    coreutils
+  ] ++ extraContents;
   Env = [
     "NO_COLOR=true" # suppress colored log output
     # "RUST_LOG=info"   # 'info' level is set by default with some spamming components set to override
