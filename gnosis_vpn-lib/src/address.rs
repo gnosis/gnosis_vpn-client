@@ -1,5 +1,6 @@
 // mostly copied from hopr-lib
 
+use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -7,7 +8,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 /// Represents an Ethereum address
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Serialize, Deserialize, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default, Hash, PartialOrd, Ord)]
 pub struct Address([u8; 20]);
 
 #[derive(Debug, Error)]
@@ -25,6 +26,42 @@ pub enum Error {
 impl Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{}", hex::encode(self.0))
+    }
+}
+
+impl Serialize for Address {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Address {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct AddressVisitor;
+
+        impl<'de> Visitor<'de> for AddressVisitor {
+            type Value = Address;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("hex string representing an Ethereum address")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let address = Address::from_hex(value).map_err(de::Error::custom)?;
+                Ok(address)
+            }
+        }
+
+        deserializer.deserialize_str(AddressVisitor)
     }
 }
 

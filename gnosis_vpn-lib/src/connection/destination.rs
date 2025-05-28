@@ -74,9 +74,9 @@ impl Destination {
 
 impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let peer_id = log_output::address(&self.address);
+        let address = log_output::address(&self.address);
         let meta = self.meta_str();
-        write!(f, "Destination[{},{}]", peer_id, meta)
+        write!(f, "Destination[{},{}]", address, meta)
     }
 }
 

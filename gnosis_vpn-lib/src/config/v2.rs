@@ -186,17 +186,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
-                for (peer_id, v) in destinations.iter() {
+                for (address, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _v) in dest.iter() {
                             if k == "meta" || k == "path" {
                                 continue;
                             }
-                            wrong_keys.push(format!("destinations.{}.{}", peer_id, k));
+                            wrong_keys.push(format!("destinations.{}.{}", address, k));
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("destinations.{}", peer_id));
+                    wrong_keys.push(format!("destinations.{}", address));
                 }
             }
             continue;
