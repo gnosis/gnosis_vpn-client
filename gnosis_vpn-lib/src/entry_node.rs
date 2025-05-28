@@ -1,3 +1,4 @@
+use std::fmt::{self, Display};
 use std::time::Duration;
 use url::Url;
 
@@ -37,5 +38,20 @@ impl EntryNode {
 
     pub fn conflicts_listen_host(&self, session: &Session) -> bool {
         self.listen_host.ends_with(&session.port.to_string())
+    }
+}
+
+impl Display for APIVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
+    }
+}
+
+impl AsRef<str> for APIVersion {
+    fn as_ref(&self) -> &str {
+        match self {
+            APIVersion::V3 => "v3",
+            APIVersion::V4 => "v4",
+        }
     }
 }

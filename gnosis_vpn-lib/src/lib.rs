@@ -10,6 +10,6 @@ pub mod state;
 pub mod wireguard;
 
 mod dirs;
+mod gvpn_client;
 mod monitor;
 mod remote_data;
-mod wg_client;

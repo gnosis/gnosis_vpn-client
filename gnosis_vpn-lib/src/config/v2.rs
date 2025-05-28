@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
 use crate::connection::{Destination as ConnDestination, SessionParameters};
-use crate::entry_node::EntryNode;
+use crate::entry_node::{APIVersion, EntryNode};
 use crate::monitor;
 use crate::peer_id::PeerId;
 use crate::session;
@@ -30,7 +30,7 @@ struct HoprdNode {
     endpoint: Url,
     api_token: String,
     internal_connection_port: Option<u16>,
-    api_version: Option<u8>
+    api_version: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -277,6 +277,12 @@ impl Connection {
     }
 }
 
+impl EntryNode {
+    pub fn default_api_version() -> APIVersion {
+        APIVersion::V3
+    }
+}
+
 impl Config {
     pub fn entry_node(&self) -> EntryNode {
         let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
@@ -291,11 +297,20 @@ impl Config {
             .as_ref()
             .and_then(|c| c.session_timeout)
             .unwrap_or(Connection::default_session_timeout());
+        let api_version = self
+            .hoprd_node
+            .api_version
+            .map(|v| match v {
+                4 => APIVersion::V4,
+                _ => EntryNode::default_api_version(),
+            })
+            .unwrap_or(EntryNode::default_api_version());
         EntryNode::new(
-            &self.hoprd_node.endpoint,
-            &self.hoprd_node.api_token,
-            &listen_host,
-            &session_timeout,
+            self.hoprd_node.endpoint.clone(),
+            self.hoprd_node.api_token.clone(),
+            listen_host,
+            session_timeout,
+            api_version,
         )
     }
 

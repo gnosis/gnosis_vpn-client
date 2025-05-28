@@ -8,7 +8,7 @@ use std::vec::Vec;
 use url::Url;
 
 use crate::connection::Destination as ConnDestination;
-use crate::entry_node::EntryNode;
+use crate::entry_node::{APIVersion, EntryNode};
 use crate::peer_id::PeerId;
 use crate::wireguard::config::{self, Config as WireGuardConfig};
 
@@ -123,10 +123,11 @@ impl Config {
             .unwrap_or(":1422".to_string());
 
         EntryNode::new(
-            &hoprd_node.endpoint,
-            &hoprd_node.api_token,
-            &listen_host,
-            &Duration::from_secs(15),
+            hoprd_node.endpoint,
+            hoprd_node.api_token,
+            listen_host,
+            Duration::from_secs(15),
+            APIVersion::V3,
         )
     }
 
