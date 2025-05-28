@@ -31,8 +31,8 @@ internal_connection_port = 1422
 
 [destinations]
 
-# exit node peer ID (where the connection should terminate)
-# [destinations.<peer_id>]
+# exit node address (where the connection should terminate)
+# [destinations.<address>]
 # additional information about this exit node
 # meta = { location = <location> }
 # session path should either be intermediates or hops = {nr}
