@@ -30,6 +30,7 @@ struct HoprdNode {
     endpoint: Url,
     api_token: String,
     internal_connection_port: Option<u16>,
+    api_version: Option<u8>
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

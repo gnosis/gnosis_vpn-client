@@ -9,15 +9,29 @@ pub struct EntryNode {
     pub api_token: String,
     pub listen_host: String,
     pub session_timeout: Duration,
+    pub api_version: APIVersion,
+}
+
+#[derive(Clone, Debug)]
+pub enum APIVersion {
+    V3,
+    V4,
 }
 
 impl EntryNode {
-    pub fn new(endpoint: &Url, api_token: &str, listen_host: &str, session_timeout: &Duration) -> Self {
+    pub fn new(
+        endpoint: Url,
+        api_token: String,
+        listen_host: String,
+        session_timeout: Duration,
+        api_version: APIVersion,
+    ) -> Self {
         Self {
-            endpoint: endpoint.clone(),
-            api_token: api_token.to_string(),
-            listen_host: listen_host.to_string(),
-            session_timeout: *session_timeout,
+            endpoint,
+            api_token,
+            listen_host,
+            session_timeout,
+            api_version,
         }
     }
 
