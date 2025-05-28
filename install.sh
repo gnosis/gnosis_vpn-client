@@ -13,8 +13,15 @@ VERSION_TAG=""
 IS_MACOS=""
 WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 
+# taken from https://stackoverflow.com/a/28938235
+BPurple='\033[1;35m'
+BCyan='\033[1;36m'
+Color_Off='\033[0m'
+
+GLOBAL_NAME="${BPurple}<GnosisVPN installer script>${Color_Off}"
+
 usage() {
-    echo "Usage: $0 [OPTIONS]"
+    echo -e "Usage: ${GLOBAL_NAME} [OPTIONS]"
     echo ""
     echo "Options:"
     echo "  --non-interactive          Run the script in non-interactive mode."
@@ -119,7 +126,7 @@ parse_arguments() {
 }
 
 print_intro() {
-    echo "Welcome to the GnosisVPN installation script!"
+    echo -e "Welcome to the ${GLOBAL_NAME}!"
     echo "This script will help you install and configure the GnosisVPN client on your system."
     echo ""
     echo "Requirements:"
@@ -162,7 +169,7 @@ prompt_install_dir() {
     echo "Please specify the installation directory for GnosisVPN."
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
-    read -r -p "Installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
+    read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
     INSTALL_FOLDER="${install_dir:-$INSTALL_FOLDER}"
 }
 
@@ -184,9 +191,10 @@ prompt_api_access() {
     echo ""
     echo "GnosisVPN uses your HOPRD node as entry connection point."
     echo "Therefore, you need to provide the API endpoint and token for your HOPRD node."
-    echo "If connected to your HOPRD node via HOPR Admin UI, paste it's full URL."
+    echo -e "If connected to your HOPRD node via ${BCyan}HOPR Admin UI${Color_Off}, paste it's full URL."
+    echo "The script will try to parse the required values from the URL."
     declare admin_url
-    read -r -p "HOPRD admin interface URL [leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
+    read -r -p "Enter full HOPRD admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
 
     declare api_endpoint api_token
     api_endpoint=""
@@ -202,7 +210,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
         fi
-        read -r -p "HOPRD API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
+        read -r -p "Enter HOPRD API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
     else
         echo "Using parsed API endpoint: ${api_endpoint}"
     fi
@@ -210,7 +218,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Error: Could not parse API token from the provided URL."
         fi
-        read -r -p "HOPRD API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
+        read -r -p "Enter HOPRD API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
     else
         echo "Using parsed API token: ${api_token}"
     fi
@@ -229,7 +237,7 @@ prompt_session_port() {
     echo ""
     echo "GnosisVPN requires a port for internal connections."
     echo "This port will be used for both TCP and UDP connections."
-    read -r -p "HOPRD session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
+    read -r -p "Enter HOPRD session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
     HOPRD_SESSION_PORT="${session_port:-$HOPRD_SESSION_PORT}"
 }
 
@@ -296,7 +304,7 @@ prompt_wg_public_key() {
     echo "In order to provide the underlying connection, GnosisVPN needs your WireGuard public key."
     echo "Go ahead and create an empty tunnel in your favorite WireGuard application and copy the public key."
     declare wg_pub_key
-    read -r -p "WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
+    read -r -p "Enter WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
     WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
 }
 
@@ -379,7 +387,7 @@ fetch_binaries() {
 
     if [[ -n ${IS_MACOS} ]]; then
         echo "Detected macOS - GnosisVPN binaries need to be removed from apple quarantine mode."
-        echo "We will run these two commands with sudo to get required privileges:"
+        echo -e "We will run these two commands with ${BCyan}sudo${Color_Off} to get required privileges:"
         echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn"
         echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn-ctl"
         echo "These are the only commands that require sudo privileges."
@@ -451,24 +459,28 @@ print_outro() {
     echo "GnosisVPN installation completed successfully!"
     echo ""
     echo "You can now run the GnosisVPN client using the following commands:"
-    echo "  - Start the client: sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml"
-    echo "  - Check client status: ${INSTALL_FOLDER}/gnosis_vpn-ctl status"
+    echo -e "  - Start the client: ${BCyan}sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml${Color_Off}"
+    echo -e "  - Check client status: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl status${Color_Off}"
+    echo "You can connect to any of those locations:"
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        echo "  - Connect to London: ${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ"
+        echo -e "  - Connect to London: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ${Color_Off}"
+        echo -e "  - Connect to Iowa: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWDNcj8phBXj9ZJkAxSmjbwNUzEWtSsg6K6BeuKCAyZuCU${Color_Off}"
     else
-        echo "  - Connect to Spain: ${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL"
+        echo -e "  - Connect to Spain: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL${Color_Off}"
+        echo -e "  - Connect to USA: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5${Color_Off}"
+        echo -e "  - Connect to Germany: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7${Color_Off}"
     fi
     echo ""
     echo "Configuration file is located at: ${INSTALL_FOLDER}/config.toml"
     echo "You can edit this file to change settings as needed."
     echo ""
-    if [[ -n "$WG_PUBLIC_KEY" ]]; then
+    if [[ -n $WG_PUBLIC_KEY ]]; then
         echo "Your configuration was set up for WireGuard manual mode."
         echo "Check the client's log output after connecting to get a template for your tunnel configuration."
         echo ""
     fi
     echo "After establishing a VPN connection you can browse anonymously by using this HTTP proxy:"
-    echo "HTTP(s) Proxy: 10.128.0.1:3128"
+    echo -e "${BCyan}HTTP(s) Proxy: 10.128.0.1:3128${Color_Off}"
     echo ""
 }
 
