@@ -7,9 +7,9 @@ use std::time::Duration;
 use std::vec::Vec;
 use url::Url;
 
+use crate::address::Address;
 use crate::connection::Destination as ConnDestination;
 use crate::entry_node::{APIVersion, EntryNode};
-use crate::peer_id::PeerId;
 use crate::wireguard::config::{self, Config as WireGuardConfig};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ pub struct EntryNodeConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfig {
     pub capabilities: Option<Vec<SessionCapabilitiesConfig>>,
-    pub destination: PeerId,
+    pub destination: Address,
     pub listen_host: Option<String>,
     pub path: Option<SessionPathConfig>,
     pub target: Option<SessionTargetConfig>,
@@ -74,7 +74,7 @@ pub enum SessionPathConfig {
     #[serde(alias = "hop")]
     Hop(u8),
     #[serde(alias = "intermediates")]
-    Intermediates(Vec<PeerId>),
+    Intermediates(Vec<Address>),
 }
 
 impl Default for SessionPathConfig {
@@ -131,7 +131,7 @@ impl Config {
         )
     }
 
-    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
         HashMap::new()
     }
 

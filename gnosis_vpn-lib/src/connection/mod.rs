@@ -669,7 +669,7 @@ impl Connection {
     fn bridge_session_params(&self) -> session::OpenSession {
         session::OpenSession::bridge(
             self.entry_node.clone(),
-            self.destination.peer_id,
+            self.destination.address,
             self.destination.bridge.capabilities.clone(),
             self.destination.path.clone(),
             self.destination.bridge.target.clone(),
@@ -679,7 +679,7 @@ impl Connection {
     fn main_session_params(&self) -> session::OpenSession {
         session::OpenSession::main(
             self.entry_node.clone(),
-            self.destination.peer_id,
+            self.destination.address,
             self.destination.wg.capabilities.clone(),
             self.destination.path.clone(),
             self.destination.wg.target.clone(),

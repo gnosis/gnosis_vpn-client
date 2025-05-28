@@ -1,13 +1,13 @@
 use std::cmp::PartialEq;
 use std::fmt::{self, Display};
 
+use crate::address::Address;
 use crate::log_output;
-use crate::peer_id::PeerId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Path {
     Hops(u8),
-    Intermediates(Vec<PeerId>),
+    Intermediates(Vec<Address>),
 }
 
 impl Default for Path {
@@ -27,7 +27,7 @@ impl Display for Path {
             Path::Intermediates(intermediates) => {
                 let i = intermediates
                     .iter()
-                    .map(|peer_id| format!("(r{})", log_output::peer_id(peer_id.to_string().as_str())))
+                    .map(|address| format!("(r{})", log_output::address(&address)))
                     .collect::<Vec<_>>()
                     .join("->");
                 format!("->{}->", i)

@@ -3,6 +3,7 @@ use serde::ser::Serialize;
 
 use std::time::SystemTime;
 
+use crate::address::Address;
 use crate::session;
 
 pub fn serialize<T>(v: &T) -> String
@@ -22,9 +23,9 @@ pub fn elapsed(timestamp: &SystemTime) -> String {
     }
 }
 
-pub fn peer_id(id: &str) -> String {
-    let l = id.len();
-    format!(".{}", &id[l - 4..])
+pub fn address(address: &Address) -> String {
+    let str = address.to_string();
+    format!("{}..{}", &str[..6], &str[16..])
 }
 
 fn truncate_after_second_space(s: &str) -> &str {

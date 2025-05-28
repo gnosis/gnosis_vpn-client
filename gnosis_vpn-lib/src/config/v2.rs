@@ -7,10 +7,10 @@ use std::vec::Vec;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
+use crate::address::Address;
 use crate::connection::{Destination as ConnDestination, SessionParameters};
 use crate::entry_node::{APIVersion, EntryNode};
 use crate::monitor;
-use crate::peer_id::PeerId;
 use crate::session;
 use crate::wireguard::config::{Config as WireGuardConfig, ManualMode as WireGuardManualMode};
 
@@ -20,7 +20,7 @@ const MAX_HOPS: u8 = 3;
 pub struct Config {
     pub version: u8,
     hoprd_node: HoprdNode,
-    destinations: Option<HashMap<PeerId, Destination>>,
+    destinations: Option<HashMap<Address, Destination>>,
     connection: Option<Connection>,
     wireguard: Option<WireGuard>,
 }
@@ -42,7 +42,7 @@ struct Destination {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 enum DestinationPath {
     #[serde(alias = "intermediates")]
-    Intermediates(Vec<PeerId>),
+    Intermediates(Vec<Address>),
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
 }
@@ -314,7 +314,7 @@ impl Config {
         )
     }
 
-    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
         let config_dests = self.destinations.clone().unwrap_or_default();
         let connection = self.connection.as_ref();
         config_dests

@@ -6,8 +6,8 @@ use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use thiserror::Error;
 
+use crate::address::Address;
 use crate::entry_node::EntryNode;
-use crate::peer_id::PeerId;
 use crate::remote_data;
 
 pub use path::Path;
@@ -38,7 +38,7 @@ pub enum Target {
 
 pub struct OpenSession {
     entry_node: EntryNode,
-    destination: PeerId,
+    destination_address: Address,
     capabilities: Vec<Capability>,
     path: Path,
     target: Target,
@@ -101,14 +101,14 @@ impl Target {
 impl OpenSession {
     pub fn bridge(
         entry_node: EntryNode,
-        destination: PeerId,
+        destination_address: Address,
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
-            destination,
+            destination_address,
             capabilities,
             path: path.clone(),
             target: target.clone(),
@@ -118,14 +118,14 @@ impl OpenSession {
 
     pub fn main(
         entry_node: EntryNode,
-        destination: PeerId,
+        destination_address: Address,
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
-            destination,
+            destination_address,
             capabilities,
             path: path.clone(),
             target: target.clone(),
@@ -160,7 +160,7 @@ impl Session {
         );
         let url = open_session.entry_node.endpoint.join(&path)?;
         let mut json = serde_json::Map::new();
-        json.insert("destination".to_string(), json!(open_session.destination));
+        json.insert("destination".to_string(), json!(open_session.destination_address));
 
         let target = open_session.target.clone();
         let target_json = json!({ target.type_(): target.address() });
