@@ -3,7 +3,7 @@ members = ["gnosis_vpn", "gnosis_vpn-ctl", "gnosis_vpn-lib"]
 resolver = "2"
 
 [workspace.package]
-version = "0.10.7"
+version = "0.11.0"
 edition = "2021"
 name = "gnosis_vpn"
 
