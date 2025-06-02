@@ -170,7 +170,8 @@ prompt_install_dir() {
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
     read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
-    INSTALL_FOLDER="${install_dir:-$INSTALL_FOLDER}"
+    INSTALL_FOLDER=$(realpath "${install_dir:-$INSTALL_FOLDER}")
+    echo "GnosisVPN will be installed to: \"${INSTALL_FOLDER}\"."
 }
 
 # from https://stackoverflow.com/a/37840948
@@ -459,7 +460,7 @@ print_outro() {
     echo "GnosisVPN installation completed successfully!"
     echo ""
     echo "You can now run the GnosisVPN client using the following commands:"
-    echo -e "  - Start the client: ${BCyan}sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml${Color_Off}"
+    echo -e "  - Start the client system service: ${BCyan}sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml${Color_Off}"
     echo -e "  - Check client status: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl status${Color_Off}"
     echo "You can connect to any of those locations:"
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
