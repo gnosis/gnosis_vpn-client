@@ -119,23 +119,23 @@ enum InternalError {
 
 impl Connection {
     pub fn new(
-        entry_node: &EntryNode,
-        destination: &Destination,
-        wg_public_key: &str,
+        entry_node: EntryNode,
+        destination: Destination,
+        wg_public_key: String,
         sender: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Connection {
+            destination,
+            entry_node,
+            sender,
+            wg_public_key,
             abort_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             client: blocking::Client::new(),
-            destination: destination.clone(),
             dismantle_channel: crossbeam_channel::bounded(1),
-            entry_node: entry_node.clone(),
             establish_channel: crossbeam_channel::bounded(1),
             phase_down: PhaseDown::Retired,
             phase_up: PhaseUp::Ready,
-            sender: sender.clone(),
-            wg_public_key: wg_public_key.to_string(),
         }
     }
 
@@ -575,14 +575,17 @@ impl Connection {
 
     fn ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
+        let dest = self.destination.clone();
+        let range = dest.ping_interval.clone();
+        let opts = dest.ping_options.clone();
         thread::spawn(move || {
             let mut rng = rand::thread_rng();
-            let delay = Duration::from_secs(rng.gen_range(5..10));
+            let delay = Duration::from_secs(rng.gen_range(range) as u64);
             let after = crossbeam_channel::after(delay);
             crossbeam_channel::select! {
                 recv(after) -> _ => {
-                    let res = monitor::ping();
-            _ = s.send(InternalEvent::Ping(res));
+                    let res = monitor::ping(&opts);
+                    _ = s.send(InternalEvent::Ping(res));
                 }
             }
         });
