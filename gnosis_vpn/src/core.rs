@@ -199,7 +199,7 @@ impl Core {
         };
 
         let (s, r) = crossbeam_channel::bounded(1);
-        let mut conn = Connection::new(&self.config.entry_node(), destination, &wg_pub_key, s);
+        let mut conn = Connection::new(self.config.entry_node(), destination.clone(), wg_pub_key, s);
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();

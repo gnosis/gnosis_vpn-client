@@ -1,8 +1,10 @@
 use std::cmp::PartialEq;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
+use std::ops::Range;
 
 use crate::log_output;
+use crate::monitor;
 use crate::peer_id::PeerId;
 use crate::session;
 
@@ -13,6 +15,8 @@ pub struct Destination {
     pub path: session::Path,
     pub bridge: SessionParameters,
     pub wg: SessionParameters,
+    pub ping_interval: Range<u8>,
+    pub ping_options: monitor::PingOptions,
 }
 
 #[derive(Clone, Debug)]
@@ -32,18 +36,22 @@ impl SessionParameters {
 
 impl Destination {
     pub fn new(
-        peer_id: &PeerId,
-        path: &session::Path,
-        meta: &HashMap<String, String>,
-        bridge: &SessionParameters,
-        wg: &SessionParameters,
+        peer_id: PeerId,
+        path: session::Path,
+        meta: HashMap<String, String>,
+        bridge: SessionParameters,
+        wg: SessionParameters,
+        ping_interval: Range<u8>,
+        ping_options: monitor::PingOptions,
     ) -> Self {
         Self {
-            peer_id: *peer_id,
-            path: path.clone(),
-            meta: meta.clone(),
-            bridge: bridge.clone(),
-            wg: wg.clone(),
+            peer_id,
+            path,
+            meta,
+            bridge,
+            wg,
+            ping_interval,
+            ping_options,
         }
     }
 
