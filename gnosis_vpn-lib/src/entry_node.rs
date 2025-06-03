@@ -15,7 +15,6 @@ pub struct EntryNode {
 
 #[derive(Clone, Debug)]
 pub enum APIVersion {
-    V3,
     V4,
 }
 
@@ -50,7 +49,6 @@ impl Display for APIVersion {
 impl AsRef<str> for APIVersion {
     fn as_ref(&self) -> &str {
         match self {
-            APIVersion::V3 => "v3",
             APIVersion::V4 => "v4",
         }
     }

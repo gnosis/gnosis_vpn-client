@@ -127,7 +127,7 @@ impl Config {
             hoprd_node.api_token,
             listen_host,
             Duration::from_secs(15),
-            APIVersion::V3,
+            APIVersion::V4,
         )
     }
 

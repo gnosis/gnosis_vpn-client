@@ -279,7 +279,7 @@ impl Connection {
 
 impl EntryNode {
     pub fn default_api_version() -> APIVersion {
-        APIVersion::V3
+        APIVersion::V4
     }
 }
 
