@@ -36,25 +36,14 @@ usage() {
 }
 
 check_reqs() {
-    if ! command -v curl &>/dev/null; then
-        echo "Error: curl is required to run this script. Please install curl and try again."
-        exit 1
-    fi
+    required_cmds=(curl grep sed cat uname)
 
-    if ! command -v grep &>/dev/null; then
-        echo "Error: grep is required to run this script. Please install curl and try again."
+    for cmd in "${required_cmds[@]}"; do
+      if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: $cmd is required to run this script. Please install $cmd and try again."
         exit 1
-    fi
-
-    if ! command -v sed &>/dev/null; then
-        echo "Error: sed is required to run this script. Please install curl and try again."
-        exit 1
-    fi
-
-    if ! command -v cat &>/dev/null; then
-        echo "Error: cat is required to run this script. Please install curl and try again."
-        exit 1
-    fi
+      fi
+    done
 }
 
 parse_arguments() {
@@ -170,7 +159,13 @@ prompt_install_dir() {
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
     read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
-    INSTALL_FOLDER=$(realpath "${install_dir:-$INSTALL_FOLDER}")
+    install_dir="${install_dir:-$INSTALL_FOLDER}"
+    # do not rely on realpath as it is unstable on macOS
+    if INSTALL_FOLDER=$(realpath "${install_dir:-$INSTALL_FOLDER}" 2>/dev/null); then
+        :
+    else
+        INSTALL_FOLDER=$([[ $install_dir = /* ]] && echo "$install_dir" || echo "$PWD/${install_dir#./}")
+    fi
     echo "GnosisVPN will be installed to: \"${INSTALL_FOLDER}\"."
 }
 
@@ -488,13 +483,15 @@ print_outro() {
 main() {
     print_intro
 
+    check_platform
+    check_reqs
+
     prompt_install_dir
     prompt_api_access
     prompt_session_port
 
     fetch_network
     fetch_version_tag
-    check_platform
     prompt_wireguard
 
     enter_install_dir
@@ -505,6 +502,5 @@ main() {
     print_outro
 }
 
-check_reqs
 parse_arguments "$@"
 main
