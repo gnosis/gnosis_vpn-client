@@ -22,7 +22,7 @@ pub mod destination;
 pub enum Event {
     Connected(ConnectInfo),
     /// Event indicating that the connection has been established and is ready for use.
-    /// Boolean flag indicated if it has ever worked before, true meaning it has worked at least once.
+    /// Boolean flag indicates if it has ever worked before, true meaning it has worked at least once.
     Disconnected(bool),
     Dismantled,
 }
