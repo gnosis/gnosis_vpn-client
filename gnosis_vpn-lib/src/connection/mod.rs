@@ -88,7 +88,6 @@ enum BackoffState {
 #[derive(Clone, Debug)]
 pub struct Connection {
     // message passing helper
-    abort_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
     establish_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
     dismantle_channel: (crossbeam_channel::Sender<PhaseUp>, crossbeam_channel::Receiver<PhaseUp>),
 
@@ -133,7 +132,6 @@ impl Connection {
             entry_node,
             sender,
             wg_public_key,
-            abort_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             client: blocking::Client::new(),
             dismantle_channel: crossbeam_channel::bounded(1),
@@ -203,17 +201,6 @@ impl Connection {
                         }
                     }
                 },
-                recv(me.abort_channel.1) -> res => {
-                    match res {
-                        Ok(()) => {
-                            tracing::warn!("Received abort signal during connection establishment");
-                            break;
-                        }
-                        Err(error) => {
-                            tracing::error!(%error, "Failed receiving signal on abort channel during connection establishment");
-                        }
-                    }
-                },
                 recv(recv_backoff) -> _ => {
                     tracing::debug!("Backoff delay expired during connection establishment");
                 },
@@ -237,7 +224,7 @@ impl Connection {
     pub fn dismantle(&mut self) {
         let mut outer = self.clone();
         thread::spawn(move || {
-            // abort establishing
+            // cancel establishing connection
             match outer.establish_channel.0.send(()) {
                 Ok(()) => (),
                 Err(error) => {
@@ -298,17 +285,6 @@ impl Connection {
                     recv(recv_backoff) -> _ => {
                         tracing::debug!("Backoff delay expired during connection dismantling");
                     }
-                    recv(me.abort_channel.1) -> res => {
-                        match res {
-                            Ok(()) => {
-                                tracing::warn!("Received abort signal during connection dismantling");
-                                break;
-                            }
-                            Err(error) => {
-                                tracing::error!(%error, "Failed receiving signal on abort channel during connection dismantling");
-                            }
-                        }
-                    }
                     recv(recv_event) -> res => {
                         match res {
                             Ok(evt) => {
@@ -324,13 +300,6 @@ impl Connection {
                     }
                 }
             });
-        });
-    }
-
-    pub fn abort(&self) {
-        tracing::info!("Aborting connection");
-        _ = self.abort_channel.0.send(()).map_err(|error| {
-            tracing::error!(%error, "Failed sending signal on abort channel");
         });
     }
 
