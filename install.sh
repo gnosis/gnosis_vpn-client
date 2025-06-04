@@ -39,10 +39,10 @@ check_reqs() {
     required_cmds=(curl grep sed cat uname)
 
     for cmd in "${required_cmds[@]}"; do
-      if ! command -v "$cmd" &>/dev/null; then
-        echo "Error: $cmd is required to run this script. Please install $cmd and try again."
-        exit 1
-      fi
+        if ! command -v "$cmd" &>/dev/null; then
+            echo "Error: $cmd is required to run this script. Please install $cmd and try again."
+            exit 1
+        fi
     done
 }
 
@@ -164,7 +164,7 @@ prompt_install_dir() {
     if INSTALL_FOLDER=$(realpath "${install_dir:-$INSTALL_FOLDER}" 2>/dev/null); then
         :
     else
-        INSTALL_FOLDER=$([[ $install_dir = /* ]] && echo "$install_dir" || echo "$PWD/${install_dir#./}")
+        INSTALL_FOLDER=$([[ $install_dir == /* ]] && echo "$install_dir" || echo "$PWD/${install_dir#./}")
     fi
     echo "GnosisVPN will be installed to: \"${INSTALL_FOLDER}\"."
 }
