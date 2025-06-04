@@ -1,9 +1,8 @@
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
-use std::cmp;
 use std::fmt;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Protocol {
     Udp,
     Tcp,
@@ -45,12 +44,6 @@ impl fmt::Display for Protocol {
             Protocol::Udp => write!(f, "udp"),
             Protocol::Tcp => write!(f, "tcp"),
         }
-    }
-}
-
-impl cmp::PartialEq for Protocol {
-    fn eq(&self, other: &Self) -> bool {
-        self.to_string() == other.to_string()
     }
 }
 

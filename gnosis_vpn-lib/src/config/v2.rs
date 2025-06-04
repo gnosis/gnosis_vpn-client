@@ -9,6 +9,7 @@ use url::Url;
 
 use crate::connection::{Destination as ConnDestination, SessionParameters};
 use crate::entry_node::EntryNode;
+use crate::monitor;
 use crate::peer_id::PeerId;
 use crate::session;
 use crate::wireguard::config::{Config as WireGuardConfig, ManualMode as WireGuardManualMode};
@@ -52,6 +53,7 @@ struct Connection {
     session_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
+    ping: Option<PingOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,6 +84,22 @@ enum SessionTargetType {
 struct ConnectionTarget {
     bridge: Option<SocketAddr>,
     wg: Option<SocketAddr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct PingOptions {
+    #[serde(default, with = "humantime_serde::option")]
+    timeout: Option<Duration>,
+    ttl: Option<u32>,
+    seq_count: Option<u16>,
+    #[serde(deserialize_with = "validate_ping_interval")]
+    interval: Option<PingInterval>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct PingInterval {
+    min: u8,
+    max: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -202,6 +220,23 @@ where
     }
 }
 
+fn validate_ping_interval<'de, D>(deserializer: D) -> Result<Option<PingInterval>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<PingInterval> = Option::deserialize(deserializer)?;
+    match value {
+        Some(interval) => {
+            if interval.min < interval.max {
+                Ok(Some(interval))
+            } else {
+                Err(serde::de::Error::custom("min must be less than max"))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 impl From<SessionCapability> for session::Capability {
     fn from(val: SessionCapability) -> Self {
         match val {
@@ -215,20 +250,29 @@ impl Connection {
     pub fn default_bridge_capabilities() -> Vec<SessionCapability> {
         vec![SessionCapability::Segmentation, SessionCapability::Retransmission]
     }
+
     pub fn default_wg_capabilities() -> Vec<SessionCapability> {
         vec![SessionCapability::Segmentation]
     }
+
     pub fn default_bridge_target() -> SocketAddr {
         SocketAddr::from(([172, 30, 0, 1], 8000))
     }
+
     pub fn default_wg_target() -> SocketAddr {
         SocketAddr::from(([172, 30, 0, 1], 51820))
     }
+
     pub fn default_listen_host() -> String {
         ":1422".to_string()
     }
+
     pub fn default_session_timeout() -> Duration {
         Duration::from_secs(15)
+    }
+
+    pub fn default_ping_interval() -> PingInterval {
+        PingInterval { min: 5, max: 10 }
     }
 }
 
@@ -309,7 +353,22 @@ impl Config {
                 let params_wg = SessionParameters::new(&wg_target, &wg_caps);
                 let meta = v.meta.clone().unwrap_or_default();
 
-                let dest = ConnDestination::new(k, &path, &meta, &params_bridge, &params_wg);
+                let interval = connection
+                    .and_then(|c| c.ping.as_ref())
+                    .and_then(|p| p.interval.clone())
+                    .unwrap_or(Connection::default_ping_interval());
+
+                let def_opts = monitor::PingOptions::default();
+                let opts = connection
+                    .and_then(|c| c.ping.as_ref())
+                    .map(|p| monitor::PingOptions {
+                        timeout: p.timeout.unwrap_or(def_opts.timeout),
+                        ttl: p.ttl.unwrap_or(def_opts.ttl),
+                        seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
+                    })
+                    .unwrap_or(def_opts);
+                let ping_range = interval.min..interval.max;
+                let dest = ConnDestination::new(*k, path, meta, params_bridge, params_wg, ping_range, opts);
                 (*k, dest)
             })
             .collect()
@@ -377,6 +436,14 @@ target_type = "plain"
 capabilities = [ "segmentation" ]
 target = "127.0.0.1:51820"
 target_type = "sealed"
+
+[connection.ping]
+timeout = "4s"
+ttl = 5
+seq_count = 1
+[connection.ping.interval]
+min = 5
+max = 10
 
 [wireguard]
 listen_port = 51820
