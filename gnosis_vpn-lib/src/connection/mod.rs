@@ -421,7 +421,7 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                // assume session is closed when not found
+                // session was closed when not found
                 let not_found = matches!(res, Err(session::Error::SessionNotFound));
                 if !not_found {
                     res?;
@@ -524,7 +524,7 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                // assume session is closed when not found
+                // session was closed when not found
                 let not_found = matches!(res, Err(session::Error::SessionNotFound));
                 if !not_found {
                     res?;
@@ -549,8 +549,17 @@ impl Connection {
                 }
             }
             InternalEvent::UnregisterWg(res) => {
+                // check all result outcomes before consuming it
+                let port_closed = match res {
+                    // determine error here, consume res later after phase check
+                    Err(wg_client::Error::SocketConnect) => true,
+                    // proceed without error if registration was not found (we are already unregistered)
+                    Err(wg_client::Error::RegistrationNotFound) => false,
+                    Err(err) => return Err(InternalError::WgError(err)),
+                    Ok(_) => false,
+                };
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
-                    if matches!(res, Err(wg_client::Error::SocketConnect)) {
+                    if port_closed {
                         print_port_instructions(session.port);
                     }
                     res?;
