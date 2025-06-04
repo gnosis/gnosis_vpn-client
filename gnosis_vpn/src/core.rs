@@ -6,6 +6,7 @@ use thiserror::Error;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
+use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::state::{self, State};
 use gnosis_vpn_lib::wireguard::{self, WireGuard};
 
@@ -147,7 +148,7 @@ impl Core {
         tracing::debug!(%event, "handling event");
         match event {
             Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
-            Event::Disconnected => self.on_session_disconnect(),
+            Event::Disconnected(ping_has_worked) => self.on_session_disconnect(ping_has_worked),
             Event::DropConnection => self.on_drop_connection(),
         }
     }
@@ -212,8 +213,8 @@ impl Core {
                                 tracing::error!(error = %error, "failed to send ConnectWg event");
                             });
                         }
-                        Ok(connection::Event::Disconnected) => {
-                            _ = sender.send(Event::Disconnected).map_err(|error| {
+                        Ok(connection::Event::Disconnected(ping_has_worked)) => {
+                            _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
                                 tracing::error!(error = %error, "failed to send Disconnected event");
                             });
                         }
@@ -234,10 +235,6 @@ impl Core {
 
     fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
         tracing::debug!(?conninfo, "on session ready");
-        if self.session_connected {
-            tracing::info!("reconnecting previously connected session - might be connection hiccup");
-            return Ok(());
-        }
         self.session_connected = true;
         if self.wg_connected {
             tracing::debug!("WireGuard connection already established");
@@ -319,9 +316,13 @@ impl Core {
         }
     }
 
-    fn on_session_disconnect(&mut self) -> Result<(), Error> {
-        tracing::info!("session hiccup detected - reconnecting");
+    fn on_session_disconnect(&mut self, ping_has_worked: bool) -> Result<(), Error> {
         self.session_connected = false;
+        if ping_has_worked {
+            tracing::info!("session disconnected - might be connection hiccup");
+        } else {
+            tracing::warn!("session cannot send data");
+        }
         Ok(())
     }
 
@@ -378,7 +379,7 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
             Ok(wg) => Some(wg),
             Err(e) => {
                 tracing::error!(error = ?e, "could not determine WireGuard handling mode");
-                print_manual_instructions();
+                log_output::print_wg_manual_instructions();
                 return Err(Error::WireGuardManualModeMissing);
             }
         }
@@ -409,15 +410,4 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
         config,
         wg: wireguard,
     })
-}
-
-fn print_manual_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> If you intend to use manual WireGuard mode, please add your public key to the configuration file:
->>!!>> [wireguard]
->>!!>> manual_mode = {{ public_key = "<wg public key>" }}
-"#
-    );
 }
