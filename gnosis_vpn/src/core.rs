@@ -158,6 +158,11 @@ impl Core {
         self.config = cs.config;
         self.state = cs.state;
         self.wg = cs.wg;
+        if let Some(conn) = &mut self.connection {
+            tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
+            conn.dismantle();
+            self.disconnect_wg();
+        }
         Ok(())
     }
 
