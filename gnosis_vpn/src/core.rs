@@ -326,7 +326,6 @@ impl Core {
     }
 
     fn on_drop_connection(&mut self) -> Result<(), Error> {
-        tracing::debug!("on drop connection");
         self.session_connected = false;
         self.connection = None;
         if let Some(sender) = self.shutdown_sender.as_ref() {
