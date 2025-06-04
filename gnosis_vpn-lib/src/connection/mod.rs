@@ -370,7 +370,8 @@ impl Connection {
     fn act_event_up(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::OpenSession(res) => {
-                let listen_host_used = matches!(res, Err(session::Error::ListenHostAlreadyUsed));
+                check_entry_node(&res);
+                let listen_host_used = matches!(&res, Err(session::Error::ListenHostAlreadyUsed));
                 match self.phase_up.clone() {
                     PhaseUp::Ready => {
                         if listen_host_used {
@@ -416,9 +417,7 @@ impl Connection {
             }
             InternalEvent::RegisterWg(res) => {
                 if let PhaseUp::WgRegistration(session) = self.phase_up.clone() {
-                    if matches!(res, Err(wg_client::Error::SocketConnect)) {
-                        log_output::print_port_instructions(session.port, Protocol::Tcp);
-                    }
+                    check_port_closed(&res, session.port);
                     self.phase_up = PhaseUp::CloseBridgeSession(session, res?);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
@@ -427,9 +426,9 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                // session was closed when not found
-                let not_found = matches!(res, Err(session::Error::SessionNotFound));
-                if !not_found {
+                check_entry_node(&res);
+                let session_closed = matches!(&res, Err(session::Error::SessionNotFound));
+                if !session_closed {
                     res?;
                 }
                 match self.phase_up.clone() {
@@ -487,6 +486,7 @@ impl Connection {
                 }
             }
             InternalEvent::ListSessions(res) => {
+                check_entry_node(&res);
                 let sessions = res?;
                 let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
                 match (open_session, self.phase_up.clone()) {
@@ -524,7 +524,8 @@ impl Connection {
     fn act_event_down(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::OpenSession(res) => {
-                let listen_host_used = matches!(res, Err(session::Error::ListenHostAlreadyUsed));
+                check_entry_node(&res);
+                let listen_host_used = matches!(&res, Err(session::Error::ListenHostAlreadyUsed));
                 if let PhaseDown::PrepareBridgeSession(registration) = self.phase_down.clone() {
                     if listen_host_used {
                         tracing::warn!("Listen host already used - trying to close existing session");
@@ -540,9 +541,9 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                // session was closed when not found
-                let not_found = matches!(res, Err(session::Error::SessionNotFound));
-                if !not_found {
+                check_entry_node(&res);
+                let session_closed = matches!(&res, Err(session::Error::SessionNotFound));
+                if !session_closed {
                     res?;
                 }
                 match self.phase_down.clone() {
@@ -565,19 +566,8 @@ impl Connection {
                 }
             }
             InternalEvent::UnregisterWg(res) => {
-                // check all result outcomes before consuming it
-                let port_closed = match res {
-                    // determine error here, consume res later after phase check
-                    Err(wg_client::Error::SocketConnect) => true,
-                    // proceed without error if registration was not found (we are already unregistered)
-                    Err(wg_client::Error::RegistrationNotFound) => false,
-                    Err(err) => return Err(InternalError::WgError(err)),
-                    Ok(_) => false,
-                };
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
-                    if port_closed {
-                        log_output::print_port_instructions(session.port, Protocol::Tcp);
-                    }
+                    check_port_closed(&res, session.port);
                     res?;
                     self.phase_down = PhaseDown::CloseBridgeSession(session);
                     self.backoff = BackoffState::Inactive;
@@ -587,6 +577,7 @@ impl Connection {
                 }
             }
             InternalEvent::ListSessions(res) => {
+                check_entry_node(&res);
                 let sessions = res?;
                 let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
                 match (open_session, self.phase_down.clone()) {
@@ -810,5 +801,20 @@ impl Display for InternalEvent {
             InternalEvent::Ping(res) => write!(f, "Ping({:?})", res),
             InternalEvent::ListSessions(res) => write!(f, "ListSessions({:?})", res),
         }
+    }
+}
+
+fn check_port_closed<R>(res: &Result<R, wg_client::Error>, port: u16) {
+    if let Err(wg_client::Error::SocketConnect) = res {
+        log_output::print_port_instructions(port, Protocol::Tcp);
+    }
+}
+
+fn check_entry_node<R>(res: &Result<R, session::Error>) {
+    match res {
+        Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
+        Err(session::Error::SocketConnect) => log_output::print_node_port_instructions(),
+        Err(session::Error::Timeout) => log_output::print_node_ip_instructions(),
+        _ => (),
     }
 }

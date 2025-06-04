@@ -66,6 +66,12 @@ pub enum Error {
     ListenHostAlreadyUsed,
     #[error("Session not found")]
     SessionNotFound,
+    #[error("Unauthorized")]
+    Unauthorized,
+    #[error("Error connecting on specified port")]
+    SocketConnect,
+    #[error("Timed out during connecting")]
+    Timeout,
 }
 
 impl Target {
@@ -179,16 +185,12 @@ impl Session {
             .json(&json)
             .timeout(open_session.entry_node.session_timeout)
             .headers(headers)
-            .send()?
+            .send()
+            // connection error checks happen before response
+            .map_err(connect_errors)?
             .error_for_status()
             // response error can only be mapped after sending
-            .map_err(|err| {
-                if err.status() == Some(StatusCode::CONFLICT) {
-                    Error::ListenHostAlreadyUsed
-                } else {
-                    err.into()
-                }
-            })?
+            .map_err(open_response_errors)?
             .json::<Self>()?;
         Ok(resp)
     }
@@ -203,10 +205,12 @@ impl Session {
             .delete(url)
             .timeout(close_session.entry_node.session_timeout)
             .headers(headers)
-            .send()?
+            .send()
+            // connection error checks happen before response
+            .map_err(connect_errors)?
             .error_for_status()
             // response error checks happen after response
-            .map_err(response_errors)?;
+            .map_err(close_response_errors)?;
         Ok(())
     }
 
@@ -221,8 +225,12 @@ impl Session {
             .get(url)
             .timeout(list_session.entry_node.session_timeout)
             .headers(headers)
-            .send()?
-            .error_for_status()?
+            .send()
+            // connection error checks happen before response
+            .map_err(connect_errors)?
+            .error_for_status()
+            // response error checks happen after response
+            .map_err(response_errors)?
             .json::<Vec<Session>>()?;
 
         Ok(resp)
@@ -233,9 +241,39 @@ impl Session {
     }
 }
 
-fn response_errors(err: reqwest::Error) -> Error {
+fn open_response_errors(err: reqwest::Error) -> Error {
+    if err.status() == Some(StatusCode::CONFLICT) {
+        Error::ListenHostAlreadyUsed
+    } else if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
+        Error::Unauthorized
+    } else {
+        err.into()
+    }
+}
+
+fn close_response_errors(err: reqwest::Error) -> Error {
     if err.status() == Some(StatusCode::NOT_FOUND) {
         Error::SessionNotFound
+    } else if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
+        Error::Unauthorized
+    } else {
+        err.into()
+    }
+}
+
+fn response_errors(err: reqwest::Error) -> Error {
+    if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
+        Error::Unauthorized
+    } else {
+        err.into()
+    }
+}
+
+fn connect_errors(err: reqwest::Error) -> Error {
+    if err.is_connect() {
+        Error::SocketConnect
+    } else if err.is_timeout() {
+        Error::Timeout
     } else {
         err.into()
     }
