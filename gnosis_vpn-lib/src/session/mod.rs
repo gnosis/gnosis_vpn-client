@@ -205,14 +205,8 @@ impl Session {
             .headers(headers)
             .send()?
             .error_for_status()
-            // response error can only be mapped after sending
-            .map_err(|err| {
-                if err.status() == Some(StatusCode::NOT_FOUND) {
-                    Error::SessionNotFound
-                } else {
-                    err.into()
-                }
-            })?;
+            // response error checks happen after response
+            .map_err(response_errors)?;
         Ok(())
     }
 
@@ -236,6 +230,14 @@ impl Session {
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {
         sessions.iter().any(|entry| entry == self)
+    }
+}
+
+fn response_errors(err: reqwest::Error) -> Error {
+    if err.status() == Some(StatusCode::NOT_FOUND) {
+        Error::SessionNotFound
+    } else {
+        err.into()
     }
 }
 

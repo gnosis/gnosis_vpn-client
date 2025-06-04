@@ -33,6 +33,8 @@ pub enum Error {
     SocketConnect,
     #[error("Invalid port")]
     InvalidPort,
+    #[error("Registration not found")]
+    RegistrationNotFound,
 }
 
 impl Input {
@@ -68,8 +70,8 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
         .timeout(std::time::Duration::from_secs(15))
         .headers(headers)
         .send()
-        // connection error needs to be mapped before response
-        .map_err(map_socket_connect_error)?
+        // connection error checks happen before response
+        .map_err(connect_errors)?
         .error_for_status()?
         .json::<Registration>()?;
 
@@ -89,15 +91,26 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
         .timeout(std::time::Duration::from_secs(10))
         .headers(headers)
         .send()
-        // connection error needs to be mapped before response
-        .map_err(map_socket_connect_error)?
-        .error_for_status()?;
+        // connection error checks happen before response
+        .map_err(connect_errors)?
+        .error_for_status()
+        // response error checks happen after response
+        .map_err(response_errors)?;
+
     Ok(())
 }
 
-fn map_socket_connect_error(err: reqwest::Error) -> Error {
+fn connect_errors(err: reqwest::Error) -> Error {
     if err.is_connect() {
         Error::SocketConnect
+    } else {
+        err.into()
+    }
+}
+
+fn response_errors(err: reqwest::Error) -> Error {
+    if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+        Error::RegistrationNotFound
     } else {
         err.into()
     }
