@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::entry_node::EntryNode;
 use crate::log_output;
 use crate::monitor;
-use crate::session::{self, Session};
+use crate::session::{self, Protocol, Session};
 use crate::wg_client::{self, Registration};
 
 pub use destination::{Destination, SessionParameters};
@@ -342,12 +342,12 @@ impl Connection {
         tracing::debug!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
             PhaseUp::Ready => self.open_session(self.bridge_session_params()),
-            PhaseUp::FixBridgeSession => self.list_sessions(&session::Protocol::Tcp),
+            PhaseUp::FixBridgeSession => self.list_sessions(&Protocol::Tcp),
             PhaseUp::FixBridgeSessionClosing(session) => self.close_session(&session),
             PhaseUp::WgRegistration(session) => self.register_wg(&session),
             PhaseUp::CloseBridgeSession(session, _registration) => self.close_session(&session),
             PhaseUp::PrepareMainSession(_registration) => self.open_session(self.main_session_params()),
-            PhaseUp::FixMainSession(_registration) => self.list_sessions(&session::Protocol::Udp),
+            PhaseUp::FixMainSession(_registration) => self.list_sessions(&Protocol::Udp),
             PhaseUp::FixMainSessionClosing(session, _registration) => self.close_session(&session),
             PhaseUp::MonitorMainSession(_session, _registration, _since, _ping_has_worked) => self.ping(),
             PhaseUp::MainSessionBroken(session, _registration) => self.close_session(&session),
@@ -359,7 +359,7 @@ impl Connection {
         match self.phase_down.clone() {
             PhaseDown::CloseMainSession(session, _since, _registration) => self.close_session(&session),
             PhaseDown::PrepareBridgeSession(_registration) => self.open_session(self.bridge_session_params()),
-            PhaseDown::FixBridgeSession(_registration) => self.list_sessions(&session::Protocol::Tcp),
+            PhaseDown::FixBridgeSession(_registration) => self.list_sessions(&Protocol::Tcp),
             PhaseDown::FixBridgeSessionClosing(session, _registration) => self.close_session(&session),
             PhaseDown::WgUnregistration(session, _registration) => self.unregister_wg(&session),
             PhaseDown::CloseBridgeSession(session) => self.close_session(&session),
@@ -417,7 +417,7 @@ impl Connection {
             InternalEvent::RegisterWg(res) => {
                 if let PhaseUp::WgRegistration(session) = self.phase_up.clone() {
                     if matches!(res, Err(wg_client::Error::SocketConnect)) {
-                        print_port_instructions(session.port);
+                        log_output::print_port_instructions(session.port, Protocol::Tcp);
                     }
                     self.phase_up = PhaseUp::CloseBridgeSession(session, res?);
                     self.backoff = BackoffState::Inactive;
@@ -474,6 +474,9 @@ impl Connection {
                         self.phase_up.clone()
                     {
                         tracing::warn!(%session, %ping_has_worked, "Session ping failed");
+                        if !ping_has_worked {
+                            log_output::print_port_instructions(session.port, Protocol::Udp);
+                        }
                         self.phase_up = PhaseUp::MainSessionBroken(session, registration);
                         self.sender
                             .send(Event::Disconnected(ping_has_worked))
@@ -573,7 +576,7 @@ impl Connection {
                 };
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
                     if port_closed {
-                        print_port_instructions(session.port);
+                        log_output::print_port_instructions(session.port, Protocol::Tcp);
                     }
                     res?;
                     self.phase_down = PhaseDown::CloseBridgeSession(session);
@@ -652,7 +655,7 @@ impl Connection {
         r
     }
 
-    fn list_sessions(&mut self, protocol: &session::Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn list_sessions(&mut self, protocol: &Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
         let params = session::ListSession::new(&self.entry_node, protocol);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -808,17 +811,4 @@ impl Display for InternalEvent {
             InternalEvent::ListSessions(res) => write!(f, "ListSessions({:?})", res),
         }
     }
-}
-
-fn print_port_instructions(port: u16) {
-    tracing::error!(
-        r#"
-
->>!!>> It seems your node isn’t exposing the configured internal_connection_port ({}).
->>!!>> Please expose that port for both TCP and UDP.
->>!!>> Additionally add port mappings in your docker-compose.yml or to your docker run statement.
->>!!>> Alternatively, update your configuration file to use a different port.
-"#,
-        port
-    );
 }
