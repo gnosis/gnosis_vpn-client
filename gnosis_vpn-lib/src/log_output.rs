@@ -53,8 +53,7 @@ pub fn print_node_port_instructions() {
     tracing::error!(
         r#"
 
->>!!>> Unable to connect to HOPRD node API.
->>!!>> It seems you provided an invalid endpoint port.
+>>!!>> Unable to connect to HOPRD node API due to invalid endpoint port.
 >>!!>> Please update your endpoint with the correct API port in the configuration file:
 >>!!>> [hoprd_node]
 >>!!>> endpoint = "<your HOPRD node endpoint>"
@@ -62,13 +61,13 @@ pub fn print_node_port_instructions() {
     );
 }
 
-pub fn print_node_ip_instructions() {
+pub fn print_node_timeout_instructions() {
     tracing::error!(
         r#"
 
->>!!>> Unable to connect to HOPRD node API.
->>!!>> It seems you provided an invalid endpoint IP address.
->>!!>> Please update your endpoint with the correct API IP in the configuration file:
+>>!!>> Unable to connect to HOPRD node API due to invalid IP address or offline status.
+>>!!>> Please ensure you are connected to the internet and that your HOPRD node is online.
+>>!!>> In case of an invalid IP address please update your endpoint with the correct API IP in the configuration file:
 >>!!>> [hoprd_node]
 >>!!>> endpoint = "<your HOPRD node endpoint>"
 "#

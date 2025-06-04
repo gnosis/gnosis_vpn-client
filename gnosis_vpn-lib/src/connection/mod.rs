@@ -814,7 +814,7 @@ fn check_entry_node<R>(res: &Result<R, session::Error>) {
     match res {
         Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
         Err(session::Error::SocketConnect) => log_output::print_node_port_instructions(),
-        Err(session::Error::Timeout) => log_output::print_node_ip_instructions(),
+        Err(session::Error::Timeout) => log_output::print_node_timeout_instructions(),
         _ => (),
     }
 }
