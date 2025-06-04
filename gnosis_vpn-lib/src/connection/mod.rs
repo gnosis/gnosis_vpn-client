@@ -21,7 +21,9 @@ pub mod destination;
 #[derive(Clone, Debug)]
 pub enum Event {
     Connected(ConnectInfo),
-    Disconnected,
+    /// Event indicating that the connection has been established and is ready for use.
+    /// Boolean flag indicated if it has ever worked before, true meaning it has worked at least once.
+    Disconnected(bool),
     Dismantled,
 }
 
@@ -50,7 +52,7 @@ enum PhaseUp {
     PrepareMainSession(Registration),
     FixMainSession(Registration),
     FixMainSessionClosing(Session, Registration),
-    MonitorMainSession(Session, SystemTime, Registration),
+    MonitorMainSession(Session, Registration, SystemTime, bool),
     MainSessionBroken(Session, Registration),
 }
 
@@ -347,7 +349,7 @@ impl Connection {
             PhaseUp::PrepareMainSession(_registration) => self.open_session(self.main_session_params()),
             PhaseUp::FixMainSession(_registration) => self.list_sessions(&session::Protocol::Udp),
             PhaseUp::FixMainSessionClosing(session, _registration) => self.close_session(&session),
-            PhaseUp::MonitorMainSession(_session, _since, _registration) => self.ping(),
+            PhaseUp::MonitorMainSession(_session, _registration, _since, _ping_has_worked) => self.ping(),
             PhaseUp::MainSessionBroken(session, _registration) => self.close_session(&session),
         }
     }
@@ -389,8 +391,12 @@ impl Connection {
                             return Ok(());
                         };
                         let session = res?;
-                        self.phase_up =
-                            PhaseUp::MonitorMainSession(session.clone(), SystemTime::now(), registration.clone());
+                        self.phase_up = PhaseUp::MonitorMainSession(
+                            session.clone(),
+                            registration.clone(),
+                            SystemTime::now(),
+                            false,
+                        );
                         self.backoff = BackoffState::Inactive;
                         let host = self
                             .entry_node
@@ -454,17 +460,24 @@ impl Connection {
             {
                 #[allow(clippy::collapsible_else_if)]
                 if res.is_ok() {
-                    if let PhaseUp::MonitorMainSession(session, since, _registration) = self.phase_up.clone() {
+                    if let PhaseUp::MonitorMainSession(session, registration, since, _ping_has_worked) =
+                        self.phase_up.clone()
+                    {
                         tracing::info!(%session, "session verified open for {}", log_output::elapsed(&since));
+                        self.phase_up = PhaseUp::MonitorMainSession(session, registration, since, true);
                         Ok(())
                     } else {
                         Err(InternalError::UnexpectedPhase)
                     }
                 } else {
-                    if let PhaseUp::MonitorMainSession(session, _since, registration) = self.phase_up.clone() {
-                        tracing::warn!(%session, "Session ping failed");
+                    if let PhaseUp::MonitorMainSession(session, registration, _since, ping_has_worked) =
+                        self.phase_up.clone()
+                    {
+                        tracing::warn!(%session, %ping_has_worked, "Session ping failed");
                         self.phase_up = PhaseUp::MainSessionBroken(session, registration);
-                        self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
+                        self.sender
+                            .send(Event::Disconnected(ping_has_worked))
+                            .map_err(InternalError::SendError)
                     } else {
                         Err(InternalError::UnexpectedPhase)
                     }
@@ -726,12 +739,13 @@ impl Display for PhaseUp {
             PhaseUp::FixMainSessionClosing(session, registration) => {
                 write!(f, "FixMainSessionClosing({}, {})", session, registration)
             }
-            PhaseUp::MonitorMainSession(session, since, registration) => write!(
+            PhaseUp::MonitorMainSession(session, registration, since, ping_has_worked) => write!(
                 f,
-                "MonitorMainSession({}, since {}, {})",
+                "MonitorMainSession({}, since {}, {}, ping_has_worked: {})",
                 session,
                 log_output::elapsed(since),
-                registration
+                registration,
+                ping_has_worked
             ),
             PhaseUp::MainSessionBroken(session, registration) => {
                 write!(f, "MainSessionBroken({}, {})", session, registration)
@@ -775,7 +789,7 @@ impl From<PhaseUp> for PhaseDown {
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSessionClosing(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::MonitorMainSession(session, since, registration) => {
+            PhaseUp::MonitorMainSession(session, registration, since, _ping_has_worked) => {
                 PhaseDown::CloseMainSession(session, since, registration)
             }
             PhaseUp::MainSessionBroken(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
