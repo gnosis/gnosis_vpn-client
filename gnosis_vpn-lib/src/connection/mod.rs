@@ -59,6 +59,8 @@ enum PhaseUp {
 enum PhaseDown {
     CloseMainSession(Session, SystemTime, Registration),
     PrepareBridgeSession(Registration),
+    FixBridgeSession(Registration),
+    FixBridgeSessionClosing(Session, Registration),
     WgUnregistration(Session, Registration),
     CloseBridgeSession(Session),
     Retired,
@@ -355,6 +357,8 @@ impl Connection {
         match self.phase_down.clone() {
             PhaseDown::CloseMainSession(session, _since, _registration) => self.close_session(&session),
             PhaseDown::PrepareBridgeSession(_registration) => self.open_session(self.bridge_session_params()),
+            PhaseDown::FixBridgeSession(_registration) => self.list_sessions(&session::Protocol::Tcp),
+            PhaseDown::FixBridgeSessionClosing(session, _registration) => self.close_session(&session),
             PhaseDown::WgUnregistration(session, _registration) => self.unregister_wg(&session),
             PhaseDown::CloseBridgeSession(session) => self.close_session(&session),
             PhaseDown::Retired => self.shutdown(),
@@ -497,16 +501,22 @@ impl Connection {
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
-            InternalEvent::UnregisterWg(res) => Err(InternalError::UnexpectedEvent(InternalEvent::UnregisterWg(res))),
+            InternalEvent::UnregisterWg(_) => Err(InternalError::UnexpectedEvent(event)),
         }
     }
 
     fn act_event_down(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::OpenSession(res) => {
-                let session = res?;
+                let listen_host_used = matches!(res, Err(session::Error::ListenHostAlreadyUsed));
                 if let PhaseDown::PrepareBridgeSession(registration) = self.phase_down.clone() {
-                    self.phase_down = PhaseDown::WgUnregistration(session, registration);
+                    if listen_host_used {
+                        tracing::warn!("Listen host already used - trying to close existing session");
+                        self.phase_down = PhaseDown::FixBridgeSession(registration);
+                        self.backoff = BackoffState::Inactive;
+                        return Ok(());
+                    };
+                    self.phase_down = PhaseDown::WgUnregistration(res?, registration);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
                 } else {
@@ -514,7 +524,11 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                res?;
+                // assume session is closed when not found
+                let not_found = matches!(res, Err(session::Error::SessionNotFound));
+                if !not_found {
+                    res?;
+                }
                 match self.phase_down.clone() {
                     PhaseDown::CloseMainSession(_session, _since, registration) => {
                         self.phase_down = PhaseDown::PrepareBridgeSession(registration);
@@ -523,6 +537,11 @@ impl Connection {
                     }
                     PhaseDown::CloseBridgeSession(_session) => {
                         self.phase_down = PhaseDown::Retired;
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    PhaseDown::FixBridgeSessionClosing(_session, registration) => {
+                        self.phase_down = PhaseDown::PrepareBridgeSession(registration);
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
@@ -542,7 +561,26 @@ impl Connection {
                     Err(InternalError::UnexpectedPhase)
                 }
             }
-            evt => Err(InternalError::UnexpectedEvent(evt)),
+            InternalEvent::ListSessions(res) => {
+                let sessions = res?;
+                let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
+                match (open_session, self.phase_down.clone()) {
+                    (Some(session), PhaseDown::FixBridgeSession(reg)) => {
+                        tracing::info!(%session, "Found conflicting session - closing");
+                        self.phase_down = PhaseDown::FixBridgeSessionClosing(session.clone(), reg);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    (None, PhaseDown::FixBridgeSession(reg)) => {
+                        tracing::info!("No conflicting session found - proceed as normal");
+                        self.phase_down = PhaseDown::PrepareBridgeSession(reg);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    _ => Err(InternalError::UnexpectedPhase),
+                }
+            }
+            InternalEvent::Ping(_) | InternalEvent::RegisterWg(_) => Err(InternalError::UnexpectedEvent(event)),
         }
     }
 
@@ -704,6 +742,10 @@ impl Display for PhaseDown {
                 registration
             ),
             PhaseDown::PrepareBridgeSession(registration) => write!(f, "PrepareBridgeSession({})", registration),
+            PhaseDown::FixBridgeSession(registration) => write!(f, "FixBridgeSession({})", registration),
+            PhaseDown::FixBridgeSessionClosing(session, registration) => {
+                write!(f, "FixBridgeSessionClosing({}, {})", session, registration)
+            }
             PhaseDown::WgUnregistration(session, registration) => {
                 write!(f, "WgUnregistration({}, {})", session, registration)
             }
