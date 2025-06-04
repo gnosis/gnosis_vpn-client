@@ -37,6 +37,10 @@ fn truncate_after_second_space(s: &str) -> &str {
 }
 
 pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
+    let prot_str = match protocol {
+        session::Protocol::Udp => "UDP",
+        session::Protocol::Tcp => "TCP",
+    };
     tracing::error!(
         r#"
 
@@ -46,7 +50,7 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
 >>!!>> Alternatively, update your configuration file to use a different port.
 "#,
         port,
-        protocol
+        prot_str,
     );
 }
 
