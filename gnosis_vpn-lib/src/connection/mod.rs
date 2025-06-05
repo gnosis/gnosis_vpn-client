@@ -117,7 +117,7 @@ enum InternalError {
     #[error("Channel send error: {0}")]
     SendError(#[from] crossbeam_channel::SendError<Event>),
     #[error("Unexpected event: {0}")]
-    UnexpectedEvent(InternalEvent),
+    UnexpectedEvent(Box<InternalEvent>),
 }
 
 impl Connection {
@@ -486,7 +486,7 @@ impl Connection {
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
-            InternalEvent::UnregisterWg(_) => Err(InternalError::UnexpectedEvent(event)),
+            InternalEvent::UnregisterWg(_) => Err(InternalError::UnexpectedEvent(Box::new(event))),
         }
     }
 
@@ -565,7 +565,9 @@ impl Connection {
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
-            InternalEvent::Ping(_) | InternalEvent::RegisterWg(_) => Err(InternalError::UnexpectedEvent(event)),
+            InternalEvent::Ping(_) | InternalEvent::RegisterWg(_) => {
+                Err(InternalError::UnexpectedEvent(Box::new(event)))
+            }
         }
     }
 
