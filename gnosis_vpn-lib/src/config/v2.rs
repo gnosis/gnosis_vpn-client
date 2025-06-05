@@ -7,10 +7,10 @@ use std::vec::Vec;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 
+use crate::address::Address;
 use crate::connection::{Destination as ConnDestination, SessionParameters};
-use crate::entry_node::EntryNode;
+use crate::entry_node::{APIVersion, EntryNode};
 use crate::monitor;
-use crate::peer_id::PeerId;
 use crate::session;
 use crate::wireguard::config::{Config as WireGuardConfig, ManualMode as WireGuardManualMode};
 
@@ -20,7 +20,7 @@ const MAX_HOPS: u8 = 3;
 pub struct Config {
     pub version: u8,
     hoprd_node: HoprdNode,
-    destinations: Option<HashMap<PeerId, Destination>>,
+    destinations: Option<HashMap<Address, Destination>>,
     connection: Option<Connection>,
     wireguard: Option<WireGuard>,
 }
@@ -30,6 +30,7 @@ struct HoprdNode {
     endpoint: Url,
     api_token: String,
     internal_connection_port: Option<u16>,
+    api_version: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -41,7 +42,7 @@ struct Destination {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 enum DestinationPath {
     #[serde(alias = "intermediates")]
-    Intermediates(Vec<PeerId>),
+    Intermediates(Vec<Address>),
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
 }
@@ -185,17 +186,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
-                for (peer_id, v) in destinations.iter() {
+                for (address, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _v) in dest.iter() {
                             if k == "meta" || k == "path" {
                                 continue;
                             }
-                            wrong_keys.push(format!("destinations.{}.{}", peer_id, k));
+                            wrong_keys.push(format!("destinations.{}.{}", address, k));
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("destinations.{}", peer_id));
+                    wrong_keys.push(format!("destinations.{}", address));
                 }
             }
             continue;
@@ -276,6 +277,12 @@ impl Connection {
     }
 }
 
+impl EntryNode {
+    pub fn default_api_version() -> APIVersion {
+        APIVersion::V4
+    }
+}
+
 impl Config {
     pub fn entry_node(&self) -> EntryNode {
         let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
@@ -290,15 +297,24 @@ impl Config {
             .as_ref()
             .and_then(|c| c.session_timeout)
             .unwrap_or(Connection::default_session_timeout());
+        let api_version = self
+            .hoprd_node
+            .api_version
+            .map(|v| match v {
+                4 => APIVersion::V4,
+                _ => EntryNode::default_api_version(),
+            })
+            .unwrap_or(EntryNode::default_api_version());
         EntryNode::new(
-            &self.hoprd_node.endpoint,
-            &self.hoprd_node.api_token,
-            &listen_host,
-            &session_timeout,
+            self.hoprd_node.endpoint.clone(),
+            self.hoprd_node.api_token.clone(),
+            listen_host,
+            session_timeout,
+            api_version,
         )
     }
 
-    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
         let config_dests = self.destinations.clone().unwrap_or_default();
         let connection = self.connection.as_ref();
         config_dests
@@ -412,17 +428,17 @@ internal_connection_port = 1422
 
 [destinations]
 
-[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 meta = { location = "Germany" }
-path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
+[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
 meta = { location = "USA" }
-path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ" ] }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
+[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
 meta = { location = "Spain" }
-path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 listen_host = "0.0.0.0:1422"
