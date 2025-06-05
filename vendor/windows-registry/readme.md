@@ -10,7 +10,7 @@ Start by adding the following to your Cargo.toml file:
 
 ```toml
 [dependencies.windows-registry]
-version = "0.3"
+version = "0.5"
 ```
 
 Read and write registry keys and values as needed:
@@ -26,6 +26,30 @@ fn main() -> Result<()> {
 
     println!("{}", key.get_u32("number")?);
     println!("{}", key.get_string("name")?);
+
+    Ok(())
+}
+```
+
+Use the `options()` method for even more control:
+
+```rust,no_run
+use windows_registry::*;
+
+fn main() -> Result<()> {
+    let tx = Transaction::new()?;
+
+    let key = CURRENT_USER
+        .options()
+        .read()
+        .write()
+        .create()
+        .transaction(&tx)
+        .open("software\\windows-rs")?;
+
+    key.set_u32("name", 123)?;
+
+    tx.commit()?;
 
     Ok(())
 }

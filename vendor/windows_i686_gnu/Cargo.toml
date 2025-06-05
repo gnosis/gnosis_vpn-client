@@ -11,12 +11,11 @@
 
 [package]
 edition = "2021"
-rust-version = "1.60"
+rust-version = "1.56"
 name = "windows_i686_gnu"
-version = "0.53.0"
+version = "0.52.6"
 authors = ["Microsoft"]
 build = "build.rs"
-autolib = false
 autobins = false
 autoexamples = false
 autotests = false
