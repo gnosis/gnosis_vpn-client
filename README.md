@@ -46,7 +46,7 @@ Run the service
 Instruct the service via the control application `./gnosis_vpn-ctl` from a separate terminal
 
 - check available destinations with `./gnosis_vpn-ctl status`
-- connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination peer id>`
+- connect to a destination of your choice by running `./gnosis_vpn-ctl connect <destination address>`
 
 Once a VPN tunnel was created, configure your browsers proxy settings
 
@@ -73,7 +73,7 @@ Run the service and provide a unix communication socket:
 Instruct the service via the control application `./gnosis_vpn-ctl` from a separate terminal
 
 - check available destinations with `./gnosis_vpn-ctl -s ./gnosis_vpn.sock status`
-- connect to a destination of your choice by running `./gnosis_vpn-ctl -s ./gnosis_vpn.sock connect <destination peer id>`
+- connect to a destination of your choice by running `./gnosis_vpn-ctl -s ./gnosis_vpn.sock connect <destination address>`
 
 Once a HOPRD tunnel was created, configure WireGuard manually
 
