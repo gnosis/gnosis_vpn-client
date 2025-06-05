@@ -18,9 +18,15 @@ mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
+    pub destination: Address,
+    #[serde(rename = "forwardPath")]
+    pub forward_path: Path,
     pub ip: String,
+    pub mtu: u16,
     pub port: u16,
     pub protocol: Protocol,
+    #[serde(rename = "returnPath")]
+    pub return_path: Path,
     pub target: String,
 }
 
@@ -174,7 +180,8 @@ impl Session {
                 json!({ "IntermediatePath": ids.clone() })
             }
         };
-        json.insert("path".to_string(), path_json);
+        json.insert("forwardPath".to_string(), path_json.clone());
+        json.insert("returnPath".to_string(), path_json);
         json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));

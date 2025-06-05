@@ -25,7 +25,7 @@ pub fn elapsed(timestamp: &SystemTime) -> String {
 
 pub fn address(address: &Address) -> String {
     let str = address.to_string();
-    format!("{}..{}", &str[..6], &str[16..])
+    format!("{}..{}", &str[..6], &str[38..])
 }
 
 fn truncate_after_second_space(s: &str) -> &str {

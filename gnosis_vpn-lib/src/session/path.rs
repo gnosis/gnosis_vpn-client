@@ -1,10 +1,12 @@
+use serde::{Deserialize, Serialize};
+
 use std::cmp::PartialEq;
 use std::fmt::{self, Display};
 
 use crate::address::Address;
 use crate::log_output;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Path {
     Hops(u8),
     Intermediates(Vec<Address>),
