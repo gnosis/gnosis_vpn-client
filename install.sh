@@ -554,32 +554,33 @@ public_key = \"${WG_PUBLIC_KEY}\"
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
         destinations='[destinations]
 
-[destinations.12D3KooWDNcj8phBXj9ZJkAxSmjbwNUzEWtSsg6K6BeuKCAyZuCU]
+[destinations.0x7220CfE91F369bfE79F883c2891e97407D7a4D48]
 meta = { location = "USA", state = "Iowa" }
-path = { intermediates = [ "12D3KooWRT74aKgHF36HwqvvxQiLCL1GVFRSv6eEFQ71wtY2vVvt" ] }
+path = { intermediates = [ "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" ] }
 
-[destinations.12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ]
+[destinations.0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA]
 meta = { location = "UK", city = "London" }
-path = { intermediates = [ "12D3KooWC69bPoKYzBYP95GXAumqeMKqxcrtb2vFYLuf4N16R2Lk" ] }
+path = { intermediates = [ "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" ] }
 '
     else
         destinations='[destinations]
 
-[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 meta = { location = "Germany" }
-path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
+[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
 meta = { location = "USA" }
-path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ" ] }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
+[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
 meta = { location = "Spain" }
-path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
+<<<<<<< HEAD
 
-[destinations.12D3KooWJVhifJNJQPDSYz5aC8hWEyFdgB3xdJyKYQoPYLn4Svv8]
+[destinations.0x9454fc1F54DC7682124BA2d153345f4F6b404A79]
 meta = { location = "India" }
-path = { intermediates = [ "12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h" ] }
+path = { intermediates = [ "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" ] }
 '
     fi
 
@@ -610,12 +611,12 @@ print_outro() {
     echo -e "  - Check client status: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl status${Color_Off}"
     echo "You can connect to any of those locations:"
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        echo -e "  - Connect to London: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ${Color_Off}"
-        echo -e "  - Connect to Iowa: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWDNcj8phBXj9ZJkAxSmjbwNUzEWtSsg6K6BeuKCAyZuCU${Color_Off}"
+        echo -e "  - Connect to London: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA${Color_Off}"
+        echo -e "  - Connect to Iowa: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0x7220CfE91F369bfE79F883c2891e97407D7a4D48${Color_Off}"
     else
-        echo -e "  - Connect to Spain: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL${Color_Off}"
-        echo -e "  - Connect to USA: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5${Color_Off}"
-        echo -e "  - Connect to Germany: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7${Color_Off}"
+        echo -e "  - Connect to Spain: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254${Color_Off}"
+        echo -e "  - Connect to USA: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0xa5Ca174Ef94403d6162a969341a61baeA48F57F8${Color_Off}"
+        echo -e "  - Connect to Germany: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0xD9c11f07BfBC1914877d7395459223aFF9Dc2739${Color_Off}"
     fi
     echo ""
     echo "Configuration file is located at: ${INSTALL_FOLDER}/config.toml"
