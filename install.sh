@@ -255,7 +255,7 @@ fetch_version_tag() {
         echo "Verifying provided version tag: ${VERSION_TAG}"
         curl --fail -L --progress-bar \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/tags/${VERSION_TAG}" ||
+            "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/tags/${VERSION_TAG}" &>/dev/null ||
             (
                 echo "Error: Provided version tag '${VERSION_TAG}' is not valid or does not exist."
                 exit 1
