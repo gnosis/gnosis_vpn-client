@@ -537,7 +537,10 @@ impl Connection {
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
                     check_port_closed(&res, session.port);
-                    res?;
+                    let already_unregistered = matches!(&res, Err(wg_client::Error::RegistrationNotFound));
+                    if !already_unregistered {
+                        res?
+                    }
                     self.phase_down = PhaseDown::CloseBridgeSession(session);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
