@@ -537,7 +537,7 @@ impl Connection {
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
                     check_port_closed(&res, session.port);
-                    let already_unregistered = matches!(&res, Err(wg_client::Error::RegistrationNotFound));
+                    let already_unregistered = matches!(&res, Err(gvpn_client::Error::RegistrationNotFound));
                     if !already_unregistered {
                         res?;
                     }
