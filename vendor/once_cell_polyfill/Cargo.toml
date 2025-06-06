@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.70.0"
 name = "once_cell_polyfill"
-version = "1.70.1"
+version = "1.70.0"
 build = false
 include = [
     "build.rs",
@@ -87,7 +87,8 @@ default = []
 name = "once_cell_polyfill"
 path = "src/lib.rs"
 
-[dependencies]
+[dependencies.once_cell]
+version = "1.17.2"
 
 [lints.clippy]
 bool_assert_comparison = "allow"

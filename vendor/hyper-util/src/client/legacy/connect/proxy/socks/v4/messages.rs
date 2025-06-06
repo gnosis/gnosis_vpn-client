@@ -101,7 +101,7 @@ impl TryFrom<&mut BytesMut> for Response {
             SocketAddrV4::new(ip.into(), port)
         };
 
-        Ok(Self(status))
+        return Ok(Self(status));
     }
 }
 

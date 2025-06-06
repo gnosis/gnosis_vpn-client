@@ -365,7 +365,7 @@ impl CharAccumulator for Utf8Parser {
 struct VtUtf8Receiver<'a>(&'a mut Option<char>);
 
 #[cfg(feature = "utf8")]
-impl utf8::Receiver for VtUtf8Receiver<'_> {
+impl<'a> utf8::Receiver for VtUtf8Receiver<'a> {
     fn codepoint(&mut self, c: char) {
         *self.0 = Some(c);
     }
@@ -436,7 +436,3 @@ pub trait Perform {
     /// subsequent characters were ignored.
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
 }
-
-#[doc = include_str!("../README.md")]
-#[cfg(doctest)]
-pub struct ReadmeDoctests;

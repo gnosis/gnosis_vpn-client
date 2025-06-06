@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.63.0"
 name = "openssl"
-version = "0.10.73"
+version = "0.10.72"
 authors = ["Steven Fackler <sfackler@gmail.com>"]
 build = "build.rs"
 autolib = false
@@ -62,7 +62,7 @@ version = "2.2.1"
 version = "1.0"
 
 [dependencies.ffi]
-version = "0.9.109"
+version = "0.9.107"
 package = "openssl-sys"
 
 [dependencies.foreign-types]

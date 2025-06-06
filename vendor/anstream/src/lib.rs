@@ -84,7 +84,3 @@ pub fn stderr() -> Stderr {
 
 /// Selection for overriding color output
 pub use colorchoice::ColorChoice;
-
-#[doc = include_str!("../README.md")]
-#[cfg(doctest)]
-pub struct ReadmeDoctests;

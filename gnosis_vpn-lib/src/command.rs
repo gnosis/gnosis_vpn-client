@@ -4,14 +4,14 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::address::Address;
 use crate::connection::Destination as ConnectionDestination;
 use crate::log_output;
+use crate::peer_id::PeerId;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     Status,
-    Connect(Address),
+    Connect(PeerId),
     Disconnect,
 }
 
@@ -47,7 +47,7 @@ pub enum Status {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    AddressNotFound,
+    PeerIdNotFound,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ pub enum DisconnectResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
-    pub address: Address,
+    pub peer_id: PeerId,
 }
 
 impl WireGuardStatus {
@@ -99,8 +99,8 @@ impl ConnectResponse {
         ConnectResponse::Connecting(destination)
     }
 
-    pub fn address_not_found() -> Self {
-        ConnectResponse::AddressNotFound
+    pub fn peer_id_not_found() -> Self {
+        ConnectResponse::PeerIdNotFound
     }
 }
 
@@ -156,7 +156,7 @@ impl FromStr for Command {
 impl From<ConnectionDestination> for Destination {
     fn from(destination: ConnectionDestination) -> Self {
         Destination {
-            address: destination.address,
+            peer_id: destination.peer_id,
             meta: destination.meta,
         }
     }
@@ -170,7 +170,7 @@ impl fmt::Display for Destination {
             .map(|(k, v)| format!("{}: {}", k, v))
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "Address: {}, {}", self.address, meta)
+        write!(f, "Peer ID: {}, {}", self.peer_id, meta)
     }
 }
 

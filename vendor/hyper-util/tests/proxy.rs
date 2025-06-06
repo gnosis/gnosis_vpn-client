@@ -11,7 +11,7 @@ async fn test_tunnel_works() {
     let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = tcp.local_addr().expect("local_addr");
 
-    let proxy_dst = format!("http://{addr}").parse().expect("uri");
+    let proxy_dst = format!("http://{}", addr).parse().expect("uri");
     let mut connector = Tunnel::new(proxy_dst, HttpConnector::new());
     let t1 = tokio::spawn(async move {
         let _conn = connector
@@ -327,10 +327,9 @@ async fn test_socks_v5_with_locally_resolved_domain_works() {
 
         // command req/res
         let n = to_client.read(&mut buf).await.expect("read 3");
-        let message = [0x05, 0x01, 0x00];
-        assert_eq!(&buf[..3], message);
-        assert!(buf[3] == 0x01 || buf[3] == 0x04); // IPv4 or IPv6
-        assert_eq!(n, 4 + 4 * (buf[3] as usize) + 2);
+        let message = [0x05, 0x01, 0x00, 0x01];
+        assert_eq!(&buf[..4], message);
+        assert_eq!(n, 4 + 4 + 2);
 
         let message = vec![0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
         to_client.write_all(&message).await.expect("write 3");

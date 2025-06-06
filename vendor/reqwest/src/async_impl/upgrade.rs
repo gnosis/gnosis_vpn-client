@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::task::{self, Poll};
 use std::{fmt, io};
 
+use futures_util::TryFutureExt;
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -68,8 +69,8 @@ impl super::response::Response {
     /// Consumes the response and returns a future for a possible HTTP upgrade.
     pub async fn upgrade(self) -> crate::Result<Upgraded> {
         hyper::upgrade::on(self.res)
-            .await
-            .map(Upgraded::from)
+            .map_ok(Upgraded::from)
             .map_err(crate::error::upgrade)
+            .await
     }
 }

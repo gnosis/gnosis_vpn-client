@@ -40,15 +40,9 @@ impl<'de> Deserialize<'de> for Protocol {
 
 impl fmt::Display for Protocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_ref())
-    }
-}
-
-impl AsRef<str> for Protocol {
-    fn as_ref(&self) -> &str {
         match self {
-            Protocol::Udp => "udp",
-            Protocol::Tcp => "tcp",
+            Protocol::Udp => write!(f, "udp"),
+            Protocol::Tcp => write!(f, "tcp"),
         }
     }
 }

@@ -56,9 +56,3 @@ impl PSTR {
         unsafe { Decode(move || decode_utf8(self.as_bytes())) }
     }
 }
-
-impl Default for PSTR {
-    fn default() -> Self {
-        Self::null()
-    }
-}

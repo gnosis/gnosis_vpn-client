@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.63"
 name = "hyper-util"
-version = "0.1.14"
+version = "0.1.12"
 authors = ["Sean McArthur <sean@seanmonstar.com>"]
 build = false
 autolib = false
@@ -58,7 +58,6 @@ client-legacy = [
     "dep:socket2",
     "tokio/sync",
     "dep:libc",
-    "dep:futures-util",
 ]
 client-proxy = [
     "client",
@@ -94,6 +93,7 @@ server-auto = [
 server-graceful = [
     "server",
     "tokio/sync",
+    "futures-util/alloc",
 ]
 service = ["dep:tower-service"]
 tokio = [
@@ -154,12 +154,8 @@ version = "1.7.1"
 version = "0.3"
 optional = true
 
-[dependencies.futures-core]
-version = "0.3"
-
 [dependencies.futures-util]
 version = "0.3.16"
-optional = true
 default-features = false
 
 [dependencies.http]
@@ -209,11 +205,6 @@ default-features = false
 [dev-dependencies.bytes]
 version = "1"
 
-[dev-dependencies.futures-util]
-version = "0.3.16"
-features = ["alloc"]
-default-features = false
-
 [dev-dependencies.http-body-util]
 version = "0.1.0"
 
@@ -243,5 +234,5 @@ version = "0.6.1"
 optional = true
 
 [target."cfg(windows)".dependencies.windows-registry]
-version = "0.5"
+version = "0.4"
 optional = true

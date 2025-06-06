@@ -19,7 +19,3 @@ mod stream;
 pub mod windows;
 
 pub use stream::WinconStream;
-
-#[doc = include_str!("../README.md")]
-#[cfg(doctest)]
-pub struct ReadmeDoctests;

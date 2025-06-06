@@ -258,7 +258,6 @@ impl AsLockedWrite for crate::Buffer {
 }
 
 mod private {
-    #[allow(unnameable_types)]
     pub trait Sealed {}
 
     impl<T: Sealed + ?Sized> Sealed for &T {}

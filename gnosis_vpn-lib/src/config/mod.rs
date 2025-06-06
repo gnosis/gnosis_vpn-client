@@ -4,9 +4,9 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::address::Address;
 use crate::connection::Destination;
 use crate::entry_node::EntryNode;
+use crate::peer_id::PeerId;
 use crate::wireguard::config::Config as WireGuardConfig;
 
 mod v1;
@@ -85,7 +85,7 @@ impl Config {
         }
     }
 
-    pub fn destinations(&self) -> HashMap<Address, Destination> {
+    pub fn destinations(&self) -> HashMap<PeerId, Destination> {
         match self {
             Config::V1(config) => config.destinations(),
             Config::V2(config) => config.destinations(),

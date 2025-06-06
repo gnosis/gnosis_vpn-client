@@ -1,5 +1,4 @@
 #![allow(
-    clippy::elidable_lifetime_names,
     clippy::enum_glob_use,
     clippy::must_use_candidate,
     clippy::single_match_else
@@ -9,7 +8,6 @@ mod rustc;
 
 use std::env;
 use std::ffi::OsString;
-use std::fmt::{self, Debug, Display};
 use std::fs;
 use std::iter;
 use std::path::Path;
@@ -92,7 +90,7 @@ fn main() {
         println!("cargo:rustc-check-cfg=cfg(host_os, values(\"windows\"))");
     }
 
-    let version = format!("{:#}\n", Render(&version));
+    let version = format!("{:#?}\n", version);
     let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR not set");
     let out_file = Path::new(&out_dir).join("version.expr");
     fs::write(out_file, version).expect("failed to write version.expr");
@@ -100,15 +98,5 @@ fn main() {
     let host = env::var_os("HOST").expect("HOST not set");
     if let Some("windows") = host.to_str().unwrap().split('-').nth(2) {
         println!("cargo:rustc-cfg=host_os=\"windows\"");
-    }
-}
-
-// Shim Version's {:?} format into a {} format, because {:?} is unusable in
-// format strings when building with `-Zfmt-debug=none`.
-struct Render<'a>(&'a rustc::Version);
-
-impl<'a> Display for Render<'a> {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        Debug::fmt(self.0, formatter)
     }
 }

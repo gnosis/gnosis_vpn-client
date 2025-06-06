@@ -1,7 +1,7 @@
 use super::*;
 
 /// The possible types that a registry value could have.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Type {
     /// A 32-bit unsigned integer value.
     U32,

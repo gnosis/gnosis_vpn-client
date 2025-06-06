@@ -84,12 +84,6 @@ impl PCWSTR {
     }
 }
 
-impl Default for PCWSTR {
-    fn default() -> Self {
-        Self::null()
-    }
-}
-
 impl AsRef<PCWSTR> for PCWSTR {
     fn as_ref(&self) -> &Self {
         self

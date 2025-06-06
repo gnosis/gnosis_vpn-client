@@ -1,6 +1,4 @@
 mod support;
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
 use std::io::Write;
 use support::server;
 use tokio::io::AsyncWriteExt;
@@ -94,10 +92,13 @@ async fn deflate_case(response_size: usize, chunk_size: usize) {
         .into_iter()
         .map(|i| format!("test {i}"))
         .collect();
+    let mut encoder = libflate::zlib::Encoder::new(Vec::new()).unwrap();
+    match encoder.write(content.as_bytes()) {
+        Ok(n) => assert!(n > 0, "Failed to write to encoder."),
+        _ => panic!("Failed to deflate encode string."),
+    };
 
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(content.as_bytes()).unwrap();
-    let deflated_content = encoder.finish().unwrap();
+    let deflated_content = encoder.finish().into_result().unwrap();
 
     let mut response = format!(
         "\
@@ -157,9 +158,12 @@ const COMPRESSED_RESPONSE_HEADERS: &[u8] = b"HTTP/1.1 200 OK\x0d\x0a\
 const RESPONSE_CONTENT: &str = "some message here";
 
 fn deflate_compress(input: &[u8]) -> Vec<u8> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(input).unwrap();
-    encoder.finish().unwrap()
+    let mut encoder = libflate::zlib::Encoder::new(Vec::new()).unwrap();
+    match encoder.write(input) {
+        Ok(n) => assert!(n > 0, "Failed to write to encoder."),
+        _ => panic!("Failed to deflate encode string."),
+    };
+    encoder.finish().into_result().unwrap()
 }
 
 #[tokio::test]

@@ -329,7 +329,7 @@ impl Poll {
         }
     }
 
-    /// Returns a `Registry` which can be used to register
+    /// Create a separate `Registry` which can be used to register
     /// `event::Source`s.
     pub fn registry(&self) -> &Registry {
         &self.registry
@@ -764,7 +764,6 @@ cfg_os_poll! {
         unix,
         not(mio_unsupported_force_poll_poll),
         not(any(
-            target_os = "aix",
             target_os = "espidf",
             target_os = "hermit",
             target_os = "hurd",

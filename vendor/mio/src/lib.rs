@@ -40,9 +40,6 @@
 //!
 //! The available features are described in the [`features`] module.
 
-#[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
-compile_error!("This wasm target is unsupported by mio. If using Tokio, disable the net feature.");
-
 // macros used internally
 #[macro_use]
 mod macros;

@@ -1,6 +1,4 @@
 mod support;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use support::server;
 
 use std::io::Write;
@@ -96,10 +94,13 @@ async fn gzip_case(response_size: usize, chunk_size: usize) {
         .into_iter()
         .map(|i| format!("test {i}"))
         .collect();
+    let mut encoder = libflate::gzip::Encoder::new(Vec::new()).unwrap();
+    match encoder.write(content.as_bytes()) {
+        Ok(n) => assert!(n > 0, "Failed to write to encoder."),
+        _ => panic!("Failed to gzip encode string."),
+    };
 
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(content.as_bytes()).unwrap();
-    let gzipped_content = encoder.finish().unwrap();
+    let gzipped_content = encoder.finish().into_result().unwrap();
 
     let mut response = format!(
         "\
@@ -159,9 +160,12 @@ const COMPRESSED_RESPONSE_HEADERS: &[u8] = b"HTTP/1.1 200 OK\x0d\x0a\
 const RESPONSE_CONTENT: &str = "some message here";
 
 fn gzip_compress(input: &[u8]) -> Vec<u8> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(input).unwrap();
-    encoder.finish().unwrap()
+    let mut encoder = libflate::gzip::Encoder::new(Vec::new()).unwrap();
+    match encoder.write(input) {
+        Ok(n) => assert!(n > 0, "Failed to write to encoder."),
+        _ => panic!("Failed to gzip encode string."),
+    };
+    encoder.finish().into_result().unwrap()
 }
 
 #[tokio::test]

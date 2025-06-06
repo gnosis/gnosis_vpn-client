@@ -131,18 +131,22 @@ mod test {
             "connection has not been set"
         );
         tx.set(&Connected::new().proxy(true));
-        assert!(rx
-            .connection_metadata()
-            .as_ref()
-            .expect("connected should be set")
-            .is_proxied());
+        assert_eq!(
+            rx.connection_metadata()
+                .as_ref()
+                .expect("connected should be set")
+                .is_proxied(),
+            true
+        );
 
         // ensure it can be called multiple times
-        assert!(rx
-            .connection_metadata()
-            .as_ref()
-            .expect("connected should be set")
-            .is_proxied());
+        assert_eq!(
+            rx.connection_metadata()
+                .as_ref()
+                .expect("connected should be set")
+                .is_proxied(),
+            true
+        );
     }
 
     #[tokio::test]
@@ -153,22 +157,24 @@ mod test {
             "connection has not been set"
         );
         let test_task = tokio::spawn(async move {
-            assert!(rx
-                .wait_for_connection_metadata()
-                .await
-                .as_ref()
-                .expect("connection should be set")
-                .is_proxied());
+            assert_eq!(
+                rx.wait_for_connection_metadata()
+                    .await
+                    .as_ref()
+                    .expect("connection should be set")
+                    .is_proxied(),
+                true
+            );
             // can be awaited multiple times
             assert!(
                 rx.wait_for_connection_metadata().await.is_some(),
                 "should be awaitable multiple times"
             );
 
-            assert!(rx.connection_metadata().is_some());
+            assert_eq!(rx.connection_metadata().is_some(), true);
         });
         // can't be finished, we haven't set the connection yet
-        assert!(!test_task.is_finished());
+        assert_eq!(test_task.is_finished(), false);
         tx.set(&Connected::new().proxy(true));
 
         assert!(test_task.await.is_ok());

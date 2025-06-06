@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::task::{self, Poll};
 use std::time::Duration;
 
-use futures_core::ready;
 use futures_util::future::Either;
 use http::uri::{Scheme, Uri};
 use pin_project_lite::pin_project;
@@ -465,7 +464,7 @@ where
     type Future = HttpConnecting<R>;
 
     fn poll_ready(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        ready!(self.resolver.poll_ready(cx)).map_err(ConnectError::dns)?;
+        futures_util::ready!(self.resolver.poll_ready(cx)).map_err(ConnectError::dns)?;
         Poll::Ready(Ok(()))
     }
 
@@ -489,15 +488,13 @@ fn get_host_port<'u>(config: &Config, dst: &'u Uri) -> Result<(&'u str, u16), Co
     if config.enforce_http {
         if dst.scheme() != Some(&Scheme::HTTP) {
             return Err(ConnectError {
-                msg: INVALID_NOT_HTTP,
-                addr: None,
+                msg: INVALID_NOT_HTTP.into(),
                 cause: None,
             });
         }
     } else if dst.scheme().is_none() {
         return Err(ConnectError {
-            msg: INVALID_MISSING_SCHEME,
-            addr: None,
+            msg: INVALID_MISSING_SCHEME.into(),
             cause: None,
         });
     }
@@ -506,8 +503,7 @@ fn get_host_port<'u>(config: &Config, dst: &'u Uri) -> Result<(&'u str, u16), Co
         Some(s) => s,
         None => {
             return Err(ConnectError {
-                msg: INVALID_MISSING_HOST,
-                addr: None,
+                msg: INVALID_MISSING_HOST.into(),
                 cause: None,
             })
         }
@@ -645,19 +641,18 @@ impl<R: Resolve> Future for HttpConnecting<R> {
 
 // Not publicly exported (so missing_docs doesn't trigger).
 pub struct ConnectError {
-    msg: &'static str,
-    addr: Option<SocketAddr>,
+    msg: Box<str>,
     cause: Option<Box<dyn StdError + Send + Sync>>,
 }
 
 impl ConnectError {
-    fn new<E>(msg: &'static str, cause: E) -> ConnectError
+    fn new<S, E>(msg: S, cause: E) -> ConnectError
     where
+        S: Into<Box<str>>,
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
         ConnectError {
-            msg,
-            addr: None,
+            msg: msg.into(),
             cause: Some(cause.into()),
         }
     }
@@ -669,8 +664,9 @@ impl ConnectError {
         ConnectError::new("dns error", cause)
     }
 
-    fn m<E>(msg: &'static str) -> impl FnOnce(E) -> ConnectError
+    fn m<S, E>(msg: S) -> impl FnOnce(E) -> ConnectError
     where
+        S: Into<Box<str>>,
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
         move |cause| ConnectError::new(msg, cause)
@@ -679,21 +675,26 @@ impl ConnectError {
 
 impl fmt::Debug for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut b = f.debug_tuple("ConnectError");
-        b.field(&self.msg);
-        if let Some(ref addr) = self.addr {
-            b.field(addr);
-        }
         if let Some(ref cause) = self.cause {
-            b.field(cause);
+            f.debug_tuple("ConnectError")
+                .field(&self.msg)
+                .field(cause)
+                .finish()
+        } else {
+            self.msg.fmt(f)
         }
-        b.finish()
     }
 }
 
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.msg)
+        f.write_str(&self.msg)?;
+
+        if let Some(ref cause) = self.cause {
+            write!(f, ": {}", cause)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -771,13 +772,9 @@ impl ConnectingTcpRemote {
                     debug!("connected to {}", addr);
                     return Ok(tcp);
                 }
-                Err(mut e) => {
+                Err(e) => {
                     trace!("connect error for {}: {:?}", addr, e);
-                    e.addr = Some(addr);
-                    // only return the first error, we assume it's the most relevant
-                    if err.is_none() {
-                        err = Some(e);
-                    }
+                    err = Some(e);
                 }
             }
         }
@@ -1102,7 +1099,7 @@ mod tests {
         let (bind_ip_v4, bind_ip_v6) = get_local_ips();
         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = server4.local_addr().unwrap().port();
-        let server6 = TcpListener::bind(format!("[::1]:{port}")).unwrap();
+        let server6 = TcpListener::bind(&format!("[::1]:{}", port)).unwrap();
 
         let assert_client_ip = |dst: String, server: TcpListener, expected_ip: IpAddr| async move {
             let mut connector = HttpConnector::new();
@@ -1122,11 +1119,11 @@ mod tests {
         };
 
         if let Some(ip) = bind_ip_v4 {
-            assert_client_ip(format!("http://127.0.0.1:{port}"), server4, ip.into()).await;
+            assert_client_ip(format!("http://127.0.0.1:{}", port), server4, ip.into()).await;
         }
 
         if let Some(ip) = bind_ip_v6 {
-            assert_client_ip(format!("http://[::1]:{port}"), server6, ip.into()).await;
+            assert_client_ip(format!("http://[::1]:{}", port), server6, ip.into()).await;
         }
     }
 
@@ -1143,7 +1140,7 @@ mod tests {
         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = server4.local_addr().unwrap().port();
 
-        let server6 = TcpListener::bind(format!("[::1]:{port}")).unwrap();
+        let server6 = TcpListener::bind(&format!("[::1]:{}", port)).unwrap();
 
         let assert_interface_name =
             |dst: String,
@@ -1166,14 +1163,14 @@ mod tests {
             };
 
         assert_interface_name(
-            format!("http://127.0.0.1:{port}"),
+            format!("http://127.0.0.1:{}", port),
             server4,
             interface.clone(),
             interface.clone(),
         )
         .await;
         assert_interface_name(
-            format!("http://[::1]:{port}"),
+            format!("http://[::1]:{}", port),
             server6,
             interface.clone(),
             interface.clone(),
@@ -1193,7 +1190,7 @@ mod tests {
 
         let server4 = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = server4.local_addr().unwrap();
-        let _server6 = TcpListener::bind(format!("[::1]:{}", addr.port())).unwrap();
+        let _server6 = TcpListener::bind(&format!("[::1]:{}", addr.port())).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1297,7 +1294,7 @@ mod tests {
                 .block_on(async move {
                     let addrs = hosts
                         .iter()
-                        .map(|host| (*host, addr.port()).into())
+                        .map(|host| (host.clone(), addr.port()).into())
                         .collect();
                     let cfg = Config {
                         local_address_ipv4: None,
@@ -1404,10 +1401,8 @@ mod tests {
 
     #[test]
     fn tcp_keepalive_time_config() {
-        let kac = TcpKeepaliveConfig {
-            time: Some(Duration::from_secs(60)),
-            ..Default::default()
-        };
+        let mut kac = TcpKeepaliveConfig::default();
+        kac.time = Some(Duration::from_secs(60));
         if let Some(tcp_keepalive) = kac.into_tcpkeepalive() {
             assert!(format!("{tcp_keepalive:?}").contains("time: Some(60s)"));
         } else {
@@ -1418,10 +1413,8 @@ mod tests {
     #[cfg(not(any(target_os = "openbsd", target_os = "redox", target_os = "solaris")))]
     #[test]
     fn tcp_keepalive_interval_config() {
-        let kac = TcpKeepaliveConfig {
-            interval: Some(Duration::from_secs(1)),
-            ..Default::default()
-        };
+        let mut kac = TcpKeepaliveConfig::default();
+        kac.interval = Some(Duration::from_secs(1));
         if let Some(tcp_keepalive) = kac.into_tcpkeepalive() {
             assert!(format!("{tcp_keepalive:?}").contains("interval: Some(1s)"));
         } else {
@@ -1437,10 +1430,8 @@ mod tests {
     )))]
     #[test]
     fn tcp_keepalive_retries_config() {
-        let kac = TcpKeepaliveConfig {
-            retries: Some(3),
-            ..Default::default()
-        };
+        let mut kac = TcpKeepaliveConfig::default();
+        kac.retries = Some(3);
         if let Some(tcp_keepalive) = kac.into_tcpkeepalive() {
             assert!(format!("{tcp_keepalive:?}").contains("retries: Some(3)"));
         } else {

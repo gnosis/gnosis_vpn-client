@@ -12,7 +12,7 @@ pub(crate) struct MetricsBatch {
     busy_duration_total: u64,
 
     /// Instant at which work last resumed (continued after park).
-    processing_scheduled_tasks_started_at: Option<Instant>,
+    processing_scheduled_tasks_started_at: Instant,
 
     /// Number of times the worker parked.
     park_count: u64,
@@ -67,17 +67,17 @@ cfg_unstable_metrics! {
 
 impl MetricsBatch {
     pub(crate) fn new(worker_metrics: &WorkerMetrics) -> MetricsBatch {
-        let maybe_now = now();
-        Self::new_unstable(worker_metrics, maybe_now)
+        let now = Instant::now();
+        Self::new_unstable(worker_metrics, now)
     }
 
     cfg_metrics_variant! {
         stable: {
             #[inline(always)]
-            fn new_unstable(_worker_metrics: &WorkerMetrics, maybe_now: Option<Instant>) -> MetricsBatch {
+            fn new_unstable(_worker_metrics: &WorkerMetrics, now: Instant) -> MetricsBatch {
                 MetricsBatch {
                     busy_duration_total: 0,
-                    processing_scheduled_tasks_started_at: maybe_now,
+                    processing_scheduled_tasks_started_at: now,
                     park_count: 0,
                     park_unpark_count: 0,
                 }
@@ -85,16 +85,7 @@ impl MetricsBatch {
         },
         unstable: {
             #[inline(always)]
-            fn new_unstable(worker_metrics: &WorkerMetrics, maybe_now: Option<Instant>) -> MetricsBatch {
-                let poll_timer = maybe_now.and_then(|now| {
-                    worker_metrics
-                        .poll_count_histogram
-                        .as_ref()
-                        .map(|worker_poll_counts| PollTimer {
-                            poll_counts: HistogramBatch::from_histogram(worker_poll_counts),
-                            poll_started_at: now,
-                        })
-                });
+            fn new_unstable(worker_metrics: &WorkerMetrics, now: Instant) -> MetricsBatch {
                 MetricsBatch {
                     park_count: 0,
                     park_unpark_count: 0,
@@ -106,8 +97,13 @@ impl MetricsBatch {
                     local_schedule_count: 0,
                     overflow_count: 0,
                     busy_duration_total: 0,
-                    processing_scheduled_tasks_started_at: maybe_now,
-                    poll_timer,
+                    processing_scheduled_tasks_started_at: now,
+                    poll_timer: worker_metrics.poll_count_histogram.as_ref().map(
+                        |worker_poll_counts| PollTimer {
+                            poll_counts: HistogramBatch::from_histogram(worker_poll_counts),
+                            poll_started_at: now,
+                        },
+                    ),
                 }
             }
         }
@@ -190,17 +186,13 @@ impl MetricsBatch {
 
     /// Start processing a batch of tasks
     pub(crate) fn start_processing_scheduled_tasks(&mut self) {
-        self.processing_scheduled_tasks_started_at = now();
+        self.processing_scheduled_tasks_started_at = Instant::now();
     }
 
     /// Stop processing a batch of tasks
     pub(crate) fn end_processing_scheduled_tasks(&mut self) {
-        if let Some(processing_scheduled_tasks_started_at) =
-            self.processing_scheduled_tasks_started_at
-        {
-            let busy_duration = processing_scheduled_tasks_started_at.elapsed();
-            self.busy_duration_total += duration_as_u64(busy_duration);
-        }
+        let busy_duration = self.processing_scheduled_tasks_started_at.elapsed();
+        self.busy_duration_total += duration_as_u64(busy_duration);
     }
 
     cfg_metrics_variant! {
@@ -286,18 +278,4 @@ cfg_rt_multi_thread! {
 
 pub(crate) fn duration_as_u64(dur: Duration) -> u64 {
     u64::try_from(dur.as_nanos()).unwrap_or(u64::MAX)
-}
-
-/// Gate unsupported time metrics for `wasm32-unknown-unknown`
-/// <https://github.com/tokio-rs/tokio/issues/7319>
-fn now() -> Option<Instant> {
-    if cfg!(all(
-        target_arch = "wasm32",
-        target_os = "unknown",
-        target_vendor = "unknown"
-    )) {
-        None
-    } else {
-        Some(Instant::now())
-    }
 }

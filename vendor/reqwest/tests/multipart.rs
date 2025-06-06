@@ -59,8 +59,7 @@ async fn text_part() {
 #[cfg(feature = "stream")]
 #[tokio::test]
 async fn stream_part() {
-    use futures_util::stream;
-    use std::future;
+    use futures_util::{future, stream};
 
     let _ = env_logger::try_init();
 

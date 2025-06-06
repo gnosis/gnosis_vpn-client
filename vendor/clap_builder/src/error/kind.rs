@@ -252,6 +252,7 @@ pub enum ErrorKind {
     /// # }
     /// ```
     ///
+    /// [`Arg::allow_invalid_utf8`]: crate::Arg::allow_invalid_utf8
     /// [`Command::external_subcommand_value_parser`]: crate::Command::external_subcommand_value_parser
     InvalidUtf8,
 

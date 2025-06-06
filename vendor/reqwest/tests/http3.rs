@@ -7,8 +7,6 @@ use http::header::CONTENT_LENGTH;
 use std::error::Error;
 use support::server;
 
-fn assert_send_sync<T: Send + Sync>(_: &T) {}
-
 #[tokio::test]
 async fn http3_request_full() {
     use http_body_util::BodyExt;
@@ -21,7 +19,7 @@ async fn http3_request_full() {
     });
 
     let url = format!("https://{}/content-length", server.addr());
-    let res_fut = reqwest::Client::builder()
+    let res = reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -29,10 +27,9 @@ async fn http3_request_full() {
         .post(url)
         .version(http::Version::HTTP_3)
         .body("hello")
-        .send();
-
-    assert_send_sync(&res_fut);
-    let res = res_fut.await.expect("request");
+        .send()
+        .await
+        .expect("request");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
     assert_eq!(res.status(), reqwest::StatusCode::OK);
@@ -158,8 +155,6 @@ async fn http3_test_concurrent_request() {
 async fn http3_test_reconnection() {
     use std::error::Error;
 
-    use h3::error::StreamError;
-
     let server = server::Http3::new().build(|_| async { http::Response::default() });
     let addr = server.addr();
 
@@ -194,11 +189,11 @@ async fn http3_test_reconnection() {
         .unwrap()
         .source()
         .unwrap()
-        .downcast_ref::<StreamError>()
+        .downcast_ref::<h3::Error>()
         .unwrap();
 
     // Why is it so hard to inspect h3 errors? :/
-    assert!(err.to_string().contains("Timeout"));
+    assert!(err.to_string().contains("timeout"));
 
     let server = server::Http3::new()
         .with_addr(addr)
@@ -215,80 +210,4 @@ async fn http3_test_reconnection() {
     assert_eq!(res.version(), http::Version::HTTP_3);
     assert_eq!(res.status(), reqwest::StatusCode::OK);
     drop(server);
-}
-
-#[cfg(all(feature = "http3", feature = "stream"))]
-#[tokio::test]
-async fn http3_request_stream() {
-    use http_body_util::BodyExt;
-
-    let server = server::Http3::new().build(move |req| async move {
-        let reqb = req.collect().await.unwrap().to_bytes();
-        assert_eq!(reqb, "hello world");
-        http::Response::default()
-    });
-
-    let url = format!("https://{}", server.addr());
-    let body = reqwest::Body::wrap_stream(futures_util::stream::iter(vec![
-        Ok::<_, std::convert::Infallible>("hello"),
-        Ok::<_, std::convert::Infallible>(" "),
-        Ok::<_, std::convert::Infallible>("world"),
-    ]));
-
-    let res = reqwest::Client::builder()
-        .http3_prior_knowledge()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .expect("client builder")
-        .post(url)
-        .version(http::Version::HTTP_3)
-        .body(body)
-        .send()
-        .await
-        .expect("request");
-
-    assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
-}
-
-#[cfg(all(feature = "http3", feature = "stream"))]
-#[tokio::test]
-async fn http3_request_stream_error() {
-    use http_body_util::BodyExt;
-
-    let server = server::Http3::new().build(move |req| async move {
-        // HTTP/3 response can start and finish before the entire request body has been received.
-        // To avoid prematurely terminating the session, collect full request body before responding.
-        let _ = req.collect().await;
-
-        http::Response::default()
-    });
-
-    let url = format!("https://{}", server.addr());
-    let body = reqwest::Body::wrap_stream(futures_util::stream::iter(vec![
-        Ok::<_, std::io::Error>("first chunk"),
-        Err::<_, std::io::Error>(std::io::Error::other("oh no!")),
-    ]));
-
-    let res = reqwest::Client::builder()
-        .http3_prior_knowledge()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .expect("client builder")
-        .post(url)
-        .version(http::Version::HTTP_3)
-        .body(body)
-        .send()
-        .await;
-
-    let err = res.unwrap_err();
-    assert!(err.is_request());
-    let err = err
-        .source()
-        .unwrap()
-        .source()
-        .unwrap()
-        .downcast_ref::<reqwest::Error>()
-        .unwrap();
-    assert!(err.is_body());
 }

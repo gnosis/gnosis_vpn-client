@@ -5,20 +5,42 @@ use super::*;
 #[derive(Debug)]
 pub struct Key(pub(crate) HKEY);
 
+impl Default for Key {
+    fn default() -> Self {
+        Self(null_mut())
+    }
+}
+
 impl Key {
     /// Creates a registry key. If the key already exists, the function opens it.
     pub fn create<T: AsRef<str>>(&self, path: T) -> Result<Self> {
-        self.options().read().write().create().open(path)
+        let mut handle = null_mut();
+
+        let result = unsafe {
+            RegCreateKeyExW(
+                self.0,
+                pcwstr(path).as_ptr(),
+                0,
+                null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_READ | KEY_WRITE,
+                null(),
+                &mut handle,
+                null_mut(),
+            )
+        };
+
+        win32_error(result).map(|_| Self(handle))
     }
 
     /// Opens a registry key.
     pub fn open<T: AsRef<str>>(&self, path: T) -> Result<Self> {
-        self.options().read().open(path)
-    }
+        let mut handle = null_mut();
 
-    /// Creates an `OpenOptions` object for the registry key.
-    pub fn options(&self) -> OpenOptions<'_> {
-        OpenOptions::new(self)
+        let result =
+            unsafe { RegOpenKeyExW(self.0, pcwstr(path).as_ptr(), 0, KEY_READ, &mut handle) };
+
+        win32_error(result).map(|_| Self(handle))
     }
 
     /// Constructs a registry key from an existing handle.
@@ -34,12 +56,6 @@ impl Key {
     /// Returns the underlying registry key handle.
     pub fn as_raw(&self) -> *mut core::ffi::c_void {
         self.0
-    }
-
-    /// Changes the name of the specified registry key.
-    pub fn rename<F: AsRef<str>, T: AsRef<str>>(&self, from: F, to: T) -> Result<()> {
-        let result = unsafe { RegRenameKey(self.0, pcwstr(from).as_ptr(), pcwstr(to).as_ptr()) };
-        win32_error(result)
     }
 
     /// Removes the registry keys and values of the specified key recursively.
@@ -75,7 +91,7 @@ impl Key {
     }
 
     /// Sets the name and value in the registry key.
-    pub fn set_string<T: AsRef<str>, U: AsRef<str>>(&self, name: T, value: U) -> Result<()> {
+    pub fn set_string<T: AsRef<str>>(&self, name: T, value: T) -> Result<()> {
         self.set_bytes(name, Type::String, pcwstr(value).as_bytes())
     }
 
@@ -89,7 +105,7 @@ impl Key {
     }
 
     /// Sets the name and value in the registry key.
-    pub fn set_expand_string<T: AsRef<str>, U: AsRef<str>>(&self, name: T, value: U) -> Result<()> {
+    pub fn set_expand_string<T: AsRef<str>>(&self, name: T, value: T) -> Result<()> {
         self.set_bytes(name, Type::ExpandString, pcwstr(value).as_bytes())
     }
 
@@ -268,6 +284,8 @@ impl Key {
 
 impl Drop for Key {
     fn drop(&mut self) {
-        unsafe { RegCloseKey(self.0) };
+        unsafe {
+            RegCloseKey(self.0);
+        }
     }
 }

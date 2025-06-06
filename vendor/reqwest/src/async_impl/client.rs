@@ -1,7 +1,5 @@
 #[cfg(any(feature = "native-tls", feature = "__rustls",))]
 use std::any::Any;
-#[cfg(feature = "http2")]
-use std::error::Error;
 use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -16,10 +14,9 @@ use super::request::{Request, RequestBuilder};
 use super::response::Response;
 use super::Body;
 #[cfg(feature = "http3")]
-use crate::async_impl::h3_client::connect::{H3ClientConfig, H3Connector};
+use crate::async_impl::h3_client::connect::H3Connector;
 #[cfg(feature = "http3")]
-use crate::async_impl::h3_client::H3Client;
-use crate::config::{RequestConfig, RequestTimeout};
+use crate::async_impl::h3_client::{H3Client, H3ResponseFuture};
 use crate::connect::{
     sealed::{Conn, Unnameable},
     BoxedConnectorLayer, BoxedConnectorService, Connector, ConnectorBuilder,
@@ -31,8 +28,7 @@ use crate::dns::hickory::HickoryDnsResolver;
 use crate::dns::{gai::GaiResolver, DnsResolverWithOverrides, DynResolver, Resolve};
 use crate::error::{self, BoxError};
 use crate::into_url::try_uri;
-use crate::proxy::Matcher as ProxyMatcher;
-use crate::redirect::{self, TowerRedirectPolicy};
+use crate::redirect::{self, remove_sensitive_headers};
 #[cfg(feature = "__rustls")]
 use crate::tls::CertificateRevocationList;
 #[cfg(feature = "__tls")]
@@ -41,15 +37,16 @@ use crate::tls::{self, TlsBackend};
 use crate::Certificate;
 #[cfg(any(feature = "native-tls", feature = "__rustls"))]
 use crate::Identity;
-use crate::{IntoUrl, Method, Proxy, Url};
-
+use crate::{IntoUrl, Method, Proxy, StatusCode, Url};
 use bytes::Bytes;
 use http::header::{
-    Entry, HeaderMap, HeaderValue, ACCEPT, ACCEPT_ENCODING, PROXY_AUTHORIZATION, RANGE, USER_AGENT,
+    Entry, HeaderMap, HeaderValue, ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH,
+    CONTENT_TYPE, LOCATION, PROXY_AUTHORIZATION, RANGE, REFERER, TRANSFER_ENCODING, USER_AGENT,
 };
 use http::uri::Scheme;
 use http::Uri;
 use hyper_util::client::legacy::connect::HttpConnector;
+use log::debug;
 #[cfg(feature = "default-tls")]
 use native_tls_crate::TlsConnector;
 use pin_project_lite::pin_project;
@@ -60,7 +57,8 @@ use quinn::VarInt;
 use tokio::time::Sleep;
 use tower::util::BoxCloneSyncServiceLayer;
 use tower::{Layer, Service};
-use tower_http::follow_redirect::FollowRedirect;
+
+type HyperResponseFuture = hyper_util::client::legacy::ResponseFuture;
 
 /// An asynchronous `Client` to make Requests with.
 ///
@@ -95,61 +93,6 @@ enum HttpVersionPref {
     All,
 }
 
-#[derive(Clone)]
-struct HyperService {
-    #[cfg(feature = "cookies")]
-    cookie_store: Option<Arc<dyn cookie::CookieStore>>,
-    hyper: HyperClient,
-}
-
-impl Service<hyper::Request<crate::async_impl::body::Body>> for HyperService {
-    type Error = crate::Error;
-    type Response = http::Response<hyper::body::Incoming>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + Sync>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.hyper.poll_ready(cx).map_err(crate::error::request)
-    }
-
-    #[cfg(not(feature = "cookies"))]
-    fn call(&mut self, req: hyper::Request<crate::async_impl::body::Body>) -> Self::Future {
-        let clone = self.hyper.clone();
-        let mut inner = std::mem::replace(&mut self.hyper, clone);
-        Box::pin(async move { inner.call(req).await.map_err(crate::error::request) })
-    }
-
-    #[cfg(feature = "cookies")]
-    fn call(&mut self, mut req: hyper::Request<crate::async_impl::body::Body>) -> Self::Future {
-        let clone = self.hyper.clone();
-        let mut inner = std::mem::replace(&mut self.hyper, clone);
-        let url = Url::parse(req.uri().to_string().as_str()).expect("invalid URL");
-
-        if let Some(cookie_store) = self.cookie_store.as_ref() {
-            if req.headers().get(crate::header::COOKIE).is_none() {
-                let headers = req.headers_mut();
-                crate::util::add_cookie_header(headers, &**cookie_store, &url);
-            }
-        }
-
-        let cookie_store = self.cookie_store.clone();
-        Box::pin(async move {
-            let res = inner.call(req).await.map_err(crate::error::request);
-
-            if let Some(ref cookie_store) = cookie_store {
-                if let Ok(res) = &res {
-                    let mut cookies =
-                        cookie::extract_response_cookie_headers(res.headers()).peekable();
-                    if cookies.peek().is_some() {
-                        cookie_store.set_cookies(&mut cookies, &url);
-                    }
-                }
-            }
-
-            res
-        })
-    }
-}
-
 struct Config {
     // NOTE: When adding a new field, update `fmt::Debug for ClientBuilder`
     accepts: Accepts,
@@ -165,11 +108,9 @@ struct Config {
     pool_idle_timeout: Option<Duration>,
     pool_max_idle_per_host: usize,
     tcp_keepalive: Option<Duration>,
-    tcp_keepalive_interval: Option<Duration>,
-    tcp_keepalive_retries: Option<u32>,
     #[cfg(any(feature = "native-tls", feature = "__rustls"))]
     identity: Option<Identity>,
-    proxies: Vec<ProxyMatcher>,
+    proxies: Vec<Proxy>,
     auto_sys_proxy: bool,
     redirect_policy: redirect::Policy,
     referer: bool,
@@ -217,18 +158,7 @@ struct Config {
     #[cfg(feature = "http2")]
     http2_keep_alive_while_idle: bool,
     local_address: Option<IpAddr>,
-    #[cfg(any(
-        target_os = "android",
-        target_os = "fuchsia",
-        target_os = "illumos",
-        target_os = "ios",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "solaris",
-        target_os = "tvos",
-        target_os = "visionos",
-        target_os = "watchos",
-    ))]
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     interface: Option<String>,
     nodelay: bool,
     #[cfg(feature = "cookies")]
@@ -246,12 +176,6 @@ struct Config {
     quic_receive_window: Option<VarInt>,
     #[cfg(feature = "http3")]
     quic_send_window: Option<u64>,
-    #[cfg(feature = "http3")]
-    quic_congestion_bbr: bool,
-    #[cfg(feature = "http3")]
-    h3_max_field_section_size: Option<u64>,
-    #[cfg(feature = "http3")]
-    h3_send_grease: Option<bool>,
     dns_overrides: HashMap<String, Vec<SocketAddr>>,
     dns_resolver: Option<Arc<dyn Resolve>>,
 }
@@ -288,8 +212,6 @@ impl ClientBuilder {
                 // TODO: Re-enable default duration once hyper's HttpConnector is fixed
                 // to no longer error when an option fails.
                 tcp_keepalive: None, //Some(Duration::from_secs(60)),
-                tcp_keepalive_interval: None,
-                tcp_keepalive_retries: None,
                 proxies: Vec::new(),
                 auto_sys_proxy: true,
                 redirect_policy: redirect::Policy::default(),
@@ -340,18 +262,7 @@ impl ClientBuilder {
                 #[cfg(feature = "http2")]
                 http2_keep_alive_while_idle: false,
                 local_address: None,
-                #[cfg(any(
-                    target_os = "android",
-                    target_os = "fuchsia",
-                    target_os = "illumos",
-                    target_os = "ios",
-                    target_os = "linux",
-                    target_os = "macos",
-                    target_os = "solaris",
-                    target_os = "tvos",
-                    target_os = "visionos",
-                    target_os = "watchos",
-                ))]
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 interface: None,
                 nodelay: true,
                 hickory_dns: cfg!(feature = "hickory-dns"),
@@ -369,12 +280,6 @@ impl ClientBuilder {
                 quic_receive_window: None,
                 #[cfg(feature = "http3")]
                 quic_send_window: None,
-                #[cfg(feature = "http3")]
-                quic_congestion_bbr: false,
-                #[cfg(feature = "http3")]
-                h3_max_field_section_size: None,
-                #[cfg(feature = "http3")]
-                h3_send_grease: None,
                 dns_resolver: None,
             },
         }
@@ -397,7 +302,7 @@ impl ClientBuilder {
 
         let mut proxies = config.proxies;
         if config.auto_sys_proxy {
-            proxies.push(ProxyMatcher::system());
+            proxies.push(Proxy::system());
         }
         let proxies = Arc::new(proxies);
 
@@ -405,7 +310,12 @@ impl ClientBuilder {
         #[cfg(feature = "http3")]
         let mut h3_connector = None;
 
-        let resolver = {
+        let mut connector_builder = {
+            #[cfg(feature = "__tls")]
+            fn user_agent(headers: &HeaderMap) -> Option<HeaderValue> {
+                headers.get(USER_AGENT).cloned()
+            }
+
             let mut resolver: Arc<dyn Resolve> = match config.hickory_dns {
                 false => Arc::new(GaiResolver::new()),
                 #[cfg(feature = "hickory-dns")]
@@ -422,16 +332,7 @@ impl ClientBuilder {
                     config.dns_overrides,
                 ));
             }
-            DynResolver::new(resolver)
-        };
-
-        let mut connector_builder = {
-            #[cfg(feature = "__tls")]
-            fn user_agent(headers: &HeaderMap) -> Option<HeaderValue> {
-                headers.get(USER_AGENT).cloned()
-            }
-
-            let mut http = HttpConnector::new_with_resolver(resolver.clone());
+            let mut http = HttpConnector::new_with_resolver(DynResolver::new(resolver.clone()));
             http.set_connect_timeout(config.connect_timeout);
 
             #[cfg(all(feature = "http3", feature = "__rustls"))]
@@ -442,9 +343,6 @@ impl ClientBuilder {
                  quic_stream_receive_window,
                  quic_receive_window,
                  quic_send_window,
-                 quic_congestion_bbr,
-                 h3_max_field_section_size,
-                 h3_send_grease,
                  local_address,
                  http_version_pref: &HttpVersionPref| {
                     let mut transport_config = TransportConfig::default();
@@ -467,27 +365,11 @@ impl ClientBuilder {
                         transport_config.send_window(send_window);
                     }
 
-                    if quic_congestion_bbr {
-                        let factory = Arc::new(quinn::congestion::BbrConfig::default());
-                        transport_config.congestion_controller_factory(factory);
-                    }
-
-                    let mut h3_client_config = H3ClientConfig::default();
-
-                    if let Some(max_field_section_size) = h3_max_field_section_size {
-                        h3_client_config.max_field_section_size = Some(max_field_section_size);
-                    }
-
-                    if let Some(send_grease) = h3_send_grease {
-                        h3_client_config.send_grease = Some(send_grease);
-                    }
-
                     let res = H3Connector::new(
-                        resolver,
+                        DynResolver::new(resolver),
                         tls,
                         local_address,
                         transport_config,
-                        h3_client_config,
                     );
 
                     match res {
@@ -580,14 +462,7 @@ impl ClientBuilder {
                         #[cfg(any(
                             target_os = "android",
                             target_os = "fuchsia",
-                            target_os = "illumos",
-                            target_os = "ios",
-                            target_os = "linux",
-                            target_os = "macos",
-                            target_os = "solaris",
-                            target_os = "tvos",
-                            target_os = "visionos",
-                            target_os = "watchos",
+                            target_os = "linux"
                         ))]
                         config.interface.as_deref(),
                         config.nodelay,
@@ -601,18 +476,7 @@ impl ClientBuilder {
                     proxies.clone(),
                     user_agent(&config.headers),
                     config.local_address,
-                    #[cfg(any(
-                        target_os = "android",
-                        target_os = "fuchsia",
-                        target_os = "illumos",
-                        target_os = "ios",
-                        target_os = "linux",
-                        target_os = "macos",
-                        target_os = "solaris",
-                        target_os = "tvos",
-                        target_os = "visionos",
-                        target_os = "watchos",
-                    ))]
+                    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                     config.interface.as_deref(),
                     config.nodelay,
                     config.tls_info,
@@ -622,15 +486,12 @@ impl ClientBuilder {
                     #[cfg(feature = "http3")]
                     {
                         h3_connector = build_h3_connector(
-                            resolver.clone(),
+                            resolver,
                             conn.clone(),
                             config.quic_max_idle_timeout,
                             config.quic_stream_receive_window,
                             config.quic_receive_window,
                             config.quic_send_window,
-                            config.quic_congestion_bbr,
-                            config.h3_max_field_section_size,
-                            config.h3_send_grease,
                             config.local_address,
                             &config.http_version_pref,
                         )?;
@@ -645,14 +506,7 @@ impl ClientBuilder {
                         #[cfg(any(
                             target_os = "android",
                             target_os = "fuchsia",
-                            target_os = "illumos",
-                            target_os = "ios",
-                            target_os = "linux",
-                            target_os = "macos",
-                            target_os = "solaris",
-                            target_os = "tvos",
-                            target_os = "visionos",
-                            target_os = "watchos",
+                            target_os = "linux"
                         ))]
                         config.interface.as_deref(),
                         config.nodelay,
@@ -827,15 +681,12 @@ impl ClientBuilder {
                         tls.enable_early_data = config.tls_enable_early_data;
 
                         h3_connector = build_h3_connector(
-                            resolver.clone(),
+                            resolver,
                             tls.clone(),
                             config.quic_max_idle_timeout,
                             config.quic_stream_receive_window,
                             config.quic_receive_window,
                             config.quic_send_window,
-                            config.quic_congestion_bbr,
-                            config.h3_max_field_section_size,
-                            config.h3_send_grease,
                             config.local_address,
                             &config.http_version_pref,
                         )?;
@@ -850,14 +701,7 @@ impl ClientBuilder {
                         #[cfg(any(
                             target_os = "android",
                             target_os = "fuchsia",
-                            target_os = "illumos",
-                            target_os = "ios",
-                            target_os = "linux",
-                            target_os = "macos",
-                            target_os = "solaris",
-                            target_os = "tvos",
-                            target_os = "visionos",
-                            target_os = "watchos",
+                            target_os = "linux"
                         ))]
                         config.interface.as_deref(),
                         config.nodelay,
@@ -877,18 +721,7 @@ impl ClientBuilder {
                 http,
                 proxies.clone(),
                 config.local_address,
-                #[cfg(any(
-                    target_os = "android",
-                    target_os = "fuchsia",
-                    target_os = "illumos",
-                    target_os = "ios",
-                    target_os = "linux",
-                    target_os = "macos",
-                    target_os = "solaris",
-                    target_os = "tvos",
-                    target_os = "visionos",
-                    target_os = "watchos",
-                ))]
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 config.interface.as_deref(),
                 config.nodelay,
             )
@@ -897,11 +730,6 @@ impl ClientBuilder {
         connector_builder.set_timeout(config.connect_timeout);
         connector_builder.set_verbose(config.connection_verbose);
         connector_builder.set_keepalive(config.tcp_keepalive);
-        connector_builder.set_keepalive_interval(config.tcp_keepalive_interval);
-        connector_builder.set_keepalive_retries(config.tcp_keepalive_retries);
-
-        #[cfg(feature = "socks")]
-        connector_builder.set_socks_resolver(resolver);
 
         let mut builder =
             hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new());
@@ -966,63 +794,30 @@ impl ClientBuilder {
         }
 
         let proxies_maybe_http_auth = proxies.iter().any(|p| p.maybe_has_http_auth());
-        let proxies_maybe_http_custom_headers =
-            proxies.iter().any(|p| p.maybe_has_http_custom_headers());
-
-        let redirect_policy_desc = if config.redirect_policy.is_default() {
-            None
-        } else {
-            Some(format!("{:?}", &config.redirect_policy))
-        };
-
-        let hyper_client = builder.build(connector_builder.build(config.connector_layers));
-        let hyper_service = HyperService {
-            #[cfg(feature = "cookies")]
-            cookie_store: config.cookie_store.clone(),
-            hyper: hyper_client,
-        };
-
-        let policy = {
-            let mut p = TowerRedirectPolicy::new(config.redirect_policy);
-            p.with_referer(config.referer)
-                .with_https_only(config.https_only);
-            p
-        };
-
-        let hyper = FollowRedirect::with_policy(hyper_service, policy.clone());
 
         Ok(Client {
             inner: Arc::new(ClientRef {
                 accepts: config.accepts,
                 #[cfg(feature = "cookies")]
-                cookie_store: config.cookie_store.clone(),
+                cookie_store: config.cookie_store,
                 // Use match instead of map since config is partially moved,
                 // and it cannot be used in closure
                 #[cfg(feature = "http3")]
                 h3_client: match h3_connector {
                     Some(h3_connector) => {
-                        #[cfg(not(feature = "cookies"))]
-                        let h3_service = H3Client::new(h3_connector, config.pool_idle_timeout);
-                        #[cfg(feature = "cookies")]
-                        let h3_service = H3Client::new(
-                            h3_connector,
-                            config.pool_idle_timeout,
-                            config.cookie_store,
-                        );
-                        Some(FollowRedirect::with_policy(h3_service, policy))
+                        Some(H3Client::new(h3_connector, config.pool_idle_timeout))
                     }
                     None => None,
                 },
+                hyper: builder.build(connector_builder.build(config.connector_layers)),
                 headers: config.headers,
+                redirect_policy: config.redirect_policy,
                 referer: config.referer,
                 read_timeout: config.read_timeout,
-                request_timeout: RequestConfig::new(config.timeout),
-                hyper,
+                request_timeout: config.timeout,
                 proxies,
                 proxies_maybe_http_auth,
-                proxies_maybe_http_custom_headers,
                 https_only: config.https_only,
-                redirect_policy_desc,
             }),
         })
     }
@@ -1328,7 +1123,7 @@ impl ClientBuilder {
     ///
     /// Adding a proxy will disable the automatic usage of the "system" proxy.
     pub fn proxy(mut self, proxy: Proxy) -> ClientBuilder {
-        self.config.proxies.push(proxy.into_matcher());
+        self.config.proxies.push(proxy);
         self.config.auto_sys_proxy = false;
         self
     }
@@ -1592,14 +1387,13 @@ impl ClientBuilder {
     /// # Example
     ///
     /// ```
-    /// # fn doc() -> Result<(), reqwest::Error> {
+    /// # #[cfg(all(feature = "__rustls", not(feature = "__rustls-ring")))]
+    /// # let _ = rustls::crypto::ring::default_provider().install_default();
     /// use std::net::IpAddr;
     /// let local_addr = IpAddr::from([12, 4, 1, 8]);
     /// let client = reqwest::Client::builder()
     ///     .local_address(local_addr)
-    ///     .build()?;
-    /// # Ok(())
-    /// # }
+    ///     .build().unwrap();
     /// ```
     pub fn local_address<T>(mut self, addr: T) -> ClientBuilder
     where
@@ -1609,50 +1403,19 @@ impl ClientBuilder {
         self
     }
 
-    /// Bind connections only on the specified network interface.
-    ///
-    /// This option is only available on the following operating systems:
-    ///
-    /// - Android
-    /// - Fuchsia
-    /// - Linux,
-    /// - macOS and macOS-like systems (iOS, tvOS, watchOS and visionOS)
-    /// - Solaris and illumos
-    ///
-    /// On Android, Linux, and Fuchsia, this uses the
-    /// [`SO_BINDTODEVICE`][man-7-socket] socket option. On macOS and macOS-like
-    /// systems, Solaris, and illumos, this instead uses the [`IP_BOUND_IF` and
-    /// `IPV6_BOUND_IF`][man-7p-ip] socket options (as appropriate).
-    ///
-    /// Note that connections will fail if the provided interface name is not a
-    /// network interface that currently exists when a connection is established.
+    /// Bind to an interface by `SO_BINDTODEVICE`.
     ///
     /// # Example
     ///
     /// ```
-    /// # fn doc() -> Result<(), reqwest::Error> {
+    /// # #[cfg(all(feature = "__rustls", not(feature = "__rustls-ring")))]
+    /// # let _ = rustls::crypto::ring::default_provider().install_default();
     /// let interface = "lo";
     /// let client = reqwest::Client::builder()
     ///     .interface(interface)
-    ///     .build()?;
-    /// # Ok(())
-    /// # }
+    ///     .build().unwrap();
     /// ```
-    ///
-    /// [man-7-socket]: https://man7.org/linux/man-pages/man7/socket.7.html
-    /// [man-7p-ip]: https://docs.oracle.com/cd/E86824_01/html/E54777/ip-7p.html
-    #[cfg(any(
-        target_os = "android",
-        target_os = "fuchsia",
-        target_os = "illumos",
-        target_os = "ios",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "solaris",
-        target_os = "tvos",
-        target_os = "visionos",
-        target_os = "watchos",
-    ))]
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     pub fn interface(mut self, interface: &str) -> ClientBuilder {
         self.config.interface = Some(interface.to_string());
         self
@@ -1666,28 +1429,6 @@ impl ClientBuilder {
         D: Into<Option<Duration>>,
     {
         self.config.tcp_keepalive = val.into();
-        self
-    }
-
-    /// Set that all sockets have `SO_KEEPALIVE` set with the supplied interval.
-    ///
-    /// If `None`, the option will not be set.
-    pub fn tcp_keepalive_interval<D>(mut self, val: D) -> ClientBuilder
-    where
-        D: Into<Option<Duration>>,
-    {
-        self.config.tcp_keepalive_interval = val.into();
-        self
-    }
-
-    /// Set that all sockets have `SO_KEEPALIVE` set with the supplied retry count.
-    ///
-    /// If `None`, the option will not be set.
-    pub fn tcp_keepalive_retries<C>(mut self, retries: C) -> ClientBuilder
-    where
-        C: Into<Option<u32>>,
-    {
-        self.config.tcp_keepalive_retries = retries.into();
         self
     }
 
@@ -2221,54 +1962,6 @@ impl ClientBuilder {
         self
     }
 
-    /// Override the default congestion control algorithm to use [BBR]
-    ///
-    /// The current default congestion control algorithm is [CUBIC]. This method overrides the
-    /// default.
-    ///
-    /// [BBR]: https://datatracker.ietf.org/doc/html/draft-ietf-ccwg-bbr
-    /// [CUBIC]: https://datatracker.ietf.org/doc/html/rfc8312
-    #[cfg(feature = "http3")]
-    #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
-    pub fn http3_congestion_bbr(mut self) -> ClientBuilder {
-        self.config.quic_congestion_bbr = true;
-        self
-    }
-
-    /// Set the maximum HTTP/3 header size this client is willing to accept.
-    ///
-    /// See [header size constraints] section of the specification for details.
-    ///
-    /// [header size constraints]: https://www.rfc-editor.org/rfc/rfc9114.html#name-header-size-constraints
-    ///
-    /// Please see docs in [`Builder`] in [`h3`].
-    ///
-    /// [`Builder`]: https://docs.rs/h3/latest/h3/client/struct.Builder.html#method.max_field_section_size
-    #[cfg(feature = "http3")]
-    #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
-    pub fn http3_max_field_section_size(mut self, value: u64) -> ClientBuilder {
-        self.config.h3_max_field_section_size = Some(value.try_into().unwrap());
-        self
-    }
-
-    /// Enable whether to send HTTP/3 protocol grease on the connections.
-    ///
-    /// HTTP/3 uses the concept of "grease"
-    ///
-    /// to prevent potential interoperability issues in the future.
-    /// In HTTP/3, the concept of grease is used to ensure that the protocol can evolve
-    /// and accommodate future changes without breaking existing implementations.
-    ///
-    /// Please see docs in [`Builder`] in [`h3`].
-    ///
-    /// [`Builder`]: https://docs.rs/h3/latest/h3/client/struct.Builder.html#method.send_grease
-    #[cfg(feature = "http3")]
-    #[cfg_attr(docsrs, doc(cfg(all(reqwest_unstable, feature = "http3",))))]
-    pub fn http3_send_grease(mut self, enabled: bool) -> ClientBuilder {
-        self.config.h3_send_grease = Some(enabled);
-        self
-    }
-
     /// Adds a new Tower [`Layer`](https://docs.rs/tower/latest/tower/trait.Layer.html) to the
     /// base connector [`Service`](https://docs.rs/tower/latest/tower/trait.Service.html) which
     /// is responsible for connection establishment.
@@ -2423,7 +2116,7 @@ impl Client {
     }
 
     pub(super) fn execute_request(&self, req: Request) -> Pending {
-        let (method, url, mut headers, body, version, extensions) = req.pieces();
+        let (method, url, mut headers, body, timeout, version) = req.pieces();
         if url.scheme() != "http" && url.scheme() != "https" {
             return Pending::new_err(error::url_bad_scheme(url));
         }
@@ -2438,6 +2131,16 @@ impl Client {
         for (key, value) in &self.inner.headers {
             if let Entry::Vacant(entry) = headers.entry(key) {
                 entry.insert(value.clone());
+            }
+        }
+
+        // Add cookies from the cookie store.
+        #[cfg(feature = "cookies")]
+        {
+            if let Some(cookie_store) = self.inner.cookie_store.as_ref() {
+                if headers.get(crate::header::COOKIE).is_none() {
+                    add_cookie_header(&mut headers, &**cookie_store, &url);
+                }
             }
         }
 
@@ -2463,7 +2166,6 @@ impl Client {
         };
 
         self.proxy_auth(&uri, &mut headers);
-        self.proxy_custom_headers(&uri, &mut headers);
 
         let builder = hyper::Request::builder()
             .method(method.clone())
@@ -2475,22 +2177,17 @@ impl Client {
             http::Version::HTTP_3 if self.inner.h3_client.is_some() => {
                 let mut req = builder.body(body).expect("valid request parts");
                 *req.headers_mut() = headers.clone();
-                let mut h3 = self.inner.h3_client.as_ref().unwrap().clone();
-                ResponseFuture::H3(h3.call(req))
+                ResponseFuture::H3(self.inner.h3_client.as_ref().unwrap().request(req))
             }
             _ => {
                 let mut req = builder.body(body).expect("valid request parts");
                 *req.headers_mut() = headers.clone();
-                let mut hyper = self.inner.hyper.clone();
-                ResponseFuture::Default(hyper.call(req))
+                ResponseFuture::Default(self.inner.hyper.request(req))
             }
         };
 
-        let total_timeout = self
-            .inner
-            .request_timeout
-            .fetch(&extensions)
-            .copied()
+        let total_timeout = timeout
+            .or(self.inner.request_timeout)
             .map(tokio::time::sleep)
             .map(Box::pin);
 
@@ -2506,6 +2203,8 @@ impl Client {
                 url,
                 headers,
                 body: reusable,
+
+                urls: Vec::new(),
 
                 retry_count: 0,
 
@@ -2536,31 +2235,13 @@ impl Client {
         }
 
         for proxy in self.inner.proxies.iter() {
-            if let Some(header) = proxy.http_non_tunnel_basic_auth(dst) {
-                headers.insert(PROXY_AUTHORIZATION, header);
+            if proxy.is_match(dst) {
+                if let Some(header) = proxy.http_basic_auth(dst) {
+                    headers.insert(PROXY_AUTHORIZATION, header);
+                }
+
+                break;
             }
-
-            break;
-        }
-    }
-
-    fn proxy_custom_headers(&self, dst: &Uri, headers: &mut HeaderMap) {
-        if !self.inner.proxies_maybe_http_custom_headers {
-            return;
-        }
-
-        if dst.scheme() != Some(&Scheme::HTTP) {
-            return;
-        }
-
-        for proxy in self.inner.proxies.iter() {
-            if let Some(iter) = proxy.http_non_tunnel_custom_headers(dst) {
-                iter.iter().for_each(|(key, value)| {
-                    headers.insert(key, value.clone());
-                });
-            }
-
-            break;
         }
     }
 }
@@ -2674,18 +2355,7 @@ impl Config {
             f.field("local_address", v);
         }
 
-        #[cfg(any(
-            target_os = "android",
-            target_os = "fuchsia",
-            target_os = "illumos",
-            target_os = "ios",
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "solaris",
-            target_os = "tvos",
-            target_os = "visionos",
-            target_os = "watchos",
-        ))]
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         if let Some(ref v) = self.interface {
             f.field("interface", v);
         }
@@ -2743,17 +2413,16 @@ struct ClientRef {
     #[cfg(feature = "cookies")]
     cookie_store: Option<Arc<dyn cookie::CookieStore>>,
     headers: HeaderMap,
-    hyper: FollowRedirect<HyperService, TowerRedirectPolicy>,
+    hyper: HyperClient,
     #[cfg(feature = "http3")]
-    h3_client: Option<FollowRedirect<H3Client, TowerRedirectPolicy>>,
+    h3_client: Option<H3Client>,
+    redirect_policy: redirect::Policy,
     referer: bool,
-    request_timeout: RequestConfig<RequestTimeout>,
+    request_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
-    proxies: Arc<Vec<ProxyMatcher>>,
+    proxies: Arc<Vec<Proxy>>,
     proxies_maybe_http_auth: bool,
-    proxies_maybe_http_custom_headers: bool,
     https_only: bool,
-    redirect_policy_desc: Option<String>,
 }
 
 impl ClientRef {
@@ -2774,8 +2443,8 @@ impl ClientRef {
             f.field("proxies", &self.proxies);
         }
 
-        if let Some(s) = &self.redirect_policy_desc {
-            f.field("redirect_policy", s);
+        if !self.redirect_policy.is_default() {
+            f.field("redirect_policy", &self.redirect_policy);
         }
 
         if self.referer {
@@ -2784,7 +2453,9 @@ impl ClientRef {
 
         f.field("default_headers", &self.headers);
 
-        self.request_timeout.fmt_as_field(f);
+        if let Some(ref d) = self.request_timeout {
+            f.field("timeout", d);
+        }
 
         if let Some(ref d) = self.read_timeout {
             f.field("read_timeout", d);
@@ -2811,6 +2482,8 @@ pin_project! {
         headers: HeaderMap,
         body: Option<Option<Bytes>>,
 
+        urls: Vec<Url>,
+
         retry_count: usize,
 
         client: Arc<ClientRef>,
@@ -2826,9 +2499,9 @@ pin_project! {
 }
 
 enum ResponseFuture {
-    Default(tower_http::follow_redirect::ResponseFuture<HyperService, Body, TowerRedirectPolicy>),
+    Default(HyperResponseFuture),
     #[cfg(feature = "http3")]
-    H3(tower_http::follow_redirect::ResponseFuture<H3Client, Body, TowerRedirectPolicy>),
+    H3(H3ResponseFuture),
 }
 
 impl PendingRequest {
@@ -2844,6 +2517,14 @@ impl PendingRequest {
         self.project().read_timeout_fut
     }
 
+    fn urls(self: Pin<&mut Self>) -> &mut Vec<Url> {
+        self.project().urls
+    }
+
+    fn headers(self: Pin<&mut Self>) -> &mut HeaderMap {
+        self.project().headers
+    }
+
     #[cfg(any(feature = "http2", feature = "http3"))]
     fn retry_error(mut self: Pin<&mut Self>, err: &(dyn std::error::Error + 'static)) -> bool {
         use log::trace;
@@ -2857,7 +2538,7 @@ impl PendingRequest {
         let body = match self.body {
             Some(Some(ref body)) => Body::reusable(body.clone()),
             Some(None) => {
-                log::debug!("error was retryable, but body not reusable");
+                debug!("error was retryable, but body not reusable");
                 return false;
             }
             None => Body::empty(),
@@ -2881,13 +2562,13 @@ impl PendingRequest {
                     .body(body)
                     .expect("valid request parts");
                 *req.headers_mut() = self.headers.clone();
-                let mut h3 = self
-                    .client
-                    .h3_client
-                    .as_ref()
-                    .expect("H3 client must exists, otherwise we can't have a h3 request here")
-                    .clone();
-                ResponseFuture::H3(h3.call(req))
+                ResponseFuture::H3(
+                    self.client
+                        .h3_client
+                        .as_ref()
+                        .expect("H3 client must exists, otherwise we can't have a h3 request here")
+                        .request(req),
+                )
             }
             _ => {
                 let mut req = hyper::Request::builder()
@@ -2896,8 +2577,7 @@ impl PendingRequest {
                     .body(body)
                     .expect("valid request parts");
                 *req.headers_mut() = self.headers.clone();
-                let mut hyper = self.client.hyper.clone();
-                ResponseFuture::Default(hyper.call(req))
+                ResponseFuture::Default(self.client.hyper.request(req))
             }
         };
 
@@ -2916,8 +2596,8 @@ fn is_retryable_error(err: &(dyn std::error::Error + 'static)) -> bool {
 
     #[cfg(feature = "http3")]
     if let Some(cause) = err.source() {
-        if let Some(err) = cause.downcast_ref::<h3::error::ConnectionError>() {
-            log::debug!("determining if HTTP/3 error {err} can be retried");
+        if let Some(err) = cause.downcast_ref::<h3::Error>() {
+            debug!("determining if HTTP/3 error {err} can be retried");
             // TODO: Does h3 provide an API for checking the error?
             return err.to_string().as_str() == "timeout";
         }
@@ -2993,15 +2673,12 @@ impl Future for PendingRequest {
                 ResponseFuture::Default(r) => match Pin::new(r).poll(cx) {
                     Poll::Ready(Err(e)) => {
                         #[cfg(feature = "http2")]
-                        if e.is_request() {
-                            if let Some(e) = e.source() {
-                                if self.as_mut().retry_error(e) {
-                                    continue;
-                                }
-                            }
+                        if self.as_mut().retry_error(&e) {
+                            continue;
                         }
-
-                        return Poll::Ready(Err(e));
+                        return Poll::Ready(Err(
+                            crate::error::request(e).with_url(self.url.clone())
+                        ));
                     }
                     Poll::Ready(Ok(res)) => res.map(super::body::boxed),
                     Poll::Pending => return Poll::Pending,
@@ -3025,21 +2702,151 @@ impl Future for PendingRequest {
             {
                 if let Some(ref cookie_store) = self.client.cookie_store {
                     let mut cookies =
-                        cookie::extract_response_cookie_headers(res.headers()).peekable();
+                        cookie::extract_response_cookie_headers(&res.headers()).peekable();
                     if cookies.peek().is_some() {
                         cookie_store.set_cookies(&mut cookies, &self.url);
                     }
                 }
             }
-            if let Some(url) = &res
-                .extensions()
-                .get::<tower_http::follow_redirect::RequestUri>()
-            {
-                self.url = match Url::parse(&url.0.to_string()) {
-                    Ok(url) => url,
-                    Err(e) => return Poll::Ready(Err(crate::error::decode(e))),
+            let should_redirect = match res.status() {
+                StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER => {
+                    self.body = None;
+                    for header in &[
+                        TRANSFER_ENCODING,
+                        CONTENT_ENCODING,
+                        CONTENT_TYPE,
+                        CONTENT_LENGTH,
+                    ] {
+                        self.headers.remove(header);
+                    }
+
+                    match self.method {
+                        Method::GET | Method::HEAD => {}
+                        _ => {
+                            self.method = Method::GET;
+                        }
+                    }
+                    true
                 }
+                StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT => {
+                    match self.body {
+                        Some(Some(_)) | None => true,
+                        Some(None) => false,
+                    }
+                }
+                _ => false,
             };
+            if should_redirect {
+                let loc = res.headers().get(LOCATION).and_then(|val| {
+                    let loc = (|| -> Option<Url> {
+                        // Some sites may send a UTF-8 Location header,
+                        // even though we're supposed to treat those bytes
+                        // as opaque, we'll check specifically for utf8.
+                        self.url.join(str::from_utf8(val.as_bytes()).ok()?).ok()
+                    })();
+
+                    // Check that the `url` is also a valid `http::Uri`.
+                    //
+                    // If not, just log it and skip the redirect.
+                    let loc = loc.and_then(|url| {
+                        if try_uri(&url).is_ok() {
+                            Some(url)
+                        } else {
+                            None
+                        }
+                    });
+
+                    if loc.is_none() {
+                        debug!("Location header had invalid URI: {val:?}");
+                    }
+                    loc
+                });
+                if let Some(loc) = loc {
+                    if self.client.referer {
+                        if let Some(referer) = make_referer(&loc, &self.url) {
+                            self.headers.insert(REFERER, referer);
+                        }
+                    }
+                    let url = self.url.clone();
+                    self.as_mut().urls().push(url);
+                    let action = self
+                        .client
+                        .redirect_policy
+                        .check(res.status(), &loc, &self.urls);
+
+                    match action {
+                        redirect::ActionKind::Follow => {
+                            debug!("redirecting '{}' to '{}'", self.url, loc);
+
+                            if loc.scheme() != "http" && loc.scheme() != "https" {
+                                return Poll::Ready(Err(error::url_bad_scheme(loc)));
+                            }
+
+                            if self.client.https_only && loc.scheme() != "https" {
+                                return Poll::Ready(Err(error::redirect(
+                                    error::url_bad_scheme(loc.clone()),
+                                    loc,
+                                )));
+                            }
+
+                            self.url = loc;
+                            let mut headers =
+                                std::mem::replace(self.as_mut().headers(), HeaderMap::new());
+
+                            remove_sensitive_headers(&mut headers, &self.url, &self.urls);
+                            let uri = try_uri(&self.url)?;
+                            let body = match self.body {
+                                Some(Some(ref body)) => Body::reusable(body.clone()),
+                                _ => Body::empty(),
+                            };
+
+                            // Add cookies from the cookie store.
+                            #[cfg(feature = "cookies")]
+                            {
+                                if let Some(ref cookie_store) = self.client.cookie_store {
+                                    add_cookie_header(&mut headers, &**cookie_store, &self.url);
+                                }
+                            }
+
+                            *self.as_mut().in_flight().get_mut() =
+                                match *self.as_mut().in_flight().as_ref() {
+                                    #[cfg(feature = "http3")]
+                                    ResponseFuture::H3(_) => {
+                                        let mut req = hyper::Request::builder()
+                                            .method(self.method.clone())
+                                            .uri(uri.clone())
+                                            .body(body)
+                                            .expect("valid request parts");
+                                        *req.headers_mut() = headers.clone();
+                                        std::mem::swap(self.as_mut().headers(), &mut headers);
+                                        ResponseFuture::H3(self.client.h3_client
+                        .as_ref()
+                        .expect("H3 client must exists, otherwise we can't have a h3 request here")
+                                            .request(req))
+                                    }
+                                    _ => {
+                                        let mut req = hyper::Request::builder()
+                                            .method(self.method.clone())
+                                            .uri(uri.clone())
+                                            .body(body)
+                                            .expect("valid request parts");
+                                        *req.headers_mut() = headers.clone();
+                                        std::mem::swap(self.as_mut().headers(), &mut headers);
+                                        ResponseFuture::Default(self.client.hyper.request(req))
+                                    }
+                                };
+
+                            continue;
+                        }
+                        redirect::ActionKind::Stop => {
+                            debug!("redirect policy disallowed redirection to '{loc}'");
+                        }
+                        redirect::ActionKind::Error(err) => {
+                            return Poll::Ready(Err(crate::error::redirect(err, self.url.clone())));
+                        }
+                    }
+                }
+            }
 
             let res = Response::new(
                 res,
@@ -3063,6 +2870,25 @@ impl fmt::Debug for Pending {
                 .finish(),
             PendingInner::Error(ref err) => f.debug_struct("Pending").field("error", err).finish(),
         }
+    }
+}
+
+fn make_referer(next: &Url, previous: &Url) -> Option<HeaderValue> {
+    if next.scheme() == "http" && previous.scheme() == "https" {
+        return None;
+    }
+
+    let mut referer = previous.clone();
+    let _ = referer.set_username("");
+    let _ = referer.set_password(None);
+    referer.set_fragment(None);
+    referer.as_str().parse().ok()
+}
+
+#[cfg(feature = "cookies")]
+fn add_cookie_header(headers: &mut HeaderMap, cookie_store: &dyn cookie::CookieStore, url: &Url) {
+    if let Some(header) = cookie_store.cookies(url) {
+        headers.insert(crate::header::COOKIE, header);
     }
 }
 
