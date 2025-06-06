@@ -30,4 +30,6 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 url = { version = "2.5", features = ["serde"] }
 
+talpid-wireguard = { path = "modules/mullvadvpn-app/talpid-wireguard" }
+
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
