@@ -1,11 +1,12 @@
 use std::{
-    ffi::CString,
     io,
-    os::unix::ffi::OsStrExt,
     os::unix::io::{
+        AsFd,
         AsRawFd,
+        BorrowedFd,
         FromRawFd,
         IntoRawFd,
+        OwnedFd,
         RawFd,
     },
     path::Path,
@@ -18,9 +19,7 @@ use std::{
 use inotify_sys as ffi;
 use libc::{
     F_GETFL,
-    F_SETFD,
     F_SETFL,
-    FD_CLOEXEC,
     O_NONBLOCK,
     fcntl,
 };
@@ -31,6 +30,7 @@ use crate::util::read_into_buffer;
 use crate::watches::{
     WatchDescriptor,
     WatchMask,
+    Watches,
 };
 
 
@@ -47,7 +47,7 @@ use crate::stream::EventStream;
 /// Please refer to the [top-level documentation] for further details and a
 /// usage example.
 ///
-/// [top-level documentation]: index.html
+/// [top-level documentation]: crate
 #[derive(Debug)]
 pub struct Inotify {
     fd: Arc<FdGuard>,
@@ -80,38 +80,32 @@ impl Inotify {
     ///     .expect("Failed to initialize an inotify instance");
     /// ```
     ///
-    /// [`Inotify`]: struct.Inotify.html
-    /// [`inotify_init1`]: ../inotify_sys/fn.inotify_init1.html
-    /// [`IN_CLOEXEC`]: ../inotify_sys/constant.IN_CLOEXEC.html
-    /// [`IN_NONBLOCK`]: ../inotify_sys/constant.IN_NONBLOCK.html
+    /// [`inotify_init1`]: inotify_sys::inotify_init1
+    /// [`IN_CLOEXEC`]: inotify_sys::IN_CLOEXEC
+    /// [`IN_NONBLOCK`]: inotify_sys::IN_NONBLOCK
     pub fn init() -> io::Result<Inotify> {
-        // Initialize inotify and set CLOEXEC and NONBLOCK flags.
-        //
-        // NONBLOCK is needed, because `Inotify` manages blocking behavior for
-        // the API consumer, and the way we do that is to make everything non-
-        // blocking by default and later override that as required.
-        //
-        // CLOEXEC prevents leaking file descriptors to processes executed by
-        // this process and seems to be a best practice. I don't grasp this
-        // issue completely and failed to find any authoritative sources on the
-        // topic. There's some discussion in the open(2) and fcntl(2) man pages,
-        // but I didn't find that helpful in understanding the issue of leaked
-        // file descriptors. For what it's worth, there's a Rust issue about
-        // this:
-        // https://github.com/rust-lang/rust/issues/12148
         let fd = unsafe {
-            let fd = ffi::inotify_init();
-            if fd == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            if fcntl(fd, F_SETFD, FD_CLOEXEC) == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            if fcntl(fd, F_SETFL, O_NONBLOCK) == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            fd
+            // Initialize inotify and pass both `IN_CLOEXEC` and `IN_NONBLOCK`.
+            //
+            // `IN_NONBLOCK` is needed, because `Inotify` manages blocking
+            // behavior for the API consumer, and the way we do that is to make
+            // everything non-blocking by default and later override that as
+            // required.
+            //
+            // Passing `IN_CLOEXEC` prevents leaking file descriptors to
+            // processes executed by this process and seems to be a best
+            // practice. I don't grasp this issue completely and failed to find
+            // any authoritative sources on the topic. There's some discussion in
+            // the open(2) and fcntl(2) man pages, but I didn't find that
+            // helpful in understanding the issue of leaked file descriptors.
+            // For what it's worth, there's a Rust issue about this:
+            // https://github.com/rust-lang/rust/issues/12148
+            ffi::inotify_init1(ffi::IN_CLOEXEC | ffi::IN_NONBLOCK)
         };
+
+        if fd == -1 {
+            return Err(io::Error::last_os_error());
+        }
 
         Ok(Inotify {
             fd: Arc::new(FdGuard {
@@ -121,157 +115,25 @@ impl Inotify {
         })
     }
 
-    /// Adds or updates a watch for the given path
-    ///
-    /// Adds a new watch or updates an existing one for the file referred to by
-    /// `path`. Returns a watch descriptor that can be used to refer to this
-    /// watch later.
-    ///
-    /// The `mask` argument defines what kind of changes the file should be
-    /// watched for, and how to do that. See the documentation of [`WatchMask`]
-    /// for details.
-    ///
-    /// If this method is used to add a new watch, a new [`WatchDescriptor`] is
-    /// returned. If it is used to update an existing watch, a
-    /// [`WatchDescriptor`] that equals the previously returned
-    /// [`WatchDescriptor`] for that watch is returned instead.
-    ///
-    /// Under the hood, this method just calls [`inotify_add_watch`] and does
-    /// some trivial translation between the types on the Rust side and the C
-    /// side.
-    ///
-    /// # Attention: Updating watches and hardlinks
-    ///
-    /// As mentioned above, this method can be used to update an existing watch.
-    /// This is usually done by calling this method with the same `path`
-    /// argument that it has been called with before. But less obviously, it can
-    /// also happen if the method is called with a different path that happens
-    /// to link to the same inode.
-    ///
-    /// You can detect this by keeping track of [`WatchDescriptor`]s and the
-    /// paths they have been returned for. If the same [`WatchDescriptor`] is
-    /// returned for a different path (and you haven't freed the
-    /// [`WatchDescriptor`] by removing the watch), you know you have two paths
-    /// pointing to the same inode, being watched by the same watch.
-    ///
-    /// # Errors
-    ///
-    /// Directly returns the error from the call to
-    /// [`inotify_add_watch`][`inotify_add_watch`] (translated into an
-    /// `io::Error`), without adding any error conditions of
-    /// its own.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use inotify::{
-    ///     Inotify,
-    ///     WatchMask,
-    /// };
-    ///
-    /// let mut inotify = Inotify::init()
-    ///     .expect("Failed to initialize an inotify instance");
-    ///
-    /// # // Create a temporary file, so `add_watch` won't return an error.
-    /// # use std::fs::File;
-    /// # File::create("/tmp/inotify-rs-test-file")
-    /// #     .expect("Failed to create test file");
-    /// #
-    /// inotify.add_watch("/tmp/inotify-rs-test-file", WatchMask::MODIFY)
-    ///     .expect("Failed to add file watch");
-    ///
-    /// // Handle events for the file here
-    /// ```
-    ///
-    /// [`inotify_add_watch`]: ../inotify_sys/fn.inotify_add_watch.html
-    /// [`WatchMask`]: struct.WatchMask.html
-    /// [`WatchDescriptor`]: struct.WatchDescriptor.html
+    /// Gets an interface that allows adding and removing watches.
+    /// See [`Watches::add`] and [`Watches::remove`].
+    pub fn watches(&self) -> Watches {
+        Watches::new(self.fd.clone())
+    }
+
+    /// Deprecated: use `Inotify.watches().add()` instead
+    #[deprecated = "use `Inotify.watches().add()` instead"]
     pub fn add_watch<P>(&mut self, path: P, mask: WatchMask)
         -> io::Result<WatchDescriptor>
         where P: AsRef<Path>
     {
-        let path = CString::new(path.as_ref().as_os_str().as_bytes())?;
-
-        let wd = unsafe {
-            ffi::inotify_add_watch(
-                **self.fd,
-                path.as_ptr() as *const _,
-                mask.bits(),
-            )
-        };
-
-        match wd {
-            -1 => Err(io::Error::last_os_error()),
-            _  => Ok(WatchDescriptor{ id: wd, fd: Arc::downgrade(&self.fd) }),
-        }
+        self.watches().add(path, mask)
     }
 
-    /// Stops watching a file
-    ///
-    /// Removes the watch represented by the provided [`WatchDescriptor`] by
-    /// calling [`inotify_rm_watch`]. [`WatchDescriptor`]s can be obtained via
-    /// [`Inotify::add_watch`], or from the `wd` field of [`Event`].
-    ///
-    /// # Errors
-    ///
-    /// Directly returns the error from the call to [`inotify_rm_watch`].
-    /// Returns an [`io::Error`] with [`ErrorKind`]`::InvalidInput`, if the given
-    /// [`WatchDescriptor`] did not originate from this [`Inotify`] instance.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use inotify::Inotify;
-    ///
-    /// let mut inotify = Inotify::init()
-    ///     .expect("Failed to initialize an inotify instance");
-    ///
-    /// # // Create a temporary file, so `add_watch` won't return an error.
-    /// # use std::fs::File;
-    /// # let mut test_file = File::create("/tmp/inotify-rs-test-file")
-    /// #     .expect("Failed to create test file");
-    /// #
-    /// # // Add a watch and modify the file, so the code below doesn't block
-    /// # // forever.
-    /// # use inotify::WatchMask;
-    /// # inotify.add_watch("/tmp/inotify-rs-test-file", WatchMask::MODIFY)
-    /// #     .expect("Failed to add file watch");
-    /// # use std::io::Write;
-    /// # write!(&mut test_file, "something\n")
-    /// #     .expect("Failed to write something to test file");
-    /// #
-    /// let mut buffer = [0; 1024];
-    /// let events = inotify
-    ///     .read_events_blocking(&mut buffer)
-    ///     .expect("Error while waiting for events");
-    ///
-    /// for event in events {
-    ///     inotify.rm_watch(event.wd);
-    /// }
-    /// ```
-    ///
-    /// [`WatchDescriptor`]: struct.WatchDescriptor.html
-    /// [`inotify_rm_watch`]: ../inotify_sys/fn.inotify_rm_watch.html
-    /// [`Inotify::add_watch`]: struct.Inotify.html#method.add_watch
-    /// [`Event`]: struct.Event.html
-    /// [`Inotify`]: struct.Inotify.html
-    /// [`io::Error`]: https://doc.rust-lang.org/std/io/struct.Error.html
-    /// [`ErrorKind`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html
+    /// Deprecated: use `Inotify.watches().remove()` instead
+    #[deprecated = "use `Inotify.watches().remove()` instead"]
     pub fn rm_watch(&mut self, wd: WatchDescriptor) -> io::Result<()> {
-        if wd.fd.upgrade().as_ref() != Some(&self.fd) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Invalid WatchDescriptor",
-            ));
-        }
-
-        let result = unsafe { ffi::inotify_rm_watch(**self.fd, wd.id) };
-        match result {
-            0  => Ok(()),
-            -1 => Err(io::Error::last_os_error()),
-            _  => panic!(
-                "unexpected return code from inotify_rm_watch ({})", result)
-        }
+        self.watches().remove(wd)
     }
 
     /// Waits until events are available, then returns them
@@ -282,9 +144,6 @@ impl Inotify {
     /// This method calls [`Inotify::read_events`] internally and behaves
     /// essentially the same, apart from the blocking behavior. Please refer to
     /// the documentation of [`Inotify::read_events`] for more information.
-    ///
-    /// [`Inotify::read_events`]: struct.Inotify.html#method.read_events
-    /// [`read`]: ../libc/fn.read.html
     pub fn read_events_blocking<'a>(&mut self, buffer: &'a mut [u8])
         -> io::Result<Events<'a>>
     {
@@ -327,9 +186,8 @@ impl Inotify {
     ///
     /// # Errors
     ///
-    /// This function directly returns all errors from the call to [`read`]
-    /// (except EGAIN/EWOULDBLOCK, which result in an empty iterator). In
-    /// addition, [`ErrorKind::UnexpectedEof`] is returned, if the call to
+    /// This function directly returns all errors from the call to [`read`].
+    /// In addition, [`ErrorKind::UnexpectedEof`] is returned, if the call to
     /// [`read`] returns `0`, signaling end-of-file.
     ///
     /// If `buffer` is too small, this will result in an error with
@@ -338,25 +196,31 @@ impl Inotify {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
     /// use inotify::Inotify;
+    /// use std::io::ErrorKind;
     ///
     /// let mut inotify = Inotify::init()
     ///     .expect("Failed to initialize an inotify instance");
     ///
     /// let mut buffer = [0; 1024];
-    /// let events = inotify.read_events(&mut buffer)
-    ///     .expect("Error while reading events");
+    /// let events = loop {
+    ///     match inotify.read_events(&mut buffer) {
+    ///         Ok(events) => break events,
+    ///         Err(error) if error.kind() == ErrorKind::WouldBlock => continue,
+    ///         _ => panic!("Error while reading events"),
+    ///     }
+    /// };
     ///
     /// for event in events {
     ///     // Handle event
     /// }
     /// ```
     ///
-    /// [`read_events_blocking`]: struct.Inotify.html#method.read_events_blocking
-    /// [`read`]: ../libc/fn.read.html
-    /// [`ErrorKind::UnexpectedEof`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.UnexpectedEof
-    /// [`ErrorKind::InvalidInput`]: https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.InvalidInput
+    /// [`read_events_blocking`]: Self::read_events_blocking
+    /// [`read`]: libc::read
+    /// [`ErrorKind::UnexpectedEof`]: std::io::ErrorKind::UnexpectedEof
+    /// [`ErrorKind::InvalidInput`]: std::io::ErrorKind::InvalidInput
     pub fn read_events<'a>(&mut self, buffer: &'a mut [u8])
         -> io::Result<Events<'a>>
     {
@@ -373,12 +237,7 @@ impl Inotify {
             }
             -1 => {
                 let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::WouldBlock {
-                    return Ok(Events::new(Arc::downgrade(&self.fd), buffer, 0));
-                }
-                else {
-                    return Err(error);
-                }
+                return Err(error);
             },
             _ if num_bytes < 0 => {
                 panic!("{} {} {} {} {} {}",
@@ -407,12 +266,10 @@ impl Inotify {
         Ok(Events::new(Arc::downgrade(&self.fd), buffer, num_bytes))
     }
 
-    /// Create a stream which collects events
-    ///
-    /// Returns a `Stream` over all events that are available. This stream is an
-    /// infinite source of events.
-    ///
-    /// An internal buffer which can hold the largest possible event is used.
+    /// Deprecated: use `into_event_stream()` instead, which enforces a single `Stream` and predictable reads.
+    /// Using this method to create multiple `EventStream` instances from one `Inotify` is unsupported,
+    /// as they will contend over one event source and each produce unpredictable stream contents.
+    #[deprecated = "use `into_event_stream()` instead, which enforces a single Stream and predictable reads"]
     #[cfg(feature = "stream")]
     pub fn event_stream<T>(&mut self, buffer: T)
         -> io::Result<EventStream<T>>
@@ -420,6 +277,32 @@ impl Inotify {
         T: AsMut<[u8]> + AsRef<[u8]>,
     {
         EventStream::new(self.fd.clone(), buffer)
+    }
+
+    /// Create a stream which collects events. Consumes the `Inotify` instance.
+    ///
+    /// Returns a `Stream` over all events that are available. This stream is an
+    /// infinite source of events.
+    ///
+    /// An internal buffer which can hold the largest possible event is used.
+    #[cfg(feature = "stream")]
+    pub fn into_event_stream<T>(self, buffer: T)
+        -> io::Result<EventStream<T>>
+    where
+        T: AsMut<[u8]> + AsRef<[u8]>,
+    {
+        EventStream::new(self.fd, buffer)
+    }
+
+    /// Creates an `Inotify` instance using the file descriptor which was originally
+    /// initialized in `Inotify::init`. This is intended to be used to transform an
+    /// `EventStream` back into an `Inotify`. Do not attempt to clone `Inotify` with this.
+    #[cfg(feature = "stream")]
+    pub(crate) fn from_file_descriptor(fd: Arc<FdGuard>) -> Self
+    {
+        Inotify {
+            fd,
+        }
     }
 
     /// Closes the inotify instance
@@ -445,8 +328,7 @@ impl Inotify {
     ///     .expect("Failed to close inotify instance");
     /// ```
     ///
-    /// [`Inotify`]: struct.Inotify.html
-    /// [`close`]: ../libc/fn.close.html
+    /// [`close`]: libc::close
     pub fn close(self) -> io::Result<()> {
         // `self` will be dropped when this method returns. If this is the only
         // owner of `fd`, the `Arc` will also be dropped. The `Drop`
@@ -481,5 +363,24 @@ impl IntoRawFd for Inotify {
     fn into_raw_fd(self) -> RawFd {
         self.fd.should_not_close();
         self.fd.fd
+    }
+}
+
+impl AsFd for Inotify {
+    #[inline]
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+}
+
+impl From<Inotify> for OwnedFd {
+    fn from(fd: Inotify) -> OwnedFd {
+        unsafe { OwnedFd::from_raw_fd(fd.into_raw_fd()) }
+    }
+}
+
+impl From<OwnedFd> for Inotify {
+    fn from(fd: OwnedFd) -> Inotify {
+        unsafe { Inotify::from_raw_fd(fd.into_raw_fd()) }
     }
 }

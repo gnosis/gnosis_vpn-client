@@ -4,7 +4,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! notify = "6.1.1"
+//! notify = "8.0.0"
 //! ```
 //!
 //! If you want debounced events (or don't need them in-order), see [notify-debouncer-mini](https://docs.rs/notify-debouncer-mini/latest/notify_debouncer_mini/)
@@ -17,44 +17,31 @@
 //! - `serde` for serialization of events
 //! - `macos_fsevent` enabled by default, for fsevent backend on macos
 //! - `macos_kqueue` for kqueue backend on macos
-//! - `crossbeam-channel` enabled by default, see below
+//! - `serialization-compat-6` restores the serialization behavior of notify 6, off by default
 //!
 //! ### Serde
 //!
 //! Events are serializable via [serde](https://serde.rs) if the `serde` feature is enabled:
 //!
 //! ```toml
-//! notify = { version = "6.1.1", features = ["serde"] }
+//! notify = { version = "8.0.0", features = ["serde"] }
 //! ```
-//!
-//! ### Crossbeam-Channel & Tokio
-//!
-//! By default crossbeam-channel is used internally by notify. Which also allows the [Watcher] to be sync.
-//! This can [cause issues](https://github.com/notify-rs/notify/issues/380) when used inside tokio.
-//!
-//! You can disable crossbeam-channel, letting notify fallback to std channels via
-//!
-//! ```toml
-//! notify = { version = "6.1.1", default-features = false, features = ["macos_kqueue"] }
-//! // Alternatively macos_fsevent instead of macos_kqueue
-//! ```
-//! Note the `macos_kqueue` requirement here, otherwise no native backend is available on macos.
 //!
 //! # Known Problems
-//! 
+//!
 //! ### Network filesystems
-//! 
+//!
 //! Network mounted filesystems like NFS may not emit any events for notify to listen to.
 //! This applies especially to WSL programs watching windows paths ([issue #254](https://github.com/notify-rs/notify/issues/254)).
-//! 
-//! A workaround is the [PollWatcher] backend.
 //!
-//! ### Docker with Linux on MacOS M1
+//! A workaround is the [`PollWatcher`] backend.
 //!
-//! Docker on macos M1 [throws](https://github.com/notify-rs/notify/issues/423) `Function not implemented (os error 38)`.
-//! You have to manually use the [PollWatcher], as the native backend isn't available inside the emulation.
+//! ### Docker with Linux on macOS M1
 //!
-//! ### MacOS, FSEvents and unowned files
+//! Docker on macOS M1 [throws](https://github.com/notify-rs/notify/issues/423) `Function not implemented (os error 38)`.
+//! You have to manually use the [`PollWatcher`], as the native backend isn't available inside the emulation.
+//!
+//! ### macOS, FSEvents and unowned files
 //!
 //! Due to the inner security model of FSEvents (see [FileSystemEventSecurity](https://developer.apple.com/library/mac/documentation/Darwin/Conceptual/FSEvents_ProgGuide/FileSystemEventSecurity/FileSystemEventSecurity.html)),
 //! some events cannot be observed easily when trying to follow files that do not
@@ -75,7 +62,7 @@
 //! ### Pseudo Filesystems like /proc, /sys
 //!
 //! Some filesystems like `/proc` and `/sys` on *nix do not emit change events or use correct file change dates.
-//! To circumvent that problem you can use the [PollWatcher] with the `compare_contents` option.
+//! To circumvent that problem you can use the [`PollWatcher`] with the `compare_contents` option.
 //!
 //! ### Linux: Bad File Descriptor / No space left on device
 //!
@@ -89,39 +76,50 @@
 //! sudo sysctl -p
 //! ```
 //!
-//! Note that the [PollWatcher] is not restricted by this limitation, so it may be an alternative if your users can't increase the limit.
+//! Note that the [`PollWatcher`] is not restricted by this limitation, so it may be an alternative if your users can't increase the limit.
 //!
 //! ### Watching large directories
-//! 
+//!
 //! When watching a very large amount of files, notify may fail to receive all events.
 //! For example the linux backend is documented to not be a 100% reliable source. See also issue [#412](https://github.com/notify-rs/notify/issues/412).
-//! 
+//!
 //! # Examples
 //!
 //! For more examples visit the [examples folder](https://github.com/notify-rs/notify/tree/main/examples) in the repository.
 //!
 //! ```rust
 //! # use std::path::Path;
-//! use notify::{Watcher, RecommendedWatcher, RecursiveMode, Result};
+//! use notify::{recommended_watcher, Event, RecursiveMode, Result, Watcher};
+//! use std::sync::mpsc;
 //!
 //! fn main() -> Result<()> {
-//!     // Automatically select the best implementation for your platform.
-//!     let mut watcher = notify::recommended_watcher(|res| {
-//!         match res {
-//!            Ok(event) => println!("event: {:?}", event),
-//!            Err(e) => println!("watch error: {:?}", e),
-//!         }
-//!     })?;
+//!     let (tx, rx) = mpsc::channel::<Result<Event>>();
+//!
+//!     // Use recommended_watcher() to automatically select the best implementation
+//!     // for your platform. The `EventHandler` passed to this constructor can be a
+//!     // closure, a `std::sync::mpsc::Sender`, a `crossbeam_channel::Sender`, or
+//!     // another type the trait is implemented for.
+//!     let mut watcher = notify::recommended_watcher(tx)?;
 //!
 //!     // Add a path to be watched. All files and directories at that path and
 //!     // below will be monitored for changes.
 //! #     #[cfg(not(any(
 //! #     target_os = "freebsd",
 //! #     target_os = "openbsd",
-//! #     target_os = "dragonflybsd",
+//! #     target_os = "dragonfly",
 //! #     target_os = "netbsd")))]
 //! #     { // "." doesn't exist on BSD for some reason in CI
 //!     watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
+//! #     }
+//! #     #[cfg(any())]
+//! #     { // don't run this in doctests, it blocks forever
+//!     // Block forever, printing out events as they come in
+//!     for res in rx {
+//!         match res {
+//!             Ok(event) => println!("event: {:?}", event),
+//!             Err(e) => println!("watch error: {:?}", e),
+//!         }
+//!     }
 //! #     }
 //!
 //!     Ok(())
@@ -151,7 +149,7 @@
 //! #     #[cfg(not(any(
 //! #     target_os = "freebsd",
 //! #     target_os = "openbsd",
-//! #     target_os = "dragonflybsd",
+//! #     target_os = "dragonfly",
 //! #     target_os = "netbsd")))]
 //! #     { // "." doesn't exist on BSD for some reason in CI
 //! #     watcher1.watch(Path::new("."), RecursiveMode::Recursive)?;
@@ -167,47 +165,23 @@
 
 pub use config::{Config, RecursiveMode};
 pub use error::{Error, ErrorKind, Result};
-pub use event::{Event, EventKind};
+pub use notify_types::event::{self, Event, EventKind};
 use std::path::Path;
 
-#[allow(dead_code)]
-#[cfg(feature = "crossbeam-channel")]
-pub(crate) type Receiver<T> = crossbeam_channel::Receiver<T>;
-#[allow(dead_code)]
-#[cfg(not(feature = "crossbeam-channel"))]
 pub(crate) type Receiver<T> = std::sync::mpsc::Receiver<T>;
-
-#[allow(dead_code)]
-#[cfg(feature = "crossbeam-channel")]
-pub(crate) type Sender<T> = crossbeam_channel::Sender<T>;
-#[allow(dead_code)]
-#[cfg(not(feature = "crossbeam-channel"))]
 pub(crate) type Sender<T> = std::sync::mpsc::Sender<T>;
-
-// std limitation
-#[allow(dead_code)]
-#[cfg(feature = "crossbeam-channel")]
-pub(crate) type BoundSender<T> = crossbeam_channel::Sender<T>;
-#[allow(dead_code)]
-#[cfg(not(feature = "crossbeam-channel"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 pub(crate) type BoundSender<T> = std::sync::mpsc::SyncSender<T>;
 
-#[allow(dead_code)]
 #[inline]
 pub(crate) fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
-    #[cfg(feature = "crossbeam-channel")]
-    return crossbeam_channel::unbounded();
-    #[cfg(not(feature = "crossbeam-channel"))]
-    return std::sync::mpsc::channel();
+    std::sync::mpsc::channel()
 }
 
-#[allow(dead_code)]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 #[inline]
 pub(crate) fn bounded<T>(cap: usize) -> (BoundSender<T>, Receiver<T>) {
-    #[cfg(feature = "crossbeam-channel")]
-    return crossbeam_channel::bounded(cap);
-    #[cfg(not(feature = "crossbeam-channel"))]
-    return std::sync::mpsc::sync_channel(cap);
+    std::sync::mpsc::sync_channel(cap)
 }
 
 #[cfg(all(target_os = "macos", not(feature = "macos_kqueue")))]
@@ -218,7 +192,8 @@ pub use crate::inotify::INotifyWatcher;
     target_os = "freebsd",
     target_os = "openbsd",
     target_os = "netbsd",
-    target_os = "dragonflybsd",
+    target_os = "dragonfly",
+    target_os = "ios",
     all(target_os = "macos", feature = "macos_kqueue")
 ))]
 pub use crate::kqueue::KqueueWatcher;
@@ -234,15 +209,15 @@ pub mod inotify;
 #[cfg(any(
     target_os = "freebsd",
     target_os = "openbsd",
-    target_os = "dragonflybsd",
+    target_os = "dragonfly",
     target_os = "netbsd",
+    target_os = "ios",
     all(target_os = "macos", feature = "macos_kqueue")
 ))]
 pub mod kqueue;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-pub mod event;
 pub mod null;
 pub mod poll;
 
@@ -314,7 +289,7 @@ pub enum WatcherKind {
 
 /// Type that can deliver file activity notifications
 ///
-/// Watcher is implemented per platform using the best implementation available on that platform.
+/// `Watcher` is implemented per platform using the best implementation available on that platform.
 /// In addition to such event driven implementations, a polling implementation is also provided
 /// that should work on any platform.
 pub trait Watcher {
@@ -349,7 +324,7 @@ pub trait Watcher {
 
     /// Configure the watcher at runtime.
     ///
-    /// See the [`Config`](config/enum.Config.html) enum for all configuration options.
+    /// See the [`Config`](config/struct.Config.html) struct for all configuration options.
     ///
     /// # Returns
     ///
@@ -366,25 +341,26 @@ pub trait Watcher {
         Self: Sized;
 }
 
-/// The recommended `Watcher` implementation for the current platform
+/// The recommended [`Watcher`] implementation for the current platform
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub type RecommendedWatcher = INotifyWatcher;
-/// The recommended `Watcher` implementation for the current platform
+/// The recommended [`Watcher`] implementation for the current platform
 #[cfg(all(target_os = "macos", not(feature = "macos_kqueue")))]
 pub type RecommendedWatcher = FsEventWatcher;
-/// The recommended `Watcher` implementation for the current platform
+/// The recommended [`Watcher`] implementation for the current platform
 #[cfg(target_os = "windows")]
 pub type RecommendedWatcher = ReadDirectoryChangesWatcher;
-/// The recommended `Watcher` implementation for the current platform
+/// The recommended [`Watcher`] implementation for the current platform
 #[cfg(any(
     target_os = "freebsd",
     target_os = "openbsd",
     target_os = "netbsd",
-    target_os = "dragonflybsd",
+    target_os = "dragonfly",
+    target_os = "ios",
     all(target_os = "macos", feature = "macos_kqueue")
 ))]
 pub type RecommendedWatcher = KqueueWatcher;
-/// The recommended `Watcher` implementation for the current platform
+/// The recommended [`Watcher`] implementation for the current platform
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -393,14 +369,12 @@ pub type RecommendedWatcher = KqueueWatcher;
     target_os = "freebsd",
     target_os = "openbsd",
     target_os = "netbsd",
-    target_os = "dragonflybsd"
+    target_os = "dragonfly",
+    target_os = "ios"
 )))]
 pub type RecommendedWatcher = PollWatcher;
 
-/// Convenience method for creating the `RecommendedWatcher` for the current platform in
-/// _immediate_ mode.
-///
-/// See [`Watcher::new_immediate`](trait.Watcher.html#tymethod.new_immediate).
+/// Convenience method for creating the [`RecommendedWatcher`] for the current platform.
 pub fn recommended_watcher<F>(event_handler: F) -> Result<RecommendedWatcher>
 where
     F: EventHandler,
@@ -411,6 +385,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, time::Duration};
+
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -430,22 +408,33 @@ mod tests {
         assert_debug_impl!(Config);
         assert_debug_impl!(Error);
         assert_debug_impl!(ErrorKind);
-        assert_debug_impl!(event::AccessKind);
-        assert_debug_impl!(event::AccessMode);
-        assert_debug_impl!(event::CreateKind);
-        assert_debug_impl!(event::DataChange);
-        assert_debug_impl!(event::EventAttributes);
-        assert_debug_impl!(event::Flag);
-        assert_debug_impl!(event::MetadataKind);
-        assert_debug_impl!(event::ModifyKind);
-        assert_debug_impl!(event::RemoveKind);
-        assert_debug_impl!(event::RenameMode);
-        assert_debug_impl!(Event);
-        assert_debug_impl!(EventKind);
         assert_debug_impl!(NullWatcher);
         assert_debug_impl!(PollWatcher);
         assert_debug_impl!(RecommendedWatcher);
         assert_debug_impl!(RecursiveMode);
         assert_debug_impl!(WatcherKind);
+    }
+
+    #[test]
+    fn integration() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+
+        watcher.watch(dir.path(), RecursiveMode::Recursive)?;
+
+        let file_path = dir.path().join("file.txt");
+        fs::write(&file_path, b"Lorem ipsum")?;
+
+        let event = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("no events received")
+            .expect("received an error");
+
+        assert_eq!(event.paths, vec![file_path]);
+
+        Ok(())
     }
 }

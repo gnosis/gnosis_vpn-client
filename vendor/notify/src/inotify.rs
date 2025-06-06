@@ -27,6 +27,7 @@ const MESSAGE: mio::Token = mio::Token(1);
 // -  messages telling it what to do
 //
 // -  events telling it that something has happened on one of the watched files.
+
 struct EventLoop {
     running: bool,
     poll: mio::Poll,
@@ -35,9 +36,11 @@ struct EventLoop {
     event_loop_rx: Receiver<EventLoopMsg>,
     inotify: Option<Inotify>,
     event_handler: Box<dyn EventHandler>,
-    watches: HashMap<PathBuf, (WatchDescriptor, WatchMask, bool)>,
+    /// PathBuf -> (WatchDescriptor, WatchMask, is_recursive, is_dir)
+    watches: HashMap<PathBuf, (WatchDescriptor, WatchMask, bool, bool)>,
     paths: HashMap<WatchDescriptor, PathBuf>,
     rename_event: Option<Event>,
+    follow_links: bool,
 }
 
 /// Watcher implementation based on inotify
@@ -58,13 +61,13 @@ enum EventLoopMsg {
 fn add_watch_by_event(
     path: &Option<PathBuf>,
     event: &inotify_sys::Event<&OsStr>,
-    watches: &HashMap<PathBuf, (WatchDescriptor, WatchMask, bool)>,
+    watches: &HashMap<PathBuf, (WatchDescriptor, WatchMask, bool, bool)>,
     add_watches: &mut Vec<PathBuf>,
 ) {
     if let Some(ref path) = *path {
         if event.mask.contains(EventMask::ISDIR) {
             if let Some(parent_path) = path.parent() {
-                if let Some(&(_, _, is_recursive)) = watches.get(parent_path) {
+                if let Some(&(_, _, is_recursive, _)) = watches.get(parent_path) {
                     if is_recursive {
                         add_watches.push(path.to_owned());
                     }
@@ -77,7 +80,7 @@ fn add_watch_by_event(
 #[inline]
 fn remove_watch_by_event(
     path: &Option<PathBuf>,
-    watches: &HashMap<PathBuf, (WatchDescriptor, WatchMask, bool)>,
+    watches: &HashMap<PathBuf, (WatchDescriptor, WatchMask, bool, bool)>,
     remove_watches: &mut Vec<PathBuf>,
 ) {
     if let Some(ref path) = *path {
@@ -88,7 +91,11 @@ fn remove_watch_by_event(
 }
 
 impl EventLoop {
-    pub fn new(inotify: Inotify, event_handler: Box<dyn EventHandler>) -> Result<Self> {
+    pub fn new(
+        inotify: Inotify,
+        event_handler: Box<dyn EventHandler>,
+        follow_links: bool,
+    ) -> Result<Self> {
         let (event_loop_tx, event_loop_rx) = unbounded::<EventLoopMsg>();
         let poll = mio::Poll::new()?;
 
@@ -110,6 +117,7 @@ impl EventLoop {
             watches: HashMap::new(),
             paths: HashMap::new(),
             rename_event: None,
+            follow_links,
         };
         Ok(event_loop)
     }
@@ -211,9 +219,7 @@ impl EventLoop {
                             }
 
                             let path = match event.name {
-                                Some(name) => {
-                                    self.paths.get(&event.wd).map(|root| root.join(&name))
-                                }
+                                Some(name) => self.paths.get(&event.wd).map(|root| root.join(name)),
                                 None => self.paths.get(&event.wd).cloned(),
                             };
 
@@ -283,9 +289,7 @@ impl EventLoop {
                                 );
                                 add_watch_by_event(&path, &event, &self.watches, &mut add_watches);
                             }
-                            if event.mask.contains(EventMask::DELETE_SELF)
-                                || event.mask.contains(EventMask::DELETE)
-                            {
+                            if event.mask.contains(EventMask::DELETE) {
                                 evs.push(
                                     Event::new(EventKind::Remove(
                                         if event.mask.contains(EventMask::ISDIR) {
@@ -295,6 +299,29 @@ impl EventLoop {
                                         },
                                     ))
                                     .add_some_path(path.clone()),
+                                );
+                                remove_watch_by_event(&path, &self.watches, &mut remove_watches);
+                            }
+                            if event.mask.contains(EventMask::DELETE_SELF) {
+                                let remove_kind = match &path {
+                                    Some(watched_path) => {
+                                        let current_watch = self.watches.get(watched_path);
+                                        match current_watch {
+                                            Some(&(_, _, _, true)) => RemoveKind::Folder,
+                                            Some(&(_, _, _, false)) => RemoveKind::File,
+                                            None => RemoveKind::Other,
+                                        }
+                                    }
+                                    None => {
+                                        log::trace!(
+                                            "No patch for DELETE_SELF event, may be a bug?"
+                                        );
+                                        RemoveKind::Other
+                                    }
+                                };
+                                evs.push(
+                                    Event::new(EventKind::Remove(remove_kind))
+                                        .add_some_path(path.clone()),
                                 );
                                 remove_watch_by_event(&path, &self.watches, &mut remove_watches);
                             }
@@ -349,6 +376,10 @@ impl EventLoop {
                             break;
                         }
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // No events read. Break out.
+                        break;
+                    }
                     Err(e) => {
                         self.event_handler.handle_event(Err(Error::io(e)));
                     }
@@ -368,12 +399,12 @@ impl EventLoop {
     fn add_watch(&mut self, path: PathBuf, is_recursive: bool, mut watch_self: bool) -> Result<()> {
         // If the watch is not recursive, or if we determine (by stat'ing the path to get its
         // metadata) that the watched path is not a directory, add a single path watch.
-        if !is_recursive || !metadata(&path).map_err(Error::io)?.is_dir() {
+        if !is_recursive || !metadata(&path).map_err(Error::io_watch)?.is_dir() {
             return self.add_single_watch(path, false, true);
         }
 
         for entry in WalkDir::new(path)
-            .follow_links(true)
+            .follow_links(self.follow_links)
             .into_iter()
             .filter_map(filter_dir)
         {
@@ -392,6 +423,7 @@ impl EventLoop {
     ) -> Result<()> {
         let mut watchmask = WatchMask::ATTRIB
             | WatchMask::CREATE
+            | WatchMask::OPEN
             | WatchMask::DELETE
             | WatchMask::CLOSE_WRITE
             | WatchMask::MODIFY
@@ -403,7 +435,7 @@ impl EventLoop {
             watchmask.insert(WatchMask::MOVE_SELF);
         }
 
-        if let Some(&(_, old_watchmask, _)) = self.watches.get(&path) {
+        if let Some(&(_, old_watchmask, _, _)) = self.watches.get(&path) {
             watchmask.insert(old_watchmask);
             watchmask.insert(WatchMask::MASK_ADD);
         }
@@ -411,7 +443,7 @@ impl EventLoop {
         if let Some(ref mut inotify) = self.inotify {
             log::trace!("adding inotify watch: {}", path.display());
 
-            match inotify.add_watch(&path, watchmask) {
+            match inotify.watches().add(&path, watchmask) {
                 Err(e) => {
                     Err(if e.raw_os_error() == Some(libc::ENOSPC) {
                         // do not report inotify limits as "no more space" on linux #266
@@ -423,8 +455,9 @@ impl EventLoop {
                 }
                 Ok(w) => {
                     watchmask.remove(WatchMask::MASK_ADD);
+                    let is_dir = metadata(&path).map_err(Error::io)?.is_dir();
                     self.watches
-                        .insert(path.clone(), (w.clone(), watchmask, is_recursive));
+                        .insert(path.clone(), (w.clone(), watchmask, is_recursive, is_dir));
                     self.paths.insert(w, path);
                     Ok(())
                 }
@@ -437,12 +470,13 @@ impl EventLoop {
     fn remove_watch(&mut self, path: PathBuf, remove_recursive: bool) -> Result<()> {
         match self.watches.remove(&path) {
             None => return Err(Error::watch_not_found().add_path(path)),
-            Some((w, _, is_recursive)) => {
+            Some((w, _, is_recursive, _)) => {
                 if let Some(ref mut inotify) = self.inotify {
+                    let mut inotify_watches = inotify.watches();
                     log::trace!("removing inotify watch: {}", path.display());
 
-                    inotify
-                        .rm_watch(w.clone())
+                    inotify_watches
+                        .remove(w.clone())
                         .map_err(|e| Error::io(e).add_path(path.clone()))?;
                     self.paths.remove(&w);
 
@@ -450,8 +484,8 @@ impl EventLoop {
                         let mut remove_list = Vec::new();
                         for (w, p) in &self.paths {
                             if p.starts_with(&path) {
-                                inotify
-                                    .rm_watch(w.clone())
+                                inotify_watches
+                                    .remove(w.clone())
                                     .map_err(|e| Error::io(e).add_path(p.into()))?;
                                 self.watches.remove(p);
                                 remove_list.push(w.clone());
@@ -469,9 +503,10 @@ impl EventLoop {
 
     fn remove_all_watches(&mut self) -> Result<()> {
         if let Some(ref mut inotify) = self.inotify {
+            let mut inotify_watches = inotify.watches();
             for (w, p) in &self.paths {
-                inotify
-                    .rm_watch(w.clone())
+                inotify_watches
+                    .remove(w.clone())
                     .map_err(|e| Error::io(e).add_path(p.into()))?;
             }
             self.watches.clear();
@@ -494,9 +529,12 @@ fn filter_dir(e: walkdir::Result<walkdir::DirEntry>) -> Option<walkdir::DirEntry
 }
 
 impl INotifyWatcher {
-    fn from_event_handler(event_handler: Box<dyn EventHandler>) -> Result<Self> {
+    fn from_event_handler(
+        event_handler: Box<dyn EventHandler>,
+        follow_links: bool,
+    ) -> Result<Self> {
         let inotify = Inotify::init()?;
-        let event_loop = EventLoop::new(inotify, event_handler)?;
+        let event_loop = EventLoop::new(inotify, event_handler, follow_links)?;
         let channel = event_loop.event_loop_tx.clone();
         let waker = event_loop.event_loop_waker.clone();
         event_loop.run();
@@ -538,8 +576,8 @@ impl INotifyWatcher {
 
 impl Watcher for INotifyWatcher {
     /// Create a new watcher.
-    fn new<F: EventHandler>(event_handler: F, _config: Config) -> Result<Self> {
-        Self::from_event_handler(Box::new(event_handler))
+    fn new<F: EventHandler>(event_handler: F, config: Config) -> Result<Self> {
+        Self::from_event_handler(Box::new(event_handler), config.follow_symlinks())
     }
 
     fn watch(&mut self, path: &Path, recursive_mode: RecursiveMode) -> Result<()> {

@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.74"
 name = "windows-strings"
-version = "0.3.1"
+version = "0.4.2"
 authors = ["Microsoft"]
 build = false
 autolib = false
@@ -40,7 +40,8 @@ name = "windows_strings"
 path = "src/lib.rs"
 
 [dependencies.windows-link]
-version = "0.1.0"
+version = "0.1.1"
+default-features = false
 
 [lints.rust]
 missing_docs = "warn"
@@ -53,4 +54,4 @@ priority = -1
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0
-check-cfg = ["cfg(windows_raw_dylib, windows_debugger_visualizer, windows_slim_errors)"]
+check-cfg = ["cfg(windows_raw_dylib, windows_slim_errors)"]

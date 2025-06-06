@@ -8,10 +8,10 @@
 use crate::{bounded, unbounded, BoundSender, Config, Receiver, Sender};
 use crate::{event::*, WatcherKind};
 use crate::{Error, EventHandler, RecursiveMode, Result, Watcher};
+use std::alloc;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
-use std::mem;
 use std::os::raw::c_void;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -183,7 +183,7 @@ impl ReadDirectoryChangesServer {
                 ptr::null_mut(),
                 OPEN_EXISTING,
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
-                0,
+                ptr::null_mut(),
             );
 
             if handle == INVALID_HANDLE_VALUE {
@@ -206,7 +206,7 @@ impl ReadDirectoryChangesServer {
         };
         // every watcher gets its own semaphore to signal completion
         let semaphore = unsafe { CreateSemaphoreW(ptr::null_mut(), 0, 1, ptr::null_mut()) };
-        if semaphore == 0 || semaphore == INVALID_HANDLE_VALUE {
+        if semaphore == ptr::null_mut() || semaphore == INVALID_HANDLE_VALUE {
             unsafe {
                 CloseHandle(handle);
             }
@@ -255,7 +255,7 @@ fn stop_watch(ws: &WatchState, meta_tx: &Sender<MetaEvent>) {
 }
 
 fn start_read(rd: &ReadData, event_handler: Arc<Mutex<dyn EventHandler>>, handle: HANDLE) {
-    let mut request = Box::new(ReadDirectoryRequest {
+    let request = Box::new(ReadDirectoryRequest {
         event_handler,
         handle,
         buffer: [0u8; BUF_SIZE as usize],
@@ -270,31 +270,30 @@ fn start_read(rd: &ReadData, event_handler: Arc<Mutex<dyn EventHandler>>, handle
         | FILE_NOTIFY_CHANGE_CREATION
         | FILE_NOTIFY_CHANGE_SECURITY;
 
-    let monitor_subdir = if (&request.data.file).is_none() && request.data.is_recursive {
+    let monitor_subdir = if request.data.file.is_none() && request.data.is_recursive {
         1
     } else {
         0
     };
 
     unsafe {
-        let mut overlapped = std::mem::ManuallyDrop::new(Box::new(mem::zeroed::<OVERLAPPED>()));
+        let overlapped = alloc::alloc_zeroed(alloc::Layout::new::<OVERLAPPED>()) as *mut OVERLAPPED;
         // When using callback based async requests, we are allowed to use the hEvent member
         // for our own purposes
 
-        let req_buf = request.buffer.as_mut_ptr() as *mut c_void;
-        let request_p = Box::into_raw(request) as isize;
-        overlapped.hEvent = request_p;
+        let request = Box::leak(request);
+        (*overlapped).hEvent = request as *mut _ as _;
 
         // This is using an asynchronous call with a completion routine for receiving notifications
         // An I/O completion port would probably be more performant
         let ret = ReadDirectoryChangesW(
             handle,
-            req_buf,
+            request.buffer.as_mut_ptr() as *mut c_void,
             BUF_SIZE,
             monitor_subdir,
             flags,
             &mut 0u32 as *mut u32, // not used for async reqs
-            (&mut **overlapped) as *mut OVERLAPPED,
+            overlapped,
             Some(handle_event),
         );
 
@@ -303,8 +302,8 @@ fn start_read(rd: &ReadData, event_handler: Arc<Mutex<dyn EventHandler>>, handle
             // Because of the error, ownership of the `overlapped` alloc was not passed
             // over to `ReadDirectoryChangesW`.
             // So we can claim ownership back.
-            let _overlapped_alloc = std::mem::ManuallyDrop::into_inner(overlapped);
-            let request: Box<ReadDirectoryRequest> = mem::transmute(request_p);
+            let _overlapped = Box::from_raw(overlapped);
+            let request = Box::from_raw(request);
             ReleaseSemaphore(request.data.complete_sem, 1, ptr::null_mut());
         }
     }
@@ -332,11 +331,18 @@ unsafe extern "system" fn handle_event(
     // string as its last member. Each struct contains an offset for getting the next entry in
     // the buffer.
     let mut cur_offset: *const u8 = request.buffer.as_ptr();
-    let mut cur_entry = cur_offset as *const FILE_NOTIFY_INFORMATION;
+    // In Wine, FILE_NOTIFY_INFORMATION structs are packed placed in the buffer;
+    // they are aligned to 16bit (WCHAR) boundary instead of 32bit required by FILE_NOTIFY_INFORMATION.
+    // Hence, we need to use `read_unaligned` here to avoid UB.
+    let mut cur_entry = ptr::read_unaligned(cur_offset as *const FILE_NOTIFY_INFORMATION);
     loop {
         // filename length is size in bytes, so / 2
-        let len = (*cur_entry).FileNameLength as usize / 2;
-        let encoded_path: &[u16] = slice::from_raw_parts((*cur_entry).FileName.as_ptr(), len);
+        let len = cur_entry.FileNameLength as usize / 2;
+        let encoded_path: &[u16] = slice::from_raw_parts(
+            cur_offset.offset(std::mem::offset_of!(FILE_NOTIFY_INFORMATION, FileName) as isize)
+                as _,
+            len,
+        );
         // prepend root to get a full path
         let path = request
             .data
@@ -354,7 +360,7 @@ unsafe extern "system" fn handle_event(
             log::trace!(
                 "Event: path = `{}`, action = {:?}",
                 path.display(),
-                (*cur_entry).Action
+                cur_entry.Action
             );
 
             let newe = Event::new(EventKind::Any).add_path(path);
@@ -368,14 +374,14 @@ unsafe extern "system" fn handle_event(
 
             let event_handler = |res| emit_event(&request.event_handler, res);
 
-            if (*cur_entry).Action == FILE_ACTION_RENAMED_OLD_NAME {
+            if cur_entry.Action == FILE_ACTION_RENAMED_OLD_NAME {
                 let mode = RenameMode::From;
                 let kind = ModifyKind::Name(mode);
                 let kind = EventKind::Modify(kind);
                 let ev = newe.set_kind(kind);
                 event_handler(Ok(ev))
             } else {
-                match (*cur_entry).Action {
+                match cur_entry.Action {
                     FILE_ACTION_RENAMED_NEW_NAME => {
                         let kind = EventKind::Modify(ModifyKind::Name(RenameMode::To));
                         let ev = newe.set_kind(kind);
@@ -401,11 +407,11 @@ unsafe extern "system" fn handle_event(
             }
         }
 
-        if (*cur_entry).NextEntryOffset == 0 {
+        if cur_entry.NextEntryOffset == 0 {
             break;
         }
-        cur_offset = cur_offset.offset((*cur_entry).NextEntryOffset as isize);
-        cur_entry = cur_offset as *const FILE_NOTIFY_INFORMATION;
+        cur_offset = cur_offset.offset(cur_entry.NextEntryOffset as isize);
+        cur_entry = ptr::read_unaligned(cur_offset as *const FILE_NOTIFY_INFORMATION);
     }
 }
 
@@ -425,7 +431,7 @@ impl ReadDirectoryChangesWatcher {
         let (cmd_tx, cmd_rx) = unbounded();
 
         let wakeup_sem = unsafe { CreateSemaphoreW(ptr::null_mut(), 0, 1, ptr::null_mut()) };
-        if wakeup_sem == 0 || wakeup_sem == INVALID_HANDLE_VALUE {
+        if wakeup_sem == ptr::null_mut() || wakeup_sem == INVALID_HANDLE_VALUE {
             return Err(Error::generic("Failed to create wakeup semaphore."));
         }
 

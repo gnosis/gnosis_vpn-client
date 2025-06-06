@@ -15,9 +15,6 @@ const INOTIFY_EVENT_SIZE: usize = mem::size_of::<ffi::inotify_event>() + 257;
 
 pub fn read_into_buffer(fd: RawFd, buffer: &mut [u8]) -> isize {
     unsafe {
-        // Discard the unaligned portion, if any, of the supplied buffer
-        let buffer = align_buffer_mut(buffer);
-
         ffi::read(
             fd,
             buffer.as_mut_ptr() as *mut c_void,
@@ -26,33 +23,13 @@ pub fn read_into_buffer(fd: RawFd, buffer: &mut [u8]) -> isize {
     }
 }
 
-pub fn align_buffer(buffer: &[u8]) -> &[u8] {
-    if buffer.len() >= mem::align_of::<ffi::inotify_event>() {
-        let ptr = buffer.as_ptr();
-        let offset = ptr.align_offset(mem::align_of::<ffi::inotify_event>());
-        &buffer[offset..]
-    } else {
-        &buffer[0..0]
-    }
-}
-
-pub fn align_buffer_mut(buffer: &mut [u8]) -> &mut [u8] {
-   if buffer.len() >= mem::align_of::<ffi::inotify_event>() {
-        let ptr = buffer.as_mut_ptr();
-        let offset = ptr.align_offset(mem::align_of::<ffi::inotify_event>());
-        &mut buffer[offset..]
-   } else {
-       &mut buffer[0..0]
-   }
-}
-
 /// Get the inotify event buffer size
 ///
 /// The maximum size of an inotify event and thus the buffer size to hold it
 /// can be calculated using this formula:
 /// `sizeof(struct inotify_event) + NAME_MAX + 1`
 ///
-/// See: [https://man7.org/linux/man-pages/man7/inotify.7.html](https://man7.org/linux/man-pages/man7/inotify.7.html)
+/// See: <https://man7.org/linux/man-pages/man7/inotify.7.html>
 ///
 /// The NAME_MAX size formula is:
 /// `ABSOLUTE_PARENT_PATH_LEN + 1 + 255`
@@ -62,11 +39,11 @@ pub fn align_buffer_mut(buffer: &mut [u8]) -> &mut [u8] {
 /// or for the root directory.
 /// - Add the maximum number of chars in a filename, 255.
 ///
-/// See: [https://github.com/torvalds/linux/blob/master/include/uapi/linux/limits.h](https://github.com/torvalds/linux/blob/master/include/uapi/linux/limits.h)
+/// See: <https://github.com/torvalds/linux/blob/master/include/uapi/linux/limits.h>
 ///
 /// Unfortunately, we can't just do the same with max path length itself.
 ///
-/// See: [https://eklitzke.org/path-max-is-tricky](https://eklitzke.org/path-max-is-tricky)
+/// See: <https://eklitzke.org/path-max-is-tricky>
 ///
 /// This function is really just a fallible wrapper around `get_absolute_path_buffer_size()`.
 ///

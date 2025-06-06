@@ -1,0 +1,13 @@
+[package]
+name = "byte_string"
+version = "1.0.0"
+authors = ["Francis Gagné <fragag1@gmail.com>"]
+description = "Wrapper types for outputting byte strings (b\"Hello\") using the Debug ({:?}) format."
+documentation = "https://docs.rs/byte_string/"
+repository = "https://github.com/FraGag/byte_string"
+readme = "README.md"
+keywords = ["ascii", "debug", "string"]
+license = "MIT/Apache-2.0"
+exclude = [".travis.yml"]
+
+[dependencies]
