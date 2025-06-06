@@ -1,6 +1,6 @@
 use ctrlc::Error as CtrlcError;
-use gnosis_vpn_lib::command::Command;
 use notify::{RecursiveMode, Watcher};
+
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -9,6 +9,8 @@ use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use gnosis_vpn_lib::command::Command;
 
 mod cli;
 mod core;
