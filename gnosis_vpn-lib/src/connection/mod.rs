@@ -532,7 +532,7 @@ impl Connection {
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
                     check_tcp_session(&res, session.port);
-                    let already_unregistered = matches!(&res, Err(wg_client::Error::RegistrationNotFound));
+                    let already_unregistered = matches!(&res, Err(gvpn_client::Error::RegistrationNotFound));
                     if !already_unregistered {
                         res?;
                     }
@@ -803,8 +803,8 @@ impl Display for InternalEvent {
 
 fn check_tcp_session<R>(res: &Result<R, gvpn_client::Error>, port: u16) {
     match res {
-        Err(wg_client::Error::SocketConnect(_)) => log_output::print_port_instructions(port, Protocol::Tcp),
-        Err(wg_client::Error::ConnectionReset(_)) => log_output::print_session_path_instructions(),
+        Err(gvpn_client::Error::SocketConnect(_)) => log_output::print_port_instructions(port, Protocol::Tcp),
+        Err(gvpn_client::Error::ConnectionReset(_)) => log_output::print_session_path_instructions(),
         _ => (),
     }
 }
