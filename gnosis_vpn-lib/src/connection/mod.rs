@@ -539,7 +539,7 @@ impl Connection {
                     check_port_closed(&res, session.port);
                     let already_unregistered = matches!(&res, Err(wg_client::Error::RegistrationNotFound));
                     if !already_unregistered {
-                        res?
+                        res?;
                     }
                     self.phase_down = PhaseDown::CloseBridgeSession(session);
                     self.backoff = BackoffState::Inactive;
