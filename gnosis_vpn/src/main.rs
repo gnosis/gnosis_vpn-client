@@ -1,3 +1,7 @@
+// SETUP TODO
+//
+//  submodule update
+//  sub submodule wireguard go rs update
 use ctrlc::Error as CtrlcError;
 use notify::{RecursiveMode, Watcher};
 
@@ -11,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::command::Command;
+use talpid_wireguard::WireguardMonitor as WireGuardMonitor;
 
 mod cli;
 mod core;

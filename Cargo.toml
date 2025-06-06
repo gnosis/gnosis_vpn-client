@@ -6,6 +6,10 @@ resolver = "2"
 version = "0.10.10"
 edition = "2021"
 name = "gnosis_vpn"
+rust-version = "1.87"
+authors = ["HOPR"]
+license = "LGPL-3.0"
+repository = "https://github.com/gnosis/gnosis_vpn-client"
 
 [workspace.dependencies]
 backoff = { version = "0.4" }
@@ -32,4 +36,36 @@ url = { version = "2.5", features = ["serde"] }
 
 talpid-wireguard = { path = "modules/mullvadvpn-app/talpid-wireguard" }
 
+# talpid-wireguard
+futures = "0.3.15"
+ipnetwork = "0.20"
+once_cell = "1.16"
+log = "0.4"
+chrono = { version = "0.4.26", default-features = false ,features = ["clock"] }
+tokio = { version = "1.44", features = ["test-util", "process", "rt-multi-thread", "fs"] }
+socket2 = { version = "0.5.7", features = ["all"] }
+
+# talpid-wireguard dev
+proptest = "1.4"
+windows-sys = "0.52.0"
+
+# tapid wireguard dependencies
+tun = { version = "0.5.5", features = ["async"] }
+hyper-util = { version = "0.1.8", features = [
+  "client",
+  "client-legacy",
+  "http2",
+  "http1",
+] }
+prost = "0.13.3"
+sha2 = "0.10"
+tonic = "0.12.3"
+tonic-build = { version = "0.10.0", default-features = false }
+tower = { version = "0.5.1", features = ["util"] }
+shadowsocks = "1.20.3"
+anyhow = "1.0"
+env_logger = "0.11.7"
+
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
+
+[workspace.lints]

@@ -1,7 +1,11 @@
 [package]
 name = "gnosis_vpn"
 version = { workspace = true }
-edition = { workspace = true }
+authors = {workspace = true}
+repository = {workspace = true}
+license = {workspace = true}
+edition = {workspace = true}
+rust-version = {workspace = true}
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -23,3 +27,4 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+talpid-wireguard = { workspace = true }
