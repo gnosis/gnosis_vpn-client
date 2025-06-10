@@ -283,7 +283,7 @@ fetch_version_tag() {
         grep '"tag_name":' |
         sed -E 's/.*"tag_name": *"([^"]*)".*/\1/')
     echo ""
-    echo "GnosisVPN version found: ${VERSION_TAG}"
+    echo "Downloadable GnosisVPN version found: ${VERSION_TAG}"
 }
 
 check_platform() {
