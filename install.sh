@@ -16,6 +16,7 @@ WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 # taken from https://stackoverflow.com/a/28938235
 BPurple='\033[1;35m'
 BCyan='\033[1;36m'
+BRed='\033[1;31m'
 Color_Off='\033[0m'
 
 GLOBAL_NAME="${BPurple}<GnosisVPN installer script>${Color_Off}"
@@ -43,7 +44,8 @@ check_reqs() {
 
     for cmd in "${required_cmds[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
-            echo "Error: $cmd is required to run this script. Please install $cmd and try again."
+            echo ""
+            echo "${BRed}Error:${Color_Off} $cmd is required to run this script. Please install $cmd and try again."
             exit 1
         fi
     done
@@ -119,6 +121,7 @@ parse_arguments() {
 }
 
 print_intro() {
+    echo ""
     echo -e "Welcome to the ${GLOBAL_NAME}!"
     echo "This script will help you install and configure the GnosisVPN client on your system."
     echo ""
@@ -134,8 +137,8 @@ print_intro() {
     echo "  - Prompt you for API access to your HOPRD node."
     echo "  - Prompt you for the 'internal_connection_port'."
     echo "  - Generate a configuration file based on your input."
-    echo ""
 
+    echo ""
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "Running in non-interactive mode."
         for i in {5..2}; do
@@ -144,13 +147,13 @@ print_intro() {
         done
         printf "\rProceeding in 1 second..."
         sleep 1
-        echo ""
     else
         read -r -n 1 -s -p "Press any key to continue or Ctrl+C to exit..."
     fi
 }
 
 prompt_install_dir() {
+    echo ""
     declare install_dir
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "[NON-INTERACTIVE] Using installation directory: ${INSTALL_FOLDER}"
@@ -158,7 +161,6 @@ prompt_install_dir() {
         return
     fi
 
-    echo ""
     echo "Please specify the installation directory for GnosisVPN."
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
@@ -170,6 +172,7 @@ prompt_install_dir() {
     else
         INSTALL_FOLDER=$([[ $install_dir == /* ]] && echo "$install_dir" || echo "$PWD/${install_dir#./}")
     fi
+    echo ""
     echo "GnosisVPN will be installed to: \"${INSTALL_FOLDER}\"."
 }
 
@@ -180,6 +183,7 @@ urldecode() {
 }
 
 prompt_api_access() {
+    echo ""
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "[NON-INTERACTIVE] Using HOPRD API endpoint: ${HOPRD_API_ENDPOINT:-}"
         sleep 1
@@ -188,7 +192,6 @@ prompt_api_access() {
         return
     fi
 
-    echo ""
     echo "GnosisVPN uses your HOPRD node as entry connection point."
     echo "Therefore, you need to provide the API endpoint and token for your HOPRD node."
     echo -e "If connected to your HOPRD node via ${BCyan}HOPR Admin UI${Color_Off}, paste it's full URL."
@@ -200,12 +203,15 @@ prompt_api_access() {
     api_endpoint=""
     api_token=""
     if [[ -n ${admin_url} ]]; then
+        echo ""
         echo "Parsing admin URL..."
         declare decoded_url
         decoded_url=$(urldecode "$admin_url")
         api_endpoint=$(echo "$decoded_url" | grep -o 'apiEndpoint=[^&]*' | sed 's/apiEndpoint=//' || true)
         api_token=$(echo "$decoded_url" | grep -o 'apiToken=[^&]*' | sed 's/apiToken=//' || true)
     fi
+
+    echo ""
     if [[ -z ${api_endpoint} ]]; then
         if [[ -n ${admin_url} ]]; then
             echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
@@ -216,7 +222,7 @@ prompt_api_access() {
     fi
     if [[ -z ${api_token} ]]; then
         if [[ -n ${admin_url} ]]; then
-            echo "Error: Could not parse API token from the provided URL."
+            echo "Warning: Could not parse API token from the provided URL. Please provide it manually."
         fi
         read -r -p "Enter HOPRD API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
     else
@@ -228,13 +234,13 @@ prompt_api_access() {
 }
 
 prompt_session_port() {
+    echo ""
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "[NON-INTERACTIVE] Using HOPRD session port: ${HOPRD_SESSION_PORT}"
         sleep 1
         return
     fi
 
-    echo ""
     echo "GnosisVPN requires a port for internal connections."
     echo "This port will be used for both TCP and UDP connections."
     read -r -p "Enter HOPRD session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
@@ -250,30 +256,32 @@ fetch_network() {
         "${HOPRD_API_ENDPOINT}/api/v3/node/info" |
         grep '"network":' |
         sed -E 's/.*"network": *"([^"]*)".*/\1/')
+    echo ""
     echo "Detected network: $HOPR_NETWORK"
 }
 
 fetch_version_tag() {
+    echo ""
     if [[ -n ${VERSION_TAG} ]]; then
-        echo ""
         echo "Verifying provided version tag: ${VERSION_TAG}"
         curl --fail -L --progress-bar \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/tags/${VERSION_TAG}" &>/dev/null ||
             (
-                echo "Error: Provided version tag '${VERSION_TAG}' is not valid or does not exist."
+                echo ""
+                echo -e "${BRed}Error:${Color_Off} Provided version tag \"${VERSION_TAG}\" is not valid or does not exist."
                 exit 1
             )
         return
     fi
 
-    echo ""
     echo "Fetching the latest GnosisVPN release tag from GitHub..."
     VERSION_TAG=$(curl --fail -L --progress-bar \
         -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" |
         grep '"tag_name":' |
         sed -E 's/.*"tag_name": *"([^"]*)".*/\1/')
+    echo ""
     echo "GnosisVPN version found: ${VERSION_TAG}"
 }
 
@@ -283,17 +291,17 @@ check_platform() {
     arch="$(uname -m)"
     if [[ ${os} == "darwin" ]]; then IS_MACOS="yes"; fi
 
+    echo ""
     case "$arch" in
     x86_64 | amd64) arch_tag="x86_64" ;;
     aarch64 | arm64) arch_tag="aarch64" ;;
     armv7l) arch_tag="armv7l" ;;
     *)
-        echo "Unsupported architecture: $arch"
+        echo -e "${BRed}Unsupported architecture:${Color_Off} $arch"
         exit 1
         ;;
     esac
 
-    echo ""
     echo "Detected architecture: $arch_tag-$os"
     PLATFORM="$arch_tag-$os"
 }
@@ -302,21 +310,25 @@ prompt_wireguard() {
     declare wg_fail
     wg_fail=""
     if ! command -v wg &>/dev/null; then
-        echo "Probing for wg command failed."
+        echo ""
+        echo "Warning: Probing for wg command failed."
         wg_fail="yes"
     fi
     if [[ -z $wg_fail ]] && ! command -v wg-quick &>/dev/null; then
-        echo "Probing for wg-quick command failed."
+        echo ""
+        echo "Warning: Probing for wg-quick command failed."
         wg_fail="yes"
     fi
 
     if [[ -n ${NON_INTERACTIVE} ]]; then
         if [[ -n ${WG_PUBLIC_KEY} ]]; then
+            echo ""
             echo "[NON-INTERACTIVE] Using provided WireGuard public key: ${WG_PUBLIC_KEY}"
             sleep 1
             return
         fi
         if [[ -n ${wg_fail} ]]; then
+            echo ""
             echo "[NON-INTERACTIVE] WireGuard tools are not installed."
             echo "[NON-INTERACTIVE] Cannot continue non interactive installation."
             echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable or install wireguard-tools."
@@ -326,12 +338,13 @@ prompt_wireguard() {
 
     if [[ -n $wg_fail ]]; then
         echo ""
-        echo "WireGuard tools are not installed."
+        echo "Warning: WireGuard tools are not installed."
         echo ""
         echo "GnosisVPN works best with WireGuard tools installed."
         echo "However if you know what you are doing you can also continue with manual mode."
-        read -r -p "Press [Enter] to continue with manual mode or Ctrl+C to exit."
+        read -r -s -p "Press [Enter] to continue with manual mode or Ctrl+C to exit."
         declare wg_pub_key
+        echo ""
         read -r -p "Enter WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
         WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
     fi
@@ -340,7 +353,8 @@ prompt_wireguard() {
 enter_install_dir() {
     mkdir -p "${INSTALL_FOLDER}"
     pushd "${INSTALL_FOLDER}" >/dev/null || {
-        echo "Failed to create or access installation directory: $INSTALL_FOLDER"
+        echo ""
+        echo -e "${BRed}Failed to create or access installation directory:${Color_Off} $INSTALL_FOLDER"
         exit 1
     }
 }
@@ -369,6 +383,7 @@ fetch_binaries() {
     chmod +x ./gnosis_vpn-ctl
 
     if [[ -n ${IS_MACOS} ]]; then
+        echo ""
         echo "Detected macOS - GnosisVPN binaries need to be removed from apple quarantine mode."
         echo -e "We will run these two commands with ${BCyan}sudo${Color_Off} to get required privileges:"
         echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn"
@@ -434,6 +449,7 @@ internal_connection_port = ${HOPRD_SESSION_PORT}
 ${destinations}
 ${wg_section}
 EOF
+    echo ""
     echo "Configuration file generated at ${INSTALL_FOLDER}/config.toml"
 }
 
