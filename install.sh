@@ -332,7 +332,7 @@ prompt_wireguard() {
             echo ""
             echo "[NON-INTERACTIVE] WireGuard tools are not installed."
             echo "[NON-INTERACTIVE] Cannot continue non interactive installation."
-            echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable or install wireguard-tools."
+            echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable or install WireGuard tools."
             exit 1
         fi
     fi
@@ -354,11 +354,17 @@ prompt_wireguard() {
         echo ""
         echo "We strongly recommend installing WireGuard tools to use GnosisVPN."
         echo "However if you know what you are doing you can also continue with manual mode."
-        read -r -s -p "Press [Enter] to continue with manual mode or Ctrl+C to exit."
-        declare wg_pub_key
-        echo ""
-        read -r -p "Enter WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
-        WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
+        declare answer
+        read -r -p "Press [Enter] to recheck for WireGuard tools or type 'manual': " answer
+        if [[ $answer == "manual" ]]; then
+            echo ""
+            echo "You have chosen to continue in manual mode."
+            echo "You will need to provide your WireGuard public key."
+            read -r -p "Enter WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
+            WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
+        else
+            prompt_wireguard
+        fi
     fi
 }
 
