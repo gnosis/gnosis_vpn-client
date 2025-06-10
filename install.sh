@@ -27,9 +27,9 @@ usage() {
     echo "Options:"
     echo "  --non-interactive          Run the script in non-interactive mode."
     echo "  -i, --install-folder       Specify the installation folder (default: ./gnosis_vpn)."
-    echo "  --api-endpoint             HOPRD API endpoint (default: empty, will prompt)."
-    echo "  --api-token                HOPRD API token (default: empty, will prompt)."
-    echo "  --session-port             HOPRD session port (default: 1422, will prompt)."
+    echo "  --api-endpoint             hoprd API endpoint (default: empty, will prompt)."
+    echo "  --api-token                hoprd API token (default: empty, will prompt)."
+    echo "  --session-port             hoprd session port (default: 1422, will prompt)."
     echo "  --wireguard-public-key     WireGuard public key (required for macOS, optional otherwise)."
     echo "  --version-tag              Specify a specific version tag to install."
     echo "  --help                     Show this help message and exit."
@@ -126,7 +126,8 @@ print_intro() {
     echo "This script will help you install and configure the GnosisVPN client on your system."
     echo ""
     echo "Requirements:"
-    echo "  - A running HOPRD node that will act as your entry node."
+    echo "  - A running hoprd node that will act as your entry node."
+    echo "  - WireGuard tools installed on your system."
     echo "  - An additional open port on your node for GnosisVPN to connect to."
     echo ""
     echo "Note:"
@@ -134,7 +135,7 @@ print_intro() {
     echo ""
     echo "This installer will:"
     echo "  - Download the GnosisVPN client and control application."
-    echo "  - Prompt you for API access to your HOPRD node."
+    echo "  - Prompt you for API access to your hoprd node."
     echo "  - Prompt you for the 'internal_connection_port'."
     echo "  - Generate a configuration file based on your input."
 
@@ -185,19 +186,19 @@ urldecode() {
 prompt_api_access() {
     echo ""
     if [[ -n ${NON_INTERACTIVE} ]]; then
-        echo "[NON-INTERACTIVE] Using HOPRD API endpoint: ${HOPRD_API_ENDPOINT:-}"
+        echo "[NON-INTERACTIVE] Using hoprd API endpoint: ${HOPRD_API_ENDPOINT:-}"
         sleep 1
-        echo "[NON-INTERACTIVE] Using HOPRD API token: ${HOPRD_API_TOKEN:-}"
+        echo "[NON-INTERACTIVE] Using hoprd API token: ${HOPRD_API_TOKEN:-}"
         sleep 1
         return
     fi
 
-    echo "GnosisVPN uses your HOPRD node as entry connection point."
-    echo "Therefore, you need to provide the API endpoint and token for your HOPRD node."
-    echo -e "If connected to your HOPRD node via ${BCyan}HOPR Admin UI${Color_Off}, paste it's full URL."
+    echo "GnosisVPN uses your hoprd node as entry connection point."
+    echo "Therefore, you need to provide the API endpoint and token for your hoprd node."
+    echo -e "If connected to your hoprd node via ${BCyan}HOPR Admin UI${Color_Off}, paste it's full URL."
     echo "The script will try to parse the required values from the URL."
     declare admin_url
-    read -r -p "Enter full HOPRD admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
+    read -r -p "Enter full hoprd admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
 
     declare api_endpoint api_token
     api_endpoint=""
@@ -216,7 +217,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
         fi
-        read -r -p "Enter HOPRD API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
+        read -r -p "Enter hoprd API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
     else
         echo "Using parsed API endpoint: ${api_endpoint}"
     fi
@@ -224,7 +225,7 @@ prompt_api_access() {
         if [[ -n ${admin_url} ]]; then
             echo "Warning: Could not parse API token from the provided URL. Please provide it manually."
         fi
-        read -r -p "Enter HOPRD API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
+        read -r -p "Enter hoprd API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
     else
         echo "Using parsed API token: ${api_token}"
     fi
@@ -236,20 +237,20 @@ prompt_api_access() {
 prompt_session_port() {
     echo ""
     if [[ -n ${NON_INTERACTIVE} ]]; then
-        echo "[NON-INTERACTIVE] Using HOPRD session port: ${HOPRD_SESSION_PORT}"
+        echo "[NON-INTERACTIVE] Using hoprd session port: ${HOPRD_SESSION_PORT}"
         sleep 1
         return
     fi
 
     echo "GnosisVPN requires a port for internal connections."
     echo "This port will be used for both TCP and UDP connections."
-    read -r -p "Enter HOPRD session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
+    read -r -p "Enter hoprd session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
     HOPRD_SESSION_PORT="${session_port:-$HOPRD_SESSION_PORT}"
 }
 
 fetch_network() {
     echo ""
-    echo "Accessing HOPRD API to determine network"
+    echo "Accessing hoprd API to determine network"
     HOPR_NETWORK=$(curl --fail -L --progress-bar \
         -H "Content-Type: application/json" \
         -H "x-auth-token: $HOPRD_API_TOKEN" \
