@@ -342,6 +342,17 @@ prompt_wireguard() {
         echo "Warning: WireGuard tools are not installed."
         echo ""
         echo "GnosisVPN works best with WireGuard tools installed."
+        if [[ -n ${IS_MACOS} ]]; then
+            echo "On macOS you can install WireGuard tools using Homebrew:"
+            echo -e "${BCyan}brew install wireguard-tools${Color_Off}"
+        else
+            echo "On Linux you can install WireGuard tools using your package manager."
+            echo "For example, on Debian/Ubuntu you can run:"
+            echo -e "${BCyan}sudo apt install wireguard-tools${Color_Off}"
+            echo -e "See https://www.wireguard.com/install/ for more information."
+        fi
+        echo ""
+        echo "We strongly recommend installing WireGuard tools to use GnosisVPN."
         echo "However if you know what you are doing you can also continue with manual mode."
         read -r -s -p "Press [Enter] to continue with manual mode or Ctrl+C to exit."
         declare wg_pub_key
