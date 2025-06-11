@@ -245,7 +245,7 @@ fn incoming_config_fs_event(
                 || kind == notify::event::EventKind::Remove(notify::event::RemoveKind::File))
                 && paths == vec![config_path] =>
         {
-            tracing::debug!("config file change detected");
+            tracing::debug!(?kind, "config file change detected");
             Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
         }
         Ok(_) => None,
