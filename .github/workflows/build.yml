@@ -29,8 +29,38 @@ jobs:
           USER: runner
       - name: Build
         run: nix build .#gnosisvpn -L
+  lint:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@v16
+        with:
+          name: gnosis-vpn-client
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        env:
+          USER: runner
       - name: Lint and formatting check
         run: nix run .#check
+  test:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@v16
+        with:
+          name: gnosis-vpn-client
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+        env:
+          USER: runner
       - name: Tests
         run: nix build .#gnosisvpn-test
   build-binaries:
