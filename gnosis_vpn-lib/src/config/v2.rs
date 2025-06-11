@@ -177,6 +177,28 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
+                    if k == "ping" {
+                        if let Some(ping) = v.as_table() {
+                            for (k, v) in ping.iter() {
+                                if k == "timeout" || k == "ttl" || k == "seq_count" {
+                                    continue;
+                                }
+                                if k == "interval" {
+                                    if let Some(interval) = v.as_table() {
+                                        for (k, _v) in interval.iter() {
+                                            if k == "min" || k == "max" {
+                                                continue;
+                                            }
+                                            wrong_keys.push(format!("connection.ping.interval.{}", k));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.ping.{}", k));
+                            }
+                        }
+                        continue;
+                    }
                     wrong_keys.push(format!("connection.{}", k));
                 }
             }

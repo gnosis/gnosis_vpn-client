@@ -163,6 +163,15 @@ impl Core {
             conn.dismantle();
             self.disconnect_wg();
         }
+        if let Some(dest) = self.target_destination.as_ref() {
+            if let Some(new_dest) = self.config.destinations().get(&dest.peer_id) {
+                tracing::debug!(current = %dest, new = %new_dest, "target destination updated");
+                self.target_destination = Some(new_dest.clone());
+            } else {
+                tracing::info!(current = %dest, "clearing target destination - not found in new configuration");
+                self.target_destination = None;
+            }
+        }
         Ok(())
     }
 
@@ -387,7 +396,7 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
 
     let mut state = match state::read() {
         Err(state::Error::NoFile) => {
-            tracing::info!("no service state file found - clean start");
+            tracing::debug!("no service state file found - clean start");
             Ok(state::State::default())
         }
         x => x,
@@ -401,8 +410,7 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
 
     // print destinations warning
     if config.destinations().is_empty() {
-        tracing::warn!(">> No destinations found in configuration file <<");
-        tracing::warn!(">> Please check https://gnosisvpn.com/servers for more information <<");
+        log_output::print_no_destinations();
     }
 
     Ok(ConfigSetup {
