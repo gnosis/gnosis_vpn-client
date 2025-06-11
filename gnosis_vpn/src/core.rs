@@ -195,11 +195,6 @@ impl Core {
             Some(wg_pub_key) => wg_pub_key,
             None => {
                 tracing::error!("Unable to create connection without WireGuard public key");
-                tracing::error!(
-                    ">> If you intend to use manual WireGuard mode, please set the public key in the configuration file: <<"
-                );
-                tracing::error!(">> [wireguard] <<");
-                tracing::error!(r#">> manual_mode = {{ public_key = "<wg public key" }} <<"#);
                 return;
             }
         };

@@ -16,7 +16,7 @@ Use [documented-config.toml](./documented-config.toml) as a full reference.
 ## Installation
 
 Use the [installer](./installer.sh) script to download GnosisVPN and generate an initial config.
-Or use this oneliner: `bash <(curl -s https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/refs/heads/main/install.sh)`.
+Or use this oneliner: `bash -c "$(curl -fsSL https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/HEAD/install.sh)"`.
 
 ## General usage
 
