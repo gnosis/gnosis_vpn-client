@@ -40,7 +40,7 @@ pub fn print_node_access_instructions() {
     tracing::error!(
         r#"
 
->>!!>> Unable to access HOPRD node API.
+>>!!>> Unable to access hoprd node API.
 >>!!>> It seems you provided an invalid access token.
 >>!!>> Please update your API token in the configuration file:
 >>!!>> [hoprd_node]
@@ -53,10 +53,10 @@ pub fn print_node_port_instructions() {
     tracing::error!(
         r#"
 
->>!!>> Unable to connect to HOPRD node API due to invalid endpoint port.
+>>!!>> Unable to connect to hoprd node API due to invalid endpoint port.
 >>!!>> Please update your endpoint with the correct API port in the configuration file:
 >>!!>> [hoprd_node]
->>!!>> endpoint = "<your HOPRD node endpoint>"
+>>!!>> endpoint = "<your hoprd node endpoint>"
 "#
     );
 }
@@ -65,11 +65,11 @@ pub fn print_node_timeout_instructions() {
     tracing::error!(
         r#"
 
->>!!>> Unable to connect to HOPRD node API due to invalid IP address or offline status.
->>!!>> Please ensure you are connected to the internet and that your HOPRD node is online.
+>>!!>> Unable to connect to hoprd node API due to invalid IP address or offline status.
+>>!!>> Please ensure you are connected to the internet and that your hoprd node is online.
 >>!!>> In case of an invalid IP address please update your endpoint with the correct API IP in the configuration file:
 >>!!>> [hoprd_node]
->>!!>> endpoint = "<your HOPRD node endpoint>"
+>>!!>> endpoint = "<your hoprd node endpoint>"
 "#
     );
 }
@@ -110,5 +110,16 @@ pub fn print_no_destinations() {
 >>!!>> No destinations found in configuration file.
 >>!!>> Please rerun installer or manually add destinations from https://gnosisvpn.com/servers.
 "#
+    );
+}
+
+pub fn print_session_path_instructions() {
+    tracing::error!(
+        r#"
+
+>>!!>> Cannot transport data through session.
+>>!!>> This could mean you are missing channel connections to relayers.
+>>!!>> Please check your hoprd node and open channels to relayers as specified here: https://gnosisvpn.com/servers.
+        "#
     );
 }

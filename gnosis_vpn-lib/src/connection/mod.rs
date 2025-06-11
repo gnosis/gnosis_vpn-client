@@ -386,7 +386,7 @@ impl Connection {
             }
             InternalEvent::RegisterWg(res) => {
                 if let PhaseUp::WgRegistration(session) = self.phase_up.clone() {
-                    check_port_closed(&res, session.port);
+                    check_tcp_session(&res, session.port);
                     self.phase_up = PhaseUp::CloseBridgeSession(session, res?);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
@@ -536,7 +536,7 @@ impl Connection {
             }
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
-                    check_port_closed(&res, session.port);
+                    check_tcp_session(&res, session.port);
                     let already_unregistered = matches!(&res, Err(wg_client::Error::RegistrationNotFound));
                     if !already_unregistered {
                         res?;
@@ -776,17 +776,19 @@ impl Display for InternalEvent {
     }
 }
 
-fn check_port_closed<R>(res: &Result<R, wg_client::Error>, port: u16) {
-    if let Err(wg_client::Error::SocketConnect) = res {
-        log_output::print_port_instructions(port, Protocol::Tcp);
+fn check_tcp_session<R>(res: &Result<R, wg_client::Error>, port: u16) {
+    match res {
+        Err(wg_client::Error::SocketConnect(_)) => log_output::print_port_instructions(port, Protocol::Tcp),
+        Err(wg_client::Error::ConnectionReset(_)) => log_output::print_session_path_instructions(),
+        _ => (),
     }
 }
 
 fn check_entry_node<R>(res: &Result<R, session::Error>) {
     match res {
         Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
-        Err(session::Error::SocketConnect) => log_output::print_node_port_instructions(),
-        Err(session::Error::Timeout) => log_output::print_node_timeout_instructions(),
+        Err(session::Error::SocketConnect(_)) => log_output::print_node_port_instructions(),
+        Err(session::Error::Timeout(_)) => log_output::print_node_timeout_instructions(),
         _ => (),
     }
 }

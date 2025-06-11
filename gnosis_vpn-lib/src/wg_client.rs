@@ -30,7 +30,9 @@ pub enum Error {
     #[error("Error making http request: {0:?}")]
     Request(#[from] reqwest::Error),
     #[error("Error connecting on specified port")]
-    SocketConnect,
+    SocketConnect(reqwest::Error),
+    #[error("Request error - connection reset by peer")]
+    ConnectionReset(reqwest::Error),
     #[error("Invalid port")]
     InvalidPort,
     #[error("Registration not found")]
@@ -102,7 +104,9 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
 
 fn connect_errors(err: reqwest::Error) -> Error {
     if err.is_connect() {
-        Error::SocketConnect
+        Error::SocketConnect(err)
+    } else if err.is_request() {
+        Error::ConnectionReset(err)
     } else {
         err.into()
     }

@@ -69,9 +69,9 @@ pub enum Error {
     #[error("Unauthorized")]
     Unauthorized,
     #[error("Error connecting on specified port")]
-    SocketConnect,
+    SocketConnect(reqwest::Error),
     #[error("Timed out during connecting")]
-    Timeout,
+    Timeout(reqwest::Error),
 }
 
 impl Target {
@@ -271,9 +271,9 @@ fn response_errors(err: reqwest::Error) -> Error {
 
 fn connect_errors(err: reqwest::Error) -> Error {
     if err.is_connect() {
-        Error::SocketConnect
+        Error::SocketConnect(err)
     } else if err.is_timeout() {
-        Error::Timeout
+        Error::Timeout(err)
     } else {
         err.into()
     }
