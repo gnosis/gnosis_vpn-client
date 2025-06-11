@@ -118,10 +118,10 @@ Follow the instructions to complete the installation.
    This command usually looks like this: `sudo <some_path>/gnosis_vpn -c <some_path>/config.toml`.
 
 2. In a separate terminal, run the control application to list available destinations.
-    Similarily, the command will be outlined by the installer and usually looks like this: `<some_path>/gnosis_vpn-ctl status`.
+   Similarily, the command will be outlined by the installer and usually looks like this: `<some_path>/gnosis_vpn-ctl status`.
 
 3. Choose a destination from the list and connect to it.
-    Again the installer will provide the command to do this: `<some_path>/gnosis_vpn-ctl connect <destination peer id>`.
+   Again the installer will provide the command to do this: `<some_path>/gnosis_vpn-ctl connect <destination peer id>`.
 
 ## 6. Use GnosisVPN connection to browse the internet
 
