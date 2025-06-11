@@ -32,7 +32,7 @@ pub enum Error {
     #[error("Error connecting on specified port: {0:?}")]
     SocketConnect(reqwest::Error),
     #[error("Connection reset by peer: {0:?}")]
-    onnectionReset(reqwest::Error),
+    ConnectionReset(reqwest::Error),
     #[error("Invalid port")]
     InvalidPort,
     #[error("Registration not found")]
