@@ -30,7 +30,7 @@ jobs:
       - name: Build
         run: nix build .#gnosisvpn -L
   lint:
-    name: Build
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -47,7 +47,7 @@ jobs:
       - name: Lint and formatting check
         run: nix run .#check
   test:
-    name: Build
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
