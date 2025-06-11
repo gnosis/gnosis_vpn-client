@@ -29,10 +29,10 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("Error making http request: {0:?}")]
     Request(#[from] reqwest::Error),
-    #[error("Error connecting on specified port")]
+    #[error("Error connecting on specified port: {0:?}")]
     SocketConnect(reqwest::Error),
-    #[error("Request error - connection reset by peer")]
-    ConnectionReset(reqwest::Error),
+    #[error("Connection reset by peer: {0:?}")]
+    onnectionReset(reqwest::Error),
     #[error("Invalid port")]
     InvalidPort,
     #[error("Registration not found")]

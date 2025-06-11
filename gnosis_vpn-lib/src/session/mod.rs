@@ -68,9 +68,9 @@ pub enum Error {
     SessionNotFound,
     #[error("Unauthorized")]
     Unauthorized,
-    #[error("Error connecting on specified port")]
+    #[error("Error connecting on specified port: {0:?}")]
     SocketConnect(reqwest::Error),
-    #[error("Timed out during connecting")]
+    #[error("Timeout: {0:?}")]
     Timeout(reqwest::Error),
 }
 

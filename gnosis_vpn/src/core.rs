@@ -163,7 +163,7 @@ impl Core {
             conn.dismantle();
             self.disconnect_wg();
         }
-        if let Some(dest) = self.target_destination.clone() {
+        if let Some(dest) = self.target_destination.as_ref() {
             if let Some(new_dest) = self.config.destinations().get(&dest.peer_id) {
                 tracing::debug!(current = %dest, new = %new_dest, "target destination updated");
                 self.target_destination = Some(new_dest.clone());
