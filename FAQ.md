@@ -2,42 +2,25 @@
 
 ## Unable to Access Websites After Activating GnosisVPN
 
-If you’ve activated GnosisVPN but cannot open any websites from the [allow list](https://gnosisvpn.com/servers#allowlist), follow these steps to diagnose and resolve the issue:
+If you’ve activated GnosisVPN but cannot open any website, follow these steps to diagnose and resolve the issue:
 
 ### Test Website Access
 
-- Double-check your Firefox proxy settings as outlined in [step 12](./ONBOARDING.md#12-use-gnosisvpn-connection-to-browse-the-internet-macos).
+- Double-check your Firefox proxy settings as outlined in [step 6](./ONBOARDING.md#6-use-gnosisvpn-connection-to-browse-the-internet).
 - Navigate to [example.com](https://example.com/).
 
 Can you access that site?
 
-- If **yes**, everything works as long as you adhere to the [allow list](https://gnosisvpn.com/servers#allowlist).
+- If **no** proceed to the next step.
 
-### Verify WireGuard Connection
+### Verify GnosisVPN Connection
 
-- Ensure that WireGuard is running on your machine and that the tunnel has an active status.
-  - **macOS users:** Locate the WireGuard app icon in the top-right corner of the screen, click on "Manage Tunnels", and verify that the tunnel status is "Active".
-  - **Linux users:** Run the command: `sudo wg show`. The output should display an interface named `gnosisvpnpoc`.
-
-Do you see an **active** WireGuard tunnel?
-
-- If **no**, verify that you followed [step 11](./ONBOARDING.md#11-update-the-newly-created-wireguard-tunnel-and-launch-wireguard-macos) closely.
-
-- Check that WireGuard can establish a handshake.
-  - **macOS users:** Locate the WireGuard app icon in the top-right corner, click on "Manage Tunnels", and check the "Data Received:" field of the active tunnel.
-  - **Linux users:** Run the command: `sudo wg show` and locate either the `latest handshake:` or `transfer:` entries.
-
-Do you see more than `0 B` (zero bytes) received or a `latest handshake` entry?
-
-- If **no**, verify that you forwarded your ports correctly; see [step 5](./ONBOARDING.md#5-configure-your-hoprd-node-to-allow-gnosisvpn-connections-macos).
-
-### Verify Hoprd Connection
-
-On successful startup, GnosisVPN will display the following message:
+- Navigate to the terminal where you launched the GnosisVPN client.
+- On successful connection, GnosisVPN will display the following message:
 
 ```
     /---============================---\
-    |   HOPRD CONNECTION ESTABLISHED   |
+    |   VPN CONNECTION ESTABLISHED   |
     \---============================---/
 ```
 
@@ -45,4 +28,19 @@ Did you see that message?
 
 - If **no**, check the log output for any errors.
 - Ensure you provided a valid entry node and API token in the configuration file.
-- Ensure you have a working route to the exit node; see [step 8](./ONBOARDING.md#8-enable-gnosisvpn-to-establish-connections-to-the-exit-nodes-from-your-hoprd-node-macos).
+- Ensure you have an open payment channel to the relay nodes. See [step 2](./ONBOARDING.md#2-enable-gnosisvpn-to-establish-connections-to-the-exit-nodes-from-your-hoprd-node).
+
+- If the service does **not** appear to be doing anything, proceed to the next step.
+
+### Use GnosisVPN Control Application to check status
+
+- In a separate terminal, run the GnosisVPN control application to check the status:
+
+`<some_path>/gnosis_vpn-ctl status`
+
+Did you see the list of available destinations?
+
+- If **no**, rerun the installer.
+- If **yes**, try connecting to a different location:
+
+`<some_path>/gnosis_vpn-ctl connect <destination peer id>`
