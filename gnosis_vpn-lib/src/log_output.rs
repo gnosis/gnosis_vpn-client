@@ -111,5 +111,4 @@ pub fn print_no_destinations() {
 >>!!>> Please rerun installer or manually add destinations from https://gnosisvpn.com/servers.
 "#
     );
-
 }
