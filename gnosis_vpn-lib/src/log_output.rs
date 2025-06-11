@@ -102,3 +102,14 @@ pub fn print_wg_manual_instructions() {
 "#
     );
 }
+
+pub fn print_no_destinations() {
+    tracing::error!(
+        r#"
+
+>>!!>> No destinations found in configuration file.
+>>!!>> Please rerun installer or manually add destinations from https://gnosisvpn.com/servers.
+"#
+    );
+
+}
