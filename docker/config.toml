@@ -1,18 +1,17 @@
-version = 1
+version = 2
 
 [hoprd_node]
 endpoint = "http://host.docker.internal:<api port>"
 api_token = "<api token>"
 
 [connection]
-destination = "<destination peer id>"
 listen_host = "0.0.0.0:1422"
-path.hop = 0
-target.host = "127.0.0.1"
-target.port = 51821
+[connection.wg]
+target = "127.0.0.1:51821"
 
 [wireguard]
-address = "<wg address>"
-server_public_key = "<server public key>"
-private_key = "<client private key>"
 listen_port = "<listen port>"
+
+[destinations.<peer id>]
+meta = { location = "local6" }
+path = { hops = 0 }
