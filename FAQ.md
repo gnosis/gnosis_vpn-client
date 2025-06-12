@@ -1,8 +1,8 @@
 # FAQ
 
-## Unable to Access Websites After Activating GnosisVPN
+## Unable to Access Websites After Activating Gnosis VPN
 
-If you’ve activated GnosisVPN but cannot open any website, follow these steps to diagnose and resolve the issue:
+If you’ve activated Gnosis VPN but cannot open any website, follow these steps to diagnose and resolve the issue:
 
 ### Test Website Access
 
@@ -13,10 +13,10 @@ Can you access that site?
 
 - If **no** proceed to the next step.
 
-### Verify GnosisVPN Connection
+### Verify Gnosis VPN Connection
 
-- Navigate to the terminal where you launched the GnosisVPN client.
-- On successful connection, GnosisVPN will display the following message:
+- Navigate to the terminal where you launched the Gnosis VPN client.
+- On successful connection, Gnosis VPN will display the following message:
 
 ```
     /---============================---\
@@ -32,9 +32,9 @@ Did you see that message?
 
 - If the service does **not** appear to be doing anything, proceed to the next step.
 
-### Use GnosisVPN Control Application to check status
+### Use Gnosis VPN Control Application to check status
 
-- In a separate terminal, run the GnosisVPN control application to check the status:
+- In a separate terminal, run the Gnosis VPN control application to check the status:
 
 `<some_path>/gnosis_vpn-ctl status`
 

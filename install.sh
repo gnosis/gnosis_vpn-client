@@ -19,7 +19,7 @@ BCyan='\033[1;36m'
 BRed='\033[1;31m'
 Color_Off='\033[0m'
 
-GLOBAL_NAME="${BPurple}<GnosisVPN installer script>${Color_Off}"
+GLOBAL_NAME="${BPurple}<Gnosis VPN installer script>${Color_Off}"
 
 usage() {
     echo -e "Usage: ${GLOBAL_NAME} [OPTIONS]"
@@ -123,18 +123,18 @@ parse_arguments() {
 print_intro() {
     echo ""
     echo -e "Welcome to the ${GLOBAL_NAME}!"
-    echo "This script will help you install and configure the GnosisVPN client on your system."
+    echo "This script will help you install and configure the Gnosis VPN client on your system."
     echo ""
     echo "Requirements:"
     echo "  - A running hoprd node that will act as your entry node."
     echo "  - WireGuard tools installed on your system."
-    echo "  - An additional open port on your node for GnosisVPN to connect to."
+    echo "  - An additional open port on your node for Gnosis VPN to connect to."
     echo ""
     echo "Note:"
-    echo "  GnosisVPN uses a port called 'internal_connection_port' for both TCP and UDP connections."
+    echo "  Gnosis VPN uses a port called 'internal_connection_port' for both TCP and UDP connections."
     echo ""
     echo "This installer will:"
-    echo "  - Download the GnosisVPN client and control application."
+    echo "  - Download the Gnosis VPN client and control application."
     echo "  - Prompt you for API access to your hoprd node."
     echo "  - Prompt you for the 'internal_connection_port'."
     echo "  - Generate a configuration file based on your input."
@@ -162,7 +162,7 @@ prompt_install_dir() {
         return
     fi
 
-    echo "Please specify the installation directory for GnosisVPN."
+    echo "Please specify the installation directory for Gnosis VPN."
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
     read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
@@ -174,7 +174,7 @@ prompt_install_dir() {
         INSTALL_FOLDER=$([[ $install_dir == /* ]] && echo "$install_dir" || echo "$PWD/${install_dir#./}")
     fi
     echo ""
-    echo "GnosisVPN will be installed to: \"${INSTALL_FOLDER}\"."
+    echo "Gnosis VPN will be installed to: \"${INSTALL_FOLDER}\"."
 }
 
 # from https://stackoverflow.com/a/37840948
@@ -193,7 +193,7 @@ prompt_api_access() {
         return
     fi
 
-    echo "GnosisVPN uses your hoprd node as entry connection point."
+    echo "Gnosis VPN uses your hoprd node as entry connection point."
     echo "Therefore, you need to provide the API endpoint and token for your hoprd node."
     echo -e "If connected to your hoprd node via ${BCyan}HOPR Admin UI${Color_Off}, paste it's full URL."
     echo "The script will try to parse the required values from the URL."
@@ -242,7 +242,7 @@ prompt_session_port() {
         return
     fi
 
-    echo "GnosisVPN requires a port for internal connections."
+    echo "Gnosis VPN requires a port for internal connections."
     echo "This port will be used for both TCP and UDP connections."
     read -r -p "Enter hoprd session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
     HOPRD_SESSION_PORT="${session_port:-$HOPRD_SESSION_PORT}"
@@ -276,14 +276,14 @@ fetch_version_tag() {
         return
     fi
 
-    echo "Fetching the latest GnosisVPN release tag from GitHub..."
+    echo "Fetching the latest Gnosis VPN release tag from GitHub..."
     VERSION_TAG=$(curl --fail -L --progress-bar \
         -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" |
         grep '"tag_name":' |
         sed -E 's/.*"tag_name": *"([^"]*)".*/\1/')
     echo ""
-    echo "Downloadable GnosisVPN version found: ${VERSION_TAG}"
+    echo "Downloadable Gnosis VPN version found: ${VERSION_TAG}"
 }
 
 check_platform() {
@@ -341,7 +341,7 @@ prompt_wireguard() {
         echo ""
         echo "Warning: WireGuard tools are not installed."
         echo ""
-        echo "GnosisVPN works best with WireGuard tools installed."
+        echo "Gnosis VPN works best with WireGuard tools installed."
         if [[ -n ${IS_MACOS} ]]; then
             echo "On macOS you can install WireGuard tools using Homebrew:"
             echo -e "${BCyan}brew install wireguard-tools${Color_Off}"
@@ -352,7 +352,7 @@ prompt_wireguard() {
             echo -e "See https://www.wireguard.com/install/ for more information."
         fi
         echo ""
-        echo "We strongly recommend installing WireGuard tools to use GnosisVPN."
+        echo "We strongly recommend installing WireGuard tools to use Gnosis VPN."
         echo "However if you know what you are doing you can also continue with manual mode."
         declare answer
         read -r -p "Press [Enter] to recheck for WireGuard tools or type 'manual': " answer
@@ -402,7 +402,7 @@ fetch_binaries() {
 
     if [[ -n ${IS_MACOS} ]]; then
         echo ""
-        echo "Detected macOS - GnosisVPN binaries need to be removed from apple quarantine mode."
+        echo "Detected macOS - Gnosis VPN binaries need to be removed from apple quarantine mode."
         echo -e "We will run these two commands with ${BCyan}sudo${Color_Off} to get required privileges:"
         echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn"
         echo "sudo xattr -dr com.apple.quarantine ./gnosis_vpn-ctl"
@@ -452,7 +452,7 @@ path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr
     fi
 
     cat <<EOF >./config.toml
-# Generated by GnosisVPN install script
+# Generated by Gnosis VPN install script
 
 version = 2
 
@@ -471,9 +471,9 @@ EOF
 
 print_outro() {
     echo ""
-    echo "GnosisVPN installation completed successfully!"
+    echo "Gnosis VPN installation completed successfully!"
     echo ""
-    echo "You can now run the GnosisVPN client using the following commands:"
+    echo "You can now run the Gnosis VPN client using the following commands:"
     echo -e "  - Start the client system service: ${BCyan}sudo ${INSTALL_FOLDER}/gnosis_vpn -c ${INSTALL_FOLDER}/config.toml${Color_Off}"
     echo -e "  - Check client status: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl status${Color_Off}"
     echo "You can connect to any of those locations:"

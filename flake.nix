@@ -1,5 +1,5 @@
 {
-  description = "GnosisVPN client service";
+  description = "Gnosis VPN client service";
 
   inputs = {
     flake-utils.url = github:numtide/flake-utils;

@@ -1,6 +1,6 @@
 # Onboarding
 
-The GnosisVPN proof of concept is a work in progress and may be updated at any time.
+The Gnosis VPN proof of concept is a work in progress and may be updated at any time.
 It may therefore be unstable or contain bugs, and should not be used in situations which require full anonymity.
 Use at your own risk.
 For testing and debugging, exit nodes currently gather logs. These logs cannot reveal user requests, server responses, IPs, or any other identifying information.
@@ -13,25 +13,25 @@ The PoC should not be used for illegal, malicious, or unethical purposes.
 
 The following process will guide you through these topics:
 
-- **Configure your hoprd node** to allow a GnosisVPN connection.
-- **Install the GnosisVPN client and WireGuard tools**.
-- **Configure Firefox proxy settings** to use the GnosisVPN connection.
+- **Configure your hoprd node** to allow a Gnosis VPN connection.
+- **Install the Gnosis VPN client and WireGuard tools**.
+- **Configure Firefox proxy settings** to use the Gnosis VPN connection.
 - **Leave feedback** by filling out the [feedback form](https://cryptpad.fr/form/#/2/form/view/ID9xmo4wYOdM4ZOzCiVMf5w6ZJehzNaIC53gkNS6C+k/).
 
 Having trouble with the PoC? Check out the [FAQ](FAQ.md).
 
-For any questions or assistance, feel free to join the [GnosisVPN Discord support channel](https://discord.gg/gnosis).
+For any questions or assistance, feel free to join the [Gnosis VPN Discord support channel](https://discord.gg/gnosis).
 
 ---
 
-## 1. Configure your hoprd node to allow GnosisVPN connections
+## 1. Configure your hoprd node to allow Gnosis VPN connections
 
-GnosisVPN will create a UDP connection to your hoprd node on a specified port (e.g., `1422`).
+Gnosis VPN will create a UDP connection to your hoprd node on a specified port (e.g., `1422`).
 
 Treat this as an additional port for hoprd that needs the same treatment as the peer-to-peer port and API port.
-If you set up any firewall rules or [port forwarding](https://docs.hoprnet.org/node/port-forwarding) for those ports, you will need to do the same for the GnosisVPN port.
+If you set up any firewall rules or [port forwarding](https://docs.hoprnet.org/node/port-forwarding) for those ports, you will need to do the same for the Gnosis VPN port.
 
-Additionally, you need to configure your hoprd node to allow GnosisVPN connections.
+Additionally, you need to configure your hoprd node to allow Gnosis VPN connections.
 The usual way of running hoprd is in a Docker container. This means you need to configure Docker to forward that port.
 
 Depending on your setup, this can be done in different ways.
@@ -74,26 +74,26 @@ services:
 7. Click **Update Port Mappings** to save your changes.
 8. Ensure you configure port forwarding on your router to expose the REST API port `3001` and port `1422` for both UDP and TCP to the internet.
 
-## 2. Enable GnosisVPN to establish connections to the Exit Nodes from your hoprd node
+## 2. Enable Gnosis VPN to establish connections to the Exit Nodes from your hoprd node
 
 **Caution:** If you have **channel auto-funding** enabled on your hoprd node, you might drain your funds quickly.
 To verify this, connect to your node via the **Admin UI** of your hoprd node and navigate to the **Configuration** page.
 Look at the **Strategies** section and ensure that `!AutoFunding` is **absent**.
 
-**Important Note:** Currently, GnosisVPN can only establish connections through high-profile relay nodes maintained by the community.
-To use GnosisVPN, you must open payment channels from your entry node to the relayer nodes.
-The relayer nodes' addresses can be found on the [GnosisVPN servers](https://gnosisvpn.com/servers) page.
+**Important Note:** Currently, Gnosis VPN can only establish connections through high-profile relay nodes maintained by the community.
+To use Gnosis VPN, you must open payment channels from your entry node to the relayer nodes.
+The relayer nodes' addresses can be found on the [Gnosis VPN servers](https://gnosisvpn.com/servers) page.
 
 ### Steps to Open a Payment Channel
 
 1. Connect to your node via the **Admin UI** of your hoprd node.
 2. Navigate to the **PEERS** page.
-3. Search for the peer of a relayer node from [GnosisVPN servers](https://gnosisvpn.com/servers).
+3. Search for the peer of a relayer node from [Gnosis VPN servers](https://gnosisvpn.com/servers).
 4. Click on **OPEN outgoing channel**.
 5. Enter the funding amount (recommended: **15 wxHOPR**) and click **Open Channel**.
 6. Once the channel is successfully opened, it will appear under the **CHANNELS: OUT** page.
 
-Repeat these steps with all available relayer nodes listed on the [GnosisVPN servers](https://gnosisvpn.com/servers) page.
+Repeat these steps with all available relayer nodes listed on the [Gnosis VPN servers](https://gnosisvpn.com/servers) page.
 
 ## 3. Install WireGuard tools
 
@@ -107,18 +107,18 @@ Using [Homebrew](https://brew.sh/), install [WireGuard tools](https://formulae.b
 
 Install WireGuard tools using your package manager. See [WireGuard installation guide](https://www.wireguard.com/install/) for more details.
 
-## 4. Install GnosisVPN client
+## 4. Install Gnosis VPN client
 
-Use the [installer](./installer.sh) script to download GnosisVPN and generate an initial config.
+Use the [installer](./installer.sh) script to download Gnosis VPN and generate an initial config.
 Or use this oneliner: `bash -c "$(curl -fsSL https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/HEAD/install.sh)"`.
 
 Follow the instructions to complete the installation.
 
-**Note:** After installation, the setup script will output the exact commands tailored to your configuration for using GnosisVPN.
+**Note:** After installation, the setup script will output the exact commands tailored to your configuration for using Gnosis VPN.
 
-## 5. Launch the GnosisVPN client system service and connect to a destination
+## 5. Launch the Gnosis VPN client system service and connect to a destination
 
-1. Open a terminal and run the command outlined by the installer to launch the GnosisVPN client.
+1. Open a terminal and run the command outlined by the installer to launch the Gnosis VPN client.
    This command usually looks like this: `sudo <some_path>/gnosis_vpn -c <some_path>/config.toml`.
 
 2. In a separate terminal, run the control application to list available destinations.
@@ -127,7 +127,7 @@ Follow the instructions to complete the installation.
 3. Choose a destination from the list and connect to it.
    Again the installer will provide the command to do this: `<some_path>/gnosis_vpn-ctl connect <destination peer id>`.
 
-## 6. Use GnosisVPN connection to browse the internet
+## 6. Use Gnosis VPN connection to browse the internet
 
 For now, we provide a specific HTTPS proxy connection that you need to configure in your browser.
 The easiest way to do this is to change the Firefox proxy settings.
@@ -140,4 +140,4 @@ The easiest way to do this is to change the Firefox proxy settings.
 - Check **Also use this proxy for HTTPS**
 
 4. Click **OK** to save the settings.
-   Start browsing through GnosisVPN.
+   Start browsing through Gnosis VPN.

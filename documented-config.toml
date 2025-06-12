@@ -80,6 +80,16 @@ path = { intermediates = [
 # capabilities = [ "segmentation" ]
 # target = "172.30.0.1:51820"
 
+# adjust internal session monitoring
+# [connection.ping]
+# timeout = "4s"
+# ttl = 5
+# seq_count = 1
+# [connection.ping.interval]
+# min = 5
+# max = 10
+
+
 ###
 ## wireguard section - specific VPN-related settings
 
@@ -88,7 +98,7 @@ path = { intermediates = [
 # listen_port = 51820
 # manually override derived allowed_ips for the WireGuard interface
 # allowed_ips = "10.128.0.1/9"
-# GnosisVPN will handle this automatically, but can only do so on supported platforms.
+# Gnosis VPN will handle this automatically, but can only do so on supported platforms.
 # If you manually handle the WireGuard interface, you need to specify a public_key here
 # [wireguard.manual_mode]
 # public_key = "<your WireGuard public key>"
