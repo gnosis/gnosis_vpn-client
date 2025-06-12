@@ -13,6 +13,7 @@ pub enum Command {
     Status,
     Connect(PeerId),
     Disconnect,
+    Ping,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,6 +21,7 @@ pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
+    Pong,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

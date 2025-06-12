@@ -1,6 +1,6 @@
 use ctrlc::Error as CtrlcError;
-use gnosis_vpn_lib::command::Command;
 use notify::{RecursiveMode, Watcher};
+
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -9,6 +9,9 @@ use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use gnosis_vpn_lib::command::Command;
+use gnosis_vpn_lib::socket;
 
 mod cli;
 mod core;
@@ -48,7 +51,7 @@ fn config_channel(
     exitcode::ExitCode,
 > {
     match param_config_path.try_exists() {
-        Ok(true) => {}
+        Ok(true) => (),
         Ok(false) => {
             tracing::error!(config_file=%param_config_path.display(), "cannot find configuration file");
             return Err(exitcode::NOINPUT);
@@ -59,39 +62,27 @@ fn config_channel(
         }
     };
 
-    let config_path = match fs::canonicalize(param_config_path) {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(error = ?e, "error canonicalizing config path");
-            return Err(exitcode::IOERR);
-        }
-    };
+    let config_path = fs::canonicalize(param_config_path).map_err(|e| {
+        tracing::error!(error = ?e, "error canonicalizing config path");
+        exitcode::IOERR
+    })?;
 
-    let parent = match config_path.parent() {
-        Some(dir) => dir,
-        None => {
-            tracing::error!("config path has no parent");
-            return Err(exitcode::UNAVAILABLE);
-        }
-    };
+    let parent = config_path.parent().ok_or_else(|| {
+        tracing::error!("config path has no parent");
+        exitcode::UNAVAILABLE
+    })?;
 
     let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
 
-    let mut watcher = match notify::recommended_watcher(sender) {
-        Ok(watcher) => watcher,
-        Err(e) => {
-            tracing::error!(error = ?e, "error creating config watcher");
-            return Err(exitcode::IOERR);
-        }
-    };
+    let mut watcher = notify::recommended_watcher(sender).map_err(|e| {
+        tracing::error!(error = ?e, "error creating config watcher");
+        exitcode::IOERR
+    })?;
 
-    match watcher.watch(parent, RecursiveMode::NonRecursive) {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!(error = ?e, "error watching config directory");
-            return Err(exitcode::IOERR);
-        }
-    };
+    watcher.watch(parent, RecursiveMode::NonRecursive).map_err(|e| {
+        tracing::error!(error = ?e, "error watching config directory");
+        exitcode::IOERR
+    })?;
 
     Ok((watcher, receiver))
 }
@@ -99,8 +90,21 @@ fn config_channel(
 fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net::UnixStream>, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
-            tracing::error!("socket path already exists");
-            return Err(exitcode::TEMPFAIL);
+            tracing::info!("probing for running instance");
+            match socket::process_cmd(&socket_path, &Command::Ping) {
+                Ok(_) => {
+                    tracing::error!("system service is already running - cannot start another instance");
+                    return Err(exitcode::TEMPFAIL);
+                }
+
+                Err(e) => {
+                    tracing::warn!(warn = ?e, "probing for running instance");
+                }
+            };
+            fs::remove_file(socket_path).map_err(|e| {
+                tracing::error!(error = ?e, "error removing stale socket file");
+                exitcode::IOERR
+            })?;
         }
         Ok(false) => (),
         Err(e) => {
@@ -109,24 +113,18 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
         }
     };
 
-    let stream = match net::UnixListener::bind(socket_path) {
-        Ok(listener) => listener,
-        Err(e) => {
-            tracing::error!(error = ?e, "error binding socket");
-            return Err(exitcode::OSFILE);
-        }
-    };
+    let stream = net::UnixListener::bind(socket_path).map_err(|e| {
+        tracing::error!(error = ?e, "error binding socket");
+        exitcode::OSFILE
+    })?;
 
     // update permissions to allow unprivileged access
     // TODO this would better be handled by allowing group access and let the installer create a
     // gvpn group and additionally add users to it
-    match fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666)) {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!(error = ?e, "error setting socket permissions");
-            return Err(exitcode::NOPERM);
-        }
-    }
+    fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666)).map_err(|e| {
+        tracing::error!(error = ?e, "error setting socket permissions");
+        exitcode::NOPERM
+    })?;
 
     let (sender, receiver) = crossbeam_channel::unbounded::<net::UnixStream>();
     thread::spawn(move || {
@@ -256,34 +254,20 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(socket_path: &Path, config_path: &Path) -> exitcode::ExitCode {
-    let ctrlc_receiver = match ctrlc_channel() {
-        Ok(receiver) => receiver,
-        Err(exit) => return exit,
-    };
-
+fn daemon(socket_path: &Path, config_path: &Path) -> Result<(), exitcode::ExitCode> {
+    let ctrlc_receiver = ctrlc_channel()?;
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = match config_channel(config_path) {
-        Ok(receiver) => receiver,
-        Err(exit) => return exit,
-    };
-
-    let socket_receiver = match socket_channel(socket_path) {
-        Ok(receiver) => receiver,
-        Err(exit) => return exit,
-    };
+    let (_config_watcher, config_receiver) = config_channel(config_path)?;
+    let socket_receiver = socket_channel(socket_path)?;
 
     let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, config_path);
-
-    // cleanup
     match fs::remove_file(socket_path) {
         Ok(_) => (),
         Err(e) => {
-            tracing::warn!(error = %e, "failed removing socket");
+            tracing::error!(error = %e, "failed removing socket");
         }
     }
-
-    exit_code
+    Err(exit_code)
 }
 
 fn loop_daemon(
@@ -306,7 +290,6 @@ fn loop_daemon(
     let mut ctrc_already_triggered = false;
 
     tracing::info!("enter listening mode");
-    // run continously until interrupted via signal
     loop {
         crossbeam_channel::select! {
             recv(ctrlc_receiver) -> _ => {
@@ -355,11 +338,12 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    let exit = daemon(&args.socket_path, &args.config_path);
-
-    if exit != exitcode::OK {
-        tracing::warn!("abnormal exit");
+    match daemon(&args.socket_path, &args.config_path) {
+        Ok(_) => (),
+        Err(exitcode::OK) => (),
+        Err(code) => {
+            tracing::warn!("abnormal exit");
+            process::exit(code);
+        }
     }
-
-    process::exit(exit)
 }

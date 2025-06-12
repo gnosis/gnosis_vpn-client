@@ -89,6 +89,7 @@ impl Core {
     pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
         tracing::debug!(%cmd, "handling command");
         match cmd {
+            Command::Ping => Ok(Response::Pong),
             Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
                 Some(dest) => {
                     self.target_destination = Some(dest.clone());

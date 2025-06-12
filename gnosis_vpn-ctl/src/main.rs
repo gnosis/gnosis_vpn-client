@@ -67,6 +67,9 @@ fn pretty_print(resp: &Response) {
             }
             println!("{}", str_resp);
         }
+        Response::Pong => {
+            println!("Pong");
+        }
     }
 }
 
@@ -77,5 +80,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
+        Response::Pong => exitcode::OK,
     }
 }
