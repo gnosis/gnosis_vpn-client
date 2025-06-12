@@ -91,7 +91,7 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
-            match socket::process_cmd(&socket_path, &Command::Ping) {
+            match socket::process_cmd(socket_path, &Command::Ping) {
                 Ok(_) => {
                     tracing::error!("system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);
