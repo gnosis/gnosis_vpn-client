@@ -112,7 +112,7 @@ Install WireGuard tools using your package manager. See [WireGuard installation 
 Use the [installer](./installer.sh) script to download GnosisVPN and generate an initial config.
 Or use this oneliner: `bash -c "$(curl -fsSL https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/HEAD/install.sh)"`.
 
-Follow the instructions to complete the installation. 
+Follow the instructions to complete the installation.
 
 **Note:** After installation, the setup script will output the exact commands tailored to your configuration for using GnosisVPN.
 
