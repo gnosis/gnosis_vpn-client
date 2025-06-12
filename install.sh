@@ -36,6 +36,15 @@ usage() {
     exit 0
 }
 
+trim() {
+    declare str="$*"
+    # strip leading
+    str="${str#"${str%%[![:space:]]*}"}"
+    # strip trailing
+    str="${str%"${str##*[![:space:]]}"}"
+    printf '%s' "$str"
+}
+
 check_reqs() {
     required_cmds=(curl grep sed cat uname)
     if [[ -n ${IS_MACOS} ]]; then
@@ -166,7 +175,7 @@ prompt_install_dir() {
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
     read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
-    install_dir="${install_dir:-$INSTALL_FOLDER}"
+    install_dir=$(trim "${install_dir:-$INSTALL_FOLDER}")
     # do not rely on realpath as it is unstable on macOS
     if INSTALL_FOLDER=$(realpath "${install_dir:-$INSTALL_FOLDER}" 2>/dev/null); then
         :
@@ -199,6 +208,7 @@ prompt_api_access() {
     echo "The script will try to parse the required values from the URL."
     declare admin_url
     read -r -p "Enter full hoprd admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
+    admin_url=$(trim "${admin_url}")
 
     declare api_endpoint api_token
     api_endpoint=""
@@ -218,6 +228,7 @@ prompt_api_access() {
             echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
         fi
         read -r -p "Enter hoprd API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
+        api_endpoint=$(trim "${api_endpoint}")
     else
         echo "Using parsed API endpoint: ${api_endpoint}"
     fi
@@ -226,6 +237,7 @@ prompt_api_access() {
             echo "Warning: Could not parse API token from the provided URL. Please provide it manually."
         fi
         read -r -p "Enter hoprd API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
+        api_token=$(trim "${api_token}")
     else
         echo "Using parsed API token: ${api_token}"
     fi
@@ -245,7 +257,7 @@ prompt_session_port() {
     echo "Gnosis VPN requires a port for internal connections."
     echo "This port will be used for both TCP and UDP connections."
     read -r -p "Enter hoprd session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
-    HOPRD_SESSION_PORT="${session_port:-$HOPRD_SESSION_PORT}"
+    HOPRD_SESSION_PORT=$(trim "${session_port:-$HOPRD_SESSION_PORT}")
 }
 
 fetch_network() {
@@ -356,12 +368,13 @@ prompt_wireguard() {
         echo "However if you know what you are doing you can also continue with manual mode."
         declare answer
         read -r -p "Press [Enter] to recheck for WireGuard tools or type 'manual': " answer
+        answer=$(trim "${answer}")
         if [[ $answer == "manual" ]]; then
             echo ""
             echo "You have chosen to continue in manual mode."
             echo "You will need to provide your WireGuard public key."
             read -r -p "Enter WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
-            WG_PUBLIC_KEY="${wg_pub_key:-$WG_PUBLIC_KEY}"
+            WG_PUBLIC_KEY=$(trim "${wg_pub_key:-$WG_PUBLIC_KEY}")
         else
             prompt_wireguard
         fi
@@ -410,6 +423,21 @@ fetch_binaries() {
         sleep 1
         sudo xattr -dr com.apple.quarantine ./gnosis_vpn
         sudo xattr -dr com.apple.quarantine ./gnosis_vpn-ctl
+    fi
+}
+
+backup_config() {
+    if [[ -f "./config.toml" ]]; then
+        declare timestamp backup_name
+        timestamp=$(date +%Y%m%d-%H%M%S)
+        backup_name="config-${timestamp}.toml"
+        cp "./config.toml" "./${backup_name}" || {
+            echo ""
+            echo -e "${BRed}Failed to back up config file:${Color_Off} ./config.toml to ./${backup_name}"
+            exit 1
+        }
+        echo ""
+        echo "Backed up existing config to ${backup_name}"
     fi
 }
 
@@ -515,6 +543,7 @@ main() {
 
     enter_install_dir
     fetch_binaries
+    backup_config
     generate_config
     exit_install_dir
 
