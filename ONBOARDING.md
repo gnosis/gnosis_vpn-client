@@ -20,7 +20,7 @@ The following process will guide you through these topics:
 
 Having trouble with the PoC? Check out the [FAQ](FAQ.md).
 
-For any questions or assistance, feel free to join the [GnosisVPN Discord support channel](https://discord.com/channels/502416149343109121/1337126805995262093).
+For any questions or assistance, feel free to join the [GnosisVPN Discord support channel](https://discord.gg/gnosis).
 
 ---
 
@@ -41,7 +41,7 @@ Depending on your setup, this can be done in different ways.
 Update the `hoprd` run command to include the port forwarding:
 
 ```bash
-docker run ... -p 1422:1422/udp ...
+docker run ... -p 1422:1422/udp -p 1422:1422/tcp ...
 ```
 
 ### Hoprd for Docker Compose
@@ -55,6 +55,7 @@ services:
     ports:
       ...
       - "1422:1422/udp"
+      - "1422:1422/tcp"
 ```
 
 ### Hoprd for Dappnode
@@ -69,8 +70,9 @@ services:
 - **PACKAGE PORT NUMBER**: `1422`
 - **PROTOCOL**: Select **UDP**.
 
-6. Click **Update Port Mappings** to save your changes.
-7. Ensure you configure port forwarding on your router to expose the REST API port `3001` and the UDP port `1422` to the internet.
+6. Repeat steps 4 and 5, and when you reach the **Protocol** section, select **TCP**.
+7. Click **Update Port Mappings** to save your changes.
+8. Ensure you configure port forwarding on your router to expose the REST API port `3001` and port `1422` for both UDP and TCP to the internet.
 
 ## 2. Enable GnosisVPN to establish connections to the Exit Nodes from your hoprd node
 
@@ -111,6 +113,8 @@ Use the [installer](./installer.sh) script to download GnosisVPN and generate an
 Or use this oneliner: `bash -c "$(curl -fsSL https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/HEAD/install.sh)"`.
 
 Follow the instructions to complete the installation.
+
+**Note:** After installation, the setup script will output the exact commands tailored to your configuration for using GnosisVPN.
 
 ## 5. Launch the GnosisVPN client system service and connect to a destination
 
