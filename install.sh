@@ -431,7 +431,11 @@ backup_config() {
         declare timestamp backup_name
         timestamp=$(date +%Y%m%d-%H%M%S)
         backup_name="config-${timestamp}.toml"
-        cp "./config.toml" "./${backup_name}"
+        cp "./config.toml" "./${backup_name}" || {
+            echo ""
+            echo -e "${BRed}Failed to back up config file:${Color_Off} ./config.toml to ./${backup_name}"
+            exit 1
+        }
         echo ""
         echo "Backed up existing config to ${backup_name}"
     fi
