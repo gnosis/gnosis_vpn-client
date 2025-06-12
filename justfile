@@ -155,7 +155,6 @@ system-setup mode='keep-running': submodules docker-build
     just docker-build
     DESTINATION_PEER_ID="${PEER_ID_LOCAL6}" API_TOKEN="${API_TOKEN_LOCAL1}" \
       API_PORT="${API_PORT_LOCAL1}" just docker-run
-    popd
 
     # 3b: wait for client to connect
     EXPECTED_PATTERN="VPN CONNECTION ESTABLISHED"
