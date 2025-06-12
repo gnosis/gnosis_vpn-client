@@ -98,7 +98,7 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
                 }
 
                 Err(e) => {
-                    tracing::warn!(warn = ?e, "probing for running instance");
+                    tracing::debug!(warn = ?e, "done probing for running instance");
                 }
             };
             fs::remove_file(socket_path).map_err(|e| {
