@@ -3,7 +3,7 @@ use gnosis_vpn_lib::config;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 
-/// Gnosis VPN system service - client application for GnosisVPN connections
+/// Gnosis VPN system service - client application for Gnosis VPN connections
 #[derive(Debug, Parser)]
 #[command(version)]
 pub struct Cli {

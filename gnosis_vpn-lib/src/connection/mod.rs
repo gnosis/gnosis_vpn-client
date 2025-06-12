@@ -112,7 +112,7 @@ enum InternalError {
     UnexpectedPhase,
     #[error("External session error: {0}")]
     SessionError(#[from] session::Error),
-    #[error("External GnosisVPN error: {0}")]
+    #[error("External Gnosis VPN error: {0}")]
     WgError(#[from] wg_client::Error),
     #[error("Channel send error: {0}")]
     SendError(#[from] crossbeam_channel::SendError<Event>),

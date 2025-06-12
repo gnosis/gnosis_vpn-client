@@ -1,4 +1,4 @@
-# GnosisVPN Client
+# Gnosis VPN Client
 
 The client establishes a VPN connection to a remote endpoint.
 It acts as a monitoring/management layer of hoprd session handling and WireGuard setup (Linux only).
@@ -15,7 +15,7 @@ Use [documented-config.toml](./documented-config.toml) as a full reference.
 
 ## Installation
 
-Use the [installer](./installer.sh) script to download GnosisVPN and generate an initial config.
+Use the [installer](./installer.sh) script to download Gnosis VPN and generate an initial config.
 Or use this oneliner: `bash -c "$(curl -fsSL https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/HEAD/install.sh)"`.
 
 ## General usage
@@ -50,7 +50,7 @@ Instruct the service via the control application `./gnosis_vpn-ctl` from a separ
 
 Once a VPN tunnel was created, configure your browsers proxy settings
 
-- Use HTTP proxy at 10.128.0.1:3128 to start browsing with GnosisVPN
+- Use HTTP proxy at 10.128.0.1:3128 to start browsing with Gnosis VPN
 
 ## Usage with manual WireGuard handling
 
@@ -82,7 +82,7 @@ Once a HOPRD tunnel was created, configure WireGuard manually
 
 Once a WireGuard tunnel was created, configure your browsers proxy settings
 
-- Use HTTP proxy at 10.128.0.1:3128 to start browsing with GnosisVPN
+- Use HTTP proxy at 10.128.0.1:3128 to start browsing with Gnosis VPN
 
 ## Deployment
 
