@@ -10,7 +10,7 @@ listen_host = "0.0.0.0:1422"
 target = "127.0.0.1:51821"
 
 [wireguard]
-listen_port = "<listen port>"
+listen_port = 51820
 
 [destinations.<peer id>]
 meta = { location = "local6" }
