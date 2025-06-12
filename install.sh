@@ -37,12 +37,12 @@ usage() {
 }
 
 trim() {
-  declare str="$*"
-  # strip leading
-  str="${str#"${str%%[![:space:]]*}"}"
-  # strip trailing
-  str="${str%"${str##*[![:space:]]}"}"
-  printf '%s' "$str"
+    declare str="$*"
+    # strip leading
+    str="${str#"${str%%[![:space:]]*}"}"
+    # strip trailing
+    str="${str%"${str##*[![:space:]]}"}"
+    printf '%s' "$str"
 }
 
 check_reqs() {
