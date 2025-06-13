@@ -288,11 +288,8 @@ fetch_version_tag() {
     fi
 
     echo "Fetching the latest Gnosis VPN release tag from GitHub..."
-    VERSION_TAG=$(curl --fail -L --progress-bar \
-        -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/gnosis/gnosis_vpn-client/releases/latest" |
-        grep '"tag_name":' |
-        sed -E 's/.*"tag_name": *"([^"]*)".*/\1/')
+
+    VERSION_TAG=$(curl --fail -L --progress-bar https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/main/LATEST)
     echo ""
     echo "Downloadable Gnosis VPN version found: ${VERSION_TAG}"
 }

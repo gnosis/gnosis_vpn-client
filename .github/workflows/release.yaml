@@ -117,12 +117,12 @@ jobs:
           rm Cargo.toml.bak
           nix develop --command cargo generate-lockfile
           echo "bump_version=${bump_version}" >> $GITHUB_OUTPUT
-          echo v${{ steps.environment.outputs.release_version }} > LATEST_TAG
-          echo "LATEST_TAG updated to v${{ steps.environment.outputs.release_version }}"
+          echo v${{ steps.environment.outputs.release_version }} > LATEST
+          echo "LATEST updated to v${{ steps.environment.outputs.release_version }}"
       - uses: EndBug/add-and-commit@v9
         with:
           add: "Cargo.*"
-          add: "LATEST_TAG"
+          add: "LATEST"
           new_branch: main
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
