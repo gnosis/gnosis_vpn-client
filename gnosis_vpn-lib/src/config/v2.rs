@@ -94,7 +94,7 @@ struct PingOptions {
     timeout: Option<Duration>,
     ttl: Option<u32>,
     seq_count: Option<u16>,
-    #[serde(deserialize_with = "validate_ping_interval")]
+    #[serde(default, deserialize_with = "validate_ping_interval")]
     interval: Option<PingInterval>,
 }
 
@@ -422,8 +422,23 @@ version = 2
 [hoprd_node]
 endpoint = "http://127.0.0.1:3001"
 api_token = "1234567890"
+
+[connection.ping]
+address = "10.128.0.1"
+
 "#####;
         toml::from_str::<Config>(config).expect("Failed to parse minimal config");
+    }
+
+    #[test]
+    fn test_ping_without_interval() {
+        let config = r#####"
+version = 2
+[hoprd_node]
+endpoint = "http://127.0.0.1:3001"
+api_token = "1234567890"
+"#####;
+        toml::from_str::<Config>(config).expect("Failed to parse minimal ping");
     }
 
     #[test]
