@@ -18,3 +18,5 @@ target/
 docker/gnosis_vpn
 docker/gnosis_vpn-ctl
 gnosisvpn-ctl.log.*
+# ci test
+cluster.log
