@@ -15,7 +15,7 @@ docker-run:
 
     log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
 
-    docker run --rm \
+    docker run --detach --rm \
         --env DESTINATION_PEER_ID_1=${DESTINATION_PEER_ID_1} \
         --env DESTINATION_PEER_ID_2=${DESTINATION_PEER_ID_2} \
         --env API_PORT=${API_PORT} \
@@ -126,8 +126,8 @@ system-setup mode='keep-running': submodules docker-build
     # 2a: start server
     echo "[PHASE2] Starting gnosis_vpn-server"
     pushd modules/gnosis_vpn-server
-    just docker-build
-    just docker-run
+        just docker-build
+        just docker-run
     popd
 
     # 2b: wait for server
@@ -137,7 +137,7 @@ system-setup mode='keep-running': submodules docker-build
     echo "[PHASE2] Waiting for log '${EXPECTED_PATTERN}' with ${TIMEOUT_S}s timeout"
 
     while true; do
-        if docker logs gnosis_vpn-server | grep -q "$EXPECTED_PATTERN"; then
+        if docker logs --since 3s gnosis_vpn-server | grep -q "$EXPECTED_PATTERN"; then
             echo "[PHASE2] ${EXPECTED_PATTERN}"
             break
         fi
@@ -146,42 +146,22 @@ system-setup mode='keep-running': submodules docker-build
             docker logs --tail 20 gnosis_vpn-server
             exit 2
         fi
-        sleep 1
+        sleep 2.5
     done
 
-    echo "[PHASE2] Server is ready, standing by for testing"
-
+    echo "[PHASE2] Server is ready for testing"
 
     ####
     ## PHASE 3: ready gnosis_vpn-client
 
     # 3a: start client
     echo "[PHASE3] Starting gnosis_vpn-client"
-    just docker-build
+    # container was build as part of the deps
     DESTINATION_PEER_ID_1="${PEER_ID_LOCAL5}" \
         DESTINATION_PEER_ID_2="${PEER_ID_LOCAL6}" \
         API_TOKEN="${API_TOKEN_LOCAL1}" \
         API_PORT="${API_PORT_LOCAL1}" \
         just docker-run
-
-    # 3b: wait for client to connect
-    EXPECTED_PATTERN="VPN CONNECTION ESTABLISHED"
-    TIMEOUT_S=$((60 * 5)) # 5 minutes
-    ENDTIME=$(($(date +%s) + TIMEOUT_S))
-    echo "[PHASE3] Waiting for log '${EXPECTED_PATTERN}' with ${TIMEOUT_S}s timeout"
-
-    while true; do
-        if docker logs gnosis_vpn-client | grep -q "$EXPECTED_PATTERN"; then
-            echo "[PHASE3] ${EXPECTED_PATTERN}"
-            break
-        fi
-        if [ $(date +%s) -gt $ENDTIME ]; then
-            echo "[PHASE3] Timeout reached"
-            docker logs --tail 20 gnosis_vpn-client
-            exit 3
-        fi
-        sleep 1
-    done
 
     exp_client_log() {
         EXPECTED_PATTERN="$1"
@@ -202,6 +182,10 @@ system-setup mode='keep-running': submodules docker-build
             sleep 2.5
         done
     }
+
+    # 3b: wait for client to be ready
+    exp_client_log "enter listening mode" 6
+    echo "[PHASE3] Client is ready for testing"
 
     # 3c: run system tests
     echo "[PHASE3] Checking connect via first local node"
