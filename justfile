@@ -45,6 +45,8 @@ submodules:
 # helper to start local cluster from hoprnet submodule
 start-cluster:
     #!/usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+
     cd modules/hoprnet
     nix develop .#cluster --command make localcluster-exposed
 
