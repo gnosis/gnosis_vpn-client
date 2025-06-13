@@ -121,8 +121,9 @@ jobs:
           echo "LATEST updated to v${{ steps.environment.outputs.release_version }}"
       - uses: EndBug/add-and-commit@v9
         with:
-          add: "Cargo.*"
-          add: "LATEST"
+          add:
+            - "Cargo.*"
+            - "LATEST"
           new_branch: main
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
