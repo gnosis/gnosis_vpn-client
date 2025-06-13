@@ -12,7 +12,7 @@ concurrency:
 jobs:
   delete-artifacts:
     name: Delete artifacts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event.pull_request.merged == true
     steps:
       - name: Checkout repository
@@ -36,11 +36,11 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - architecture: aarch64-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - architecture: armv7l-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - architecture: aarch64-darwin
             runner: macos-14
           - architecture: x86_64-darwin
@@ -57,7 +57,7 @@ jobs:
     secrets: inherit
   comment:
     name: Comment PR
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - build-binaries
     steps:
