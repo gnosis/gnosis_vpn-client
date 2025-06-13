@@ -14,7 +14,7 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
         run: nix build .#gnosisvpn -L
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,9 +46,9 @@ jobs:
           USER: runner
       - name: Lint and formatting check
         run: nix run .#check
-  test:
-    name: Test
-    runs-on: ubuntu-latest
+  unittest:
+    name: Unit test
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,18 +61,35 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
         env:
           USER: runner
-      - name: Tests
+      - name: Run unit tests
         run: nix build .#gnosisvpn-test
+  # systemtest:
+  #   name: System test
+  #   runs-on: ubuntu-24.04
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+  #     - name: Install Nix
+  #       uses: cachix/install-nix-action@v31
+  #     - name: Use Nix Cache
+  #       uses: cachix/cachix-action@v16
+  #       with:
+  #         name: gnosis-vpn-client
+  #         authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+  #       env:
+  #         USER: runner
+  #     - name: Run system tests
+  #       run: nix develop --command just system-setup ci-system-test
   build-binaries:
     strategy:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - architecture: aarch64-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - architecture: armv7l-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - architecture: aarch64-darwin
             runner: macos-14
           - architecture: x86_64-darwin

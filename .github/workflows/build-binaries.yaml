@@ -22,7 +22,7 @@ on:
       runner:
         type: choice
         options:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-13
           - macos-14
         required: true

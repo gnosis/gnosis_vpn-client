@@ -18,6 +18,6 @@ COPY ./gnosis_vpn-ctl gnosis_vpn-ctl
 COPY ./wrapper.sh wrapper.sh
 
 # port handling
-EXPOSE 51820/udp
+EXPOSE 51822/udp
 
 CMD ["./wrapper.sh"]

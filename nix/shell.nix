@@ -29,6 +29,7 @@ craneLib.devShell {
     jq
     which
     yq-go
+    just
 
     # development helper
     cargo-outdated

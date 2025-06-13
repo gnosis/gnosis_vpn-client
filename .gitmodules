@@ -1,0 +1,6 @@
+[submodule "modules/hoprnet"]
+	path = modules/hoprnet
+	url = https://github.com/hoprnet/hoprnet
+[submodule "modules/gnosis_vpn-server"]
+	path = modules/gnosis_vpn-server
+	url = https://github.com/gnosis/gnosis_vpn-server
