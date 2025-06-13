@@ -88,6 +88,7 @@ struct ConnectionTarget {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct PingOptions {
+    address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
     timeout: Option<Duration>,
     ttl: Option<u32>,
@@ -180,7 +181,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "ping" {
                         if let Some(ping) = v.as_table() {
                             for (k, v) in ping.iter() {
-                                if k == "timeout" || k == "ttl" || k == "seq_count" {
+                                if k == "address" || k == "timeout" || k == "ttl" || k == "seq_count" {
                                     continue;
                                 }
                                 if k == "interval" {
@@ -384,6 +385,7 @@ impl Config {
                 let opts = connection
                     .and_then(|c| c.ping.as_ref())
                     .map(|p| monitor::PingOptions {
+                        address: p.address.unwrap_or(def_opts.address),
                         timeout: p.timeout.unwrap_or(def_opts.timeout),
                         ttl: p.ttl.unwrap_or(def_opts.ttl),
                         seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
@@ -460,6 +462,7 @@ target = "127.0.0.1:51820"
 target_type = "sealed"
 
 [connection.ping]
+address = 10.128.0.1
 timeout = "4s"
 ttl = 5
 seq_count = 1
