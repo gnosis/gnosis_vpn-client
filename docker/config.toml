@@ -6,6 +6,8 @@ api_token = "<api token>"
 
 [connection]
 listen_host = "0.0.0.0:1422"
+[connection.bridge]
+target = "127.0.0.1:8000"
 [connection.wg]
 target = "127.0.0.1:51821"
 
