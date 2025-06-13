@@ -78,8 +78,9 @@ jobs:
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
         env:
           USER: runner
-      - name: Run system tests
+      - name: Prepare binary
         run: nix build .#gnosisvpn-x86_64-linux
+      - name: Run system tests
         run: nix develop --command just system-setup ci-system-test
   build-binaries:
     strategy:
