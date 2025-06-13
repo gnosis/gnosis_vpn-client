@@ -16,7 +16,8 @@ docker-run:
     log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
 
     docker run --rm \
-        --env DESTINATION_PEER_ID=${DESTINATION_PEER_ID} \
+        --env DESTINATION_PEER_ID_1=${DESTINATION_PEER_ID_1} \
+        --env DESTINATION_PEER_ID_2=${DESTINATION_PEER_ID_2} \
         --env API_PORT=${API_PORT} \
         --env API_TOKEN=${API_TOKEN} \
         --env RUST_LOG=${log_level} \

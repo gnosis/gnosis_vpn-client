@@ -2,9 +2,15 @@
 
 set -o errexit
 
-declare dest="$DESTINATION_PEER_ID"
-if [ -z "$dest" ]; then
-    echo "DESTINATION_PEER_ID is not set"
+declare dest1="$DESTINATION_PEER_ID_1"
+if [ -z "$dest1" ]; then
+    echo "DESTINATION_PEER_ID_1 is not set"
+    exit 1
+fi
+
+declare dest2="$DESTINATION_PEER_ID_2"
+if [ -z "$dest2" ]; then
+    echo "DESTINATION_PEER_ID_2 is not set"
     exit 1
 fi
 
@@ -22,6 +28,7 @@ fi
 
 awk -v cont="$port" '{gsub(/endpoint = "http:\/\/host.docker.internal:<api port>"/, "endpoint = \"http://host.docker.internal:" cont "\""); print}' config.toml >temp.toml && mv temp.toml config.toml
 awk -v cont="$token" '{gsub(/api_token = "<api token>"/, "api_token = \"" cont "\""); print}' config.toml >temp.toml && mv temp.toml config.toml
-awk -v cont="$dest" '{gsub(/destinations.<peer id>/, "destinations." cont ); print}' config.toml >temp.toml && mv temp.toml config.toml
+awk -v cont="$dest1" '{gsub(/destinations."<peerid1>"/, "destinations." cont ); print}' config.toml >temp.toml && mv temp.toml config.toml
+awk -v cont="$dest2" '{gsub(/destinations."<peerid2>"/, "destinations." cont ); print}' config.toml >temp.toml && mv temp.toml config.toml
 
 ./gnosis_vpn -c config.toml
