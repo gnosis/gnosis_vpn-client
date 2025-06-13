@@ -204,7 +204,7 @@ prompt_api_access() {
 
     echo "Gnosis VPN uses your hoprd node as entry connection point."
     echo "Therefore, you need to provide the API endpoint and token for your hoprd node."
-    echo -e "If connected to your hoprd node via ${BCyan}HOPR Admin UI${Color_Off}, paste it's full URL."
+    echo -e "If you are connected to your hoprd node via ${BCyan}HOPR Admin UI${Color_Off}, paste its full URL."
     echo "The script will try to parse the required values from the URL."
     declare admin_url
     read -r -p "Enter full hoprd admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
@@ -476,6 +476,10 @@ path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ
 [destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
 meta = { location = "Spain" }
 path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
+
+[destinations.12D3KooWJVhifJNJQPDSYz5aC8hWEyFdgB3xdJyKYQoPYLn4Svv8]
+meta = { location = "India" }
+path = { intermediates = [ "12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h" ] }
 '
     fi
 
