@@ -45,7 +45,7 @@ start-cluster:
     cd modules/hoprnet
     nix develop .#cluster --command make localcluster-exposed
 
-[doc('''Run full system setup with ping test:
+[doc('''Run full system setup with system tests:
 This will start a local cluster, start the server and client, and run a ping test.
    'mode' can be either 'keep-running' or 'ci-system-test', with 'keep-running' being the default
 ''')]
@@ -109,11 +109,13 @@ system-setup mode='keep-running': submodules docker-build
     done
 
     # 1c: extract values
+    PEER_ID_LOCAL5=$(awk '/local5/,/Admin UI/ {if ($1 == "Peer" && $2 == "Id:") print $3}' cluster.log)
     PEER_ID_LOCAL6=$(awk '/local6/,/Admin UI/ {if ($1 == "Peer" && $2 == "Id:") print $3}' cluster.log)
     API_TOKEN_LOCAL1=$(awk '/local1/,/Admin UI/ {if ($0 ~ /Admin UI:/) print $0}' cluster.log | sed -n 's/.*apiToken=\(.*\)$/\1/p')
     API_PORT_LOCAL1=$(awk '/local1/,/Rest API/ {if ($1 == "Rest" && $2 == "API:") print $3}' cluster.log | sed -n 's|.*:\([0-9]\+\)/.*|\1|p')
 
-    echo "[PHASE1] Peer ID (local6): $PEER_ID_LOCAL6"
+    echo "[PHASE1] Peer ID 1 (local5): $PEER_ID_LOCAL5"
+    echo "[PHASE1] Peer ID 2 (local6): $PEER_ID_LOCAL6"
     echo "[PHASE1] API Token (local1): $API_TOKEN_LOCAL1"
     echo "[PHASE1] API Port (local1): $API_PORT_LOCAL1"
 
@@ -147,7 +149,7 @@ system-setup mode='keep-running': submodules docker-build
         sleep 1
     done
 
-    echo "[PHASE2] Server is ready, waiting for client to connect"
+    echo "[PHASE2] Server is ready, standing by for testing"
 
 
     ####
@@ -156,8 +158,11 @@ system-setup mode='keep-running': submodules docker-build
     # 3a: start client
     echo "[PHASE3] Starting gnosis_vpn-client"
     just docker-build
-    DESTINATION_PEER_ID="${PEER_ID_LOCAL6}" API_TOKEN="${API_TOKEN_LOCAL1}" \
-      API_PORT="${API_PORT_LOCAL1}" just docker-run
+    DESTINATION_PEER_ID_1="${PEER_ID_LOCAL5}" \
+        DESTINATION_PEER_ID_2="${PEER_ID_LOCAL6}" \
+        API_TOKEN="${API_TOKEN_LOCAL1}" \
+        API_PORT="${API_PORT_LOCAL1}" \
+        just docker-run
 
     # 3b: wait for client to connect
     EXPECTED_PATTERN="VPN CONNECTION ESTABLISHED"
@@ -178,18 +183,46 @@ system-setup mode='keep-running': submodules docker-build
         sleep 1
     done
 
-    # 3c: run ping test
-    # echo "[PHASE3] Checking ping from client to server"
-    # docker exec gnosis_vpn-client ping -c1 10.129.0.1
-    # echo "[PHASE3] Checking ping from server to client"
-    # docker exec gnosis_vpn-server ping -c1 $CLIENT_WG_IP
+    exp_client_log() {
+        EXPECTED_PATTERN="$1"
+        TIMEOUT_S="${2}"
+        ENDTIME=$(($(date +%s) + TIMEOUT_S))
+        echo "[PHASE3] Waiting for log '${EXPECTED_PATTERN}' with ${TIMEOUT_S}s timeout"
 
-    # if [ "{{ mode }}" = "ci-system-test" ]; then
-    #     echo "[SUCCESS] System test completed successfully"
-    #     exit 0
-    # else
-    #     echo "[PHASE3] System setup complete, keeping components running"
-    #     echo "[PHASE3] Press Ctrl+C to stop the cluster and containers"
-    #     wait $CLUSTER_PID
-    #     exit 0
-    # fi
+        while true; do
+            if docker logs --since 3s gnosis_vpn-client | grep -q "$EXPECTED_PATTERN"; then
+                echo "[PHASE3] ${EXPECTED_PATTERN}"
+                break
+            fi
+            if [ $(date +%s) -gt $ENDTIME ]; then
+                echo "[PHASE3] Timeout reached"
+                docker logs --tail 20 gnosis_vpn-client
+                exit 2
+            fi
+            sleep 2.5
+        done
+    }
+
+    # 3c: run system tests
+    echo "[PHASE3] Checking connect via first local node"
+    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${PEER_ID_LOCAL5}
+    exp_client_log "VPN CONNECTION ESTABLISHED" 11
+    echo "[PHASE3] Checking working ping first node"
+    exp_client_log "session verified open" 11
+    echo "[PHASE3] Checking connect via second local node"
+    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${PEER_ID_LOCAL6}
+    exp_client_log "VPN CONNECTION ESTABLISHED" 16
+    echo "[PHASE3] Checking working ping second node"
+    exp_client_log "session verified open" 11
+    echo "[PHASE3] Checking disconnect"
+    exp_client_log "WireGuard connection closed" 6
+
+    if [ "{{ mode }}" = "ci-system-test" ]; then
+        echo "[SUCCESS] System test completed successfully"
+        exit 0
+    else
+        echo "[PHASE3] System setup complete, keeping components running"
+        echo "[PHASE3] Press Ctrl+C to stop the cluster and containers"
+        wait $CLUSTER_PID
+        exit 0
+    fi
