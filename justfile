@@ -199,6 +199,7 @@ system-setup mode='keep-running': submodules docker-build
     echo "[PHASE3] Checking working ping second node"
     exp_client_log "session verified open" 11
     echo "[PHASE3] Checking disconnect"
+    docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
     exp_client_log "WireGuard connection closed" 6
 
     if [ "{{ mode }}" = "ci-system-test" ]; then
