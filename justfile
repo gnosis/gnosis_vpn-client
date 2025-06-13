@@ -13,10 +13,13 @@ docker-run:
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    docker run --rm --detach \
+    log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
+
+    docker run --rm \
         --env DESTINATION_PEER_ID=${DESTINATION_PEER_ID} \
         --env API_PORT=${API_PORT} \
         --env API_TOKEN=${API_TOKEN} \
+        --env RUST_LOG=${log_level} \
         --publish 51822:51820/udp \
         --cap-add=NET_ADMIN \
         --add-host=host.docker.internal:host-gateway \
