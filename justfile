@@ -3,7 +3,10 @@ build:
     nix build .#gnosisvpn-x86_64-linux
 
 # build docker image
-docker-build: build
+docker-build:
+    #!/usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+
     cp result/bin/* docker/
     chmod 775 docker/gnosis_vpn docker/gnosis_vpn-ctl
     docker build --platform linux/x86_64 -t gnosis_vpn-client docker/
