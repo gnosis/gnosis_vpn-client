@@ -1,4 +1,4 @@
-use std::net::{IpAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -16,16 +16,6 @@ pub enum Error {
     PingFailed(#[from] ping::Error),
 }
 
-impl PingOptions {
-    pub fn new(timeout: Duration, ttl: u32, seq_count: u16) -> Self {
-        PingOptions {
-            timeout,
-            ttl,
-            seq_count,
-        }
-    }
-}
-
 impl Default for PingOptions {
     fn default() -> Self {
         PingOptions {
@@ -40,11 +30,11 @@ impl Default for PingOptions {
 pub fn ping(opts: &PingOptions) -> Result<(), Error> {
     ping::ping(
         opts.address,
-        Some(opts.timeout),                       // default timeout 4 sec
-        Some(opts.ttl),                           // ttl - number of jumps
-        None,                                     // ident - Identifier
-        Some(opts.seq_count),                     // Seq Count
-        None,                                     // Custom Payload
+        Some(opts.timeout),   // default timeout 4 sec
+        Some(opts.ttl),       // ttl - number of jumps
+        None,                 // ident - Identifier
+        Some(opts.seq_count), // Seq Count
+        None,                 // Custom Payload
     )
     .map_err(Error::PingFailed)
 }

@@ -1,11 +1,12 @@
+use serde::{Deserialize, Deserializer, Serialize};
+use url::Url;
+
 use std::cmp::PartialEq;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::Duration;
 use std::vec::Vec;
-
-use serde::{Deserialize, Deserializer, Serialize};
-use url::Url;
 
 use crate::connection::{Destination as ConnDestination, SessionParameters};
 use crate::entry_node::EntryNode;
@@ -462,7 +463,7 @@ target = "127.0.0.1:51820"
 target_type = "sealed"
 
 [connection.ping]
-address = 10.128.0.1
+address = "10.128.0.1"
 timeout = "4s"
 ttl = 5
 seq_count = 1
