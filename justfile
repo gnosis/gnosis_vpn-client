@@ -118,8 +118,7 @@ system-setup mode='keep-running': submodules docker-build
     ## PHASE 2: ready gnosis_vpn-server
 
     # 2a: start server
-    SERVER_PRIVATE_KEY=$(wg genkey)
-    echo "[PHASE2] Starting gnosis_vpn-server with public key: $(echo $SERVER_PRIVATE_KEY | wg pubkey)"
+    echo "[PHASE2] Starting gnosis_vpn-server"
     pushd modules/gnosis_vpn-server
     just docker-build
     just docker-run
