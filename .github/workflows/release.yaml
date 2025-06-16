@@ -15,32 +15,32 @@ concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-  build-binaries:
-    strategy:
-      matrix:
-        binary:
-          - architecture: x86_64-linux
-            runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: armv7l-linux
-            runner: ubuntu-24.04
-          - architecture: aarch64-darwin
-            runner: macos-14
-          - architecture: x86_64-darwin
-            runner: macos-13
-    name: Binary ${{ matrix.binary.architecture }}
-    uses: ./.github/workflows/build-binaries.yaml
-    with:
-      branch: main
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
-      version_type: "release"
-    secrets: inherit
+  # build-binaries:
+  #   strategy:
+  #     matrix:
+  #       binary:
+  #         - architecture: x86_64-linux
+  #           runner: ubuntu-24.04
+  #         - architecture: aarch64-linux
+  #           runner: ubuntu-24.04
+  #         - architecture: armv7l-linux
+  #           runner: ubuntu-24.04
+  #         - architecture: aarch64-darwin
+  #           runner: macos-14
+  #         - architecture: x86_64-darwin
+  #           runner: macos-13
+  #   name: Binary ${{ matrix.binary.architecture }}
+  #   uses: ./.github/workflows/build-binaries.yaml
+  #   with:
+  #     branch: main
+  #     runner: ${{ matrix.binary.runner }}
+  #     architecture: ${{ matrix.binary.architecture }}
+  #     version_type: "release"
+  #   secrets: inherit
   release:
     name: Close release
-    needs:
-      - build-binaries
+    # needs:
+    #   - build-binaries
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
