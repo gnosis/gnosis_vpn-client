@@ -74,8 +74,6 @@ jobs:
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}" --clobber
 
               if [[ "${{ inputs.version_type }}" == "release" ]]; then
-                sudo apt-get update
-                sudo apt-get install -y gnupg coreutils
                 gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sig --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sig
                 gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256
                 gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256.asc --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256.asc
