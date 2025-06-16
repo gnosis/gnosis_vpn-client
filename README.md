@@ -15,8 +15,6 @@ Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node a
 
 ### Check signatures
 
-### Check signatures
-
 To validate the signature of the downloaded binary from GitHub, follow these steps:
 
 1. Import the public key:
