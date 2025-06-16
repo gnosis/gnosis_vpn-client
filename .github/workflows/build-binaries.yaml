@@ -97,10 +97,7 @@ jobs:
           fi
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
-          # nix build .#gnosisvpn-${{ steps.vars.outputs.architecture}} -L
-          mkdir -p ./result/bin
-          echo "Hello architecture: ${{ steps.vars.outputs.architecture }}" > ./result/bin/gnosis_vpn
-          echo "Hello architecture: ${{ steps.vars.outputs.architecture }}" > ./result/bin/gnosis_vpn-ctl
+          nix build .#gnosisvpn-${{ steps.vars.outputs.architecture}} -L
           mkdir -p binaries
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
