@@ -18,21 +18,25 @@ Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node a
 To validate the signature of the downloaded binary from GitHub, follow these steps:
 
 1. Import the public key:
+
    ```bash
    gpg --import gpg-publickey.asc
    ```
 
 2. Verify the binary signature:
+
    ```bash
    gpg --verify gnosis_vpn-aarch64-darwin.sig gnosis_vpn-aarch64-darwin
    ```
 
 3. Verify the SHA256 checksum signature:
+
    ```bash
    gpg --verify gnosis_vpn-aarch64-darwin.sha256.asc
    ```
 
 4. Compare the decrypted checksum with the actual checksum:
+
    ```bash
    diff -u <(gpg --decrypt gnosis_vpn-aarch64-darwin.sha256.asc) <(shasum -a 256 gnosis_vpn-aarch64-darwin)
    ```
