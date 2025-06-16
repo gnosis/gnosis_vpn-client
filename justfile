@@ -48,6 +48,8 @@ start-cluster:
     set -o errexit -o nounset -o pipefail
 
     cd modules/hoprnet
+    # if on github hosted runner try to free some extra space (see https://github.com/orgs/community/discussions/25678)
+    rm -rf /opt/hostedtoolcache
     nix develop .#cluster --command make localcluster-exposed
 
 # full system setup with system tests: 'mode' can be either 'keep-running' or 'ci-system-test'
