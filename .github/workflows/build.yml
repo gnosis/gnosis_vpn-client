@@ -76,7 +76,7 @@ jobs:
         with:
           name: gnosis-vpn-client
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-          extaPullNames: "hoprnet"
+          extraPullNames: "hoprnet"
         env:
           USER: runner
       - name: Install just via apt
