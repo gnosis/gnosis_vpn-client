@@ -50,10 +50,7 @@ start-cluster:
     cd modules/hoprnet
     nix develop .#cluster --command make localcluster-exposed
 
-[doc('''Run full system setup with system tests:
-This will start a local cluster, start the server and client, and run a ping test.
-   'mode' can be either 'keep-running' or 'ci-system-test', with 'keep-running' being the default
-''')]
+# full system setup with system tests: 'mode' can be either 'keep-running' or 'ci-system-test'
 system-setup mode='keep-running': submodules docker-build
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
