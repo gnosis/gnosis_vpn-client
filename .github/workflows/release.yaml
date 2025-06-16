@@ -60,6 +60,7 @@ jobs:
           echo "release_version=${release_version}" >> $GITHUB_OUTPUT
       - name: Create release and publish binaries
         run: |
+          set -x
           architectures=("aarch64-linux" "x86_64-linux" "armv7l-linux" "aarch64-darwin" "x86_64-darwin" )
           mkdir -p binaries
           echo "Generating release notes"
@@ -72,22 +73,20 @@ jobs:
               echo "Uploading binary gnosis_vpn-${architecture}"
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}" --clobber
               gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}" --clobber
-
-              if [[ "${{ inputs.version_type }}" == "release" ]]; then
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sig --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sig
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256.asc --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256.asc
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sig --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sig
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sha256
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sha256.asc --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sha256.asc
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sig" --clobber
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sha256" --clobber
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sha256.asc" --clobber
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sig" --clobber
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sha256" --clobber
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sha256.asc" --clobber
-              fi
-
+              echo "Downloading signatures and checksums for gnosis_vpn-${architecture}"
+              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sig --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sig
+              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256
+              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256.asc --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256.asc
+              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sig --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sig
+              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sha256
+              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sha256.asc --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sha256.asc
+              echo "Uploading signatures and checksums for gnosis_vpn-${architecture}"
+              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sig" --clobber
+              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sha256" --clobber
+              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sha256.asc" --clobber
+              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sig" --clobber
+              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sha256" --clobber
+              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sha256.asc" --clobber
           done
           echo "Release v${{ steps.environment.outputs.release_version }} created and binaries uploaded"
           exit 1
