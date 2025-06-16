@@ -7,7 +7,7 @@ It acts as a monitoring/management layer of hoprd session handling and WireGuard
 
 The client (`gnosis_vpn`) is meant to run as a service binary with privileged access.
 We offer a control application (`gnosis_vpn-ctl`) that can be used to manage the client.
-The default socket for communicating with the client is `/var/run/gnosisvpn.sock`.
+The default socket for communicating with the client is `/var/run/gnosis_vpn.sock`.
 The default configuration file is located in `/etc/gnosisvpn/config.toml`.
 
 The minimal configuration file [config.toml](./config.toml) can be used to ease the setup.
