@@ -3,7 +3,7 @@ build:
     nix build .#gnosisvpn-x86_64-linux
 
 # build docker image
-docker-build:
+docker-build: build
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
