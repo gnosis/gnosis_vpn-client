@@ -41,7 +41,6 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
         env:
           USER: runner
       - name: Lint and formatting check
@@ -58,7 +57,6 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
         env:
           USER: runner
       - name: Run unit tests
@@ -75,7 +73,6 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
           extraPullNames: "hoprnet"
         env:
           USER: runner
