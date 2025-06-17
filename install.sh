@@ -330,12 +330,13 @@ check_channels() {
 
     if [[ -n ${missing_channel} ]]; then
         for i in {30..2}; do
-            printf "\rRechecking open channels to Gnosis VPN relayer nodes in %d seconds..." "$i"
+            printf "\rRechecking open channels to Gnosis VPN relayer nodes in %d seconds... " "$i"
             sleep 1
         done
-        printf "\rRechecking open channels to Gnosis VPN relayer nodes in 1 second..."
+        printf "\rRechecking open channels to Gnosis VPN relayer nodes in 1 second...  "
         sleep 1
         check_channels
+        return
     fi
 
     echo ""
