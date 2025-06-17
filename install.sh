@@ -273,8 +273,12 @@ check_channel() {
     channel="$2"
     name="$3"
 
-    if echo "$channels" | grep -q -- "$channel"; then
-        return 0
+    #  \"peerAddress\":\"<peer>\" followed by any non-}  then \"status\":\"(capture)\"
+    local re='\"peerAddress\":\"'"$channel"'\"[^}]*\"status\":\"([^\"]+)\"'
+
+    if [[ $channels =~ $re ]]; then
+        # BASH_REMATCH[1] now holds the status
+        [[ ${BASH_REMATCH[1]} == Open ]]
     else
         echo -e ""
         echo -e "${BRed}Error:${Color_Off} Missing channel to ${name} relayer"
