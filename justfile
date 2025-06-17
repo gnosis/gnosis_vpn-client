@@ -4,6 +4,9 @@ build:
 
 # build docker image
 docker-build: build
+    #!/usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+
     cp result/bin/* docker/
     chmod 775 docker/gnosis_vpn docker/gnosis_vpn-ctl
     docker build --platform linux/x86_64 -t gnosis_vpn-client docker/
@@ -42,13 +45,14 @@ submodules:
 # helper to start local cluster from hoprnet submodule
 start-cluster:
     #!/usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+    # if on github hosted runner try to free some extra space (see https://github.com/orgs/community/discussions/25678)
+    rm -rf /opt/hostedtoolcache
+
     cd modules/hoprnet
     nix develop .#cluster --command make localcluster-exposed
 
-[doc('''Run full system setup with system tests:
-This will start a local cluster, start the server and client, and run a ping test.
-   'mode' can be either 'keep-running' or 'ci-system-test', with 'keep-running' being the default
-''')]
+# full system setup with system tests: 'mode' can be either 'keep-running' or 'ci-system-test'
 system-setup mode='keep-running': submodules docker-build
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
