@@ -97,7 +97,7 @@ parse_arguments() {
                 WG_PUBLIC_KEY="$2"
                 shift
             else
-                echo "${BRed}Error:${Color_Off} --expect-wg requires a non-empty argument."
+                echo "${BRed}Error:${Color_Off} --expert-wg requires a non-empty argument."
                 exit 1
             fi
             ;;
