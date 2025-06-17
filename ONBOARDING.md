@@ -85,12 +85,12 @@ To use Gnosis VPN, you must open payment channels from your entry node to the re
 
 ### Relayers
 
-| Relayer address | Target location |
-|------------------|-----------------|
-| `12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ` | USA |
-| `12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr` | Spain |
-| `12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP` | Germany |
-| `12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h` | India |
+| Relayer address                                        | Target location |
+| ------------------------------------------------------ | --------------- |
+| `12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ` | USA             |
+| `12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr` | Spain           |
+| `12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP` | Germany         |
+| `12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h` | India           |
 
 ### Steps to Open a Payment Channel
 
