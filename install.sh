@@ -283,7 +283,6 @@ check_channel() {
     fi
 }
 
-
 check_channels() {
     if [[ -n ${NON_INTERACTIVE} ]]; then
         if [[ -n ${EXPERT_CHANNELS} ]]; then
@@ -459,8 +458,6 @@ check_wireguard() {
     echo ""
     echo "Successfully detected WireGuard tools."
 }
-
-
 
 enter_install_dir() {
     mkdir -p "${INSTALL_FOLDER}"
