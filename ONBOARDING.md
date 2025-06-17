@@ -82,18 +82,30 @@ Look at the **Strategies** section and ensure that `!AutoFunding` is **absent**.
 
 **Important Note:** Currently, Gnosis VPN can only establish connections through high-profile relay nodes maintained by the community.
 To use Gnosis VPN, you must open payment channels from your entry node to the relayer nodes.
-The relayer nodes' addresses can be found on the [Gnosis VPN servers](https://gnosisvpn.com/servers) page.
+
+### Relayers
+
+| Relayer address                                        | Target location |
+| ------------------------------------------------------ | --------------- |
+| `12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ` | USA             |
+| `12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr` | Spain           |
+| `12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP` | Germany         |
+| `12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h` | India           |
 
 ### Steps to Open a Payment Channel
 
+In order to help you with identifying the relayer nodes, we provide a list of [aliases](relayer-aliases.csv).
+Navigate to the **ALIASES** page in the **Admin UI** and click the second button next to the title called **Import**.
+Upload [aliases](relayer-aliases.csv) file to make the next steps easier.
+
 1. Connect to your node via the **Admin UI** of your hoprd node.
 2. Navigate to the **PEERS** page.
-3. Search for the peer of a relayer node from [Gnosis VPN servers](https://gnosisvpn.com/servers).
+3. Search for one relayer node from the [relayers](#relayers) table above.
 4. Click on **OPEN outgoing channel**.
 5. Enter the funding amount (recommended: **15 wxHOPR**) and click **Open Channel**.
 6. Once the channel is successfully opened, it will appear under the **CHANNELS: OUT** page.
 
-Repeat these steps with all available relayer nodes listed on the [Gnosis VPN servers](https://gnosisvpn.com/servers) page.
+Repeat these steps with all available [relayers](#relayers).
 
 ## 3. Install WireGuard tools
 

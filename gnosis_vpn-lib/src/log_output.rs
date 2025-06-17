@@ -108,7 +108,7 @@ pub fn print_no_destinations() {
         r#"
 
 >>!!>> No destinations found in configuration file.
->>!!>> Please rerun installer or manually add destinations from https://gnosisvpn.com/servers.
+>>!!>> Please rerun installer from https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/heads/main/install.sh.
 "#
     );
 }
@@ -119,7 +119,7 @@ pub fn print_session_path_instructions() {
 
 >>!!>> Cannot transport data through session.
 >>!!>> This could mean you are missing channel connections to relayers.
->>!!>> Please check your hoprd node and open channels to relayers as specified here: https://gnosisvpn.com/servers.
-        "#
+>>!!>> Please check your hoprd node and open channels to relayers as specified here: https://github.com/gnosis/gnosis_vpn-client/blob/main/ONBOARDING.md#relayers.
+"#
     );
 }
