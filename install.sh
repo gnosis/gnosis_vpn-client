@@ -425,7 +425,7 @@ check_wireguard() {
             sleep 1
             return
         fi
-        if check_wg_commands; then
+        if ! check_wg_commands; then
             echo ""
             echo "[NON-INTERACTIVE] WireGuard tools are not installed."
             echo "[NON-INTERACTIVE] Cannot continue non interactive installation."
