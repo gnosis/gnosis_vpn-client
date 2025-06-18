@@ -391,7 +391,7 @@ check_platform() {
 }
 
 check_reqs() {
-    required_cmds=(curl grep sed cat uname)
+    declare required_cmds=(curl grep sed cat uname)
     if [[ -n ${IS_MACOS} ]]; then
         required_cmds+=(xattr)
     fi
@@ -406,20 +406,18 @@ check_reqs() {
 
 }
 
-check_wireguard() {
-    declare wg_fail
-    wg_fail=""
-    if ! command -v wg &>/dev/null; then
-        echo ""
-        echo "Warning: Probing for wg command failed."
-        wg_fail="yes"
-    fi
-    if [[ -z $wg_fail ]] && ! command -v wg-quick &>/dev/null; then
-        echo ""
-        echo "Warning: Probing for wg-quick command failed."
-        wg_fail="yes"
-    fi
+check_wg_commands() {
+    declare required_cmds=(wg wg-quick)
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo ""
+            echo "Warning: $cmd command is not available."
+            return 1
+        fi
+    done
+}
 
+check_wireguard() {
     if [[ -n ${NON_INTERACTIVE} ]]; then
         if [[ -n ${WG_PUBLIC_KEY} ]]; then
             echo ""
@@ -427,7 +425,7 @@ check_wireguard() {
             sleep 1
             return
         fi
-        if [[ -n ${wg_fail} ]]; then
+        if check_wg_commands; then
             echo ""
             echo "[NON-INTERACTIVE] WireGuard tools are not installed."
             echo "[NON-INTERACTIVE] Cannot continue non interactive installation."
@@ -442,22 +440,37 @@ check_wireguard() {
         return
     fi
 
-    if [[ -n $wg_fail ]]; then
+    if check_wg_commands; then
         echo ""
         echo -e "${BRed}Error:${Color_Off}: WireGuard tools are not installed."
+
         echo ""
         if [[ -n ${IS_MACOS} ]]; then
-            echo "You can install WireGuard tools using Homebrew (https://brew.sh):"
-            echo -e "${BCyan}brew install wireguard-tools${Color_Off}"
+            if command -v brew &>/dev/null; then
+                echo "Executing 'brew install wireguard-tools' to install WireGuard tools."
+                read -r -p "Press [Enter] to proceed."
+                brew install wireguard-tools || {
+                    echo ""
+                    echo -e "${BRed}Failed to install WireGuard tools.${Color_Off}"
+                    exit 1
+                }
+            else
+                echo -e "${BRed}Error:${Color_Off} Homebrew (https://brew.sh) not found."
+                echo "Unable to install WireGuard tools on macOS."
+                echo -e "Please install Homebrew from ${BCyan}(https://brew.sh)${Color_Off}."
+                echo "Then restart this installer. Exiting."
+                exit 1
+            fi
         else
             echo "You can install WireGuard tools using your package manager."
             echo "For example, on Debian/Ubuntu you can run:"
             echo -e "${BCyan}sudo apt install wireguard-tools${Color_Off}"
             echo "See https://www.wireguard.com/install/ for more information."
+            echo ""
+            read -r -p "Please install WireGuard tools - once installed press [Enter] to proceed."
         fi
-        echo ""
-        read -r -p "Please install WireGuard tools - once installed press [Enter] to proceed."
         check_wireguard
+        return
     fi
 
     echo ""
