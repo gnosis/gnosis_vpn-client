@@ -440,7 +440,7 @@ check_wireguard() {
         return
     fi
 
-    if check_wg_commands; then
+    if ! check_wg_commands; then
         echo ""
         echo -e "${BRed}Error:${Color_Off}: WireGuard tools are not installed."
 
