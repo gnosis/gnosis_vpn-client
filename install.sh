@@ -311,15 +311,20 @@ check_channels() {
         -H "x-auth-token: $HOPRD_API_TOKEN" \
         "${HOPRD_API_ENDPOINT}/api/v3/channels?includingClosed=false&fullTopology=false")
 
+    # strip everything up through the opening [ of outgoing
+    declare outgoing_inc_remainder="${channels#*\"outgoing\":[}"
+    # now cut off everything after the matching ]
+    declare outgoing="${outgoing_inc_remainder%%]*}]"
+
     declare missing_channel=""
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        check_channel "${channels}" "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" "Stockholm" || missing_channel="yes"
-        check_channel "${channels}" "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" "Columbus" || missing_channel="yes"
+        check_channel "${outgoing}" "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" "Stockholm" || missing_channel="yes"
+        check_channel "${outgoing}" "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" "Columbus" || missing_channel="yes"
     else
-        check_channel "${channels}" "0x25865191AdDe377fd85E91566241178070F4797A" "USA" || missing_channel="yes"
-        check_channel "${channels}" "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" "India" || missing_channel="yes"
-        check_channel "${channels}" "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA" "Germany" || missing_channel="yes"
-        check_channel "${channels}" "0x2Cf9E5951C9e60e01b579f654dF447087468fc04" "Spain" || missing_channel="yes"
+        check_channel "${outgoing}" "0x25865191AdDe377fd85E91566241178070F4797A" "USA" || missing_channel="yes"
+        check_channel "${outgoing}" "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" "India" || missing_channel="yes"
+        check_channel "${outgoing}" "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA" "Germany" || missing_channel="yes"
+        check_channel "${outgoing}" "0x2Cf9E5951C9e60e01b579f654dF447087468fc04" "Spain" || missing_channel="yes"
     fi
 
     if [[ -n ${NON_INTERACTIVE} ]]; then
