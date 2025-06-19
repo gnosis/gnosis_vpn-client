@@ -30,6 +30,9 @@ craneLib.devShell {
     which
     yq-go
     just
+    nfpm
+    gnupg
+    perl # Required for shasum
 
     # development helper
     cargo-outdated

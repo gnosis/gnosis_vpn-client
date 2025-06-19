@@ -2,6 +2,35 @@
 build:
     nix build .#gnosisvpn-x86_64-linux
 
+package distro arch:
+    #! /usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+    release_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
+    sed -i.bak "s/version:.*/version: \"${release_version}\"/" nfpm/nfpm.yaml
+    sed -i.bak "s/arch:.*/arch: \"{{arch}}\"/" nfpm/nfpm.yaml
+    nfpm package --config nfpm/nfpm.yaml --packager "{{distro}}" --target "target/gnosisvpn-{{arch}}.{{distro}}"
+    mv nfpm/nfpm.yaml.bak nfpm/nfpm.yaml
+    gpg --armor --output "target/gnosisvpn-{{arch}}.{{distro}}.sig" --detach-sign "target/gnosisvpn-{{arch}}.{{distro}}"
+    shasum -a 256 "target/gnosisvpn-{{arch}}.{{distro}}" > "target/gnosisvpn-{{arch}}.{{distro}}.sha256"
+    gpg --armor --sign "target/gnosisvpn-{{arch}}.{{distro}}.sha256"
+
+
+package-all:
+    #! /usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+    just package deb x86_64-linux
+    just package deb aarch64-linux
+    just package deb armv7l-linux
+    just package rpm x86_64-linux
+    just package rpm aarch64-linux
+    just package rpm armv7l-linux
+    just package apk x86_64-linux
+    just package apk aarch64-linux
+    just package apk armv7l-linux
+    just package archlinux x86_64-linux
+    just package archlinux aarch64-linux
+    just package archlinux armv7l-linux
+
 # build docker image
 docker-build: build
     cp result/bin/* docker/

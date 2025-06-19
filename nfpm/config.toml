@@ -1,0 +1,37 @@
+version = 2
+
+[hoprd_node]
+endpoint = "http://127.0.0.1:3001"
+api_token = "MySecretApiToken"
+internal_connection_port = 1422
+
+
+[destinations]
+
+[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
+meta = { location = "Germany", city = "Frankfurt" }
+path = { intermediates = [
+    "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP",
+] }
+# path = { hops = 0 }
+
+[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
+meta = { location = "US", city = "Iowa" }
+path = { intermediates = [
+    "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ",
+] }
+# path = { hops = 0 }
+
+[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
+meta = { location = "Spain", city = "Madrid" }
+path = { intermediates = [
+    "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr",
+] }
+# path = { hops = 0 }
+
+[destinations.12D3KooWJVhifJNJQPDSYz5aC8hWEyFdgB3xdJyKYQoPYLn4Svv8]
+meta = { location = "India", city = "Mumbai" }
+path = { intermediates = [
+    "12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h",
+] } # q_india
+# path = { hops = 0 }

@@ -1,0 +1,28 @@
+name: gnosisvpn
+arch: "x86_64-linux"
+platform: linux
+version: "0.10.11"
+section: default
+priority: optional
+maintainer: Gnosis VPN <contact@hoprnet.org>
+description: Gnosis VPN is a decentralized, trustless and uncensorable VPN solution build on top the HOPR mixnet.
+license: GNU Lesser General Public License v3.0
+homepage: https://github.com/gnosis/gnosisvpn
+depends:
+  - wireguard-tools
+  - systemd
+  # - hoprd
+
+contents:
+  - src: ./result/bin/gnosis_vpn
+    dst: /usr/bin/gnosisvpn
+  - src: ./result/bin/gnosis_vpn-ctl
+    dst: /usr/bin/gnosisvpn-ctl
+  - src: ./nfpm/config.toml
+    dst: /etc/gnosisvpn/config.toml
+  - src: ./nfpm/gnosisvpn.service
+    dst: /etc/systemd/system/gnosisvpn.service
+
+scripts:
+  postinstall: ./nfpm/install.sh
+  preremove: ./nfpm/uninstall.sh
