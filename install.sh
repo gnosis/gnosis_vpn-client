@@ -156,7 +156,6 @@ print_intro() {
 
 prompt_install_dir() {
     echo ""
-    declare install_dir
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "[NON-INTERACTIVE] Using installation directory: ${INSTALL_FOLDER}"
         sleep 1
@@ -166,6 +165,7 @@ prompt_install_dir() {
     echo "Please specify the installation directory for Gnosis VPN."
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
+    declare install_dir
     read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
     install_dir=$(trim "${install_dir:-$INSTALL_FOLDER}")
     # do not rely on realpath as it is unstable on macOS
@@ -203,9 +203,8 @@ prompt_api_access() {
     read -r -p "Enter full hoprd admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
     admin_url=$(trim "${admin_url}")
 
-    declare api_endpoint api_token
-    api_endpoint=""
-    api_token=""
+    declare api_endpoint=""
+    declare api_token=""
     if [[ -n ${admin_url} ]]; then
         echo ""
         echo "Parsing admin URL..."
@@ -268,10 +267,9 @@ fetch_network() {
 }
 
 check_channel() {
-    declare channels channel name
-    channels="$1"
-    channel="$2"
-    name="$3"
+    declare channels="$1"
+    declare channel="$2"
+    declare name="$3"
 
     #  \"peerAddress\":\"<peer>\" followed by any non-}  then \"status\":\"(capture)\"
     local re='\"peerAddress\":\"'"$channel"'\"[^}]*\"status\":\"([^\"]+)\"'
@@ -311,15 +309,20 @@ check_channels() {
         -H "x-auth-token: $HOPRD_API_TOKEN" \
         "${HOPRD_API_ENDPOINT}/api/v3/channels?includingClosed=false&fullTopology=false")
 
+    # strip everything up through the opening [ of outgoing
+    declare outgoing_inc_remainder="${channels#*\"outgoing\":[}"
+    # now cut off everything after the matching ]
+    declare outgoing="${outgoing_inc_remainder%%]*}]"
+
     declare missing_channel=""
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        check_channel "${channels}" "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" "Stockholm" || missing_channel="yes"
-        check_channel "${channels}" "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" "Columbus" || missing_channel="yes"
+        check_channel "${outgoing}" "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" "Stockholm" || missing_channel="yes"
+        check_channel "${outgoing}" "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" "Columbus" || missing_channel="yes"
     else
-        check_channel "${channels}" "0x25865191AdDe377fd85E91566241178070F4797A" "USA" || missing_channel="yes"
-        check_channel "${channels}" "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" "India" || missing_channel="yes"
-        check_channel "${channels}" "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA" "Germany" || missing_channel="yes"
-        check_channel "${channels}" "0x2Cf9E5951C9e60e01b579f654dF447087468fc04" "Spain" || missing_channel="yes"
+        check_channel "${outgoing}" "0x25865191AdDe377fd85E91566241178070F4797A" "USA" || missing_channel="yes"
+        check_channel "${outgoing}" "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" "India" || missing_channel="yes"
+        check_channel "${outgoing}" "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA" "Germany" || missing_channel="yes"
+        check_channel "${outgoing}" "0x2Cf9E5951C9e60e01b579f654dF447087468fc04" "Spain" || missing_channel="yes"
     fi
 
     if [[ -n ${NON_INTERACTIVE} ]]; then
@@ -370,12 +373,14 @@ fetch_version_tag() {
 }
 
 check_platform() {
-    declare os arch arch_tag
+    declare os
     os="$(uname | tr '[:upper:]' '[:lower:]')"
+    declare arch
     arch="$(uname -m)"
     if [[ ${os} == "darwin" ]]; then IS_MACOS="yes"; fi
 
     echo ""
+    declare arch_tag
     case "$arch" in
     x86_64 | amd64) arch_tag="x86_64" ;;
     aarch64 | arm64) arch_tag="aarch64" ;;
@@ -491,9 +496,8 @@ exit_install_dir() {
 }
 
 download_binary() {
-    declare binary url
-    binary="$1"
-    url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${VERSION_TAG}/${binary}"
+    declare binary="$1"
+    declare url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${VERSION_TAG}/${binary}"
 
     echo ""
     echo "Downloading ${binary} from ${url}..."
@@ -524,9 +528,9 @@ fetch_binaries() {
 
 backup_config() {
     if [[ -f "./config.toml" ]]; then
-        declare timestamp backup_name
+        declare timestamp
         timestamp=$(date +%Y%m%d-%H%M%S)
-        backup_name="config-${timestamp}.toml"
+        declare backup_name="config-${timestamp}.toml"
         cp "./config.toml" "./${backup_name}" || {
             echo ""
             echo -e "${BRed}Failed to back up config file:${Color_Off} ./config.toml to ./${backup_name}"
@@ -538,8 +542,7 @@ backup_config() {
 }
 
 generate_config() {
-    declare destinations wg_section
-    wg_section=""
+    declare wg_section=""
     if [[ -n ${WG_PUBLIC_KEY} ]]; then
         wg_section="
 [wireguard.manual_mode]
@@ -547,6 +550,7 @@ public_key = \"${WG_PUBLIC_KEY}\"
         "
     fi
 
+    declare destinations
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
         destinations='[destinations]
 

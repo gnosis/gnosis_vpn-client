@@ -1,12 +1,13 @@
+use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
 use crate::connection::Destination as ConnectionDestination;
 use crate::log_output;
 use crate::peer_id::PeerId;
+use crate::session;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
@@ -62,6 +63,7 @@ pub enum DisconnectResponse {
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub peer_id: PeerId,
+    pub path: session::Path,
 }
 
 impl WireGuardStatus {
@@ -160,6 +162,7 @@ impl From<ConnectionDestination> for Destination {
         Destination {
             peer_id: destination.peer_id,
             meta: destination.meta,
+            path: destination.path,
         }
     }
 }
@@ -172,7 +175,15 @@ impl fmt::Display for Destination {
             .map(|(k, v)| format!("{}: {}", k, v))
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "Peer ID: {}, {}", self.peer_id, meta)
+        let short_pid = log_output::peer_id(self.peer_id.to_string().as_str());
+        write!(
+            f,
+            "Peer ID: {pid}, Route: (entry){path}(x{short_pid}), {meta}",
+            meta = meta,
+            path = self.path,
+            pid = self.peer_id,
+            short_pid = short_pid,
+        )
     }
 }
 
