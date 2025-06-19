@@ -711,13 +711,19 @@ impl Display for PhaseUp {
             PhaseUp::FixMainSessionClosing(session, registration) => {
                 write!(f, "FixMainSessionClosing({}, {})", session, registration)
             }
-            PhaseUp::MonitorMainSession(session, registration, since, ping_has_worked) => write!(
+            PhaseUp::MainSessionEstablished(session, registration, since) => write!(
                 f,
-                "MonitorMainSession({}, since {}, {}, ping_has_worked: {})",
+                "MainSessionEstablished({}, since {}, {})",
                 session,
                 log_output::elapsed(since),
                 registration,
-                ping_has_worked
+            ),
+            PhaseUp::MonitorMainSession(session, registration, since) => write!(
+                f,
+                "MonitorMainSession({}, since {}, {})",
+                session,
+                log_output::elapsed(since),
+                registration,
             ),
             PhaseUp::MainSessionBroken(session, registration) => {
                 write!(f, "MainSessionBroken({}, {})", session, registration)
@@ -761,7 +767,10 @@ impl From<PhaseUp> for PhaseDown {
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSessionClosing(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::MonitorMainSession(session, registration, since, _ping_has_worked) => {
+            PhaseUp::MainSessionEstablished(session, registration, since) => {
+                PhaseDown::CloseMainSession(session, since, registration)
+            }
+            PhaseUp::MonitorMainSession(session, registration, since) => {
                 PhaseDown::CloseMainSession(session, since, registration)
             }
             PhaseUp::MainSessionBroken(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
