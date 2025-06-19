@@ -595,12 +595,20 @@ impl Connection {
     }
 
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        // immediate ping needs to wait for wg-quick to finish it's job
+        // that's why it is not immediate until wg connection handling moves here as well
         let (s, r) = crossbeam_channel::bounded(1);
         let dest = self.destination.clone();
         let opts = dest.ping_options.clone();
         thread::spawn(move || {
-            let res = monitor::ping(&opts);
-            _ = s.send(InternalEvent::Ping(res));
+            let delay = Duration::from_millis(333);
+            let after = crossbeam_channel::after(delay);
+            crossbeam_channel::select! {
+                recv(after) -> _ => {
+                    let res = monitor::ping(&opts);
+                    _ = s.send(InternalEvent::Ping(res));
+                }
+            }
         });
         r
     }
