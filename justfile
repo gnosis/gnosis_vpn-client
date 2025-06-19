@@ -206,14 +206,15 @@ system-setup mode='keep-running': submodules docker-build
     docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
     exp_client_log "WireGuard connection closed" 6
 
-    echo "[PHASE3] Checking no warnings or errors"
+    echo "[PHASE3] Checking no warnings or errors in client logs"
     if docker logs gnosis_vpn-client | grep -qE "WARN|ERROR"; then
         echo "[PHASE3] Found warnings or errors in client logs"
         docker logs gnosis_vpn-client
         exit 1
     fi
+    echo "[PHASE3] Checking no errors in server logs"
     if docker logs gnosis_vpn-server | grep -qE "WARN|ERROR"; then
-        echo "[PHASE3] Found warnings or errors in server logs"
+        echo "[PHASE3] Found no errors in server logs"
         docker logs gnosis_vpn-server
         exit 1
     fi
