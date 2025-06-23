@@ -185,6 +185,10 @@ impl Session {
         json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
+        // creates a TCP session as part of the session pool, so we immediately know if it might work
+        if open_session.protocol == Protocol::Tcp {
+            json.insert("sessionPool".to_string(), json!(1));
+        }
 
         tracing::debug!(?headers, body = ?json, %url, "post open session");
         let resp = client
