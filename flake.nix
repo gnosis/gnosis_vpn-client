@@ -117,9 +117,9 @@
 
           # Intel Mac builds do not work with full compiler optimizations enabled
           # That's why we use a custom profile with opt-level = 1
-          gnosisvpnIntelBuildArgs = gnosisvpnBuildArgs //
-            { cargoExtraArgs = "--profile intelmac --all"; };
-
+          gnosisvpnIntelBuildArgs = gnosisvpnBuildArgs // {
+            CARGO_PROFILE = "intelmac";
+          };
 
           gnosisvpn = rust-builder-local.callPackage
             ./nix/rust-package.nix
