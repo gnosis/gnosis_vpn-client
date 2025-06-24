@@ -6,10 +6,9 @@ use core::ops::Deref;
 
 use pki_types::ServerName;
 
-use super::ResolvesClientCert;
-use super::Tls12Resumption;
 #[cfg(feature = "tls12")]
 use super::tls12;
+use super::{ResolvesClientCert, Tls12Resumption};
 use crate::SupportedCipherSuite;
 #[cfg(feature = "logging")]
 use crate::bs_debug;
@@ -21,20 +20,18 @@ use crate::client::{ClientConfig, EchMode, EchStatus, tls13};
 use crate::common_state::{CommonState, HandshakeKind, KxState, State};
 use crate::conn::ConnectionRandoms;
 use crate::crypto::{ActiveKeyExchange, KeyExchangeAlgorithm};
-use crate::enums::{AlertDescription, CipherSuite, ContentType, HandshakeType, ProtocolVersion};
+use crate::enums::{
+    AlertDescription, CertificateType, CipherSuite, ContentType, HandshakeType, ProtocolVersion,
+};
 use crate::error::{Error, PeerIncompatible, PeerMisbehaved};
 use crate::hash_hs::HandshakeHashBuffer;
 use crate::log::{debug, trace};
 use crate::msgs::base::Payload;
-use crate::msgs::enums::{
-    CertificateType, Compression, ECPointFormat, ExtensionType, PskKeyExchangeMode,
-};
-use crate::msgs::handshake::ProtocolName;
-use crate::msgs::handshake::SupportedProtocolVersions;
+use crate::msgs::enums::{Compression, ECPointFormat, ExtensionType, PskKeyExchangeMode};
 use crate::msgs::handshake::{
     CertificateStatusRequest, ClientExtension, ClientHelloPayload, ClientSessionTicket,
     HandshakeMessagePayload, HandshakePayload, HasServerExtensions, HelloRetryRequest,
-    KeyShareEntry, Random, SessionId,
+    KeyShareEntry, ProtocolName, Random, SessionId, SupportedProtocolVersions,
 };
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
@@ -85,7 +82,7 @@ fn find_session(
             }
         })
         .or_else(|| {
-            debug!("No cached session for {:?}", server_name);
+            debug!("No cached session for {server_name:?}");
             None
         });
 
@@ -102,7 +99,7 @@ fn find_session(
 
 pub(super) fn start_handshake(
     server_name: ServerName<'static>,
-    alpn_protocols: Vec<Vec<u8>>,
+    alpn_protocols: Vec<ProtocolName>,
     extra_exts: Vec<ClientExtension>,
     config: Arc<ClientConfig>,
     cx: &mut ClientContext<'_>,
@@ -362,12 +359,7 @@ fn emit_client_hello_for_retry(
     // Add ALPN extension if we have any protocols
     if !input.hello.alpn_protocols.is_empty() {
         exts.push(ClientExtension::Protocols(
-            input
-                .hello
-                .alpn_protocols
-                .iter()
-                .map(|proto| ProtocolName::from(proto.clone()))
-                .collect::<Vec<_>>(),
+            input.hello.alpn_protocols.clone(),
         ));
     }
 
@@ -448,8 +440,11 @@ fn emit_client_hello_for_retry(
             false => None,
         })
         .collect();
-    // We don't do renegotiation at all, in fact.
-    cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
+
+    if supported_versions.tls12 {
+        // We don't do renegotiation at all, in fact.
+        cipher_suites.push(CipherSuite::TLS_EMPTY_RENEGOTIATION_INFO_SCSV);
+    }
 
     let mut chp_payload = ClientHelloPayload {
         client_version: ProtocolVersion::TLSv1_2,
@@ -487,7 +482,7 @@ fn emit_client_hello_for_retry(
         (EchStatus::NotOffered, None) => {
             if let Some(grease_ext) = ech_grease_ext {
                 // Add the GREASE ECH extension.
-                let grease_ext = grease_ext?;
+                let grease_ext = ClientExtension::EncryptedClientHello(grease_ext?);
                 chp_payload
                     .extensions
                     .push(grease_ext.clone());
@@ -507,10 +502,7 @@ fn emit_client_hello_for_retry(
         .map(ClientExtension::ext_type)
         .collect();
 
-    let mut chp = HandshakeMessagePayload {
-        typ: HandshakeType::ClientHello,
-        payload: HandshakePayload::ClientHello(chp_payload),
-    };
+    let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(chp_payload));
 
     let tls13_early_data_key_schedule = match (ech_state.as_mut(), tls13_session) {
         // If we're performing ECH and resuming, then the PSK binder will have been dealt with
@@ -553,7 +545,7 @@ fn emit_client_hello_for_retry(
         tls13::emit_fake_ccs(&mut input.sent_tls13_fake_ccs, cx.common);
     }
 
-    trace!("Sending ClientHello {:#?}", ch);
+    trace!("Sending ClientHello {ch:#?}");
 
     transcript_buffer.add_message(&ch);
     cx.common.send_msg(ch, false);
@@ -674,10 +666,10 @@ fn prepare_resumption<'a>(
 
 pub(super) fn process_alpn_protocol(
     common: &mut CommonState,
-    offered_protocols: &[Vec<u8>],
-    proto: Option<&[u8]>,
+    offered_protocols: &[ProtocolName],
+    selected: Option<&ProtocolName>,
 ) -> Result<(), Error> {
-    common.alpn_protocol = proto.map(ToOwned::to_owned);
+    common.alpn_protocol = selected.map(ToOwned::to_owned);
 
     if let Some(alpn_protocol) = &common.alpn_protocol {
         if !offered_protocols.contains(alpn_protocol) {
@@ -752,7 +744,7 @@ impl State<ClientConnectionData> for ExpectServerHello {
     {
         let server_hello =
             require_handshake_msg!(m, HandshakeType::ServerHello, HandshakePayload::ServerHello)?;
-        trace!("We got ServerHello {:#?}", server_hello);
+        trace!("We got ServerHello {server_hello:#?}");
 
         use crate::ProtocolVersion::{TLSv1_2, TLSv1_3};
         let config = &self.input.config;
@@ -878,7 +870,7 @@ impl State<ClientConnectionData> for ExpectServerHello {
                 });
             }
             _ => {
-                debug!("Using ciphersuite {:?}", suite);
+                debug!("Using ciphersuite {suite:?}");
                 self.suite = Some(suite);
                 cx.common.suite = Some(suite);
             }
@@ -983,7 +975,7 @@ impl ExpectServerHelloOrHelloRetryRequest {
             HandshakeType::HelloRetryRequest,
             HandshakePayload::HelloRetryRequest
         )?;
-        trace!("Got HRR {:?}", hrr);
+        trace!("Got HRR {hrr:?}");
 
         cx.common.check_aligned_handshake()?;
 
@@ -1190,21 +1182,13 @@ impl State<ClientConnectionData> for ExpectServerHelloOrHelloRetryRequest {
     {
         match m.payload {
             MessagePayload::Handshake {
-                parsed:
-                    HandshakeMessagePayload {
-                        payload: HandshakePayload::ServerHello(..),
-                        ..
-                    },
+                parsed: HandshakeMessagePayload(HandshakePayload::ServerHello(..)),
                 ..
             } => self
                 .into_expect_server_hello()
                 .handle(cx, m),
             MessagePayload::Handshake {
-                parsed:
-                    HandshakeMessagePayload {
-                        payload: HandshakePayload::HelloRetryRequest(..),
-                        ..
-                    },
+                parsed: HandshakeMessagePayload(HandshakePayload::HelloRetryRequest(..)),
                 ..
             } => self.handle_hello_retry_request(cx, m),
             payload => Err(inappropriate_handshake_message(

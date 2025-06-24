@@ -1,9 +1,11 @@
 mod support;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use support::server;
 
 use std::io::Write;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::time::Duration;
 
 #[tokio::test]
 async fn gzip_response() {
@@ -94,13 +96,10 @@ async fn gzip_case(response_size: usize, chunk_size: usize) {
         .into_iter()
         .map(|i| format!("test {i}"))
         .collect();
-    let mut encoder = libflate::gzip::Encoder::new(Vec::new()).unwrap();
-    match encoder.write(content.as_bytes()) {
-        Ok(n) => assert!(n > 0, "Failed to write to encoder."),
-        _ => panic!("Failed to gzip encode string."),
-    };
 
-    let gzipped_content = encoder.finish().into_result().unwrap();
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(content.as_bytes()).unwrap();
+    let gzipped_content = encoder.finish().unwrap();
 
     let mut response = format!(
         "\
@@ -160,12 +159,9 @@ const COMPRESSED_RESPONSE_HEADERS: &[u8] = b"HTTP/1.1 200 OK\x0d\x0a\
 const RESPONSE_CONTENT: &str = "some message here";
 
 fn gzip_compress(input: &[u8]) -> Vec<u8> {
-    let mut encoder = libflate::gzip::Encoder::new(Vec::new()).unwrap();
-    match encoder.write(input) {
-        Ok(n) => assert!(n > 0, "Failed to write to encoder."),
-        _ => panic!("Failed to gzip encode string."),
-    };
-    encoder.finish().into_result().unwrap()
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(input).unwrap();
+    encoder.finish().unwrap()
 }
 
 #[tokio::test]
@@ -201,9 +197,8 @@ async fn test_non_chunked_non_fragmented_response() {
 
 #[tokio::test]
 async fn test_chunked_fragmented_response_1() {
-    const DELAY_BETWEEN_RESPONSE_PARTS: tokio::time::Duration =
-        tokio::time::Duration::from_millis(1000);
-    const DELAY_MARGIN: tokio::time::Duration = tokio::time::Duration::from_millis(50);
+    const DELAY_BETWEEN_RESPONSE_PARTS: Duration = Duration::from_millis(1000);
+    const DELAY_MARGIN: Duration = Duration::from_millis(50);
 
     let server = server::low_level_with_response(|_raw_request, client_socket| {
         Box::new(async move {
@@ -255,9 +250,8 @@ async fn test_chunked_fragmented_response_1() {
 
 #[tokio::test]
 async fn test_chunked_fragmented_response_2() {
-    const DELAY_BETWEEN_RESPONSE_PARTS: tokio::time::Duration =
-        tokio::time::Duration::from_millis(1000);
-    const DELAY_MARGIN: tokio::time::Duration = tokio::time::Duration::from_millis(50);
+    const DELAY_BETWEEN_RESPONSE_PARTS: Duration = Duration::from_millis(1000);
+    const DELAY_MARGIN: Duration = Duration::from_millis(50);
 
     let server = server::low_level_with_response(|_raw_request, client_socket| {
         Box::new(async move {
@@ -310,9 +304,8 @@ async fn test_chunked_fragmented_response_2() {
 
 #[tokio::test]
 async fn test_chunked_fragmented_response_with_extra_bytes() {
-    const DELAY_BETWEEN_RESPONSE_PARTS: tokio::time::Duration =
-        tokio::time::Duration::from_millis(1000);
-    const DELAY_MARGIN: tokio::time::Duration = tokio::time::Duration::from_millis(50);
+    const DELAY_BETWEEN_RESPONSE_PARTS: Duration = Duration::from_millis(1000);
+    const DELAY_MARGIN: Duration = Duration::from_millis(50);
 
     let server = server::low_level_with_response(|_raw_request, client_socket| {
         Box::new(async move {

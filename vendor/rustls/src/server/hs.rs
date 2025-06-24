@@ -11,18 +11,18 @@ use crate::common_state::{KxState, Protocol, State};
 use crate::conn::ConnectionRandoms;
 use crate::crypto::SupportedKxGroup;
 use crate::enums::{
-    AlertDescription, CipherSuite, HandshakeType, ProtocolVersion, SignatureAlgorithm,
-    SignatureScheme,
+    AlertDescription, CertificateType, CipherSuite, HandshakeType, ProtocolVersion,
+    SignatureAlgorithm, SignatureScheme,
 };
 use crate::error::{Error, PeerIncompatible, PeerMisbehaved};
 use crate::hash_hs::{HandshakeHash, HandshakeHashBuffer};
 use crate::log::{debug, trace};
-use crate::msgs::enums::{CertificateType, Compression, ExtensionType, NamedGroup};
+use crate::msgs::enums::{Compression, ExtensionType, NamedGroup};
 #[cfg(feature = "tls12")]
 use crate::msgs::handshake::SessionId;
 use crate::msgs::handshake::{
-    ClientHelloPayload, HandshakePayload, KeyExchangeAlgorithm, Random, ServerExtension,
-    ServerNamePayload, SingleProtocolName,
+    ClientHelloPayload, HandshakePayload, KeyExchangeAlgorithm, ProtocolName, Random,
+    ServerExtension, ServerNamePayload, SingleProtocolName,
 };
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
@@ -89,9 +89,9 @@ impl ExtensionProcessing {
                         .iter()
                         .any(|theirs| theirs.as_ref() == ours.as_slice())
                 })
-                .cloned();
+                .map(|bytes| ProtocolName::from(bytes.clone()));
             if let Some(selected_protocol) = &cx.common.alpn_protocol {
-                debug!("Chosen ALPN protocol {:?}", selected_protocol);
+                debug!("Chosen ALPN protocol {selected_protocol:?}");
                 self.exts
                     .push(ServerExtension::Protocols(SingleProtocolName::new(
                         selected_protocol.clone(),
@@ -417,6 +417,7 @@ impl ExpectClientHello {
                 server_cert_types: client_hello.client_certificate_extension(),
                 cipher_suites: &client_hello.cipher_suites,
                 certificate_authorities,
+                named_groups: client_hello.namedgroups_extension(),
             };
             trace!("Resolving server certificate: {client_hello:#?}");
 
@@ -449,7 +450,7 @@ impl ExpectClientHello {
                     .send_fatal_alert(AlertDescription::HandshakeFailure, incompat)
             })?;
 
-        debug!("decided upon suite {:?}", suite);
+        debug!("decided upon suite {suite:?}");
         cx.common.suite = Some(suite);
         cx.common.kx_state = KxState::Start(skxg);
 
@@ -672,7 +673,7 @@ pub(super) fn process_client_hello<'m>(
 ) -> Result<(&'m ClientHelloPayload, Vec<SignatureScheme>), Error> {
     let client_hello =
         require_handshake_msg!(m, HandshakeType::ClientHello, HandshakePayload::ClientHello)?;
-    trace!("we got a clienthello {:?}", client_hello);
+    trace!("we got a clienthello {client_hello:?}");
 
     if !client_hello
         .compression_methods

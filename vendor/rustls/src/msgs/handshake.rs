@@ -12,8 +12,8 @@ use pki_types::{CertificateDer, DnsName};
 use crate::crypto::ActiveKeyExchange;
 use crate::crypto::SecureRandom;
 use crate::enums::{
-    CertificateCompressionAlgorithm, CipherSuite, EchClientHelloType, HandshakeType,
-    ProtocolVersion, SignatureScheme,
+    CertificateCompressionAlgorithm, CertificateType, CipherSuite, EchClientHelloType,
+    HandshakeType, ProtocolVersion, SignatureScheme,
 };
 use crate::error::InvalidMessage;
 #[cfg(feature = "tls12")]
@@ -22,9 +22,9 @@ use crate::log::warn;
 use crate::msgs::base::{MaybeEmpty, NonEmpty, Payload, PayloadU8, PayloadU16, PayloadU24};
 use crate::msgs::codec::{self, Codec, LengthPrefixedBuffer, ListLength, Reader, TlsListElement};
 use crate::msgs::enums::{
-    CertificateStatusType, CertificateType, ClientCertificateType, Compression, ECCurveType,
-    ECPointFormat, EchVersion, ExtensionType, HpkeAead, HpkeKdf, HpkeKem, KeyUpdateRequest,
-    NamedGroup, PskKeyExchangeMode, ServerNameType,
+    CertificateStatusType, ClientCertificateType, Compression, ECCurveType, ECPointFormat,
+    EchVersion, ExtensionType, HpkeAead, HpkeKdf, HpkeKem, KeyUpdateRequest, NamedGroup,
+    PskKeyExchangeMode, ServerNameType,
 };
 use crate::rand;
 use crate::sync::Arc;
@@ -67,7 +67,7 @@ macro_rules! wrapped_payload(
 );
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub struct Random(pub(crate) [u8; 32]);
+pub(crate) struct Random(pub(crate) [u8; 32]);
 
 impl fmt::Debug for Random {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -114,7 +114,7 @@ impl From<[u8; 32]> for Random {
 }
 
 #[derive(Copy, Clone)]
-pub struct SessionId {
+pub(crate) struct SessionId {
     len: usize,
     data: [u8; 32],
 }
@@ -164,7 +164,7 @@ impl Codec<'_> for SessionId {
 }
 
 impl SessionId {
-    pub fn random(secure_random: &dyn SecureRandom) -> Result<Self, rand::GetRandomFailed> {
+    pub(crate) fn random(secure_random: &dyn SecureRandom) -> Result<Self, rand::GetRandomFailed> {
         let mut data = [0u8; 32];
         secure_random.fill(&mut data)?;
         Ok(Self { data, len: 32 })
@@ -228,7 +228,7 @@ impl TlsListElement for SignatureScheme {
 }
 
 #[derive(Clone, Debug)]
-pub enum ServerNamePayload<'a> {
+pub(crate) enum ServerNamePayload<'a> {
     /// A successfully decoded value:
     SingleDnsName(DnsName<'a>),
 
@@ -310,8 +310,7 @@ impl<'a> Codec<'a> for ServerNamePayload<'a> {
 
                 HostNamePayload::IpAddress(_invalid) => {
                     warn!(
-                        "Illegal SNI extension: ignoring IP address presented as hostname ({:?})",
-                        _invalid
+                        "Illegal SNI extension: ignoring IP address presented as hostname ({_invalid:?})"
                     );
                     Some(Self::IpAddress)
                 }
@@ -358,8 +357,22 @@ impl HostNamePayload {
 
 wrapped_payload!(
     /// RFC7301: `opaque ProtocolName<1..2^8-1>;`
-    pub struct ProtocolName, PayloadU8<NonEmpty>,
+    pub(crate) struct ProtocolName, PayloadU8<NonEmpty>,
 );
+
+impl PartialEq for ProtocolName {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Deref for ProtocolName {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
 
 /// RFC7301: `ProtocolName protocol_name_list<2..2^16-1>`
 impl TlsListElement for ProtocolName {
@@ -370,11 +383,11 @@ impl TlsListElement for ProtocolName {
 
 /// RFC7301 encodes a single protocol name as `Vec<ProtocolName>`
 #[derive(Clone, Debug)]
-pub struct SingleProtocolName(ProtocolName);
+pub(crate) struct SingleProtocolName(ProtocolName);
 
 impl SingleProtocolName {
-    pub(crate) fn new(bytes: Vec<u8>) -> Self {
-        Self(ProtocolName::from(bytes))
+    pub(crate) fn new(single: ProtocolName) -> Self {
+        Self(single)
     }
 
     const SIZE_LEN: ListLength = ListLength::NonZeroU16 {
@@ -410,22 +423,18 @@ impl AsRef<[u8]> for SingleProtocolName {
 
 // --- TLS 1.3 Key shares ---
 #[derive(Clone, Debug)]
-pub struct KeyShareEntry {
+pub(crate) struct KeyShareEntry {
     pub(crate) group: NamedGroup,
     /// RFC8446: `opaque key_exchange<1..2^16-1>;`
     pub(crate) payload: PayloadU16<NonEmpty>,
 }
 
 impl KeyShareEntry {
-    pub fn new(group: NamedGroup, payload: impl Into<Vec<u8>>) -> Self {
+    pub(crate) fn new(group: NamedGroup, payload: impl Into<Vec<u8>>) -> Self {
         Self {
             group,
             payload: PayloadU16::new(payload.into()),
         }
-    }
-
-    pub fn group(&self) -> NamedGroup {
-        self.group
     }
 }
 
@@ -494,7 +503,7 @@ impl TlsListElement for PresharedKeyBinder {
 }
 
 #[derive(Clone, Debug)]
-pub struct PresharedKeyOffer {
+pub(crate) struct PresharedKeyOffer {
     pub(crate) identities: Vec<PresharedKeyIdentity>,
     pub(crate) binders: Vec<PresharedKeyBinder>,
 }
@@ -532,7 +541,7 @@ impl TlsListElement for ResponderId {
 }
 
 #[derive(Clone, Debug)]
-pub struct OcspCertificateStatusRequest {
+pub(crate) struct OcspCertificateStatusRequest {
     pub(crate) responder_ids: Vec<ResponderId>,
     pub(crate) extensions: PayloadU16,
 }
@@ -553,7 +562,7 @@ impl Codec<'_> for OcspCertificateStatusRequest {
 }
 
 #[derive(Clone, Debug)]
-pub enum CertificateStatusRequest {
+pub(crate) enum CertificateStatusRequest {
     Ocsp(OcspCertificateStatusRequest),
     Unknown((CertificateStatusType, Payload<'static>)),
 }
@@ -617,7 +626,7 @@ impl TlsListElement for KeyShareEntry {
 ///
 /// RFC8446: `ProtocolVersion versions<2..254>;`
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SupportedProtocolVersions {
+pub(crate) struct SupportedProtocolVersions {
     pub(crate) tls13: bool,
     pub(crate) tls12: bool,
 }
@@ -692,7 +701,7 @@ impl TlsListElement for CertificateCompressionAlgorithm {
 }
 
 #[derive(Clone, Debug)]
-pub enum ClientExtension {
+pub(crate) enum ClientExtension {
     EcPointFormats(Vec<ECPointFormat>),
     NamedGroups(Vec<NamedGroup>),
     SignatureAlgorithms(Vec<SignatureScheme>),
@@ -760,10 +769,8 @@ impl Codec<'_> for ClientExtension {
             Self::NamedGroups(r) => r.encode(nested.buf),
             Self::SignatureAlgorithms(r) => r.encode(nested.buf),
             Self::ServerName(r) => r.encode(nested.buf),
-            Self::SessionTicket(ClientSessionTicket::Request)
-            | Self::ExtendedMasterSecretRequest
-            | Self::EarlyData => {}
-            Self::SessionTicket(ClientSessionTicket::Offer(r)) => r.encode(nested.buf),
+            Self::SessionTicket(r) => r.encode(nested.buf),
+            Self::ExtendedMasterSecretRequest | Self::EarlyData => {}
             Self::Protocols(r) => r.encode(nested.buf),
             Self::SupportedVersions(r) => r.encode(nested.buf),
             Self::KeyShare(r) => r.encode(nested.buf),
@@ -797,12 +804,7 @@ impl Codec<'_> for ClientExtension {
                 Self::ServerName(ServerNamePayload::read(&mut sub)?.into_owned())
             }
             ExtensionType::SessionTicket => {
-                if sub.any_left() {
-                    let contents = Payload::read(&mut sub).into_owned();
-                    Self::SessionTicket(ClientSessionTicket::Offer(contents))
-                } else {
-                    Self::SessionTicket(ClientSessionTicket::Request)
-                }
+                Self::SessionTicket(ClientSessionTicket::read(&mut sub)?)
             }
             ExtensionType::ALProtocolNegotiation => Self::Protocols(Vec::read(&mut sub)?),
             ExtensionType::SupportedVersions => {
@@ -863,13 +865,29 @@ fn trim_hostname_trailing_dot_for_sni(dns_name: &DnsName<'_>) -> DnsName<'static
 }
 
 #[derive(Clone, Debug)]
-pub enum ClientSessionTicket {
+pub(crate) enum ClientSessionTicket {
     Request,
     Offer(Payload<'static>),
 }
 
+impl<'a> Codec<'a> for ClientSessionTicket {
+    fn encode(&self, bytes: &mut Vec<u8>) {
+        match self {
+            Self::Request => (),
+            Self::Offer(p) => p.encode(bytes),
+        }
+    }
+
+    fn read(r: &mut Reader<'a>) -> Result<Self, InvalidMessage> {
+        Ok(match r.left() {
+            0 => Self::Request,
+            _ => Self::Offer(Payload::read(r).into_owned()),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
-pub enum ServerExtension {
+pub(crate) enum ServerExtension {
     EcPointFormats(Vec<ECPointFormat>),
     ServerNameAck,
     SessionTicketAck,
@@ -991,65 +1009,13 @@ impl ServerExtension {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClientHelloPayload {
-    pub client_version: ProtocolVersion,
-    pub random: Random,
-    pub session_id: SessionId,
-    pub cipher_suites: Vec<CipherSuite>,
-    pub compression_methods: Vec<Compression>,
-    pub extensions: Vec<ClientExtension>,
-}
-
-impl Codec<'_> for ClientHelloPayload {
-    fn encode(&self, bytes: &mut Vec<u8>) {
-        self.payload_encode(bytes, Encoding::Standard)
-    }
-
-    fn read(r: &mut Reader<'_>) -> Result<Self, InvalidMessage> {
-        let mut ret = Self {
-            client_version: ProtocolVersion::read(r)?,
-            random: Random::read(r)?,
-            session_id: SessionId::read(r)?,
-            cipher_suites: Vec::read(r)?,
-            compression_methods: Vec::read(r)?,
-            extensions: Vec::new(),
-        };
-
-        if r.any_left() {
-            ret.extensions = Vec::read(r)?;
-        }
-
-        match (r.any_left(), ret.extensions.is_empty()) {
-            (true, _) => Err(InvalidMessage::TrailingData("ClientHelloPayload")),
-            (_, true) => Err(InvalidMessage::MissingData("ClientHelloPayload")),
-            _ => Ok(ret),
-        }
-    }
-}
-
-/// RFC8446: `CipherSuite cipher_suites<2..2^16-2>;`
-impl TlsListElement for CipherSuite {
-    const SIZE_LEN: ListLength = ListLength::NonZeroU16 {
-        empty_error: InvalidMessage::IllegalEmptyList("CipherSuites"),
-    };
-}
-
-/// RFC5246: `CompressionMethod compression_methods<1..2^8-1>;`
-impl TlsListElement for Compression {
-    const SIZE_LEN: ListLength = ListLength::NonZeroU8 {
-        empty_error: InvalidMessage::IllegalEmptyList("Compressions"),
-    };
-}
-
-impl TlsListElement for ClientExtension {
-    const SIZE_LEN: ListLength = ListLength::U16;
-}
-
-/// draft-ietf-tls-esni-17: `ExtensionType OuterExtensions<2..254>;`
-impl TlsListElement for ExtensionType {
-    const SIZE_LEN: ListLength = ListLength::NonZeroU8 {
-        empty_error: InvalidMessage::IllegalEmptyList("ExtensionTypes"),
-    };
+pub(crate) struct ClientHelloPayload {
+    pub(crate) client_version: ProtocolVersion,
+    pub(crate) random: Random,
+    pub(crate) session_id: SessionId,
+    pub(crate) cipher_suites: Vec<CipherSuite>,
+    pub(crate) compression_methods: Vec<Compression>,
+    pub(crate) extensions: Vec<ClientExtension>,
 }
 
 impl ClientHelloPayload {
@@ -1139,7 +1105,7 @@ impl ClientHelloPayload {
         }
     }
 
-    pub fn sigalgs_extension(&self) -> Option<&[SignatureScheme]> {
+    pub(crate) fn sigalgs_extension(&self) -> Option<&[SignatureScheme]> {
         let ext = self.find_extension(ExtensionType::SignatureAlgorithms)?;
         match ext {
             ClientExtension::SignatureAlgorithms(req) => Some(req),
@@ -1212,7 +1178,7 @@ impl ClientHelloPayload {
         }
     }
 
-    pub fn keyshare_extension(&self) -> Option<&[KeyShareEntry]> {
+    pub(crate) fn keyshare_extension(&self) -> Option<&[KeyShareEntry]> {
         let ext = self.find_extension(ExtensionType::KeyShare)?;
         match ext {
             ClientExtension::KeyShare(shares) => Some(shares),
@@ -1304,6 +1270,58 @@ impl ClientHelloPayload {
     }
 }
 
+impl Codec<'_> for ClientHelloPayload {
+    fn encode(&self, bytes: &mut Vec<u8>) {
+        self.payload_encode(bytes, Encoding::Standard)
+    }
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, InvalidMessage> {
+        let mut ret = Self {
+            client_version: ProtocolVersion::read(r)?,
+            random: Random::read(r)?,
+            session_id: SessionId::read(r)?,
+            cipher_suites: Vec::read(r)?,
+            compression_methods: Vec::read(r)?,
+            extensions: Vec::new(),
+        };
+
+        if r.any_left() {
+            ret.extensions = Vec::read(r)?;
+        }
+
+        match (r.any_left(), ret.extensions.is_empty()) {
+            (true, _) => Err(InvalidMessage::TrailingData("ClientHelloPayload")),
+            (_, true) => Err(InvalidMessage::MissingData("ClientHelloPayload")),
+            _ => Ok(ret),
+        }
+    }
+}
+
+/// RFC8446: `CipherSuite cipher_suites<2..2^16-2>;`
+impl TlsListElement for CipherSuite {
+    const SIZE_LEN: ListLength = ListLength::NonZeroU16 {
+        empty_error: InvalidMessage::IllegalEmptyList("CipherSuites"),
+    };
+}
+
+/// RFC5246: `CompressionMethod compression_methods<1..2^8-1>;`
+impl TlsListElement for Compression {
+    const SIZE_LEN: ListLength = ListLength::NonZeroU8 {
+        empty_error: InvalidMessage::IllegalEmptyList("Compressions"),
+    };
+}
+
+impl TlsListElement for ClientExtension {
+    const SIZE_LEN: ListLength = ListLength::U16;
+}
+
+/// draft-ietf-tls-esni-17: `ExtensionType OuterExtensions<2..254>;`
+impl TlsListElement for ExtensionType {
+    const SIZE_LEN: ListLength = ListLength::NonZeroU8 {
+        empty_error: InvalidMessage::IllegalEmptyList("ExtensionTypes"),
+    };
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum HelloRetryExtension {
     KeyShare(NamedGroup),
@@ -1366,9 +1384,9 @@ impl TlsListElement for HelloRetryExtension {
 }
 
 #[derive(Clone, Debug)]
-pub struct HelloRetryRequest {
+pub(crate) struct HelloRetryRequest {
     pub(crate) legacy_version: ProtocolVersion,
-    pub session_id: SessionId,
+    pub(crate) session_id: SessionId,
     pub(crate) cipher_suite: CipherSuite,
     pub(crate) extensions: Vec<HelloRetryExtension>,
 }
@@ -1422,7 +1440,7 @@ impl HelloRetryRequest {
             .find(|x| x.ext_type() == ext)
     }
 
-    pub fn requested_key_share_group(&self) -> Option<NamedGroup> {
+    pub(crate) fn requested_key_share_group(&self) -> Option<NamedGroup> {
         let ext = self.find_extension(ExtensionType::KeyShare)?;
         match ext {
             HelloRetryExtension::KeyShare(grp) => Some(*grp),
@@ -1489,13 +1507,13 @@ impl HelloRetryRequest {
 }
 
 #[derive(Clone, Debug)]
-pub struct ServerHelloPayload {
-    pub extensions: Vec<ServerExtension>,
+pub(crate) struct ServerHelloPayload {
     pub(crate) legacy_version: ProtocolVersion,
     pub(crate) random: Random,
     pub(crate) session_id: SessionId,
     pub(crate) cipher_suite: CipherSuite,
     pub(crate) compression_method: Compression,
+    pub(crate) extensions: Vec<ServerExtension>,
 }
 
 impl Codec<'_> for ServerHelloPayload {
@@ -1600,7 +1618,7 @@ impl ServerHelloPayload {
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct CertificateChain<'a>(pub Vec<CertificateDer<'a>>);
+pub(crate) struct CertificateChain<'a>(pub(crate) Vec<CertificateDer<'a>>);
 
 impl CertificateChain<'_> {
     pub(crate) fn into_owned(self) -> CertificateChain<'static> {
@@ -1776,7 +1794,7 @@ impl TlsListElement for CertificateEntry<'_> {
 }
 
 #[derive(Debug)]
-pub struct CertificatePayloadTls13<'a> {
+pub(crate) struct CertificatePayloadTls13<'a> {
     pub(crate) context: PayloadU8,
     pub(crate) entries: Vec<CertificateEntry<'a>>,
 }
@@ -2136,20 +2154,20 @@ impl KxDecode<'_> for ServerKeyExchangeParams {
 }
 
 #[derive(Debug)]
-pub struct ServerKeyExchange {
+pub(crate) struct ServerKeyExchange {
     pub(crate) params: ServerKeyExchangeParams,
     pub(crate) dss: DigitallySignedStruct,
 }
 
 impl ServerKeyExchange {
-    pub fn encode(&self, buf: &mut Vec<u8>) {
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
         self.params.encode(buf);
         self.dss.encode(buf);
     }
 }
 
 #[derive(Debug)]
-pub enum ServerKeyExchangePayload {
+pub(crate) enum ServerKeyExchangePayload {
     Known(ServerKeyExchange),
     Unknown(Payload<'static>),
 }
@@ -2220,10 +2238,10 @@ pub(crate) trait HasServerExtensions {
             .find(|x| x.ext_type() == ext)
     }
 
-    fn alpn_protocol(&self) -> Option<&[u8]> {
+    fn alpn_protocol(&self) -> Option<&ProtocolName> {
         let ext = self.find_extension(ExtensionType::ALProtocolNegotiation)?;
         match ext {
-            ServerExtension::Protocols(protos) => Some(protos.as_ref()),
+            ServerExtension::Protocols(protos) => Some(&protos.0),
             _ => None,
         }
     }
@@ -2322,7 +2340,7 @@ impl TlsListElement for DistinguishedName {
 }
 
 #[derive(Debug)]
-pub struct CertificateRequestPayload {
+pub(crate) struct CertificateRequestPayload {
     pub(crate) certtypes: Vec<ClientCertificateType>,
     pub(crate) sigschemes: Vec<SignatureScheme>,
     pub(crate) canames: Vec<DistinguishedName>,
@@ -2421,7 +2439,7 @@ impl TlsListElement for CertReqExtension {
 }
 
 #[derive(Debug)]
-pub struct CertificateRequestPayloadTls13 {
+pub(crate) struct CertificateRequestPayloadTls13 {
     pub(crate) context: PayloadU8,
     pub(crate) extensions: Vec<CertReqExtension>,
 }
@@ -2479,7 +2497,7 @@ impl CertificateRequestPayloadTls13 {
 
 // -- NewSessionTicket --
 #[derive(Debug)]
-pub struct NewSessionTicketPayload {
+pub(crate) struct NewSessionTicketPayload {
     pub(crate) lifetime_hint: u32,
     // Tickets can be large (KB), so we deserialise this straight
     // into an Arc, so it can be passed directly into the client's
@@ -2561,7 +2579,7 @@ impl TlsListElement for NewSessionTicketExtension {
 }
 
 #[derive(Debug)]
-pub struct NewSessionTicketPayloadTls13 {
+pub(crate) struct NewSessionTicketPayloadTls13 {
     pub(crate) lifetime: u32,
     pub(crate) age_add: u32,
     pub(crate) nonce: PayloadU8,
@@ -2638,7 +2656,7 @@ impl Codec<'_> for NewSessionTicketPayloadTls13 {
 
 /// Only supports OCSP
 #[derive(Debug)]
-pub struct CertificateStatus<'a> {
+pub(crate) struct CertificateStatus<'a> {
     pub(crate) ocsp_response: PayloadU24<'a>,
 }
 
@@ -2682,7 +2700,7 @@ impl<'a> CertificateStatus<'a> {
 // -- RFC8879 compressed certificates
 
 #[derive(Debug)]
-pub struct CompressedCertificatePayload<'a> {
+pub(crate) struct CompressedCertificatePayload<'a> {
     pub(crate) alg: CertificateCompressionAlgorithm,
     pub(crate) uncompressed_len: u32,
     pub(crate) compressed: PayloadU24<'a>,
@@ -2722,7 +2740,7 @@ impl CompressedCertificatePayload<'_> {
 }
 
 #[derive(Debug)]
-pub enum HandshakePayload<'a> {
+pub(crate) enum HandshakePayload<'a> {
     HelloRequest,
     ClientHello(ClientHelloPayload),
     ServerHello(ServerHelloPayload),
@@ -2744,7 +2762,7 @@ pub enum HandshakePayload<'a> {
     Finished(Payload<'a>),
     CertificateStatus(CertificateStatus<'a>),
     MessageHash(Payload<'a>),
-    Unknown(Payload<'a>),
+    Unknown((HandshakeType, Payload<'a>)),
 }
 
 impl HandshakePayload<'_> {
@@ -2770,7 +2788,40 @@ impl HandshakePayload<'_> {
             Finished(x) => x.encode(bytes),
             CertificateStatus(x) => x.encode(bytes),
             MessageHash(x) => x.encode(bytes),
-            Unknown(x) => x.encode(bytes),
+            Unknown((_, x)) => x.encode(bytes),
+        }
+    }
+
+    pub(crate) fn handshake_type(&self) -> HandshakeType {
+        use self::HandshakePayload::*;
+        match self {
+            HelloRequest => HandshakeType::HelloRequest,
+            ClientHello(_) => HandshakeType::ClientHello,
+            ServerHello(_) => HandshakeType::ServerHello,
+            HelloRetryRequest(_) => HandshakeType::HelloRetryRequest,
+            Certificate(_) | CertificateTls13(_) => HandshakeType::Certificate,
+            CompressedCertificate(_) => HandshakeType::CompressedCertificate,
+            ServerKeyExchange(_) => HandshakeType::ServerKeyExchange,
+            CertificateRequest(_) | CertificateRequestTls13(_) => HandshakeType::CertificateRequest,
+            CertificateVerify(_) => HandshakeType::CertificateVerify,
+            ServerHelloDone => HandshakeType::ServerHelloDone,
+            EndOfEarlyData => HandshakeType::EndOfEarlyData,
+            ClientKeyExchange(_) => HandshakeType::ClientKeyExchange,
+            NewSessionTicket(_) | NewSessionTicketTls13(_) => HandshakeType::NewSessionTicket,
+            EncryptedExtensions(_) => HandshakeType::EncryptedExtensions,
+            KeyUpdate(_) => HandshakeType::KeyUpdate,
+            Finished(_) => HandshakeType::Finished,
+            CertificateStatus(_) => HandshakeType::CertificateStatus,
+            MessageHash(_) => HandshakeType::MessageHash,
+            Unknown((t, _)) => *t,
+        }
+    }
+
+    fn wire_handshake_type(&self) -> HandshakeType {
+        match self.handshake_type() {
+            // A `HelloRetryRequest` appears on the wire as a `ServerHello` with a magic `random` value.
+            HandshakeType::HelloRetryRequest => HandshakeType::ServerHello,
+            other => other,
         }
     }
 
@@ -2799,16 +2850,13 @@ impl HandshakePayload<'_> {
             Finished(x) => Finished(x.into_owned()),
             CertificateStatus(x) => CertificateStatus(x.into_owned()),
             MessageHash(x) => MessageHash(x.into_owned()),
-            Unknown(x) => Unknown(x.into_owned()),
+            Unknown((t, x)) => Unknown((t, x.into_owned())),
         }
     }
 }
 
 #[derive(Debug)]
-pub struct HandshakeMessagePayload<'a> {
-    pub typ: HandshakeType,
-    pub payload: HandshakePayload<'a>,
-}
+pub struct HandshakeMessagePayload<'a>(pub(crate) HandshakePayload<'a>);
 
 impl<'a> Codec<'a> for HandshakeMessagePayload<'a> {
     fn encode(&self, bytes: &mut Vec<u8>) {
@@ -2825,7 +2873,7 @@ impl<'a> HandshakeMessagePayload<'a> {
         r: &mut Reader<'a>,
         vers: ProtocolVersion,
     ) -> Result<Self, InvalidMessage> {
-        let mut typ = HandshakeType::read(r)?;
+        let typ = HandshakeType::read(r)?;
         let len = codec::u24::read(r)?.0 as usize;
         let mut sub = r.sub(len)?;
 
@@ -2841,7 +2889,6 @@ impl<'a> HandshakeMessagePayload<'a> {
                 if random == HELLO_RETRY_REQUEST_RANDOM {
                     let mut hrr = HelloRetryRequest::read(&mut sub)?;
                     hrr.legacy_version = version;
-                    typ = HandshakeType::HelloRetryRequest;
                     HandshakePayload::HelloRetryRequest(hrr)
                 } else {
                     let mut shp = ServerHelloPayload::read(&mut sub)?;
@@ -2912,11 +2959,11 @@ impl<'a> HandshakeMessagePayload<'a> {
                 // not legal on wire
                 return Err(InvalidMessage::UnexpectedMessage("HelloRetryRequest"));
             }
-            _ => HandshakePayload::Unknown(Payload::read(&mut sub)),
+            _ => HandshakePayload::Unknown((typ, Payload::read(&mut sub))),
         };
 
         sub.expect_empty("HandshakeMessagePayload")
-            .map(|_| Self { typ, payload })
+            .map(|_| Self(payload))
     }
 
     pub(crate) fn encoding_for_binder_signing(&self) -> Vec<u8> {
@@ -2927,7 +2974,7 @@ impl<'a> HandshakeMessagePayload<'a> {
     }
 
     pub(crate) fn total_binder_length(&self) -> usize {
-        match &self.payload {
+        match &self.0 {
             HandshakePayload::ClientHello(ch) => match ch.extensions.last() {
                 Some(ClientExtension::PresharedKey(offer)) => {
                     let mut binders_encoding = Vec::new();
@@ -2944,11 +2991,9 @@ impl<'a> HandshakeMessagePayload<'a> {
 
     pub(crate) fn payload_encode(&self, bytes: &mut Vec<u8>, encoding: Encoding) {
         // output type, length, and encoded payload
-        match self.typ {
-            HandshakeType::HelloRetryRequest => HandshakeType::ServerHello,
-            _ => self.typ,
-        }
-        .encode(bytes);
+        self.0
+            .wire_handshake_type()
+            .encode(bytes);
 
         let nested = LengthPrefixedBuffer::new(
             ListLength::U24 {
@@ -2958,7 +3003,7 @@ impl<'a> HandshakeMessagePayload<'a> {
             bytes,
         );
 
-        match &self.payload {
+        match &self.0 {
             // for Server Hello and HelloRetryRequest payloads we need to encode the payload
             // differently based on the purpose of the encoding.
             HandshakePayload::ServerHello(payload) => payload.payload_encode(nested.buf, encoding),
@@ -2967,23 +3012,16 @@ impl<'a> HandshakeMessagePayload<'a> {
             }
 
             // All other payload types are encoded the same regardless of purpose.
-            _ => self.payload.encode(nested.buf),
+            _ => self.0.encode(nested.buf),
         }
     }
 
     pub(crate) fn build_handshake_hash(hash: &[u8]) -> Self {
-        Self {
-            typ: HandshakeType::MessageHash,
-            payload: HandshakePayload::MessageHash(Payload::new(hash.to_vec())),
-        }
+        Self(HandshakePayload::MessageHash(Payload::new(hash.to_vec())))
     }
 
     pub(crate) fn into_owned(self) -> HandshakeMessagePayload<'static> {
-        let Self { typ, payload } = self;
-        HandshakeMessagePayload {
-            typ,
-            payload: payload.into_owned(),
-        }
+        HandshakeMessagePayload(self.0.into_owned())
     }
 }
 
@@ -3199,7 +3237,7 @@ impl TlsListElement for EchConfigExtension {
 ///
 /// [draft-ietf-tls-esni Section 5]: <https://www.ietf.org/archive/id/draft-ietf-tls-esni-18.html#section-5>
 #[derive(Clone, Debug)]
-pub enum EncryptedClientHello {
+pub(crate) enum EncryptedClientHello {
     /// A `ECHClientHello` with type [EchClientHelloType::ClientHelloOuter].
     Outer(EncryptedClientHelloOuter),
     /// An empty `ECHClientHello` with type [EchClientHelloType::ClientHelloInner].
@@ -3238,7 +3276,7 @@ impl Codec<'_> for EncryptedClientHello {
 ///
 /// [draft-ietf-tls-esni Section 5]: <https://www.ietf.org/archive/id/draft-ietf-tls-esni-18.html#section-5>
 #[derive(Clone, Debug)]
-pub struct EncryptedClientHelloOuter {
+pub(crate) struct EncryptedClientHelloOuter {
     /// The cipher suite used to encrypt ClientHelloInner. Must match a value from
     /// ECHConfigContents.cipher_suites list.
     pub cipher_suite: HpkeSymmetricCipherSuite,
@@ -3274,7 +3312,7 @@ impl Codec<'_> for EncryptedClientHelloOuter {
 ///
 /// [draft-ietf-tls-esni Section 5]: <https://www.ietf.org/archive/id/draft-ietf-tls-esni-18.html#section-5>
 #[derive(Clone, Debug)]
-pub struct ServerEncryptedClientHello {
+pub(crate) struct ServerEncryptedClientHello {
     pub(crate) retry_configs: Vec<EchConfigPayload>,
 }
 

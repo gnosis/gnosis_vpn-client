@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.71"
 name = "windows-link"
-version = "0.1.1"
+version = "0.1.3"
 authors = ["Microsoft"]
 build = false
 autolib = false
@@ -41,4 +41,4 @@ priority = -1
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0
-check-cfg = ["cfg(windows_raw_dylib, windows_debugger_visualizer, windows_slim_errors)"]
+check-cfg = ["cfg(windows_raw_dylib, windows_slim_errors)"]

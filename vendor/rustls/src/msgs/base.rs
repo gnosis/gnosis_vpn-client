@@ -158,7 +158,7 @@ impl<C: Cardinality> fmt::Debug for PayloadU16<C> {
 ///
 /// `C` controls the minimum length accepted when decoding.
 #[derive(Clone, Eq, PartialEq)]
-pub struct PayloadU8<C: Cardinality = MaybeEmpty>(pub(crate) Vec<u8>, PhantomData<C>);
+pub(crate) struct PayloadU8<C: Cardinality = MaybeEmpty>(pub(crate) Vec<u8>, PhantomData<C>);
 
 impl<C: Cardinality> PayloadU8<C> {
     pub(crate) fn encode_slice(slice: &[u8], bytes: &mut Vec<u8>) {
@@ -232,7 +232,7 @@ pub(super) fn hex<'a>(
     payload: impl IntoIterator<Item = &'a u8>,
 ) -> fmt::Result {
     for b in payload {
-        write!(f, "{:02x}", b)?;
+        write!(f, "{b:02x}")?;
     }
     Ok(())
 }

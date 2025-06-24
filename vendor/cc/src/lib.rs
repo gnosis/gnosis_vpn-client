@@ -2742,6 +2742,8 @@ impl Build {
 
             cmd.args.push("-isysroot".into());
             cmd.args.push(OsStr::new(&sdk_path).to_owned());
+            cmd.env
+                .push(("SDKROOT".into(), OsStr::new(&sdk_path).to_owned()));
 
             if target.abi == "macabi" {
                 // Mac Catalyst uses the macOS SDK, but to compile against and
@@ -3490,7 +3492,7 @@ impl Build {
                     "powerpc-unknown-linux-gnu" => Some("powerpc-linux-gnu"),
                     "powerpc-unknown-linux-gnuspe" => Some("powerpc-linux-gnuspe"),
                     "powerpc-unknown-netbsd" => Some("powerpc--netbsd"),
-                    "powerpc64-unknown-linux-gnu" => Some("powerpc-linux-gnu"),
+                    "powerpc64-unknown-linux-gnu" => Some("powerpc64-linux-gnu"),
                     "powerpc64le-unknown-linux-gnu" => Some("powerpc64le-linux-gnu"),
                     "riscv32i-unknown-none-elf" => self.find_working_gnu_prefix(&[
                         "riscv32-unknown-elf",

@@ -631,19 +631,19 @@ pub(crate) mod polyfills {
     // FIXME(#67): Once our MSRV is high enough, remove this.
     #[allow(unused)]
     pub(crate) trait NumExt {
-        /// Subtract without checking for underflow.
-        ///
-        /// # Safety
-        ///
-        /// The caller promises that the subtraction will not underflow.
-        unsafe fn unchecked_sub(self, rhs: Self) -> Self;
-
         /// Add without checking for overflow.
         ///
         /// # Safety
         ///
         /// The caller promises that the addition will not overflow.
         unsafe fn unchecked_add(self, rhs: Self) -> Self;
+
+        /// Subtract without checking for underflow.
+        ///
+        /// # Safety
+        ///
+        /// The caller promises that the subtraction will not underflow.
+        unsafe fn unchecked_sub(self, rhs: Self) -> Self;
 
         /// Multiply without checking for overflow.
         ///
@@ -653,10 +653,26 @@ pub(crate) mod polyfills {
         unsafe fn unchecked_mul(self, rhs: Self) -> Self;
     }
 
+    // NOTE on coverage: these will never be tested in nightly since they're
+    // polyfills for a feature which has been stabilized on our nightly
+    // toolchain.
     impl NumExt for usize {
-        // NOTE on coverage: this will never be tested in nightly since it's a
-        // polyfill for a feature which has been stabilized on our nightly
-        // toolchain.
+        #[cfg_attr(
+            all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
+            coverage(off)
+        )]
+        #[inline(always)]
+        unsafe fn unchecked_add(self, rhs: usize) -> usize {
+            match self.checked_add(rhs) {
+                Some(x) => x,
+                None => {
+                    // SAFETY: The caller promises that the addition will not
+                    // underflow.
+                    unsafe { core::hint::unreachable_unchecked() }
+                }
+            }
+        }
+
         #[cfg_attr(
             all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
             coverage(off)
@@ -673,28 +689,6 @@ pub(crate) mod polyfills {
             }
         }
 
-        // NOTE on coverage: this will never be tested in nightly since it's a
-        // polyfill for a feature which has been stabilized on our nightly
-        // toolchain.
-        #[cfg_attr(
-            all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
-            coverage(off)
-        )]
-        #[inline(always)]
-        unsafe fn unchecked_add(self, rhs: usize) -> usize {
-            match self.checked_add(rhs) {
-                Some(x) => x,
-                None => {
-                    // SAFETY: The caller promises that the addition will not
-                    // overflow.
-                    unsafe { core::hint::unreachable_unchecked() }
-                }
-            }
-        }
-
-        // NOTE on coverage: this will never be tested in nightly since it's a
-        // polyfill for a feature which has been stabilized on our nightly
-        // toolchain.
         #[cfg_attr(
             all(coverage_nightly, __ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS),
             coverage(off)
@@ -739,7 +733,7 @@ pub(crate) mod testutil {
     /// A `T` which is guaranteed not to satisfy `align_of::<A>()`.
     ///
     /// It must be the case that `align_of::<T>() < align_of::<A>()` in order
-    /// fot this type to work properly.
+    /// for this type to work properly.
     #[repr(C)]
     pub(crate) struct ForceUnalign<T: Unaligned, A> {
         // The outer struct is aligned to `A`, and, thanks to `repr(C)`, `t` is

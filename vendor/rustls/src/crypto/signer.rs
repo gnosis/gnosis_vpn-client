@@ -4,14 +4,13 @@ use core::fmt::Debug;
 
 use pki_types::{AlgorithmIdentifier, CertificateDer, PrivateKeyDer, SubjectPublicKeyInfoDer};
 
+use super::CryptoProvider;
 use crate::client::ResolvesClientCert;
 use crate::enums::{SignatureAlgorithm, SignatureScheme};
 use crate::error::{Error, InconsistentKeys};
 use crate::server::{ClientHello, ParsedCertificate, ResolvesServerCert};
 use crate::sync::Arc;
 use crate::x509;
-
-use super::CryptoProvider;
 
 /// An abstract signing key.
 ///
@@ -108,7 +107,7 @@ impl ResolvesClientCert for SingleCertAndKey {
         _root_hint_subjects: &[&[u8]],
         _sigschemes: &[SignatureScheme],
     ) -> Option<Arc<CertifiedKey>> {
-        Some(Arc::clone(&self.0))
+        Some(self.0.clone())
     }
 
     fn has_certs(&self) -> bool {
@@ -118,7 +117,7 @@ impl ResolvesClientCert for SingleCertAndKey {
 
 impl ResolvesServerCert for SingleCertAndKey {
     fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        Some(Arc::clone(&self.0))
+        Some(self.0.clone())
     }
 }
 

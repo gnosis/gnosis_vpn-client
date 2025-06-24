@@ -17,6 +17,8 @@
 #![allow(unknown_lints)]
 #![deny(renamed_and_removed_lints)]
 #![deny(clippy::all, clippy::missing_safety_doc, clippy::undocumented_unsafe_blocks)]
+// Inlining format args isn't supported on our MSRV.
+#![allow(clippy::uninlined_format_args)]
 #![deny(
     rustdoc::bare_urls,
     rustdoc::broken_intra_doc_links,
@@ -34,19 +36,14 @@ mod ext;
 mod output_tests;
 mod repr;
 
-use proc_macro2::{TokenStream, TokenTree};
-use quote::ToTokens;
-
-use {
-    proc_macro2::Span,
-    quote::quote,
-    syn::{
-        parse_quote, Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Error, Expr,
-        ExprLit, ExprUnary, GenericParam, Ident, Lit, Meta, Path, Type, UnOp, WherePredicate,
-    },
+use proc_macro2::{Span, TokenStream, TokenTree};
+use quote::{quote, ToTokens};
+use syn::{
+    parse_quote, Attribute, Data, DataEnum, DataStruct, DataUnion, DeriveInput, Error, Expr,
+    ExprLit, ExprUnary, GenericParam, Ident, Lit, Meta, Path, Type, UnOp, WherePredicate,
 };
 
-use {crate::ext::*, crate::repr::*};
+use crate::{ext::*, repr::*};
 
 // FIXME(https://github.com/rust-lang/rust/issues/54140): Some errors could be
 // made better if we could add multiple lines of error output like this:
@@ -274,7 +271,7 @@ fn derive_known_layout_inner(
                 // The layout of `Self` is reflected using a sequence of
                 // invocations of `DstLayout::{new_zst,extend,pad_to_align}`.
                 // The documentation of these items vows that invocations in
-                // this manner will acurately describe a type, so long as:
+                // this manner will accurately describe a type, so long as:
                 //
                 //  - that type is `repr(C)`,
                 //  - its fields are enumerated in the order they appear,
@@ -756,6 +753,7 @@ fn derive_try_from_bytes_struct(
                     ___ZerocopyAliasing: #zerocopy_crate::pointer::invariant::Reference,
                 {
                     use #zerocopy_crate::util::macro_util::core_reexport;
+                    use #zerocopy_crate::pointer::PtrInner;
 
                     true #(&& {
                         // SAFETY:
@@ -766,17 +764,28 @@ fn derive_try_from_bytes_struct(
                         //   the same byte ranges in the returned pointer's referent
                         //   as they do in `*slf`
                         let field_candidate = unsafe {
-                            let project = |slf: core_reexport::ptr::NonNull<Self>| {
-                                let slf = slf.as_ptr();
+                            let project = |slf: PtrInner<'_, Self>| {
+                                let slf = slf.as_non_null().as_ptr();
                                 let field = core_reexport::ptr::addr_of_mut!((*slf).#field_names);
                                 // SAFETY: `cast_unsized_unchecked` promises that
                                 // `slf` will either reference a zero-sized byte
                                 // range, or else will reference a byte range that
-                                // is entirely contained withing an allocated
+                                // is entirely contained within an allocated
                                 // object. In either case, this guarantees that
                                 // field projection will not wrap around the address
                                 // space, and so `field` will be non-null.
-                                unsafe { core_reexport::ptr::NonNull::new_unchecked(field) }
+                                let ptr = unsafe { core_reexport::ptr::NonNull::new_unchecked(field) };
+                                // SAFETY:
+                                // 0. `ptr` addresses a subset of the bytes of
+                                //    `slf`, so by invariant on `slf: PtrInner`,
+                                //    if `ptr`'s referent is not zero sized,
+                                //    then `ptr` has valid provenance for its
+                                //    referent, which is entirely contained in
+                                //    some Rust allocation, `A`.
+                                // 1. By invariant on `slf: PtrInner`, if
+                                //    `ptr`'s referent is not zero sized, `A` is
+                                //    guaranteed to live for at least `'a`.
+                                unsafe { PtrInner::new(ptr) }
                             };
 
                             candidate.reborrow().cast_unsized_unchecked(project)
@@ -827,6 +836,7 @@ fn derive_try_from_bytes_union(
                     ___ZerocopyAliasing: #zerocopy_crate::pointer::invariant::Reference,
                 {
                     use #zerocopy_crate::util::macro_util::core_reexport;
+                    use #zerocopy_crate::pointer::PtrInner;
 
                     false #(|| {
                         // SAFETY:
@@ -837,17 +847,28 @@ fn derive_try_from_bytes_union(
                         //   `self_type_trait_bounds`, neither `*slf` nor the
                         //   returned pointer's referent contain any `UnsafeCell`s
                         let field_candidate = unsafe {
-                            let project = |slf: core_reexport::ptr::NonNull<Self>| {
-                                let slf = slf.as_ptr();
+                            let project = |slf: PtrInner<'_, Self>| {
+                                let slf = slf.as_non_null().as_ptr();
                                 let field = core_reexport::ptr::addr_of_mut!((*slf).#field_names);
                                 // SAFETY: `cast_unsized_unchecked` promises that
                                 // `slf` will either reference a zero-sized byte
                                 // range, or else will reference a byte range that
-                                // is entirely contained withing an allocated
+                                // is entirely contained within an allocated
                                 // object. In either case, this guarantees that
                                 // field projection will not wrap around the address
                                 // space, and so `field` will be non-null.
-                                unsafe { core_reexport::ptr::NonNull::new_unchecked(field) }
+                                let ptr = unsafe { core_reexport::ptr::NonNull::new_unchecked(field) };
+                                // SAFETY:
+                                // 0. `ptr` addresses a subset of the bytes of
+                                //    `slf`, so by invariant on `slf: PtrInner`,
+                                //    if `ptr`'s referent is not zero sized,
+                                //    then `ptr` has valid provenance for its
+                                //    referent, which is entirely contained in
+                                //    some Rust allocation, `A`.
+                                // 1. By invariant on `slf: PtrInner`, if
+                                //    `ptr`'s referent is not zero sized, `A` is
+                                //    guaranteed to live for at least `'a`.
+                                unsafe { PtrInner::new(ptr) }
                             };
 
                             candidate.reborrow().cast_unsized_unchecked(project)
@@ -883,7 +904,7 @@ fn derive_try_from_bytes_enum(
     let trivial_is_bit_valid = try_gen_trivial_is_bit_valid(ast, top_level, zerocopy_crate);
     let extra = match (trivial_is_bit_valid, could_be_from_bytes) {
         (Some(is_bit_valid), _) => is_bit_valid,
-        // SAFETY: It would be sound for the enum to implement `FomBytes`, as
+        // SAFETY: It would be sound for the enum to implement `FromBytes`, as
         // required by `gen_trivial_is_bit_valid_unchecked`.
         (None, true) => unsafe { gen_trivial_is_bit_valid_unchecked(zerocopy_crate) },
         (None, false) => {
@@ -1202,7 +1223,9 @@ fn derive_from_bytes_enum(
 
 // Returns `None` if the enum's size is not guaranteed by the repr.
 fn enum_size_from_repr(repr: &EnumRepr) -> Result<usize, Error> {
-    use {CompoundRepr::*, PrimitiveRepr::*, Repr::*};
+    use CompoundRepr::*;
+    use PrimitiveRepr::*;
+    use Repr::*;
     match repr {
         Transparent(span)
         | Compound(
@@ -1505,7 +1528,7 @@ impl ToTokens for Trait {
         // stable and therefore not guaranteed to represent the variant names.
         // Indeed with the (unstable) `fmt-debug` compiler flag [2], it can
         // return only a minimalized output or empty string. To make sure this
-        // code will work in the future and independet of the compiler flag, we
+        // code will work in the future and independent of the compiler flag, we
         // translate the variants to their names manually here.
         //
         // [1] https://doc.rust-lang.org/1.81.0/std/fmt/trait.Debug.html#stability

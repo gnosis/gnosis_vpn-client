@@ -1,3 +1,35 @@
+## v0.12.20
+
+- Add `ClientBuilder::tcp_user_timeout(Duration)` option to set `TCP_USER_TIMEOUT`.
+- Fix proxy headers only using the first matched proxy.
+- (wasm) Fix re-adding `Error::is_status()`.
+
+## v0.12.19
+
+- Fix redirect that changes the method to GET should remove payload headers.
+- Fix redirect to only check the next scheme if the policy action is to follow.
+- (wasm) Fix compilation error if `cookies` feature is enabled (by the way, it's a noop feature in wasm).
+
+## v0.12.18
+
+- Fix compilation when `socks` enabled without TLS.
+
+## v0.12.17
+
+- Fix compilation on macOS.
+
+## v0.12.16
+
+- Add `ClientBuilder::http3_congestion_bbr()` to enable BBR congestion control.
+- Add `ClientBuilder::http3_send_grease()` to configure whether to send use QUIC grease.
+- Add `ClientBuilder::http3_max_field_section_size()` to configure the maximum response headers.
+- Add `ClientBuilder::tcp_keepalive_interval()` to configure TCP probe interval.
+- Add `ClientBuilder::tcp_keepalive_retries()` to configure TCP probe count.
+- Add `Proxy::headers()` to add extra headers that should be sent to a proxy.
+- Fix `redirect::Policy::limit()` which had an off-by-1 error, allowing 1 more redirect than specified.
+- Fix HTTP/3 to support streaming request bodies.
+- (wasm) Fix null bodies when calling `Response::bytes_stream()`.
+
 ## v0.12.15
 
 - Fix Windows to support both `ProxyOverride` and `NO_PROXY`.

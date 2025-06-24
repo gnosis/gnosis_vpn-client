@@ -182,7 +182,7 @@ impl AlwaysResolvesServerRawPublicKeys {
 
 impl server::ResolvesServerCert for AlwaysResolvesServerRawPublicKeys {
     fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<sign::CertifiedKey>> {
-        Some(Arc::clone(&self.0))
+        Some(self.0.clone())
     }
 
     fn only_raw_public_keys(&self) -> bool {
@@ -282,6 +282,7 @@ mod sni_resolver {
                         client_cert_types: None,
                         cipher_suites: &[],
                         certificate_authorities: None,
+                        named_groups: None,
                     })
                     .is_none()
             );
@@ -303,6 +304,7 @@ mod sni_resolver {
                         client_cert_types: None,
                         cipher_suites: &[],
                         certificate_authorities: None,
+                        named_groups: None,
                     })
                     .is_none()
             );
