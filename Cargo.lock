@@ -599,7 +599,7 @@ checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
 name = "gnosis_vpn"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "clap",
  "exitcode",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "backoff",
  "bincode",
