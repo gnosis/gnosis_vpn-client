@@ -115,6 +115,12 @@
             cargoToml = ./Cargo.toml;
           };
 
+          # Intel Mac builds do not work with full compiler optimizations enabled
+          # That's why we use a custom profile with opt-level = 1
+          gnosisvpnIntelBuildArgs = gnosisvpnBuildArgs //
+            { cargoExtraArgs = "--profile intelmac --all"; };
+
+
           gnosisvpn = rust-builder-local.callPackage
             ./nix/rust-package.nix
             gnosisvpnBuildArgs;
@@ -132,7 +138,7 @@
           # CAVEAT: must be built from a darwin system
           gnosisvpn-x86_64-darwin = rust-builder-x86_64-darwin.callPackage
             ./nix/rust-package.nix
-            gnosisvpnBuildArgs;
+            gnosisvpnIntelBuildArgs;
           # CAVEAT: must be built from a darwin system
           gnosisvpn-aarch64-darwin = rust-builder-aarch64-darwin.callPackage
             ./nix/rust-package.nix

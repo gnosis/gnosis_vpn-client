@@ -34,7 +34,7 @@ gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 
 [profile.intelmac]
 inherits = "release"
-opt-level = 2
+opt-level = 1
 debug = false
 # split-debuginfo = '...'  # Platform-specific.
 strip = "none"
