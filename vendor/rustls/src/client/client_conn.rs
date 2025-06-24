@@ -19,7 +19,7 @@ use crate::error::Error;
 use crate::kernel::KernelConnection;
 use crate::log::trace;
 use crate::msgs::enums::NamedGroup;
-use crate::msgs::handshake::ClientExtension;
+use crate::msgs::handshake::{ClientExtension, ProtocolName};
 use crate::msgs::persist;
 use crate::suites::{ExtractedSecrets, SupportedCipherSuite};
 use crate::sync::Arc;
@@ -313,9 +313,9 @@ impl ClientConfig {
         // Safety assumptions:
         // 1. that the provider has been installed (explicitly or implicitly)
         // 2. that the process-level default provider is usable with the supplied protocol versions.
-        Self::builder_with_provider(Arc::clone(
-            CryptoProvider::get_default_or_install_from_crate_features(),
-        ))
+        Self::builder_with_provider(
+            CryptoProvider::get_default_or_install_from_crate_features().clone(),
+        )
         .with_protocol_versions(versions)
         .unwrap()
     }
@@ -703,7 +703,7 @@ mod connection {
         /// we behave in the TLS protocol, `name` is the
         /// name of the server we want to talk to.
         pub fn new(config: Arc<ClientConfig>, name: ServerName<'static>) -> Result<Self, Error> {
-            Self::new_with_alpn(Arc::clone(&config), name, config.alpn_protocols.clone())
+            Self::new_with_alpn(config.clone(), name, config.alpn_protocols.clone())
         }
 
         /// Make a new ClientConnection with custom ALPN protocols.
@@ -772,6 +772,11 @@ mod connection {
         /// Return the connection's Encrypted Client Hello (ECH) status.
         pub fn ech_status(&self) -> EchStatus {
             self.inner.core.data.ech_status
+        }
+
+        /// Returns the number of TLS1.3 tickets that have been received.
+        pub fn tls13_tickets_received(&self) -> u32 {
+            self.inner.tls13_tickets_received
         }
 
         /// Return true if the connection was made with a `ClientConfig` that is FIPS compatible.
@@ -846,6 +851,10 @@ impl ConnectionCore<ClientConnectionData> {
         common_state.enable_secret_extraction = config.enable_secret_extraction;
         common_state.fips = config.fips();
         let mut data = ClientConnectionData::new();
+        let alpn_protocols = alpn_protocols
+            .into_iter()
+            .map(ProtocolName::from)
+            .collect();
 
         let mut cx = hs::ClientContext {
             common: &mut common_state,
@@ -875,7 +884,7 @@ impl UnbufferedClientConnection {
     /// Make a new ClientConnection. `config` controls how we behave in the TLS protocol, `name` is
     /// the name of the server we want to talk to.
     pub fn new(config: Arc<ClientConfig>, name: ServerName<'static>) -> Result<Self, Error> {
-        Self::new_with_alpn(Arc::clone(&config), name, config.alpn_protocols.clone())
+        Self::new_with_alpn(config.clone(), name, config.alpn_protocols.clone())
     }
 
     /// Make a new UnbufferedClientConnection with custom ALPN protocols.
@@ -918,6 +927,11 @@ impl UnbufferedClientConnection {
         self.inner
             .core
             .dangerous_into_kernel_connection()
+    }
+
+    /// Returns the number of TLS1.3 tickets that have been received.
+    pub fn tls13_tickets_received(&self) -> u32 {
+        self.inner.tls13_tickets_received
     }
 }
 

@@ -2,9 +2,10 @@ use alloc::boxed::Box;
 use core::fmt::Debug;
 use core::mem;
 use core::ops::{Deref, DerefMut, Range};
-use kernel::KernelConnection;
 #[cfg(feature = "std")]
 use std::io;
+
+use kernel::KernelConnection;
 
 use crate::common_state::{CommonState, Context, DEFAULT_BUFFER_LIMIT, IoState, State};
 use crate::enums::{AlertDescription, ContentType, ProtocolVersion};
@@ -1146,7 +1147,7 @@ impl<Data> ConnectionCore<Data> {
             Err(err) => {
                 return Err(self
                     .common_state
-                    .send_fatal_alert(AlertDescription::DecodeError, err));
+                    .send_fatal_alert(AlertDescription::from(err), err));
             }
         };
 

@@ -165,7 +165,7 @@ mod connection {
             params: Vec<u8>,
         ) -> Result<Self, Error> {
             Self::new_with_alpn(
-                Arc::clone(&config),
+                config.clone(),
                 quic_version,
                 name,
                 params,
@@ -218,6 +218,11 @@ mod connection {
         /// is not an error, but you may wish to resend the data.
         pub fn is_early_data_accepted(&self) -> bool {
             self.inner.core.is_early_data_accepted()
+        }
+
+        /// Returns the number of TLS1.3 tickets that have been received.
+        pub fn tls13_tickets_received(&self) -> u32 {
+            self.inner.tls13_tickets_received
         }
     }
 

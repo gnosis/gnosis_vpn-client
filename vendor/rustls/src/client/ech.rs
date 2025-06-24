@@ -28,8 +28,8 @@ use crate::tls13::key_schedule::{
     KeyScheduleEarly, KeyScheduleHandshakeStart, server_ech_hrr_confirmation_secret,
 };
 use crate::{
-    AlertDescription, CommonState, EncryptedClientHelloError, Error, HandshakeType,
-    PeerIncompatible, PeerMisbehaved, ProtocolVersion, Tls13CipherSuite,
+    AlertDescription, CommonState, EncryptedClientHelloError, Error, PeerIncompatible,
+    PeerMisbehaved, ProtocolVersion, Tls13CipherSuite,
 };
 
 /// Controls how Encrypted Client Hello (ECH) is used in a client handshake.
@@ -107,7 +107,7 @@ impl EchConfig {
 
         // Note: we name the index var _i because if the log feature is disabled
         //       it is unused.
-        #[cfg_attr(not(feature = "std"), allow(clippy::unused_enumerate_index))]
+        #[cfg_attr(not(feature = "logging"), allow(clippy::unused_enumerate_index))]
         for (_i, config) in ech_configs.iter().enumerate() {
             let contents = match config {
                 EchConfigPayload::V18(contents) => contents,
@@ -202,7 +202,7 @@ impl EchGreaseConfig {
         secure_random: &'static dyn SecureRandom,
         inner_name: ServerName<'static>,
         outer_hello: &ClientHelloPayload,
-    ) -> Result<ClientExtension, Error> {
+    ) -> Result<EncryptedClientHello, Error> {
         trace!("Preparing GREASE ECH extension");
 
         // Pick a random config id.
@@ -251,14 +251,12 @@ impl EchGreaseConfig {
         secure_random.fill(&mut payload)?;
 
         // Return the GREASE extension.
-        Ok(ClientExtension::EncryptedClientHello(
-            EncryptedClientHello::Outer(EncryptedClientHelloOuter {
-                cipher_suite: suite.sym,
-                config_id: config_id[0],
-                enc: PayloadU16::new(grease_state.enc.0),
-                payload: PayloadU16::new(payload),
-            }),
-        ))
+        Ok(EncryptedClientHello::Outer(EncryptedClientHelloOuter {
+            cipher_suite: suite.sym,
+            config_id: config_id[0],
+            enc: PayloadU16::new(grease_state.enc.0),
+            payload: PayloadU16::new(payload),
+        }))
     }
 }
 
@@ -398,15 +396,13 @@ impl EchState {
             false => self.enc.0.clone(),
         };
 
-        fn outer_hello_ext(ctx: &EchState, enc: Vec<u8>, payload: Vec<u8>) -> ClientExtension {
-            ClientExtension::EncryptedClientHello(EncryptedClientHello::Outer(
-                EncryptedClientHelloOuter {
-                    cipher_suite: ctx.cipher_suite,
-                    config_id: ctx.config_id,
-                    enc: PayloadU16::new(enc),
-                    payload: PayloadU16::new(payload),
-                },
-            ))
+        fn outer_hello_ext(ctx: &EchState, enc: Vec<u8>, payload: Vec<u8>) -> EncryptedClientHello {
+            EncryptedClientHello::Outer(EncryptedClientHelloOuter {
+                cipher_suite: ctx.cipher_suite,
+                config_id: ctx.config_id,
+                enc: PayloadU16::new(enc),
+                payload: PayloadU16::new(payload),
+            })
         }
 
         // The outer handshake is not permitted to resume a session. If we're resuming in the
@@ -420,7 +416,11 @@ impl EchState {
         // To compute the encoded AAD we add a placeholder extension with an empty payload.
         outer_hello
             .extensions
-            .push(outer_hello_ext(self, enc.clone(), vec![0; payload_len]));
+            .push(ClientExtension::EncryptedClientHello(outer_hello_ext(
+                self,
+                enc.clone(),
+                vec![0; payload_len],
+            )));
 
         // Next we compute the proper extension payload.
         let payload = self
@@ -431,7 +431,9 @@ impl EchState {
         outer_hello.extensions.pop();
         outer_hello
             .extensions
-            .push(outer_hello_ext(self, enc, payload));
+            .push(ClientExtension::EncryptedClientHello(outer_hello_ext(
+                self, enc, payload,
+            )));
 
         Ok(outer_hello)
     }
@@ -664,10 +666,7 @@ impl EchState {
 
         // If we're resuming, we need to update the PSK binder in the inner hello.
         if let Some(resuming) = resuming.as_ref() {
-            let mut chp = HandshakeMessagePayload {
-                typ: HandshakeType::ClientHello,
-                payload: HandshakePayload::ClientHello(inner_hello),
-            };
+            let mut chp = HandshakeMessagePayload(HandshakePayload::ClientHello(inner_hello));
 
             // Retain the early key schedule we get from processing the binder.
             self.early_data_key_schedule = Some(tls13::fill_in_psk_binder(
@@ -678,14 +677,14 @@ impl EchState {
 
             // fill_in_psk_binder works on an owned HandshakeMessagePayload, so we need to
             // extract our inner hello back out of it to retain ownership.
-            inner_hello = match chp.payload {
+            inner_hello = match chp.0 {
                 HandshakePayload::ClientHello(chp) => chp,
                 // Safety: we construct the HMP above and know its type unconditionally.
                 _ => unreachable!(),
             };
         }
 
-        trace!("ECH Inner Hello: {:#?}", inner_hello);
+        trace!("ECH Inner Hello: {inner_hello:#?}");
 
         // Encode the inner hello according to the rules required for ECH. This differs
         // from the standard encoding in several ways. Notably this is where we will
@@ -733,10 +732,9 @@ impl EchState {
                 // (retryreq == None means we're in the "initial ClientHello" case)
                 None => ProtocolVersion::TLSv1_0,
             },
-            payload: MessagePayload::handshake(HandshakeMessagePayload {
-                typ: HandshakeType::ClientHello,
-                payload: HandshakePayload::ClientHello(inner_hello),
-            }),
+            payload: MessagePayload::handshake(HandshakeMessagePayload(
+                HandshakePayload::ClientHello(inner_hello),
+            )),
         };
 
         // Update the inner transcript buffer with the inner hello message.
@@ -779,17 +777,15 @@ impl EchState {
     }
 
     fn server_hello_conf(server_hello: &ServerHelloPayload) -> Message<'_> {
-        Self::ech_conf_message(HandshakeMessagePayload {
-            typ: HandshakeType::ServerHello,
-            payload: HandshakePayload::ServerHello(server_hello.clone()),
-        })
+        Self::ech_conf_message(HandshakeMessagePayload(HandshakePayload::ServerHello(
+            server_hello.clone(),
+        )))
     }
 
     fn hello_retry_request_conf(retry_req: &HelloRetryRequest) -> Message<'_> {
-        Self::ech_conf_message(HandshakeMessagePayload {
-            typ: HandshakeType::HelloRetryRequest,
-            payload: HandshakePayload::HelloRetryRequest(retry_req.clone()),
-        })
+        Self::ech_conf_message(HandshakeMessagePayload(
+            HandshakePayload::HelloRetryRequest(retry_req.clone()),
+        ))
     }
 
     fn ech_conf_message(hmp: HandshakeMessagePayload<'_>) -> Message<'_> {

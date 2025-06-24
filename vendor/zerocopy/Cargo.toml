@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.56.0"
 name = "zerocopy"
-version = "0.8.25"
+version = "0.8.26"
 authors = [
     "Joshua Liebow-Feeser <joshlf@google.com>",
     "Jack Wrenn <jswrenn@amazon.com>",
@@ -53,8 +53,8 @@ zerocopy-panic-in-const-and-vec-try-reserve-1-57-0 = "1.57.0"
 zerocopy-target-has-atomics-1-60-0 = "1.60.0"
 
 [package.metadata.ci]
-pinned-nightly = "nightly-2025-04-23"
-pinned-stable = "1.86.0"
+pinned-nightly = "nightly-2025-06-16"
+pinned-stable = "1.87.0"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -90,7 +90,7 @@ name = "trybuild"
 path = "tests/trybuild.rs"
 
 [dependencies.zerocopy-derive]
-version = "=0.8.25"
+version = "=0.8.26"
 optional = true
 
 [dev-dependencies.either]
@@ -118,7 +118,7 @@ version = "=1.0.89"
 features = ["diff"]
 
 [dev-dependencies.zerocopy-derive]
-version = "=0.8.25"
+version = "=0.8.26"
 
 [target."cfg(any())".dependencies.zerocopy-derive]
-version = "=0.8.25"
+version = "=0.8.26"

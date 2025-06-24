@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "windows-targets"
-version = "0.53.0"
+version = "0.53.2"
 dependencies = [
  "windows_aarch64_gnullvm",
  "windows_aarch64_msvc",

@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.66"
 name = "toml_write"
-version = "0.1.1"
+version = "0.1.2"
 build = false
 include = [
     "build.rs",
@@ -22,9 +22,7 @@ include = [
     "Cargo.lock",
     "LICENSE*",
     "README.md",
-    "benches/**/*",
     "examples/**/*",
-    "tests/**/*",
 ]
 autolib = false
 autobins = false
@@ -34,7 +32,6 @@ autobenches = false
 description = """
 A low-level interface for writing out TOML
 """
-homepage = "https://github.com/toml-rs/toml"
 readme = "README.md"
 keywords = [
     "encoding",
@@ -49,6 +46,7 @@ all-features = true
 rustdoc-args = [
     "--cfg",
     "docsrs",
+    "--generate-link-to-definition",
 ]
 
 [[package.metadata.release.pre-release-replacements]]
@@ -94,14 +92,6 @@ std = ["alloc"]
 [lib]
 name = "toml_write"
 path = "src/lib.rs"
-
-[[test]]
-name = "float"
-path = "tests/float.rs"
-
-[[test]]
-name = "string"
-path = "tests/string.rs"
 
 [dependencies]
 
@@ -151,7 +141,7 @@ lossy_float_literal = "warn"
 macro_use_imports = "warn"
 mem_forget = "warn"
 mutex_integer = "warn"
-needless_continue = "warn"
+needless_continue = "allow"
 needless_for_each = "warn"
 negative_feature_names = "warn"
 path_buf_push_overwrite = "warn"
@@ -177,6 +167,7 @@ wildcard_imports = "warn"
 zero_sized_map_values = "warn"
 
 [lints.rust]
+unnameable_types = "allow"
 unreachable_pub = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 unused_lifetimes = "warn"

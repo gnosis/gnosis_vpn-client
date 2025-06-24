@@ -1,9 +1,9 @@
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct OnceLock<T>(once_cell::sync::OnceCell<T>);
+pub struct OnceLock<T>(std::sync::OnceLock<T>);
 
 impl<T> OnceLock<T> {
     pub const fn new() -> Self {
-        Self(once_cell::sync::OnceCell::new())
+        Self(std::sync::OnceLock::new())
     }
 
     pub fn get(&self) -> Option<&T> {

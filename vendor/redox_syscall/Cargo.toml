@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "redox_syscall"
-version = "0.5.12"
+version = "0.5.13"
 authors = ["Jeremy Soller <jackpot51@gmail.com>"]
 build = false
 autolib = false

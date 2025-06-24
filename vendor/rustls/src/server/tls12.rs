@@ -91,7 +91,7 @@ mod client_hello {
                 .ecpoints_extension()
                 .unwrap_or(&[ECPointFormat::Uncompressed]);
 
-            trace!("ecpoints {:?}", ecpoints_ext);
+            trace!("ecpoints {ecpoints_ext:?}");
 
             if !ecpoints_ext.contains(&ECPointFormat::Uncompressed) {
                 return Err(cx.common.send_fatal_alert(
@@ -347,18 +347,15 @@ mod client_hello {
         ep.process_common(config, cx, ocsp_response, hello, resumedata, extra_exts)?;
         ep.process_tls12(config, hello, using_ems);
 
-        let sh = HandshakeMessagePayload {
-            typ: HandshakeType::ServerHello,
-            payload: HandshakePayload::ServerHello(ServerHelloPayload {
-                legacy_version: ProtocolVersion::TLSv1_2,
-                random: Random::from(randoms.server),
-                session_id,
-                cipher_suite: suite.common.suite,
-                compression_method: Compression::Null,
-                extensions: ep.exts,
-            }),
-        };
-        trace!("sending server hello {:?}", sh);
+        let sh = HandshakeMessagePayload(HandshakePayload::ServerHello(ServerHelloPayload {
+            legacy_version: ProtocolVersion::TLSv1_2,
+            random: Random::from(randoms.server),
+            session_id,
+            cipher_suite: suite.common.suite,
+            compression_method: Compression::Null,
+            extensions: ep.exts,
+        }));
+        trace!("sending server hello {sh:?}");
         flight.add(sh);
 
         Ok(ep.send_ticket)
@@ -368,17 +365,15 @@ mod client_hello {
         flight: &mut HandshakeFlightTls12<'_>,
         cert_chain: &[CertificateDer<'static>],
     ) {
-        flight.add(HandshakeMessagePayload {
-            typ: HandshakeType::Certificate,
-            payload: HandshakePayload::Certificate(CertificateChain(cert_chain.to_vec())),
-        });
+        flight.add(HandshakeMessagePayload(HandshakePayload::Certificate(
+            CertificateChain(cert_chain.to_vec()),
+        )));
     }
 
     fn emit_cert_status(flight: &mut HandshakeFlightTls12<'_>, ocsp: &[u8]) {
-        flight.add(HandshakeMessagePayload {
-            typ: HandshakeType::CertificateStatus,
-            payload: HandshakePayload::CertificateStatus(CertificateStatus::new(ocsp)),
-        });
+        flight.add(HandshakeMessagePayload(
+            HandshakePayload::CertificateStatus(CertificateStatus::new(ocsp)),
+        ));
     }
 
     fn emit_server_kx(
@@ -407,10 +402,9 @@ mod client_hello {
             dss: DigitallySignedStruct::new(sigscheme, sig),
         });
 
-        flight.add(HandshakeMessagePayload {
-            typ: HandshakeType::ServerKeyExchange,
-            payload: HandshakePayload::ServerKeyExchange(skx),
-        });
+        flight.add(HandshakeMessagePayload(
+            HandshakePayload::ServerKeyExchange(skx),
+        ));
         Ok(kx)
     }
 
@@ -440,21 +434,15 @@ mod client_hello {
             canames: names,
         };
 
-        let creq = HandshakeMessagePayload {
-            typ: HandshakeType::CertificateRequest,
-            payload: HandshakePayload::CertificateRequest(cr),
-        };
+        let creq = HandshakeMessagePayload(HandshakePayload::CertificateRequest(cr));
 
-        trace!("Sending CertificateRequest {:?}", creq);
+        trace!("Sending CertificateRequest {creq:?}");
         flight.add(creq);
         Ok(true)
     }
 
     fn emit_server_hello_done(flight: &mut HandshakeFlightTls12<'_>) {
-        flight.add(HandshakeMessagePayload {
-            typ: HandshakeType::ServerHelloDone,
-            payload: HandshakePayload::ServerHelloDone,
-        });
+        flight.add(HandshakeMessagePayload(HandshakePayload::ServerHelloDone));
     }
 }
 
@@ -492,7 +480,7 @@ impl State<ServerConnectionData> for ExpectCertificate {
             .verifier
             .client_auth_mandatory();
 
-        trace!("certs {:?}", cert_chain);
+        trace!("certs {cert_chain:?}");
 
         let client_cert = match cert_chain.split_first() {
             None if mandatory => {
@@ -820,13 +808,12 @@ fn emit_ticket(
 
     let m = Message {
         version: ProtocolVersion::TLSv1_2,
-        payload: MessagePayload::handshake(HandshakeMessagePayload {
-            typ: HandshakeType::NewSessionTicket,
-            payload: HandshakePayload::NewSessionTicket(NewSessionTicketPayload::new(
+        payload: MessagePayload::handshake(HandshakeMessagePayload(
+            HandshakePayload::NewSessionTicket(NewSessionTicketPayload::new(
                 ticket_lifetime,
                 ticket,
             )),
-        }),
+        )),
     };
 
     transcript.add_message(&m);
@@ -854,10 +841,9 @@ fn emit_finished(
 
     let f = Message {
         version: ProtocolVersion::TLSv1_2,
-        payload: MessagePayload::handshake(HandshakeMessagePayload {
-            typ: HandshakeType::Finished,
-            payload: HandshakePayload::Finished(verify_data_payload),
-        }),
+        payload: MessagePayload::handshake(HandshakeMessagePayload(HandshakePayload::Finished(
+            verify_data_payload,
+        ))),
     };
 
     transcript.add_message(&f);
@@ -911,6 +897,7 @@ impl State<ServerConnectionData> for ExpectFinished {
                 .config
                 .session_storage
                 .put(self.session_id.as_ref().to_vec(), value.get_encoding());
+            #[cfg_attr(not(feature = "logging"), allow(clippy::if_same_then_else))]
             if worked {
                 debug!("Session saved");
             } else {

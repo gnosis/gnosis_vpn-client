@@ -115,14 +115,13 @@
 //!         .map_err(|err| err.to_string())
 //! }).join().unwrap();
 //! ```
+#[cfg(zerocopy_core_error_1_81_0)]
+use core::error::Error;
 use core::{
     convert::Infallible,
     fmt::{self, Debug, Write},
     ops::Deref,
 };
-
-#[cfg(zerocopy_core_error_1_81_0)]
-use core::error::Error;
 #[cfg(all(not(zerocopy_core_error_1_81_0), any(feature = "std", test)))]
 use std::error::Error;
 
@@ -607,7 +606,6 @@ impl<Src, Dst: ?Sized + TryFromBytes> ValidityError<Src, Dst> {
     /// This formatting may include potentially sensitive information.
     fn display_verbose_extras(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
     where
-        Src: Deref,
         Dst: KnownLayout,
     {
         f.write_str("Destination type: ")?;
@@ -630,7 +628,6 @@ impl<Src, Dst: ?Sized + TryFromBytes> fmt::Debug for ValidityError<Src, Dst> {
 /// potentially sensitive information.
 impl<Src, Dst: ?Sized> fmt::Display for ValidityError<Src, Dst>
 where
-    Src: Deref,
     Dst: KnownLayout + TryFromBytes,
 {
     #[inline]
@@ -646,12 +643,7 @@ where
 
 #[cfg(any(zerocopy_core_error_1_81_0, feature = "std", test))]
 #[cfg_attr(doc_cfg, doc(cfg(all(rust = "1.81.0", feature = "std"))))]
-impl<Src, Dst: ?Sized> Error for ValidityError<Src, Dst>
-where
-    Src: Deref,
-    Dst: KnownLayout + TryFromBytes,
-{
-}
+impl<Src, Dst: ?Sized> Error for ValidityError<Src, Dst> where Dst: KnownLayout + TryFromBytes {}
 
 impl<Src, Dst: ?Sized + TryFromBytes, A, S> From<ValidityError<Src, Dst>>
     for ConvertError<A, S, ValidityError<Src, Dst>>

@@ -20,12 +20,11 @@ use crate::conn::{ConnectionCommon, ConnectionCore, UnbufferedConnectionCommon};
 #[cfg(doc)]
 use crate::crypto;
 use crate::crypto::CryptoProvider;
-use crate::enums::{CipherSuite, ProtocolVersion, SignatureScheme};
+use crate::enums::{CertificateType, CipherSuite, ProtocolVersion, SignatureScheme};
 use crate::error::Error;
 use crate::kernel::KernelConnection;
 use crate::log::trace;
 use crate::msgs::base::Payload;
-use crate::msgs::enums::CertificateType;
 use crate::msgs::handshake::{ClientHelloPayload, ProtocolName, ServerExtension};
 use crate::msgs::message::Message;
 use crate::suites::ExtractedSecrets;
@@ -34,7 +33,9 @@ use crate::sync::Arc;
 use crate::time_provider::DefaultTimeProvider;
 use crate::time_provider::TimeProvider;
 use crate::vecbuf::ChunkVecBuffer;
-use crate::{DistinguishedName, KeyLog, WantsVersions, compress, sign, verify, versions};
+use crate::{
+    DistinguishedName, KeyLog, NamedGroup, WantsVersions, compress, sign, verify, versions,
+};
 
 /// A trait for the ability to store server session data.
 ///
@@ -146,6 +147,7 @@ pub struct ClientHello<'a> {
     ///
     /// [certificate_authorities]: https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.4
     pub(super) certificate_authorities: Option<&'a [DistinguishedName]>,
+    pub(super) named_groups: Option<&'a [NamedGroup]>,
 }
 
 impl<'a> ClientHello<'a> {
@@ -216,6 +218,27 @@ impl<'a> ClientHello<'a> {
     /// [certificate_authorities]: https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.4
     pub fn certificate_authorities(&self) -> Option<&'a [DistinguishedName]> {
         self.certificate_authorities
+    }
+
+    /// Get the [`named_groups`] extension sent by the client.
+    ///
+    /// This means different things in different versions of TLS:
+    ///
+    /// Originally it was introduced as the "[`elliptic_curves`]" extension for TLS1.2.
+    /// It described the elliptic curves supported by a client for all purposes: key
+    /// exchange, signature verification (for server authentication), and signing (for
+    /// client auth).  Later [RFC7919] extended this to include FFDHE "named groups",
+    /// but FFDHE groups in this context only relate to key exchange.
+    ///
+    /// In TLS1.3 it was renamed to "[`named_groups`]" and now describes all types
+    /// of key exchange mechanisms, and does not relate at all to elliptic curves
+    /// used for signatures.
+    ///
+    /// [`elliptic_curves`]: https://datatracker.ietf.org/doc/html/rfc4492#section-5.1.1
+    /// [RFC7919]: https://datatracker.ietf.org/doc/html/rfc7919#section-2
+    /// [`named_groups`]:https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.7
+    pub fn named_groups(&self) -> Option<&'a [NamedGroup]> {
+        self.named_groups
     }
 }
 
@@ -455,9 +478,9 @@ impl ServerConfig {
         // Safety assumptions:
         // 1. that the provider has been installed (explicitly or implicitly)
         // 2. that the process-level default provider is usable with the supplied protocol versions.
-        Self::builder_with_provider(Arc::clone(
-            CryptoProvider::get_default_or_install_from_crate_features(),
-        ))
+        Self::builder_with_provider(
+            CryptoProvider::get_default_or_install_from_crate_features().clone(),
+        )
         .with_protocol_versions(versions)
         .unwrap()
     }
@@ -996,6 +1019,7 @@ impl Accepted {
             client_cert_types: payload.client_certificate_extension(),
             cipher_suites: &payload.cipher_suites,
             certificate_authorities: payload.certificate_authorities_extension(),
+            named_groups: payload.namedgroups_extension(),
         };
 
         trace!("Accepted::client_hello(): {ch:#?}");
@@ -1040,8 +1064,7 @@ impl Accepted {
 
     fn client_hello_payload<'a>(message: &'a Message<'_>) -> &'a ClientHelloPayload {
         match &message.payload {
-            crate::msgs::message::MessagePayload::Handshake { parsed, .. } => match &parsed.payload
-            {
+            crate::msgs::message::MessagePayload::Handshake { parsed, .. } => match &parsed.0 {
                 crate::msgs::handshake::HandshakePayload::ClientHello(ch) => ch,
                 _ => unreachable!(),
             },

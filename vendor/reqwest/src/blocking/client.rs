@@ -6,7 +6,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::task::ready;
+use std::task::{ready, Poll};
 use std::thread;
 use std::time::Duration;
 
@@ -564,7 +564,18 @@ impl ClientBuilder {
     ///     .interface(interface)
     ///     .build().unwrap();
     /// ```
-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "solaris",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+    ))]
     pub fn interface(self, interface: &str) -> ClientBuilder {
         self.with_inner(move |inner| inner.interface(interface))
     }
@@ -577,6 +588,40 @@ impl ClientBuilder {
         D: Into<Option<Duration>>,
     {
         self.with_inner(move |inner| inner.tcp_keepalive(val))
+    }
+
+    /// Set that all sockets have `SO_KEEPALIVE` set with the supplied interval.
+    ///
+    /// If `None`, the option will not be set.
+    pub fn tcp_keepalive_interval<D>(self, val: D) -> ClientBuilder
+    where
+        D: Into<Option<Duration>>,
+    {
+        self.with_inner(move |inner| inner.tcp_keepalive_interval(val))
+    }
+
+    /// Set that all sockets have `SO_KEEPALIVE` set with the supplied retry count.
+    ///
+    /// If `None`, the option will not be set.
+    pub fn tcp_keepalive_retries<C>(self, retries: C) -> ClientBuilder
+    where
+        C: Into<Option<u32>>,
+    {
+        self.with_inner(move |inner| inner.tcp_keepalive_retries(retries))
+    }
+
+    /// Set that all sockets have `TCP_USER_TIMEOUT` set with the supplied duration.
+    ///
+    /// This option controls how long transmitted data may remain unacknowledged before
+    /// the connection is force-closed.
+    ///
+    /// The current default is `None` (option disabled).
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    pub fn tcp_user_timeout<D>(self, val: D) -> ClientBuilder
+    where
+        D: Into<Option<Duration>>,
+    {
+        self.with_inner(move |inner| inner.tcp_user_timeout(val))
     }
 
     // TLS options
@@ -1302,8 +1347,6 @@ async fn forward<F>(fut: F, mut tx: OneshotResponse)
 where
     F: Future<Output = crate::Result<async_impl::Response>>,
 {
-    use std::task::Poll;
-
     futures_util::pin_mut!(fut);
 
     // "select" on the sender being canceled, and the future completing
