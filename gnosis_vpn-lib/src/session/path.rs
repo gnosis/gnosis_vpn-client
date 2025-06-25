@@ -9,7 +9,7 @@ use crate::peer_id::PeerId;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Path {
     Hops(u8),
-    Intermediates(Vec<PeerId>),
+    IntermediatePath(Vec<PeerId>),
 }
 
 impl Default for Path {
@@ -26,7 +26,7 @@ impl Display for Path {
                 let h = (1..*hops).map(|_| "()").collect::<Vec<_>>().join("->");
                 format!("->{}->", h)
             }
-            Path::Intermediates(intermediates) => {
+            Path::IntermediatePath(intermediates) => {
                 let i = intermediates
                     .iter()
                     .map(|peer_id| format!("(r{})", log_output::peer_id(peer_id.to_string().as_str())))

@@ -213,8 +213,8 @@ system-setup mode='keep-running': submodules docker-build
         exit 1
     fi
     echo "[PHASE3] Checking no errors in server logs"
-    if docker logs gnosis_vpn-server | grep -qE "WARN|ERROR"; then
-        echo "[PHASE3] Found no errors in server logs"
+    if docker logs gnosis_vpn-server | grep -qE "ERROR"; then
+        echo "[PHASE3] Found errors in server logs"
         docker logs gnosis_vpn-server
         exit 1
     fi

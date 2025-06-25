@@ -329,7 +329,7 @@ impl Config {
             .iter()
             .map(|(k, v)| {
                 let path = match v.path.clone() {
-                    Some(DestinationPath::Intermediates(p)) => session::Path::Intermediates(p),
+                    Some(DestinationPath::Intermediates(p)) => session::Path::IntermediatePath(p),
                     Some(DestinationPath::Hops(h)) => session::Path::Hops(h),
                     None => session::Path::default(),
                 };

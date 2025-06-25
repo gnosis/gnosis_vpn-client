@@ -170,7 +170,7 @@ impl Session {
             Path::Hops(hop) => {
                 json!({"Hops": hop})
             }
-            Path::Intermediates(ids) => {
+            Path::IntermediatePath(ids) => {
                 json!({ "IntermediatePath": ids.clone() })
             }
         };
