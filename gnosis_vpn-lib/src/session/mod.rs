@@ -34,6 +34,8 @@ pub struct Session {
 pub enum Capability {
     Segmentation,
     Retransmission,
+    RetransmissionAckOnly,
+    NoDelay,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -176,8 +178,8 @@ impl Session {
             Path::Hops(hop) => {
                 json!({"Hops": hop})
             }
-            Path::IntermediatePath(ids) => {
-                json!({ "IntermediatePath": ids.clone() })
+            Path::IntermediatePath(addresses) => {
+                json!({ "IntermediatePath": addresses.clone() })
             }
         };
         json.insert("forwardPath".to_string(), path_json.clone());
