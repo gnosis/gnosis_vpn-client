@@ -175,14 +175,14 @@ impl fmt::Display for Destination {
             .map(|(k, v)| format!("{}: {}", k, v))
             .collect::<Vec<_>>()
             .join(", ");
-        let short_pid = log_output::peer_id(self.peer_id.to_string().as_str());
+        let short_addr = log_output::address(&self.address);
         write!(
             f,
             "Address: {addr}, Route: (entry){path}(x{short_addr}), {meta}",
             meta = meta,
             path = self.path,
             addr = self.address,
-            short_pid = short_pid,
+            short_addr = short_addr,
         )
     }
 }
