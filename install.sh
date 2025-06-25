@@ -576,8 +576,6 @@ path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 [destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
 meta = { location = "Spain" }
 path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
-<<<<<<< HEAD
-
 [destinations.0x9454fc1F54DC7682124BA2d153345f4F6b404A79]
 meta = { location = "India" }
 path = { intermediates = [ "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" ] }
