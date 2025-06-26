@@ -29,7 +29,7 @@ impl Display for Path {
             Path::IntermediatePath(intermediates) => {
                 let i = intermediates
                     .iter()
-                    .map(|address| format!("(r{})", log_output::address(address)))
+                    .map(|address| format!("({})", log_output::address(address)))
                     .collect::<Vec<_>>()
                     .join("->");
                 format!("->{}->", i)

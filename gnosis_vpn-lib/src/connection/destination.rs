@@ -56,7 +56,7 @@ impl Destination {
     }
 
     pub fn pretty_print_path(&self) -> String {
-        format!("{}(x{})", self.path, log_output::address(&self.address))
+        format!("{}({})", self.path, log_output::address(&self.address))
     }
 
     fn meta_str(&self) -> String {
