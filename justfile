@@ -197,7 +197,7 @@ system-setup mode='keep-running': submodules docker-build
     # 3c: run system tests
     if [ "{{ mode }}" != "ci-system-test" ]; then
         echo "[PHASE3] Disabling errexit, nounset, and pipefail for interactive testing"
-        unset -o errexit -o nounset -o pipefail
+        set +o errexit
     fi
 
     echo "[PHASE3] Checking connect via first local node"
