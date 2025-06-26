@@ -195,47 +195,35 @@ system-setup mode='keep-running': submodules docker-build
     echo "[PHASE3] Client is ready for testing"
 
     # 3c: run system tests
-    if [ "{{ mode }}" != "ci-system-test" ]; then
-        echo "[PHASE3] Disabling errexit, nounset, and pipefail for interactive testing"
-        set +o errexit
-    fi
-
-    echo "[PHASE3] Checking connect via first local node"
-    cmd="docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}"
-    if [ "{{ mode }}" != "ci-system-test" ]; then read -p "Will run: $cmd. Press Enter to continue..."; fi
-    eval $cmd
-    exp_client_log "VPN CONNECTION ESTABLISHED" 11
-    echo "[PHASE3] Checking working ping first node"
-    exp_client_log "Session verified as open" 11
-
-    echo "[PHASE3] Checking connect via second local node"
-    cmd="docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL6}"
-    if [ "{{ mode }}" != "ci-system-test" ]; then read -p "Will run: $cmd. Press Enter to continue..."; fi
-    eval $cmd
-    exp_client_log "VPN CONNECTION ESTABLISHED" 16
-    echo "[PHASE3] Checking working ping second node"
-    exp_client_log "Session verified as open" 11
-
-    echo "[PHASE3] Checking disconnect"
-    cmd="docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect"
-    if [ "{{ mode }}" != "ci-system-test" ]; then read -p "Will run: $cmd. Press Enter to continue..."; fi
-    eval $cmd
-    exp_client_log "WireGuard connection closed" 6
-
-    echo "[PHASE3] Checking no warnings or errors in client logs"
-    if docker logs gnosis_vpn-client | grep -qE "WARN|ERROR"; then
-        echo "[PHASE3] Found warnings or errors in client logs"
-        docker logs gnosis_vpn-client
-        exit 1
-    fi
-    echo "[PHASE3] Checking no errors in server logs"
-    if docker logs gnosis_vpn-server | grep -qE "ERROR"; then
-        echo "[PHASE3] Found errors in server logs"
-        docker logs gnosis_vpn-server
-        exit 1
-    fi
-
     if [ "{{ mode }}" = "ci-system-test" ]; then
+        echo "[PHASE3] Checking connect via first local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}
+        exp_client_log "VPN CONNECTION ESTABLISHED" 11
+        echo "[PHASE3] Checking working ping first node"
+        exp_client_log "Session verified as open" 11
+
+        echo "[PHASE3] Checking connect via second local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL6}
+        exp_client_log "VPN CONNECTION ESTABLISHED" 16
+        echo "[PHASE3] Checking working ping second node"
+        exp_client_log "Session verified as open" 11
+
+        echo "[PHASE3] Checking disconnect"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
+        exp_client_log "WireGuard connection closed" 6
+
+        echo "[PHASE3] Checking no warnings or errors in client logs"
+        if docker logs gnosis_vpn-client | grep -qE "WARN|ERROR"; then
+            echo "[PHASE3] Found warnings or errors in client logs"
+            docker logs gnosis_vpn-client
+            exit 1
+        fi
+        echo "[PHASE3] Checking no errors in server logs"
+        if docker logs gnosis_vpn-server | grep -qE "ERROR"; then
+            echo "[PHASE3] Found errors in server logs"
+            docker logs gnosis_vpn-server
+            exit 1
+        fi
         echo "[SUCCESS] System test completed successfully"
         exit 0
     else
