@@ -83,7 +83,7 @@ system-setup mode='keep-running': submodules docker-build
     echo "[PHASE1] Starting cluster with PID: $CLUSTER_PID"
 
     # 1b: wait for nodes
-    EXPECTED_PATTERN="node @ 0.0.0.0:3018"
+    EXPECTED_PATTERN="All nodes ready"
     TIMEOUT_S=$((60 * 50)) # 50 minutes
     ENDTIME=$(($(date +%s) + TIMEOUT_S))
     echo "[PHASE1] Waiting for log '${EXPECTED_PATTERN}' with ${TIMEOUT_S}s timeout"
@@ -96,6 +96,8 @@ system-setup mode='keep-running': submodules docker-build
     while true; do
         if grep -q "$EXPECTED_PATTERN" cluster.log; then
             echo "[PHASE1] ${EXPECTED_PATTERN}"
+            # even though nodes are ready the output was not yet printed - waiting for a bit
+            sleep 3
             break
         fi
         if [ $(date +%s) -gt $ENDTIME ]; then
@@ -113,10 +115,11 @@ system-setup mode='keep-running': submodules docker-build
     done
 
     # 1c: extract values
+    echo "[PHASE1] Extracting values from cluster log"
     ADDRESS_LOCAL5=$(grep "Address:" cluster.log | tail -n 2 | head -n 1 | awk '{print $2}')
     ADDRESS_LOCAL6=$(grep "Address:" cluster.log | tail -n 1 | awk '{print $2}')
     API_PORT_LOCAL1=3003
-    API_TOKEN_LOCAL1=$(grep -A3 -P "^\tnode @ .*:$API_TOKEN_LOCAL1" cluster.log | tail -n 1 | sed -E 's#.*apiToken=([^&]+).*#\1#')
+    API_TOKEN_LOCAL1=$(grep -A3 -P "^\tnode @ .*:$API_PORT_LOCAL1" cluster.log | tail -n 1 | sed -E 's#.*apiToken=([^&]+).*#\1#')
 
     echo "[PHASE1] ADDRESS 1 (local5): $ADDRESS_LOCAL5"
     echo "[PHASE1] ADDRESS 2 (local6): $ADDRESS_LOCAL6"
@@ -161,8 +164,8 @@ system-setup mode='keep-running': submodules docker-build
     # 3a: start client
     echo "[PHASE3] Starting gnosis_vpn-client"
     # container was build as part of the deps
-    DESTINATION_PEER_ID_1="${PEER_ID_LOCAL5}" \
-        DESTINATION_PEER_ID_2="${PEER_ID_LOCAL6}" \
+    DESTINATION_ADDRESS_1="${ADDRESS_LOCAL5}" \
+        DESTINATION_ADDRESS_2="${ADDRESS_LOCAL6}" \
         API_TOKEN="${API_TOKEN_LOCAL1}" \
         API_PORT="${API_PORT_LOCAL1}" \
         just docker-run
@@ -193,12 +196,12 @@ system-setup mode='keep-running': submodules docker-build
 
     # 3c: run system tests
     echo "[PHASE3] Checking connect via first local node"
-    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${PEER_ID_LOCAL5}
+    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}
     exp_client_log "VPN CONNECTION ESTABLISHED" 11
     echo "[PHASE3] Checking working ping first node"
     exp_client_log "Session verified as open" 11
     echo "[PHASE3] Checking connect via second local node"
-    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${PEER_ID_LOCAL6}
+    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL6}
     exp_client_log "VPN CONNECTION ESTABLISHED" 16
     echo "[PHASE3] Checking working ping second node"
     exp_client_log "Session verified as open" 11
