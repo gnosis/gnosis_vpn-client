@@ -14,9 +14,9 @@ target = "127.0.0.1:51821"
 address = "10.129.0.1"
 
 [destinations."<address1>"]
-meta = { location = "testnode1" }
+meta = { location = "testnode5" }
 path = { hops = 0 }
 
 [destinations."<address2>"]
-meta = { location = "testnode2" }
+meta = { location = "testnode6" }
 path = { hops = 0 }
