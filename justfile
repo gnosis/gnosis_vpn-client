@@ -19,8 +19,8 @@ docker-run:
     log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
 
     docker run --detach --rm \
-        --env DESTINATION_PEER_ID_1=${DESTINATION_PEER_ID_1} \
-        --env DESTINATION_PEER_ID_2=${DESTINATION_PEER_ID_2} \
+        --env DESTINATION_ADDRESS_1=${DESTINATION_ADDRESS_1} \
+        --env DESTINATION_ADDRESS_2=${DESTINATION_ADDRESS_2} \
         --env API_PORT=${API_PORT} \
         --env API_TOKEN=${API_TOKEN} \
         --env RUST_LOG=${log_level} \
@@ -50,7 +50,7 @@ start-cluster:
     rm -rf /opt/hostedtoolcache
 
     cd modules/hoprnet
-    nix develop .#cluster --command make localcluster-exposed
+    nix develop .#citest --command make localcluster-exposed
 
 # full system setup with system tests: 'mode' can be either 'keep-running' or 'ci-system-test'
 system-setup mode='keep-running': submodules docker-build
@@ -83,7 +83,7 @@ system-setup mode='keep-running': submodules docker-build
     echo "[PHASE1] Starting cluster with PID: $CLUSTER_PID"
 
     # 1b: wait for nodes
-    EXPECTED_PATTERN="All nodes ready"
+    EXPECTED_PATTERN="node @ 0.0.0.0:3018"
     TIMEOUT_S=$((60 * 50)) # 50 minutes
     ENDTIME=$(($(date +%s) + TIMEOUT_S))
     echo "[PHASE1] Waiting for log '${EXPECTED_PATTERN}' with ${TIMEOUT_S}s timeout"
@@ -113,13 +113,13 @@ system-setup mode='keep-running': submodules docker-build
     done
 
     # 1c: extract values
-    PEER_ID_LOCAL5=$(awk '/local5/,/Admin UI/ {if ($1 == "Peer" && $2 == "Id:") print $3}' cluster.log)
-    PEER_ID_LOCAL6=$(awk '/local6/,/Admin UI/ {if ($1 == "Peer" && $2 == "Id:") print $3}' cluster.log)
-    API_TOKEN_LOCAL1=$(awk '/local1/,/Admin UI/ {if ($0 ~ /Admin UI:/) print $0}' cluster.log | sed -n 's/.*apiToken=\(.*\)$/\1/p')
-    API_PORT_LOCAL1=$(awk '/local1/,/Rest API/ {if ($1 == "Rest" && $2 == "API:") print $3}' cluster.log | sed -n 's|.*:\([0-9]\+\)/.*|\1|p')
+    ADDRESS_LOCAL5=$(grep "Address:" cluster.log | tail -n 2 | head -n 1 | awk '{print $2}')
+    ADDRESS_LOCAL6=$(grep "Address:" cluster.log | tail -n 1 | awk '{print $2}')
+    API_PORT_LOCAL1=3003
+    API_TOKEN_LOCAL1=$(grep -A3 -P "^\tnode @ .*:$API_TOKEN_LOCAL1" cluster.log | tail -n 1 | sed -E 's#.*apiToken=([^&]+).*#\1#')
 
-    echo "[PHASE1] Peer ID 1 (local5): $PEER_ID_LOCAL5"
-    echo "[PHASE1] Peer ID 2 (local6): $PEER_ID_LOCAL6"
+    echo "[PHASE1] ADDRESS 1 (local5): $ADDRESS_LOCAL5"
+    echo "[PHASE1] ADDRESS 2 (local6): $ADDRESS_LOCAL6"
     echo "[PHASE1] API Token (local1): $API_TOKEN_LOCAL1"
     echo "[PHASE1] API Port (local1): $API_PORT_LOCAL1"
 
