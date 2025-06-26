@@ -184,7 +184,7 @@ system-setup mode='keep-running': submodules docker-build
             if [ $(date +%s) -gt $ENDTIME ]; then
                 echo "[PHASE3] Timeout reached"
                 docker logs --tail 20 gnosis_vpn-client
-                exit 2
+                return 1
             fi
             sleep 2.5
         done
