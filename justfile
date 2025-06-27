@@ -50,7 +50,7 @@ start-cluster:
     rm -rf /opt/hostedtoolcache
 
     cd modules/hoprnet
-    nix develop .#citest --command make localcluster-exposed
+    nix develop .#citestdev --command make localcluster-exposed
 
 # full system setup with system tests: 'mode' can be either 'keep-running' or 'ci-system-test'
 system-setup mode='keep-running': submodules docker-build
