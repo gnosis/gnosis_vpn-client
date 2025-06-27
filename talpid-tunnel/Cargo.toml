@@ -1,0 +1,19 @@
+[package]
+name = "talpid-tunnel"
+description = "Library for creating tunnel devices and interfacing with various VPN tunnels"
+
+[dependencies]
+thiserror = { workspace = true }
+cfg-if = "1.0"
+ipnetwork = "0.20"
+talpid-routing = { path = "../talpid-routing" }
+talpid-types = { path = "../talpid-types" }
+futures = "0.3.15"
+tokio = { version = "1.44", features = ["process", "rt-multi-thread", "fs"] }
+
+tun = { version = "0.5.5", features = ["async"] }
+
+# [target.'cfg(not(target_os = "android"))'.dependencies]
+# tun07 = { package = "tun", version = "0.7.11", optional = true, features = [
+#   "async",
+# ] }
