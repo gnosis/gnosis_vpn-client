@@ -1,0 +1,17 @@
+[package]
+name = "talpid-routing"
+description = "Library for managing routing tables"
+
+[dependencies]
+thiserror = { workspace = true }
+futures = "0.3.15"
+ipnetwork = "0.20"
+log = "0.4"
+tokio = { version = "1.44", features = ["process", "rt-multi-thread", "net", "io-util", "time"] }
+talpid-types = { path = "../talpid-types" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+rtnetlink = "0.11"
+netlink-packet-route = { version = "0.13", features = ["rich_nlas"] }
+netlink-sys = "0.8.3"
