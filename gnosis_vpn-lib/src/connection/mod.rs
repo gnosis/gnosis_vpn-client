@@ -1,12 +1,13 @@
 use backoff::{backoff::Backoff, ExponentialBackoff};
-use std::fmt::{self, Display};
-use std::thread;
-use std::time::{Duration, SystemTime};
-
 use crossbeam_channel;
 use rand::Rng;
 use reqwest::blocking;
+use talpid_core::tunnel_state_machine;
 use thiserror::Error;
+
+use std::fmt::{self, Display};
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 use crate::entry_node::EntryNode;
 use crate::log_output;
@@ -99,7 +100,7 @@ pub struct Connection {
     phase_up: PhaseUp,
     phase_down: PhaseDown,
     backoff: BackoffState,
-
+    tunnel_state_machine_handle = tunnel_state_machine::spawn(),
     // static input data
     entry_node: EntryNode,
     destination: Destination,

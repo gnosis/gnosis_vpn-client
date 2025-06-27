@@ -19,6 +19,9 @@ craneLib.devShell {
     openssl
     pkg-config
     patchelf
+    dbus
+    libnftnl
+    libmnl
 
     # testing utilities
     bash

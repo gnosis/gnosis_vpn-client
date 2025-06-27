@@ -1,10 +1,10 @@
 [workspace]
-members = ["gnosis_vpn", "gnosis_vpn-ctl", "gnosis_vpn-lib"]
+members = ["gnosis_vpn", "gnosis_vpn-ctl", "gnosis_vpn-lib" ]
 resolver = "2"
 
 [workspace.package]
 version = "0.10.13"
-edition = "2021"
+edition = "2024"
 name = "gnosis_vpn"
 
 [workspace.dependencies]
@@ -31,6 +31,7 @@ tracing-subscriber = "0.3"
 url = { version = "2.5", features = ["serde"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
+talpid-core = { path = "talpid-core" }
 
 [profile.intelmac]
 inherits = "release"
