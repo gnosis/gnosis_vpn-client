@@ -1,0 +1,12 @@
+[package]
+name = "talpid-types"
+description = "Common base structures for talpid"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+ipnetwork = "0.20"
+base64 = "0.22.0"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize", "getrandom"] }
+thiserror = { workspace = true }
+zeroize = "1.5.7"
+log = "0.4"
