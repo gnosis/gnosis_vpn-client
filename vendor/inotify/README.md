@@ -23,7 +23,8 @@ fn main() {
         .expect("Failed to determine current directory");
 
     inotify
-        .add_watch(
+        .watches()
+        .add(
             current_dir,
             WatchMask::MODIFY | WatchMask::CREATE | WatchMask::DELETE,
         )
@@ -69,7 +70,7 @@ Include it in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-inotify = "0.9"
+inotify = "0.10"
 ```
 
 Please refer to the [documentation] and the example above, for information on how to use it in your code.

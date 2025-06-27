@@ -13,9 +13,9 @@ parking_lot = "0.12.0"
 rand = "0.8.5"
 talpid-routing = { path = "../talpid-routing" }
 talpid-tunnel = { path = "../talpid-tunnel" }
-talpid-tunnel-config-client = { path = "../talpid-tunnel-config-client" }
+# talpid-tunnel-config-client = { path = "../talpid-tunnel-config-client" }
 talpid-types = { path = "../talpid-types" }
-talpid-wireguard = { path = "../talpid-wireguard" }
+# talpid-wireguard = { path = "../talpid-wireguard" }
 tokio = { version = "1.44", features = ["process", "rt-multi-thread", "fs"] }
 
 nix = { version = "0.30.1", features = ["mount"] }

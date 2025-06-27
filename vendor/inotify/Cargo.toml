@@ -11,15 +11,30 @@
 
 [package]
 edition = "2018"
+rust-version = "1.63"
 name = "inotify"
-version = "0.9.6"
-authors = ["Hanno Braun <mail@hannobraun.de>", "Félix Saparelli <me@passcod.name>", "Cristian Kubis <cristian.kubis@tsunix.de>", "Frank Denis <github@pureftpd.org>"]
-exclude = ["/.travis.yml", "/inotify-rs.sublime-project"]
+version = "0.10.2"
+authors = [
+    "Hanno Braun <mail@hannobraun.de>",
+    "Félix Saparelli <me@passcod.name>",
+    "Cristian Kubis <cristian.kubis@tsunix.de>",
+    "Frank Denis <github@pureftpd.org>",
+]
+exclude = [
+    "/.travis.yml",
+    "/inotify-rs.sublime-project",
+]
 description = "Idiomatic wrapper for inotify"
 documentation = "https://docs.rs/inotify"
 readme = "README.md"
-keywords = ["inotify", "linux"]
-categories = ["api-bindings", "filesystem"]
+keywords = [
+    "inotify",
+    "linux",
+]
+categories = [
+    "api-bindings",
+    "filesystem",
+]
 license = "ISC"
 repository = "https://github.com/hannobraun/inotify"
 
@@ -29,6 +44,7 @@ required-features = ["stream"]
 
 [[example]]
 name = "watch"
+
 [dependencies.bitflags]
 version = "1"
 
@@ -46,19 +62,33 @@ version = "0.2"
 version = "1.0.1"
 features = ["net"]
 optional = true
+
 [dev-dependencies.futures-util]
 version = "0.3.1"
+
+[dev-dependencies.maplit]
+version = "1.0"
+
+[dev-dependencies.rand]
+version = "0.8"
 
 [dev-dependencies.tempfile]
 version = "3.1.0"
 
 [dev-dependencies.tokio]
 version = "1.0.1"
-features = ["macros", "rt-multi-thread"]
+features = [
+    "macros",
+    "rt-multi-thread",
+]
 
 [features]
 default = ["stream"]
-stream = ["futures-core", "tokio"]
+stream = [
+    "futures-core",
+    "tokio",
+]
+
 [badges.maintenance]
 status = "actively-developed"
 
