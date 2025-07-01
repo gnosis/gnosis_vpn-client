@@ -2,16 +2,15 @@
   "nodes": {
     "crane": {
       "locked": {
-        "lastModified": 1751373145,
-        "narHash": "sha256-iZPDcELar/+jKs3zdlqiNeBqiefZ7Yf60H7qjwFboYY=",
-        "owner": "hoprnet",
+        "lastModified": 1750266157,
+        "narHash": "sha256-tL42YoNg9y30u7zAqtoGDNdTyXTi8EALDeCB13FtbQA=",
+        "owner": "ipetkov",
         "repo": "crane",
-        "rev": "b4fc3ae9fd3d89f83e92aeec8e903d3e9666707f",
+        "rev": "e37c943371b73ed87faf33f7583860f81f1d5a48",
         "type": "github"
       },
       "original": {
-        "owner": "hoprnet",
-        "ref": "este/find-filter",
+        "owner": "ipetkov",
         "repo": "crane",
         "type": "github"
       }
