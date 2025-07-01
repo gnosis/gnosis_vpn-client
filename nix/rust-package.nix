@@ -71,11 +71,18 @@ let
         Security
         SystemConfiguration
       ]
-      ++ pkgs.lld
+    else
+      [ ];
+  extraNativeBuildInputs =
+    if isDarwinForDarwin then
+      [ pkgs.lld ]
+    else if isDarwinForNonDarwin then
+      [
+        setupHookDarwin
+        pkgs.lld
+      ]
     else
       [ pkgs.mold ];
-  darwinNativeBuildInputs =
-    if !isDarwinForDarwin && isDarwinForNonDarwin then [ setupHookDarwin ] else [ ];
 
   sharedArgsBase = {
     inherit
@@ -94,7 +101,7 @@ let
         libiconv
       ]
       ++ stdenv.extraNativeBuildInputs
-      ++ darwinNativeBuildInputs;
+      ++ extraNativeBuildInputs;
     buildInputs = [ pkgsStatOrDyn.openssl ] ++ stdenv.extraBuildInputs ++ extraBuildInputs;
 
     CARGO_HOME = ".cargo";
