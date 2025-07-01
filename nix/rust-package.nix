@@ -11,7 +11,6 @@
   lib,
   libiconv,
   makeSetupHook,
-  mold,
   pandoc,
   pkg-config,
   pkgs,
@@ -89,7 +88,6 @@ let
     # this dependency
     nativeBuildInputs =
       [
-        mold
         llvmPackages.bintools
         pkg-config
         libiconv
