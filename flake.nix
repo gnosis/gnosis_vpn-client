@@ -39,8 +39,6 @@
         {
           config,
           lib,
-          self',
-          inputs',
           system,
           ...
         }:
@@ -52,9 +50,7 @@
           pkgs = import nixpkgs {
             inherit localSystem overlays;
             packageOverrides = pkgs: {
-              openssl = pkgs.openssl.override {
-                static = true;
-              };
+              openssl = pkgs.openssl.override { static = true; };
             };
           };
           rustNightly = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
@@ -63,7 +59,6 @@
           depsSrc = fs.toSource {
             root = ./.;
             fileset = fs.unions [
-              ./vendor
               ./.cargo/config.toml
               ./Cargo.lock
               (fs.fileFilter (file: file.name == "Cargo.toml") ./.)
@@ -73,7 +68,6 @@
           src = fs.toSource {
             root = ./.;
             fileset = fs.unions [
-              ./vendor
               ./.cargo/config.toml
               ./Cargo.lock
               ./README.md
@@ -214,7 +208,6 @@
               "LICENSE"
               "nix/setup-hook-darwin.sh"
               "target/*"
-              "vendor/*"
             ];
 
             programs.shfmt.enable = true;
@@ -252,9 +245,7 @@
             programs.taplo.enable = true;
           };
 
-          checks = {
-            inherit gnosisvpn-clippy;
-          };
+          checks = { inherit gnosisvpn-clippy; };
 
           apps = {
             check = run-check;
@@ -263,7 +254,11 @@
           packages = {
             inherit gnosisvpn gnosisvpn-debug;
             inherit gnosisvpn-test;
-            inherit gnosisvpn-aarch64-linux gnosisvpn-armv7l-linux gnosisvpn-x86_64-linux;
+            inherit
+              gnosisvpn-aarch64-linux
+              gnosisvpn-armv7l-linux
+              gnosisvpn-x86_64-linux
+              ;
             # FIXME: Darwin cross-builds are currently broken.
             # Follow https://github.com/nixos/nixpkgs/pull/256590
             inherit gnosisvpn-aarch64-darwin gnosisvpn-x86_64-darwin;
