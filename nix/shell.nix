@@ -16,7 +16,7 @@ let
       };
   craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
   # mold is only supported on Linux, so falling back to lld on Darwin
-  linker = if pkgs.stdenv.buildPlatform.isDarwin then "lld" else "mold";
+  linker = if pkgs.stdenv.buildPlatform.isDarwin then pkgs.lld else pkgs.mold;
 
 in
 craneLib.devShell {
@@ -39,7 +39,7 @@ craneLib.devShell {
       yq-go
 
       # linker
-      mold
+      linker
       llvmPackages.bintools
 
       # development helper
@@ -58,5 +58,5 @@ craneLib.devShell {
     ++ lib.optionals stdenv.isLinux [ autoPatchelfHook ]
     ++ extraPackages;
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.pkgsBuildHost.openssl ];
-  CARGO_BUILD_RUSTFLAGS = "-C link-arg=-fuse-ld=${linker}";
+  CARGO_BUILD_RUSTFLAGS = "-C link-arg=-fuse-ld=${linker.pname}";
 }
