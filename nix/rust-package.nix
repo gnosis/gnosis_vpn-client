@@ -62,7 +62,7 @@ let
   isDarwinForDarwin = buildPlatform.isDarwin && hostPlatform.isDarwin;
   isDarwinForNonDarwin = buildPlatform.isDarwin && !hostPlatform.isDarwin;
 
-  darwinBuildInputs =
+  extraBuildInputs =
     if isDarwinForDarwin || isDarwinForNonDarwin then
       with pkgsStatOrDyn.pkgsBuildHost.darwin.apple_sdk.frameworks;
       [
@@ -71,8 +71,9 @@ let
         Security
         SystemConfiguration
       ]
+      ++ pkgs.lld
     else
-      [ ];
+      [ pkgs.mold ];
   darwinNativeBuildInputs =
     if !isDarwinForDarwin && isDarwinForNonDarwin then [ setupHookDarwin ] else [ ];
 
@@ -94,7 +95,7 @@ let
       ]
       ++ stdenv.extraNativeBuildInputs
       ++ darwinNativeBuildInputs;
-    buildInputs = [ pkgsStatOrDyn.openssl ] ++ stdenv.extraBuildInputs ++ darwinBuildInputs;
+    buildInputs = [ pkgsStatOrDyn.openssl ] ++ stdenv.extraBuildInputs ++ extraBuildInputs;
 
     CARGO_HOME = ".cargo";
     cargoExtraArgs = "-p ${pname} ${cargoExtraArgs}";
