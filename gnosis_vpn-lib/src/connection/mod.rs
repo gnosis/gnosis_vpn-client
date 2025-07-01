@@ -715,15 +715,15 @@ impl Display for PhaseUp {
         match self {
             PhaseUp::Ready => write!(f, "Ready"),
             PhaseUp::FixBridgeSession => write!(f, "FixBridgeSession"),
-            PhaseUp::FixBridgeSessionClosing(session) => write!(f, "FixBridgeSessionClosing({})", session),
-            PhaseUp::WgRegistration(session) => write!(f, "WgRegistration({})", session),
+            PhaseUp::FixBridgeSessionClosing(session) => write!(f, "FixBridgeSessionClosing({session})"),
+            PhaseUp::WgRegistration(session) => write!(f, "WgRegistration({session})"),
             PhaseUp::CloseBridgeSession(session, registration) => {
-                write!(f, "CloseBridgeSession({}, {})", session, registration)
+                write!(f, "CloseBridgeSession({session}, {registration})")
             }
-            PhaseUp::PrepareMainSession(registration) => write!(f, "PrepareMainSession({})", registration),
-            PhaseUp::FixMainSession(registration) => write!(f, "FixMainSession({})", registration),
+            PhaseUp::PrepareMainSession(registration) => write!(f, "PrepareMainSession({registration})"),
+            PhaseUp::FixMainSession(registration) => write!(f, "FixMainSession({registration})"),
             PhaseUp::FixMainSessionClosing(session, registration) => {
-                write!(f, "FixMainSessionClosing({}, {})", session, registration)
+                write!(f, "FixMainSessionClosing({session}, {registration})")
             }
             PhaseUp::MainSessionEstablished(session, registration, since) => write!(
                 f,
@@ -740,7 +740,7 @@ impl Display for PhaseUp {
                 registration,
             ),
             PhaseUp::MainSessionBroken(session, registration) => {
-                write!(f, "MainSessionBroken({}, {})", session, registration)
+                write!(f, "MainSessionBroken({session}, {registration})")
             }
         }
     }
@@ -756,15 +756,15 @@ impl Display for PhaseDown {
                 log_output::elapsed(since),
                 registration
             ),
-            PhaseDown::PrepareBridgeSession(registration) => write!(f, "PrepareBridgeSession({})", registration),
-            PhaseDown::FixBridgeSession(registration) => write!(f, "FixBridgeSession({})", registration),
+            PhaseDown::PrepareBridgeSession(registration) => write!(f, "PrepareBridgeSession({registration})"),
+            PhaseDown::FixBridgeSession(registration) => write!(f, "FixBridgeSession({registration})"),
             PhaseDown::FixBridgeSessionClosing(session, registration) => {
-                write!(f, "FixBridgeSessionClosing({}, {})", session, registration)
+                write!(f, "FixBridgeSessionClosing({session}, {registration})")
             }
             PhaseDown::WgUnregistration(session, registration) => {
-                write!(f, "WgUnregistration({}, {})", session, registration)
+                write!(f, "WgUnregistration({session}, {registration})")
             }
-            PhaseDown::CloseBridgeSession(session) => write!(f, "CloseBridgeSession({})", session),
+            PhaseDown::CloseBridgeSession(session) => write!(f, "CloseBridgeSession({session})"),
             PhaseDown::Retired => write!(f, "Retired"),
         }
     }
@@ -795,12 +795,12 @@ impl From<PhaseUp> for PhaseDown {
 impl Display for InternalEvent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            InternalEvent::OpenSession(res) => write!(f, "OpenSession({:?})", res),
-            InternalEvent::CloseSession(res) => write!(f, "CloseSession({:?})", res),
-            InternalEvent::RegisterWg(res) => write!(f, "RegisterWg({:?})", res),
-            InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({:?})", res),
-            InternalEvent::Ping(res) => write!(f, "Ping({:?})", res),
-            InternalEvent::ListSessions(res) => write!(f, "ListSessions({:?})", res),
+            InternalEvent::OpenSession(res) => write!(f, "OpenSession({res:?})"),
+            InternalEvent::CloseSession(res) => write!(f, "CloseSession({res:?})"),
+            InternalEvent::RegisterWg(res) => write!(f, "RegisterWg({res:?})"),
+            InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({res:?})"),
+            InternalEvent::Ping(res) => write!(f, "Ping({res:?})"),
+            InternalEvent::ListSessions(res) => write!(f, "ListSessions({res:?})"),
         }
     }
 }

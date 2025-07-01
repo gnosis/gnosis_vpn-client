@@ -13,7 +13,7 @@ fn main() {
     let resp = match socket::process_cmd(&args.socket_path, &cmd) {
         Ok(resp) => resp,
         Err(e) => {
-            eprintln!("Error processing {}: {}", cmd, e);
+            eprintln!("Error processing {cmd}: {e}");
             return;
         }
     };
@@ -30,21 +30,21 @@ fn main() {
 
 fn json_print(resp: &Response) {
     match serde_json::to_string_pretty(resp) {
-        Ok(s) => println!("{}", s),
-        Err(e) => eprintln!("Error serializing response to JSON: {}", e),
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("Error serializing response to JSON: {e}"),
     }
 }
 
 fn pretty_print(resp: &Response) {
     match resp {
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
-            println!("Connecting to {}", dest);
+            println!("Connecting to {dest}");
         }
         Response::Connect(command::ConnectResponse::PeerIdNotFound) => {
             eprintln!("Peer ID not found in available destinations");
         }
         Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
-            println!("Disconnecting from {}", dest);
+            println!("Disconnecting from {dest}");
         }
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
@@ -54,17 +54,17 @@ fn pretty_print(resp: &Response) {
             status,
             available_destinations,
         }) => {
-            let mut str_resp = format!("WireGuard status: {}\n", wireguard);
-            str_resp.push_str(&format!("Status: {}\n", status));
+            let mut str_resp = format!("WireGuard status: {wireguard}\n");
+            str_resp.push_str(&format!("Status: {status}\n"));
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
             } else {
                 str_resp.push_str("Available destinations:\n");
                 for dest in available_destinations {
-                    str_resp.push_str(&format!("  - {}\n", dest));
+                    str_resp.push_str(&format!("  - {dest}\n"));
                 }
             }
-            println!("{}", str_resp);
+            println!("{str_resp}");
         }
         Response::Pong => {
             println!("Pong");
