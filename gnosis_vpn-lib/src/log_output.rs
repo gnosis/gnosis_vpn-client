@@ -11,7 +11,7 @@ where
 {
     match serde_json::to_string(&v) {
         Ok(s) => s,
-        Err(e) => format!("serializion error: {e}"),
+        Err(e) => format!("serialization error: {e}"),
     }
 }
 
