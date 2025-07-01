@@ -181,11 +181,11 @@ pub mod errno {
     };
 }
 pub mod data {
+    pub use libc::iovec as IoVec;
     pub use libc::sigaction as SigAction;
     pub use libc::stat as Stat;
     pub use libc::statvfs as StatVfs;
     pub use libc::timespec as TimeSpec;
-    pub use libc::iovec as IoVec;
 
     // TODO: Remove
     pub fn timespec_from_mut_bytes(bytes: &mut [u8]) -> &mut TimeSpec {
@@ -223,6 +223,7 @@ extern "C" {
     // NOTE: Although there are version suffixes, there'd have to be strong reasons for adding new
     // version.
     fn redox_open_v1(path_base: *const u8, path_len: usize, flags: u32, mode: u16) -> RawResult;
+    fn redox_openat_v1(fd: usize, buf: *const u8, path_len: usize, flags: u32) -> RawResult;
     fn redox_dup_v1(fd: usize, buf: *const u8, len: usize) -> RawResult;
     fn redox_dup2_v1(old_fd: usize, new_fd: usize, buf: *const u8, len: usize) -> RawResult;
     fn redox_read_v1(fd: usize, dst_base: *mut u8, dst_len: usize) -> RawResult;
@@ -246,6 +247,10 @@ extern "C" {
     fn redox_get_ruid_v1() -> RawResult;
     fn redox_get_egid_v1() -> RawResult;
     fn redox_get_rgid_v1() -> RawResult;
+
+    // This function is used to get the credentials, pid, euid, egid etc. of the process with the target pid.
+    fn redox_get_proc_credentials_v0(target_pid: usize, buf: &mut [u8]) -> RawResult;
+
     fn redox_setrens_v1(rns: usize, ens: usize) -> RawResult;
     fn redox_mkns_v1(names: *const data::IoVec, num_names: usize, _flags: u32) -> RawResult;
 
@@ -282,6 +287,9 @@ impl Fd {
     #[inline]
     pub fn open(path: &str, flags: i32, mode: u16) -> Result<Self> {
         Ok(Self(call::open(path, flags, mode)?))
+    }
+    pub fn openat(&self, path: &str, flags: i32) -> Result<Self> {
+        Ok(Self(call::openat(self.raw(), path, flags)?))
     }
     #[inline]
     pub fn dup(&self, buf: &[u8]) -> Result<usize> {
@@ -364,6 +372,13 @@ pub mod call {
         let path = path.as_ref();
         Ok(Error::demux(unsafe {
             redox_open_v1(path.as_ptr(), path.len(), flags as u32, mode)
+        })?)
+    }
+    #[inline]
+    pub fn openat(fd: usize, path: impl AsRef<[u8]>, flags: i32) -> Result<usize> {
+        let path = path.as_ref();
+        Ok(Error::demux(unsafe {
+            redox_openat_v1(fd, path.as_ptr(), path.len(), flags as u32)
         })?)
     }
     #[inline]
@@ -461,6 +476,13 @@ pub mod call {
     pub fn getpid() -> Result<usize> {
         Error::demux(unsafe { redox_get_pid_v1() })
     }
+
+    #[inline]
+    // [u8; size_of::<crate::protocol::ProcMeta>()]
+    pub fn get_proc_credentials(target_pid: usize, buf: &mut [u8]) -> Result<usize> {
+        Error::demux(unsafe { redox_get_proc_credentials_v0(target_pid, buf) })
+    }
+
     #[inline]
     pub fn setrens(rns: usize, ens: usize) -> Result<usize> {
         Error::demux(unsafe { redox_setrens_v1(rns, ens) })
@@ -561,8 +583,6 @@ pub mod call {
         // no-op
         let iovecs = ioslice::IoSlice::cast_to_raw_iovecs(names);
 
-        unsafe {
-            Error::demux(redox_mkns_v1(iovecs.as_ptr(), iovecs.len(), 0))
-        }
+        unsafe { Error::demux(redox_mkns_v1(iovecs.as_ptr(), iovecs.len(), 0)) }
     }
 }
