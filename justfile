@@ -202,8 +202,8 @@ system-setup mode='keep-running': submodules docker-build
         echo "[PHASE3] Checking working ping first node"
         exp_client_log "Session verified as open" 33
 
-        echo "[PHASE3] Checking ping"
-        time ping -c1 10.128.0.1 || (
+        echo "[PHASE3] Checking external ping"
+        time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
             docker logs gnosis_vpn-client
             exit 1
         )
@@ -211,8 +211,8 @@ system-setup mode='keep-running': submodules docker-build
         echo "[PHASE3] Waiting for 40 seconds to ensure connection stability"
         sleep 40
 
-        echo "[PHASE3] Checking ping again"
-        time ping -c1 10.128.0.1 || (
+        echo "[PHASE3] Checking external ping again"
+        time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
             docker logs gnosis_vpn-client
             exit 1
         )
