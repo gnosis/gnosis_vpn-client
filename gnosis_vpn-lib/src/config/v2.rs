@@ -130,7 +130,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "endpoint" || k == "api_token" || k == "internal_connection_port" {
                         continue;
                     }
-                    wrong_keys.push(format!("hoprd_node.{}", k));
+                    wrong_keys.push(format!("hoprd_node.{k}"));
                 }
             }
             continue;
@@ -148,12 +148,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                 if k == "public_key" {
                                     continue;
                                 }
-                                wrong_keys.push(format!("wireguard.manual_mode.{}", k));
+                                wrong_keys.push(format!("wireguard.manual_mode.{k}"));
                             }
                         }
                         continue;
                     };
-                    wrong_keys.push(format!("wireguard.{}", k));
+                    wrong_keys.push(format!("wireguard.{k}"));
                 }
             }
             continue;
@@ -174,7 +174,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                 if k == "capabilities" || k == "target" || k == "target_type" {
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.bridge.{}", k));
+                                wrong_keys.push(format!("connection.bridge.{k}"));
                             }
                         }
                         continue;
@@ -191,17 +191,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                             if k == "min" || k == "max" {
                                                 continue;
                                             }
-                                            wrong_keys.push(format!("connection.ping.interval.{}", k));
+                                            wrong_keys.push(format!("connection.ping.interval.{k}"));
                                         }
                                     }
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.ping.{}", k));
+                                wrong_keys.push(format!("connection.ping.{k}"));
                             }
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("connection.{}", k));
+                    wrong_keys.push(format!("connection.{k}"));
                 }
             }
             continue;
@@ -215,11 +215,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             if k == "meta" || k == "path" {
                                 continue;
                             }
-                            wrong_keys.push(format!("destinations.{}.{}", peer_id, k));
+                            wrong_keys.push(format!("destinations.{peer_id}.{k}"));
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("destinations.{}", peer_id));
+                    wrong_keys.push(format!("destinations.{peer_id}"));
                 }
             }
             continue;
@@ -238,8 +238,7 @@ where
         Ok(value)
     } else {
         Err(serde::de::Error::custom(format!(
-            "hops must be less than or equal to {}",
-            MAX_HOPS
+            "hops must be less than or equal to {MAX_HOPS}"
         )))
     }
 }
@@ -302,7 +301,7 @@ impl Connection {
 
 impl Config {
     pub fn entry_node(&self) -> EntryNode {
-        let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
+        let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{p}"));
         let listen_host = self
             .connection
             .as_ref()

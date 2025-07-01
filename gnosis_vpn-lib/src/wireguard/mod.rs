@@ -90,7 +90,7 @@ impl ConnectSession {
         let listen_port_line = self
             .interface
             .listen_port
-            .map(|port| format!("ListenPort = {}\n", port))
+            .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
 
         format!(

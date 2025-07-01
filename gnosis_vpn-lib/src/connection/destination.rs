@@ -69,7 +69,7 @@ impl Destination {
             None => self
                 .meta
                 .iter()
-                .map(|(key, value)| format!("{}: {}", key, value))
+                .map(|(key, value)| format!("{key}: {value}"))
                 .collect::<Vec<String>>()
                 .join(", "),
         }
@@ -80,7 +80,7 @@ impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let peer_id = log_output::peer_id(&self.peer_id.to_string());
         let meta = self.meta_str();
-        write!(f, "Destination[{},{}]", peer_id, meta)
+        write!(f, "Destination[{peer_id},{meta}]")
     }
 }
 
