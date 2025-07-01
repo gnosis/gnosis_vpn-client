@@ -1,0 +1,42 @@
+#################################################################################
+# Child pipeline to cache Gnosis VPN dependencies
+#################################################################################
+name: Cache dependencies
+env:
+  RUST_BACKTRACE: "1"
+on:
+  workflow_call:
+    inputs:
+      branch:
+        required: true
+        type: string
+concurrency:
+  group: ${{ github.ref }}-cache-deps
+  cancel-in-progress: true
+jobs:
+  cargo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          persist-credentials: false
+      - name: Replace the crates.io registry with a private proxy registry
+        env:
+          PRIVATE_CARGO_REGISTRY_PROXY_URL: ${{ secrets.PRIVATE_CARGO_REGISTRY_PROXY_URL }}
+        run: "cat >> .cargo/config.toml<< EOF        \n[source.hopr-cargo-registry-cache]\nregistry = \"sparse+${PRIVATE_CARGO_REGISTRY_PROXY_URL}\"\n    #magic___^_^___line\n[source.crates-io]\nreplace-with = \"hopr-cargo-registry-cache\"\nEOF\n    #magic___^_^___line\n"
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@v16
+        with:
+          name: gnosis-vpn-client
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+      - name: Cache dependencies
+        run: nix develop -c cargo fetch
