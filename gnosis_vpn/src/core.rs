@@ -214,28 +214,30 @@ impl Core {
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
-        thread::spawn(move || loop {
-            crossbeam_channel::select! {
-                recv(r) -> event => {
-                    match event {
-                        Ok(connection::Event::Connected(conninfo)) => {
-                            _ = sender.send(Event::ConnectWg(conninfo)).map_err(|error| {
-                                tracing::error!(error = %error, "failed to send ConnectWg event");
-                            });
-                        }
-                        Ok(connection::Event::Disconnected(ping_has_worked)) => {
-                            _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
-                                tracing::error!(error = %error, "failed to send Disconnected event");
-                            });
-                        }
-                        Ok(connection::Event::Dismantled) => {
-                            _ = sender.send(Event::DropConnection).map_err(|error| {
-                                tracing::error!(error = %error, "failed to send DropConnection event");
-                            });
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = ?e, "failed to receive event");
+        thread::spawn(move || {
+            loop {
+                crossbeam_channel::select! {
+                    recv(r) -> event => {
+                        match event {
+                            Ok(connection::Event::Connected(conninfo)) => {
+                                _ = sender.send(Event::ConnectWg(conninfo)).map_err(|error| {
+                                    tracing::error!(error = %error, "failed to send ConnectWg event");
+                                });
+                            }
+                            Ok(connection::Event::Disconnected(ping_has_worked)) => {
+                                _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
+                                    tracing::error!(error = %error, "failed to send Disconnected event");
+                                });
+                            }
+                            Ok(connection::Event::Dismantled) => {
+                                _ = sender.send(Event::DropConnection).map_err(|error| {
+                                    tracing::error!(error = %error, "failed to send DropConnection event");
+                                });
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "failed to receive event");
+                            }
                         }
                     }
                 }

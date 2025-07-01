@@ -1,4 +1,4 @@
-use backoff::{backoff::Backoff, ExponentialBackoff};
+use backoff::{ExponentialBackoff, backoff::Backoff};
 use std::fmt::{self, Display};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -152,69 +152,73 @@ impl Connection {
 
     pub fn establish(&mut self) {
         let mut me = self.clone();
-        thread::spawn(move || loop {
-            // Backoff handling
-            // Inactive - no backoff was set, act up
-            // Active - backoff was set and can trigger, don't act until backoff delay
-            // Triggered - backoff was triggered, time to act up again keeping backoff active
-            let (recv_event, recv_backoff) = match me.backoff {
-                BackoffState::Inactive => (me.act_up(), crossbeam_channel::never()),
-                BackoffState::Active(mut backoff) => match backoff.next_backoff() {
-                    Some(delay) => {
-                        tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay during connection establishment");
-                        me.backoff = BackoffState::Triggered(backoff);
-                        (crossbeam_channel::never(), crossbeam_channel::after(delay))
-                    }
-                    None => {
-                        me.backoff = BackoffState::Inactive;
-                        tracing::error!("Critical error: backoff exhausted during connection establishment - halting");
-                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                            tracing::error!(%error, "Failed sending dismantled event");
-                        });
-                        break;
-                    }
-                },
-                BackoffState::Triggered(backoff) => {
-                    tracing::debug!(?backoff, "Activating backoff during connection establishment");
-                    me.backoff = BackoffState::Active(backoff);
-                    (me.act_up(), crossbeam_channel::never())
-                }
-            };
-            // main listening loop
-            crossbeam_channel::select! {
-                // waiting on dismantle signal for providing runtime data
-                recv(me.establish_channel.1) -> res => {
-                    match res {
-                        Ok(()) => {
-                            match me.dismantle_channel.0.send(me.phase_up) {
-                                Ok(()) => (),
-                                Err(error) => {
-                                    tracing::error!(%error, "Critical error sending connection data on dismantle channel - halting");
-                                    _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                                        tracing::error!(%error, "Failed sending dismantled event");
-                                    });
-                                }
-                            }
+        thread::spawn(move || {
+            loop {
+                // Backoff handling
+                // Inactive - no backoff was set, act up
+                // Active - backoff was set and can trigger, don't act until backoff delay
+                // Triggered - backoff was triggered, time to act up again keeping backoff active
+                let (recv_event, recv_backoff) = match me.backoff {
+                    BackoffState::Inactive => (me.act_up(), crossbeam_channel::never()),
+                    BackoffState::Active(mut backoff) => match backoff.next_backoff() {
+                        Some(delay) => {
+                            tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay during connection establishment");
+                            me.backoff = BackoffState::Triggered(backoff);
+                            (crossbeam_channel::never(), crossbeam_channel::after(delay))
+                        }
+                        None => {
+                            me.backoff = BackoffState::Inactive;
+                            tracing::error!(
+                                "Critical error: backoff exhausted during connection establishment - halting"
+                            );
+                            _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                                tracing::error!(%error, "Failed sending dismantled event");
+                            });
                             break;
                         }
-                        Err(error) => {
-                            tracing::error!(%error, "Failed receiving signal on establish channel");
-                        }
+                    },
+                    BackoffState::Triggered(backoff) => {
+                        tracing::debug!(?backoff, "Activating backoff during connection establishment");
+                        me.backoff = BackoffState::Active(backoff);
+                        (me.act_up(), crossbeam_channel::never())
                     }
-                },
-                recv(recv_backoff) -> _ => {
-                    tracing::debug!("Backoff delay expired during connection establishment");
-                },
-                recv(recv_event) -> res => {
-                    match res {
-                        Ok(evt) => {
-                            tracing::debug!(event = ?evt, "Received event during connection establishment");
-                            _ = me.act_event_up(evt).map_err(|error| {
-                                tracing::error!(%error, "Failed to process event during connection establishment");
-                            });
+                };
+                // main listening loop
+                crossbeam_channel::select! {
+                    // waiting on dismantle signal for providing runtime data
+                    recv(me.establish_channel.1) -> res => {
+                        match res {
+                            Ok(()) => {
+                                match me.dismantle_channel.0.send(me.phase_up) {
+                                    Ok(()) => (),
+                                    Err(error) => {
+                                        tracing::error!(%error, "Critical error sending connection data on dismantle channel - halting");
+                                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                                            tracing::error!(%error, "Failed sending dismantled event");
+                                        });
+                                    }
+                                }
+                                break;
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "Failed receiving signal on establish channel");
+                            }
                         }
-                        Err(error) => {
-                            tracing::error!(%error, "Failed receiving event during connection establishment");
+                    },
+                    recv(recv_backoff) -> _ => {
+                        tracing::debug!("Backoff delay expired during connection establishment");
+                    },
+                    recv(recv_event) -> res => {
+                        match res {
+                            Ok(evt) => {
+                                tracing::debug!(event = ?evt, "Received event during connection establishment");
+                                _ = me.act_event_up(evt).map_err(|error| {
+                                    tracing::error!(%error, "Failed to process event during connection establishment");
+                                });
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "Failed receiving event during connection establishment");
+                            }
                         }
                     }
                 }
@@ -251,51 +255,53 @@ impl Connection {
             outer.phase_down = outer.phase_up.clone().into();
 
             let mut me = outer.clone();
-            thread::spawn(move || loop {
-                // Backoff handling
-                // Inactive - no backoff was set, act up
-                // Active - backoff was set and can trigger, don't act until backoff delay
-                // Triggered - backoff was triggered, time to act up again keeping backoff active
-                let (recv_event, recv_backoff) = match me.backoff {
-                    BackoffState::Inactive => (me.act_down(), crossbeam_channel::never()),
-                    BackoffState::Active(mut backoff) => match backoff.next_backoff() {
-                        Some(delay) => {
-                            tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay during connection dismantling");
-                            me.backoff = BackoffState::Triggered(backoff);
-                            (crossbeam_channel::never(), crossbeam_channel::after(delay))
-                        }
-                        None => {
-                            me.backoff = BackoffState::Inactive;
-                            tracing::error!(
-                                "Critical error: backoff exhausted during connection dismantling - halting"
-                            );
-                            _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                                tracing::error!(%error, "Failed sending dismantled event");
-                            });
-                            break;
-                        }
-                    },
-                    BackoffState::Triggered(backoff) => {
-                        tracing::debug!(?backoff, "Activating backoff during connection dismantling");
-                        me.backoff = BackoffState::Active(backoff);
-                        (me.act_down(), crossbeam_channel::never())
-                    }
-                };
-                // main listening loop
-                crossbeam_channel::select! {
-                    recv(recv_backoff) -> _ => {
-                        tracing::debug!("Backoff delay expired during connection dismantling");
-                    }
-                    recv(recv_event) -> res => {
-                        match res {
-                            Ok(evt) => {
-                                tracing::debug!(event = ?evt, "Received event during connection dismantling");
-                                _ = me.act_event_down(evt).map_err(|error| {
-                                    tracing::error!(%error, "Failed to process event during connection dismantling");
-                                });
+            thread::spawn(move || {
+                loop {
+                    // Backoff handling
+                    // Inactive - no backoff was set, act up
+                    // Active - backoff was set and can trigger, don't act until backoff delay
+                    // Triggered - backoff was triggered, time to act up again keeping backoff active
+                    let (recv_event, recv_backoff) = match me.backoff {
+                        BackoffState::Inactive => (me.act_down(), crossbeam_channel::never()),
+                        BackoffState::Active(mut backoff) => match backoff.next_backoff() {
+                            Some(delay) => {
+                                tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay during connection dismantling");
+                                me.backoff = BackoffState::Triggered(backoff);
+                                (crossbeam_channel::never(), crossbeam_channel::after(delay))
                             }
-                            Err(error) => {
-                                tracing::error!(%error, "Failed receiving event during connection dismantling");
+                            None => {
+                                me.backoff = BackoffState::Inactive;
+                                tracing::error!(
+                                    "Critical error: backoff exhausted during connection dismantling - halting"
+                                );
+                                _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                                    tracing::error!(%error, "Failed sending dismantled event");
+                                });
+                                break;
+                            }
+                        },
+                        BackoffState::Triggered(backoff) => {
+                            tracing::debug!(?backoff, "Activating backoff during connection dismantling");
+                            me.backoff = BackoffState::Active(backoff);
+                            (me.act_down(), crossbeam_channel::never())
+                        }
+                    };
+                    // main listening loop
+                    crossbeam_channel::select! {
+                        recv(recv_backoff) -> _ => {
+                            tracing::debug!("Backoff delay expired during connection dismantling");
+                        }
+                        recv(recv_event) -> res => {
+                            match res {
+                                Ok(evt) => {
+                                    tracing::debug!(event = ?evt, "Received event during connection dismantling");
+                                    _ = me.act_event_down(evt).map_err(|error| {
+                                        tracing::error!(%error, "Failed to process event during connection dismantling");
+                                    });
+                                }
+                                Err(error) => {
+                                    tracing::error!(%error, "Failed receiving event during connection dismantling");
+                                }
                             }
                         }
                     }
