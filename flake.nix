@@ -11,7 +11,6 @@
     treefmt-nix.url = github:numtide/treefmt-nix;
     flake-root.url = github:srid/flake-root;
 
-    crane.inputs.nixpkgs.follows = "nixpkgs";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
