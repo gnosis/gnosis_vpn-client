@@ -94,7 +94,10 @@
             ./nix/rust-builder.nix
             {
               inherit nixpkgs rust-overlay crane localSystem;
-              crossSystem = pkgs.lib.systems.examples.aarch64-darwin;
+              crossSystem = pkgs.lib.systems.examples.aarch64-darwin // {
+                # comes with invalid config entry for this architecture: "arm64-apple-darwin" <- invalid rust compilation target
+                config = "aarch64-apple-darwin";
+              };
               isCross = true;
             };
 
