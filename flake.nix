@@ -6,9 +6,7 @@
     flake-parts.url = github:hercules-ci/flake-parts;
     nixpkgs.url = github:NixOS/nixpkgs/release-25.05;
     rust-overlay.url = github:oxalica/rust-overlay/master;
-    # using a fork with an added source filter
-    crane.url = github:hoprnet/crane/tb/20240117-find-filter;
-    # pin it to a version which we are compatible with
+    crane.url = github:ipetkov/crane;
     pre-commit.url = github:cachix/pre-commit-hooks.nix;
     treefmt-nix.url = github:numtide/treefmt-nix;
     flake-root.url = github:srid/flake-root;
