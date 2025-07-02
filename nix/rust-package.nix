@@ -10,7 +10,6 @@
   llvmPackages,
   lib,
   libiconv,
-  makeSetupHook,
   pandoc,
   pkg-config,
   pkgs,
@@ -43,15 +42,6 @@ let
     else
       "";
 
-  # The hook is used when building on darwin for non-darwin, where the flags
-  # need to be cleaned up.
-  darwinSuffixSalt = builtins.replaceStrings [ "-" "." ] [ "_" "_" ] buildPlatform.config;
-  targetSuffixSalt = builtins.replaceStrings [ "-" "." ] [ "_" "_" ] hostPlatform.config;
-  setupHookDarwin = makeSetupHook {
-    name = "darwin-hopr-gcc-hook";
-    substitutions = { inherit darwinSuffixSalt targetSuffixSalt; };
-  } ./setup-hook-darwin.sh;
-
   crateInfo = craneLib.crateNameFromCargoToml { inherit cargoToml; };
   pname = crateInfo.pname;
   pnameSuffix = if CARGO_PROFILE == "release" then "" else "-${CARGO_PROFILE}";
@@ -62,19 +52,9 @@ let
   isDarwinForDarwin = buildPlatform.isDarwin && hostPlatform.isDarwin;
   isDarwinForNonDarwin = buildPlatform.isDarwin && !hostPlatform.isDarwin;
 
-  extraBuildInputs =
-    if isDarwinForDarwin || isDarwinForNonDarwin then
-      [ pkgsStatOrDyn.pkgsBuildHost.apple-sdk_15 ]
-    else
-      [ ];
   extraNativeBuildInputs =
-    if isDarwinForDarwin then
+    if isDarwinForDarwin || isDarwinForDarwin then
       [ pkgs.lld ]
-    else if isDarwinForNonDarwin then
-      [
-        setupHookDarwin
-        pkgs.lld
-      ]
     else
       [ pkgs.mold ];
 
@@ -96,7 +76,7 @@ let
       ]
       ++ stdenv.extraNativeBuildInputs
       ++ extraNativeBuildInputs;
-    buildInputs = [ pkgsStatOrDyn.openssl ] ++ stdenv.extraBuildInputs ++ extraBuildInputs;
+    buildInputs = [ pkgsStatOrDyn.openssl ] ++ stdenv.extraBuildInputs;
 
     CARGO_HOME = ".cargo";
     cargoExtraArgs = "-p ${pname} ${cargoExtraArgs}";
