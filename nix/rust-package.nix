@@ -64,13 +64,7 @@ let
 
   extraBuildInputs =
     if isDarwinForDarwin || isDarwinForNonDarwin then
-      with pkgsStatOrDyn.pkgsBuildHost.darwin.apple_sdk.frameworks;
-      [
-        CoreFoundation
-        CoreServices
-        Security
-        SystemConfiguration
-      ]
+      [ pkgsStatOrDyn.pkgsBuildHost.apple_sdk_15 ]
     else
       [ ];
   extraNativeBuildInputs =
