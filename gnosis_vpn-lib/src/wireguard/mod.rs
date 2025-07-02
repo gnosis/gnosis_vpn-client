@@ -98,6 +98,7 @@ impl ConnectSession {
 PrivateKey = {private_key}
 Address = {address}
 {listen_port_line}
+PostUp = sleep 10 && ip route add 10.128.0.1/32 dev %i metric 50 2>/dev/null || true
 
 [Peer]
 PublicKey = {public_key}
