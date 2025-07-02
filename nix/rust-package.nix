@@ -64,7 +64,7 @@ let
 
   extraBuildInputs =
     if isDarwinForDarwin || isDarwinForNonDarwin then
-      [ pkgsStatOrDyn.pkgsBuildHost.apple_sdk_15 ]
+      [ pkgsStatOrDyn.pkgsBuildHost.apple-sdk_15 ]
     else
       [ ];
   extraNativeBuildInputs =
