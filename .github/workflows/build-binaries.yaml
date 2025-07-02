@@ -24,9 +24,9 @@ on:
         options:
           - ubuntu-24.04
           - macos-13
-          - macos-14
+          - macos-15
         required: true
-        description: "GH Runner to use: macos-13=x86_64-darwin and macos-14=aarch64-darwin"
+        description: "GH Runner to use: macos-13=x86_64-darwin and macos-15=aarch64-darwin"
       architecture:
         type: choice
         options:
@@ -74,7 +74,7 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
       - name: Get version

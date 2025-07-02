@@ -24,7 +24,7 @@ impl Display for Path {
             Path::Hops(0) => "->".to_string(),
             Path::Hops(hops) => {
                 let h = (1..*hops).map(|_| "()").collect::<Vec<_>>().join("->");
-                format!("->{}->", h)
+                format!("->{h}->")
             }
             Path::IntermediatePath(intermediates) => {
                 let i = intermediates
@@ -32,9 +32,9 @@ impl Display for Path {
                     .map(|peer_id| format!("(r{})", log_output::peer_id(peer_id.to_string().as_str())))
                     .collect::<Vec<_>>()
                     .join("->");
-                format!("->{}->", i)
+                format!("->{i}->")
             }
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }

@@ -42,7 +42,7 @@ jobs:
           - architecture: armv7l-linux
             runner: ubuntu-24.04
           - architecture: aarch64-darwin
-            runner: macos-14
+            runner: macos-15
           - architecture: x86_64-darwin
             runner: macos-13
     name: Binary ${{ matrix.binary.architecture }}
@@ -92,3 +92,10 @@ jobs:
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-x86_64-darwin --destination=./binaries --local-filename=gnosis_vpn-x86_64-darwin
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-x86_64-darwin --destination=./binaries --local-filename=gnosis_vpn-x86_64-darwin
             ```
+  cache-deps:
+    name: Cache deps
+    if: github.event.pull_request.merged == true
+    uses: ./.github/workflows/cache-deps.yaml
+    with:
+      branch: ${{ github.event.pull_request.base.ref }}
+    secrets: inherit

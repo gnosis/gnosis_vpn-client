@@ -4,7 +4,9 @@ resolver = "2"
 
 [workspace.package]
 version = "0.10.13"
-edition = "2021"
+edition = "2024"
+
+[workspace.metadata.crane]
 name = "gnosis_vpn"
 
 [workspace.dependencies]
