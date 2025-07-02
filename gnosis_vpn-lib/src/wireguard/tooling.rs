@@ -59,7 +59,10 @@ impl WireGuard for Tooling {
 
         if !output.status.success() {
             tracing::info!("wg-quick up status: {}", output.status);
-            tracing::info!("wg-quick up stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+        }
+        // wg-quick populates stderr with warnings
+        if !output.stderr.is_empty() {
+            tracing::debug!("wg-quick up stderr: {:?}", String::from_utf8_lossy(&output.stderr));
         }
         if !output.stdout.is_empty() {
             tracing::info!("wg-quick up stdout: {:?}", String::from_utf8_lossy(&output.stdout));
@@ -74,7 +77,10 @@ impl WireGuard for Tooling {
 
         if !output.status.success() {
             tracing::info!("wg-quick down status: {}", output.status);
-            tracing::info!("wg-quick down stderr: {:?}", String::from_utf8_lossy(&output.stderr));
+        }
+        // wg-quick populates stderr with warnings
+        if !output.stderr.is_empty() {
+            tracing::debug!("wg-quick down stderr: {:?}", String::from_utf8_lossy(&output.stderr));
         }
         if !output.stdout.is_empty() {
             tracing::info!("wg-quick down stdout: {:?}", String::from_utf8_lossy(&output.stdout));
