@@ -23,10 +23,10 @@ on:
         type: choice
         options:
           - ubuntu-24.04
-          - macos-15-large
+          - macos-13
           - macos-15
         required: true
-        description: "GH Runner to use: macos-15-large=x86_64-darwin and macos-15=aarch64-darwin"
+        description: "GH Runner to use: macos-13=x86_64-darwin and macos-15=aarch64-darwin"
       architecture:
         type: choice
         options:
