@@ -28,7 +28,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
-            runner: macos-15-large
+            runner: macos-13
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
