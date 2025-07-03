@@ -33,6 +33,11 @@
           pkgs = import nixpkgs {
             inherit system;
             overlays = [ (import rust-overlay) ];
+            packageOverrides = pkgs: {
+              openssl = pkgs.openssl.override {
+                static = true;
+              };
+            };
           };
           # NB: we don't need to overlay our custom toolchain for the *entire*
           # pkgs (which would require rebuidling anything else which uses rust).
@@ -41,7 +46,8 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain (
             p:
             (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
-              targets = [ "x86_64-unknown-linux-gnu" ];
+              # targets = [ "x86_64-unknown-linux-gnu" ];
+              targets = [ "x86_64-unknown-linux-musl" ];
             }
           );
 
@@ -54,6 +60,7 @@
 
             nativeBuildInputs = [
               pkgs.pkg-config
+              pkgs.mold
             ];
             buildInputs =
               [
@@ -107,6 +114,8 @@
               pname = "gnosis_vpn";
               cargoExtraArgs = "--all";
               src = srcFiles;
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
             }
           );
 
