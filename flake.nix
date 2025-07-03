@@ -52,10 +52,12 @@
             inherit src;
             strictDeps = true;
 
+            nativeBuildInputs = [
+              pkgs.pkg-config
+            ];
             buildInputs =
               [
                 pkgs.openssl
-                pkgs.pkg-config
               ]
               ++ lib.optionals pkgs.stdenv.isDarwin [
                 # Additional darwin specific inputs can be set here
