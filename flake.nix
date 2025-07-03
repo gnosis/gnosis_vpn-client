@@ -81,15 +81,15 @@
             doCheck = false;
           };
 
-          fileSetForCrate =
-            crate:
+          srcFiles =
             lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
                 ./Cargo.toml
                 ./Cargo.lock
                 (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
-                (craneLib.fileset.commonCargoSources crate)
+                (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
+                (craneLib.fileset.commonCargoSources ./gnosis_vpn)
               ];
             };
 
@@ -105,16 +105,8 @@
             individualCrateArgs
             // {
               pname = "gnosis_vpn";
-              cargoExtraArgs = "-p gnosis_vpn";
-              src = fileSetForCrate ./gnosis_vpn;
-            }
-          );
-          gnosis_vpn-ctl = craneLib.buildPackage (
-            individualCrateArgs
-            // {
-              pname = "gnosis_vpn-ctl";
-              cargoExtraArgs = "-p gnosis_vpn-ctl";
-              src = fileSetForCrate ./gnosis_vpn-ctl;
+              cargoExtraArgs = "--all";
+              src = srcFiles;
             }
           );
 
@@ -126,13 +118,13 @@
 
           checks = {
             # Build the crates as part of `nix flake check` for convenience
-            inherit gnosis_vpn gnosis_vpn-ctl;
+            inherit gnosis_vpn;
           };
 
 
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
-            inherit gnosis_vpn gnosis_vpn-ctl;
+            inherit gnosis_vpn;
           };
 
           devShells.default = craneLib.devShell {
