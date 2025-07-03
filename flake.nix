@@ -43,6 +43,7 @@
           # pkgs (which would require rebuidling anything else which uses rust).
           # Instead, we just want to update the scope that crane will use by appending
           # our specific toolchain there.
+          cross = pkgs.pkgsCross.musl64;
           craneLib = (crane.mkLib pkgs).overrideToolchain (
             p:
             (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
@@ -59,12 +60,12 @@
             strictDeps = true;
 
             nativeBuildInputs = [
-              pkgs.pkg-config
+              cross.pkg-config
               pkgs.mold
             ];
             buildInputs =
               [
-                pkgs.openssl
+                cross.openssl
               ]
               ++ lib.optionals pkgs.stdenv.isDarwin [
                 # Additional darwin specific inputs can be set here
