@@ -1,5 +1,5 @@
 [workspace]
-members = ["gnosis_vpn", "gnosis_vpn-ctl", "gnosis_vpn-lib"]
+members = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
