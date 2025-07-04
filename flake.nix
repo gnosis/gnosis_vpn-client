@@ -30,20 +30,20 @@
       systems = [ "x86_64-linux" ];
       perSystem = { config, self', inputs', lib, system, ... }:
         let
-          pkgs = import nixpkgs {
+          pkgs = (import nixpkgs {
             inherit system;
             overlays = [ (import rust-overlay) ];
-            packageOverrides = pkgs: {
-              openssl = pkgs.openssl.override {
-                static = true;
-              };
-            };
-          };
+            # packageOverrides = pkgs: {
+            #   openssl = pkgs.openssl.override {
+            #     static = true;
+            #   };
+            # };
+          }).pkgsStatic;
           # NB: we don't need to overlay our custom toolchain for the *entire*
           # pkgs (which would require rebuidling anything else which uses rust).
           # Instead, we just want to update the scope that crane will use by appending
           # our specific toolchain there.
-          cross = pkgs.pkgsCross.musl64;
+          # cross = pkgs.pkgsCross.musl64;
           craneLib = (crane.mkLib pkgs).overrideToolchain (
             p:
             (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
@@ -60,12 +60,12 @@
             strictDeps = true;
 
             nativeBuildInputs = [
-              cross.pkg-config
+              pkgs.pkg-config
               pkgs.mold
             ];
             buildInputs =
               [
-                cross.openssl
+                pkgs.openssl
               ]
               ++ lib.optionals pkgs.stdenv.isDarwin [
                 # Additional darwin specific inputs can be set here
