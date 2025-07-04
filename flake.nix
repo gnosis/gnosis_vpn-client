@@ -26,19 +26,19 @@
         # 3. Add here: foo.flakeModule
 
       ];
-      # systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
-      systems = [ "x86_64-linux" ];
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
       perSystem = { config, self', inputs', lib, system, ... }:
         let
           pkgs = (import nixpkgs {
             inherit system;
             overlays = [ (import rust-overlay) ];
-            # packageOverrides = pkgs: {
-            #   openssl = pkgs.openssl.override {
-            #     static = true;
-            #   };
-            # };
           });
+
+          target_for_system =
+            if system == "x86_64-linux"
+            then "x86_64-unknown-linux-musl"
+            else system;
+
           # NB: we don't need to overlay our custom toolchain for the *entire*
           # pkgs (which would require rebuidling anything else which uses rust).
           # Instead, we just want to update the scope that crane will use by appending
@@ -47,8 +47,7 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain (
             p:
             (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
-              # targets = [ "x86_64-unknown-linux-gnu" ];
-              targets = [ "x86_64-unknown-linux-musl" ];
+              targets = [ target_for_system ];
             }
           );
 
