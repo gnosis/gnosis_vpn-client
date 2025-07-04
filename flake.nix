@@ -17,7 +17,7 @@
     };
   };
 
-  outputs = inputs@{ self, flake-parts, nixpkgs, rust-overlay, crane, ... }:
+  outputs = inputs@{ self, flake-parts, nixpkgs, rust-overlay, crane, advisory-db, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         # To import a flake module
@@ -187,6 +187,16 @@
               src = pkgs.lib.sources.sourceFilesBySuffices src [ ".toml" ];
               # taplo arguments can be further customized below as needed
               taploExtraArgs = "--config ./taplo.toml";
+            };
+
+            # Audit dependencies
+            gvpn-audit = craneLib.cargoAudit {
+              inherit src advisory-db;
+            };
+
+            # Audit licenses
+            gvpn-deny = craneLib.cargoDeny {
+              inherit src;
             };
 
           };
