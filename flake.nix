@@ -29,8 +29,10 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
       perSystem = { config, self', inputs', lib, system, ... }:
         let
+          crossSystem = "aarch64-linux";
+          localSystem = "x86_64-linux";
           pkgs = (import nixpkgs {
-            inherit system;
+            inherit crossSystem localSystem;
             overlays = [ (import rust-overlay) ];
           });
 
