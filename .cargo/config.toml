@@ -6,3 +6,4 @@ root = ".cargo"
 # Nightly only
 #rustflags = [ "-Zlocation-detail=none" ]
 #rustdocflags = ["--enable-index-page", "-Z", "unstable-options"]
+# linker = "aarch64-linux-musl-gcc"

@@ -30,7 +30,8 @@
       perSystem = { config, self', inputs', lib, system, ... }:
         let
           pkgs = (import nixpkgs {
-            inherit system;
+            localSystem = system;
+            crossSystem = system;
             overlays = [ (import rust-overlay) ];
           });
 
@@ -130,15 +131,7 @@
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
 
-          gnosis_vpn = craneLib.buildPackage (
-            individualCrateArgs //
-            (builtins.getAttr targetForSystem targetCrateArgs) // {
-              pname = "gnosis_vpn";
-              cargoExtraArgs = "--all";
-              src = srcFiles;
-            }
-          );
-
+          gnosis_vpn = pkgs.callPackage ./nix/builder.nix { };
         in
         {
           # Per-system attributes can be defined here. The self' and inputs'
