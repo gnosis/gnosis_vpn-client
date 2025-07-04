@@ -34,12 +34,14 @@
             overlays = [ (import rust-overlay) ];
           });
 
-          targetForSystem =
-            if system == "x86_64-linux" then "x86_64-unknown-linux-musl"
-            else if system == "aarch64-darwin" then "aarch64-apple-darwin"
-            else if system == "x86_64-darwin" then "x86_64-apple-darwin"
-            else if system == "aarch64-linux" then "aarch64-unknown-linux-musl"
-            else throw "Unsupported system: ${system}";
+          systemTargets = {
+            "x86_64-linux" = "x86_64-unknown-linux-musl";
+            "aarch64-linux" = "aarch64-unknown-linux-musl";
+            "x86_64-darwin" = "x86_64-apple-darwin";
+            "aarch64-darwin" = "aarch64-apple-darwin";
+          };
+
+          targetForSystem = builtins.getAttr system systemTargets;
 
           # NB: we don't need to overlay our custom toolchain for the *entire*
           # pkgs (which would require rebuidling anything else which uses rust).
@@ -101,27 +103,23 @@
               ];
             };
 
-          crateArgsForSystem =
-            if targetForSystem == "x86_64-unknown-linux-musl" then
-              individualCrateArgs // {
-                CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
-              }
-            else if targetForSystem == "aarch64-unknown-linux-musl" then
-              individualCrateArgs // {
-                CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
-              }
-            else if targetForSystem == "x86_64-apple-darwin" then
-              individualCrateArgs // {
-                CARGO_PROFILE = "intelmac";
-                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-              }
-            else if targetForSystem == "aarch64-apple-darwin" then
-              individualCrateArgs // {
-                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-              }
-            else throw "Unsupported target: ${targetForSystem}";
+          targetCrateArgs = {
+            "x86_64-unknown-linux-musl" = {
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+            };
+            "aarch64-unknown-linux-musl" = {
+              CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+            };
+            "x86_64-apple-darwin" = {
+              CARGO_PROFILE = "intelmac";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+            };
+            "aarch64-apple-darwin" = {
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+            };
+          };
 
           # Build the top-level crates of the workspace as individual derivations.
           # This allows consumers to only depend on (and build) only what they need.
@@ -133,7 +131,8 @@
           # cargo won't be able to find the sources for all members.
 
           gnosis_vpn = craneLib.buildPackage (
-            crateArgsForSystem // {
+            individualCrateArgs //
+            (builtins.getAttr targetForSystem targetCrateArgs) // {
               pname = "gnosis_vpn";
               cargoExtraArgs = "--all";
               src = srcFiles;
