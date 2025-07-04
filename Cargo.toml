@@ -1,11 +1,11 @@
 [workspace]
 members = ["gnosis_vpn*"]
 resolver = "2"
-license = "GPL-3.0"
 
 [workspace.package]
 version = "0.10.14"
 edition = "2024"
+license = "GPL-3.0"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
