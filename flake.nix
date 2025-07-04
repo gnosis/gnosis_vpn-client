@@ -34,7 +34,7 @@
             overlays = [ (import rust-overlay) ];
           });
 
-          target_for_system =
+          targetForSystem =
             if system == "x86_64-linux" then "x86_64-unknown-linux-musl"
             else if system == "aarch64-darwin" then "aarch64-apple-darwin"
             else if system == "x86_64-darwin" then "x86_64-apple-darwin"
@@ -48,7 +48,7 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain (
             p:
             (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
-              targets = [ target_for_system ];
+              targets = [ targetForSystem ];
             }
           );
 
@@ -100,14 +100,21 @@
               ];
             };
 
-          targetCrateArgs =
-            if target_for_system == "x86_64-unknown-linux-musl" then
+          crateArgsForSystem =
+            if targetForSystem == "x86_64-unknown-linux-musl" then
               individualCrateArgs // {
+                cargoExtraArgs = "--all";
                 CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
               }
-            else if target_for_system == "aarch64-apple-darwin" then
+            else if targetForSystem == "aarch64-apple-darwin" then
               individualCrateArgs // {
+                cargoExtraArgs = "--all";
+                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              }
+            else if targetForSystem == "x86_64-apple-darwin" then
+              individualCrateArgs // {
+                cargoExtraArgs = "--all --profile-intelmac";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
               }
             else
@@ -123,9 +130,8 @@
           # cargo won't be able to find the sources for all members.
 
           gnosis_vpn = craneLib.buildPackage (
-            targetCrateArgs // {
+            crateArgsForSystem // {
               pname = "gnosis_vpn";
-              cargoExtraArgs = "--all";
               src = srcFiles;
             }
           );
