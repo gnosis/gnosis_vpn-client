@@ -131,7 +131,14 @@
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
 
-          gnosis_vpn = pkgs.callPackage ./nix/builder.nix { };
+          gnosis_vpn = (import ./nix/builder.nix) {
+            crossSystem = system;
+            localSystem = system;
+            nixpkgs = nixpkgs;
+            rust-overlay = inputs.rust-overlay;
+            crane = crane;
+            lib = lib;
+          };
         in
         {
           # Per-system attributes can be defined here. The self' and inputs'

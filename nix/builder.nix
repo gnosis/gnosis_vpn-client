@@ -22,12 +22,12 @@ let
   # cross = pkgs.pkgsCross.musl64;
   craneLib = (crane.mkLib pkgs).overrideToolchain (
     p:
-    (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
+    (p.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml).override {
       targets = [ targetForSystem ];
     }
   );
 
-  src = craneLib.cleanCargoSource ./.;
+  src = craneLib.cleanCargoSource ../.;
 
   # Common arguments can be set here to avoid repeating them later
   commonArgs = {
@@ -65,13 +65,13 @@ let
 
   srcFiles =
     lib.fileset.toSource {
-      root = ./.;
+      root = ../.;
       fileset = lib.fileset.unions [
-        ./Cargo.toml
-        ./Cargo.lock
-        (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
-        (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
-        (craneLib.fileset.commonCargoSources ./gnosis_vpn)
+        ../Cargo.toml
+        ../Cargo.lock
+        (craneLib.fileset.commonCargoSources ../gnosis_vpn-lib)
+        (craneLib.fileset.commonCargoSources ../gnosis_vpn-ctl)
+        (craneLib.fileset.commonCargoSources ../gnosis_vpn)
       ];
     };
 
