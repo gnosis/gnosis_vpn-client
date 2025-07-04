@@ -103,18 +103,16 @@
           crateArgsForSystem =
             if targetForSystem == "x86_64-unknown-linux-musl" then
               individualCrateArgs // {
-                cargoExtraArgs = "--all";
                 CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
               }
             else if targetForSystem == "aarch64-apple-darwin" then
               individualCrateArgs // {
-                cargoExtraArgs = "--all";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
               }
             else if targetForSystem == "x86_64-apple-darwin" then
               individualCrateArgs // {
-                cargoExtraArgs = "--all --profile-intelmac";
+                CARGO_PROFILE = "intelmac";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
               }
             else
@@ -132,6 +130,7 @@
           gnosis_vpn = craneLib.buildPackage (
             crateArgsForSystem // {
               pname = "gnosis_vpn";
+              cargoExtraArgs = "--all";
               src = srcFiles;
             }
           );
