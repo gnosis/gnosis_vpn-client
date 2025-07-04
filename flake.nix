@@ -37,6 +37,7 @@
           target_for_system =
             if system == "x86_64-linux" then "x86_64-unknown-linux-musl"
             else if system == "aarch64-darwin" then "aarch64-apple-darwin"
+            else if system == "x86_64-darwin" then "x86_64-apple-darwin"
             else system;
 
           # NB: we don't need to overlay our custom toolchain for the *entire*
