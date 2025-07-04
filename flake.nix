@@ -139,6 +139,15 @@
             crane = crane;
             lib = lib;
           };
+
+          gnosis_vpn-aarch64 = (import ./nix/builder.nix) {
+            crossSystem = "aarch64-linux";
+            localSystem = system;
+            nixpkgs = nixpkgs;
+            rust-overlay = inputs.rust-overlay;
+            crane = crane;
+            lib = lib;
+          };
         in
         {
           # Per-system attributes can be defined here. The self' and inputs'
@@ -153,7 +162,7 @@
 
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
-            inherit gnosis_vpn;
+            inherit gnosis_vpn gnosis_vpn-aarch64;
           };
 
           devShells.default = craneLib.devShell {
