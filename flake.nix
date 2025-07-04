@@ -38,7 +38,8 @@
             if system == "x86_64-linux" then "x86_64-unknown-linux-musl"
             else if system == "aarch64-darwin" then "aarch64-apple-darwin"
             else if system == "x86_64-darwin" then "x86_64-apple-darwin"
-            else system;
+            else if system == "aarch64-linux" then "aarch64-unknown-linux-musl"
+            else throw "Unsupported system: ${system}";
 
           # NB: we don't need to overlay our custom toolchain for the *entire*
           # pkgs (which would require rebuidling anything else which uses rust).
@@ -106,17 +107,21 @@
                 CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
               }
-            else if targetForSystem == "aarch64-apple-darwin" then
+            else if targetForSystem == "aarch64-unknown-linux-musl" then
               individualCrateArgs // {
-                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+                CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
               }
             else if targetForSystem == "x86_64-apple-darwin" then
               individualCrateArgs // {
                 CARGO_PROFILE = "intelmac";
                 CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
               }
-            else
-              individualCrateArgs;
+            else if targetForSystem == "aarch64-apple-darwin" then
+              individualCrateArgs // {
+                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              }
+            else throw "Unsupported target: ${targetForSystem}";
 
           # Build the top-level crates of the workspace as individual derivations.
           # This allows consumers to only depend on (and build) only what they need.
