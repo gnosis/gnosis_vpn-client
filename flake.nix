@@ -58,6 +58,9 @@
             inherit src;
             strictDeps = true;
 
+            nativeBuildInputs = [ pkgs.pkg-config ] ++ lib.optionals pkgs.stdenv.isLinux [
+              pkgs.mold
+            ];
             buildInputs =
               [
                 pkgs.pkgsStatic.openssl
@@ -96,6 +99,19 @@
               ];
             };
 
+          targetCrateArgs =
+            if target_for_system == "x86_64-unknown-linux-musl" then
+              individualCrateArgs // {
+                CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              }
+            else if target_for_system == "aarch64-apple-darwin" then
+              individualCrateArgs // {
+                CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              }
+            else
+              individualCrateArgs;
+
           # Build the top-level crates of the workspace as individual derivations.
           # This allows consumers to only depend on (and build) only what they need.
           # Though it is possible to build the entire workspace as a single derivation,
@@ -104,18 +120,12 @@
           # Note that the cargo workspace must define `workspace.members` using wildcards,
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
+
           gnosis_vpn = craneLib.buildPackage (
-            individualCrateArgs
-            // {
-              nativeBuildInputs = [
-                pkgs.pkg-config
-                pkgs.mold
-              ];
+            targetCrateArgs // {
               pname = "gnosis_vpn";
               cargoExtraArgs = "--all";
               src = srcFiles;
-              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
             }
           );
 
