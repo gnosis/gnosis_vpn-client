@@ -29,12 +29,19 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
       perSystem = { config, self', inputs', lib, system, ... }:
         let
-          crossSystem = "aarch64-linux";
-          localSystem = "x86_64-linux";
-          pkgs = (import nixpkgs {
-            inherit crossSystem localSystem;
-            overlays = [ (import rust-overlay) ];
-          });
+          pkgs =
+            # check if we cross compile
+            if system == pkgs.targetPlatform.system then
+              (import nixpkgs {
+                inherit system;
+                overlays = [ (import rust-overlay) ];
+              })
+            else
+              (import nixpkgs {
+                crossSystem = pkgs.targetPlatform.system;
+                localSystem = system;
+                overlays = [ (import rust-overlay) ];
+              });
 
           systemTargets = {
             "x86_64-linux" = "x86_64-unknown-linux-musl";
