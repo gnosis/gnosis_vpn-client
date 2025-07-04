@@ -35,8 +35,8 @@
           });
 
           target_for_system =
-            if system == "x86_64-linux"
-            then "x86_64-unknown-linux-musl"
+            if system == "x86_64-linux" then "x86_64-unknown-linux-musl"
+            else if system == "aarch64-darwin" then "aarch64-apple-darwin"
             else system;
 
           # NB: we don't need to overlay our custom toolchain for the *entire*
@@ -58,10 +58,6 @@
             inherit src;
             strictDeps = true;
 
-            nativeBuildInputs = [
-              pkgs.pkg-config
-              pkgs.mold
-            ];
             buildInputs =
               [
                 pkgs.pkgsStatic.openssl
@@ -111,6 +107,10 @@
           gnosis_vpn = craneLib.buildPackage (
             individualCrateArgs
             // {
+              nativeBuildInputs = [
+                pkgs.pkg-config
+                pkgs.mold
+              ];
               pname = "gnosis_vpn";
               cargoExtraArgs = "--all";
               src = srcFiles;
