@@ -131,7 +131,7 @@
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
 
-          gnosis_vpn = (import ./nix/builder.nix) {
+          gvpn = (import ./nix/builder.nix) {
             crossSystem = system;
             localSystem = system;
             nixpkgs = nixpkgs;
@@ -140,7 +140,7 @@
             lib = lib;
           };
 
-          gnosis_vpn-aarch64 = (import ./nix/builder.nix) {
+          gvpn-aarch64 = (import ./nix/builder.nix) {
             crossSystem = "aarch64-linux";
             localSystem = system;
             nixpkgs = nixpkgs;
@@ -156,13 +156,44 @@
 
           checks = {
             # Build the crates as part of `nix flake check` for convenience
-            inherit gnosis_vpn;
-          };
+            inherit gvpn;
 
+            # Run clippy (and deny all warnings) on the workspace source,
+            # again, reusing the dependency artifacts from above.
+            #
+            # Note that this is done as a separate derivation so that
+            # we can block the CI if there are issues here, but not
+            # prevent downstream consumers from building our crate by itself.
+            gvpn-clippy = craneLib.cargoClippy (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+              }
+            );
+
+            gvpn-doc = craneLib.cargoDoc (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+              }
+            );
+
+            gvpn-fmt = craneLib.cargoFmt {
+              inherit src;
+            };
+
+            gvpn-toml-fmt = craneLib.taploFmt {
+              src = pkgs.lib.sources.sourceFilesBySuffices src [ ".toml" ];
+              # taplo arguments can be further customized below as needed
+              taploExtraArgs = "--config ./taplo.toml";
+            };
+
+          };
 
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
-            inherit gnosis_vpn gnosis_vpn-aarch64;
+            inherit gvpn gvpn-aarch64;
           };
 
           devShells.default = craneLib.devShell {
