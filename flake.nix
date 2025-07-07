@@ -3,8 +3,16 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    crane.url = "github:ipetkov/crane";
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+    };
+    crane = {
+      url = "github:ipetkov/crane";
+    };
+
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+    };
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -17,7 +25,7 @@
     };
   };
 
-  outputs = inputs@{ self, flake-parts, nixpkgs, rust-overlay, crane, advisory-db, ... }:
+  outputs = inputs@{ self, flake-parts, nixpkgs, rust-overlay, crane, advisory-db, treefmt-nix, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         # To import a flake module
@@ -25,6 +33,7 @@
         # 2. Add foo as a parameter to the outputs function
         # 3. Add here: foo.flakeModule
 
+        treefmt-nix.flakeModule
       ];
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
       perSystem = { config, self', inputs', lib, system, ... }:
@@ -131,23 +140,15 @@
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
 
-          gvpn = (import ./nix/builder.nix) {
-            crossSystem = system;
-            localSystem = system;
-            nixpkgs = nixpkgs;
-            rust-overlay = inputs.rust-overlay;
-            crane = crane;
-            lib = lib;
-          };
-
-          gvpn-aarch64 = (import ./nix/builder.nix) {
-            crossSystem = "aarch64-linux";
-            localSystem = system;
-            nixpkgs = nixpkgs;
-            rust-overlay = inputs.rust-overlay;
-            crane = crane;
-            lib = lib;
-          };
+          gvpn =
+            craneLib.buildPackage (
+              individualCrateArgs //
+              (builtins.getAttr targetForSystem targetCrateArgs) // {
+                pname = "gnosis_vpn";
+                cargoExtraArgs = "--all";
+                src = srcFiles;
+              }
+            );
         in
         {
           # Per-system attributes can be defined here. The self' and inputs'
@@ -203,7 +204,8 @@
 
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
-            inherit gvpn gvpn-aarch64;
+            inherit gvpn;
+            default = gvpn;
           };
 
           devShells.default = craneLib.devShell {
