@@ -165,7 +165,7 @@
             programs.prettier.enable = true;
             programs.rustfmt.enable = true;
             programs.shellcheck.enable = true;
-            programs.shfmt.enable = true;
+            programs.shfmt = { enable = true; indent_size = 4; };
             programs.taplo.enable = true; # TOML formatter
             programs.yamlfmt.enable = true;
 
