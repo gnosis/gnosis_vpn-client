@@ -158,12 +158,26 @@
               "LICENSE"
               "LATEST"
               "target/*"
-              "Cargo.lock"
-              "modules/**"
+              "modules/*"
             ];
 
+            programs.nixfmt.enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt-rfc-style.compiler;
+            programs.prettier.enable = true;
+            programs.rustfmt.enable = true;
+            programs.shellcheck.enable = true;
             programs.shfmt.enable = true;
+            programs.taplo.enable = true; # TOML formatter
             programs.yamlfmt.enable = true;
+
+            programs.nixfmt.package = pkgs.nixfmt-rfc-style;
+            settings.formatter.prettier.excludes = [
+              "*.toml"
+              "*.yml"
+              "*.yaml"
+            ];
+            settings.formatter.rustfmt = {
+              command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
+            };
             # trying setting from https://github.com/google/yamlfmt/blob/main/docs/config-file.md
             settings.formatter.yamlfmt.settings = {
               formatter.type = "basic";
@@ -171,28 +185,8 @@
               formatter.trim_trailing_whitespace = true;
               formatter.include_document_start = true;
             };
-            programs.prettier.enable = true;
-            programs.rustfmt.enable = true;
-            # using the official Nixpkgs formatting
-            # see https://github.com/NixOS/rfcs/blob/master/rfcs/0166-nix-formatting.md
-            programs.nixfmt.enable = true;
-            programs.taplo.enable = true;
-            settings.formatter.taplo.settings = {
-              formatting = {
-                reorder_keys = false;
-              };
-              rule = {
-                include = [ "*.toml" "**/Cargo.toml" ];
-                keys = [ "dependencies" ];
-                formatting = {
-                  reorder_keys = true;
-                };
-              };
-            };
-            settings.formatter.rustfmt = {
-              command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
-            };
           };
+
         in
         {
           # Per-system attributes can be defined here. The self' and inputs'
@@ -252,7 +246,8 @@
             packages = [ ];
           };
 
-          formatter = config.treefmt.build.wrapper;
+          treefmt = treefmt;
+          formatter = treefmt;
         };
       flake = {
         # The usual flake attributes can be defined here, including system-
