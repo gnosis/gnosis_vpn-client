@@ -26,7 +26,17 @@
     };
   };
 
-  outputs = inputs@{ self, flake-parts, nixpkgs, rust-overlay, crane, advisory-db, treefmt-nix, ... }:
+  outputs =
+    inputs@{
+      self,
+      flake-parts,
+      nixpkgs,
+      rust-overlay,
+      crane,
+      advisory-db,
+      treefmt-nix,
+      ...
+    }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         # To import a flake module
@@ -36,14 +46,29 @@
 
         treefmt-nix.flakeModule
       ];
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
-      perSystem = { config, self', inputs', lib, system, ... }:
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
+      ];
+      perSystem =
+        {
+          config,
+          self',
+          inputs',
+          lib,
+          system,
+          ...
+        }:
         let
-          pkgs = (import nixpkgs {
-            localSystem = system;
-            crossSystem = system;
-            overlays = [ (import rust-overlay) ];
-          });
+          pkgs = (
+            import nixpkgs {
+              localSystem = system;
+              crossSystem = system;
+              overlays = [ (import rust-overlay) ];
+            }
+          );
 
           systemTargets = {
             "x86_64-linux" = "x86_64-unknown-linux-musl";
@@ -73,9 +98,11 @@
             inherit src;
             strictDeps = true;
 
-            nativeBuildInputs = [ pkgs.pkg-config ] ++ lib.optionals pkgs.stdenv.isLinux [
-              pkgs.mold
-            ];
+            nativeBuildInputs =
+              [ pkgs.pkg-config ]
+              ++ lib.optionals pkgs.stdenv.isLinux [
+                pkgs.mold
+              ];
             buildInputs =
               [
                 pkgs.pkgsStatic.openssl
@@ -102,17 +129,16 @@
             doCheck = false;
           };
 
-          srcFiles =
-            lib.fileset.toSource {
-              root = ./.;
-              fileset = lib.fileset.unions [
-                ./Cargo.toml
-                ./Cargo.lock
-                (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
-                (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
-                (craneLib.fileset.commonCargoSources ./gnosis_vpn)
-              ];
-            };
+          srcFiles = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn)
+            ];
+          };
 
           targetCrateArgs = {
             "x86_64-unknown-linux-musl" = {
@@ -141,15 +167,15 @@
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
 
-          gvpn =
-            craneLib.buildPackage (
-              individualCrateArgs //
-              (builtins.getAttr targetForSystem targetCrateArgs) // {
-                pname = "gnosis_vpn";
-                cargoExtraArgs = "--all";
-                src = srcFiles;
-              }
-            );
+          gvpn = craneLib.buildPackage (
+            individualCrateArgs
+            // (builtins.getAttr targetForSystem targetCrateArgs)
+            // {
+              pname = "gnosis_vpn";
+              cargoExtraArgs = "--all";
+              src = srcFiles;
+            }
+          );
 
           treefmt = {
             projectRootFile = "LICENSE";
@@ -161,23 +187,27 @@
               "modules/*"
             ];
 
-            programs.nixfmt.enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt-rfc-style.compiler;
+            programs.nixfmt = {
+              enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt-rfc-style.compiler;
+              package = pkgs.nixfmt-rfc-style;
+            };
             programs.prettier.enable = true;
-            programs.rustfmt.enable = true;
-            programs.shellcheck.enable = true;
-            programs.shfmt = { enable = true; indent_size = 4; };
-            programs.taplo.enable = true; # TOML formatter
-            programs.yamlfmt.enable = true;
-
-            programs.nixfmt.package = pkgs.nixfmt-rfc-style;
             settings.formatter.prettier.excludes = [
               "*.toml"
               "*.yml"
               "*.yaml"
             ];
+            programs.rustfmt.enable = true;
             settings.formatter.rustfmt = {
               command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
             };
+            programs.shellcheck.enable = true;
+            programs.shfmt = {
+              enable = true;
+              indent_size = 4;
+            };
+            programs.taplo.enable = true; # TOML formatter
+            programs.yamlfmt.enable = true;
             # trying setting from https://github.com/google/yamlfmt/blob/main/docs/config-file.md
             settings.formatter.yamlfmt.settings = {
               formatter.type = "basic";
