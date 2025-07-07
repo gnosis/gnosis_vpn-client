@@ -258,6 +258,19 @@
               inherit src;
             };
 
+            # Run tests with cargo-nextest
+            # Consider setting `doCheck = false` on other crate derivations
+            # if you do not want the tests to run twice
+            test = craneLib.cargoNextest (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                partitions = 1;
+                partitionType = "count";
+                cargoNextestPartitionsExtraArgs = "--no-tests=pass";
+              }
+            );
+
           };
 
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
