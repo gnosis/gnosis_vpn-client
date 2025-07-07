@@ -31,10 +31,8 @@ on:
         type: choice
         options:
           - x86_64-linux
-          - aarch64-linux
           - aarch64-darwin
           - x86_64-darwin
-          - armv7l-linux
         required: true
         description: "Architecture to build for"
 concurrency:
@@ -97,7 +95,7 @@ jobs:
           fi
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
-          nix build .#gnosisvpn-${{ steps.vars.outputs.architecture}} -L
+          nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
           mkdir -p binaries
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
