@@ -1,6 +1,6 @@
 # build static linux binary
 build:
-    nix build .#gnosisvpn-x86_64-linux
+    nix build .#packages.x86_64-linux.gvpn
 
 # build docker image
 docker-build: build

@@ -30,7 +30,7 @@ jobs:
       - name: Build
         run: nix build .#gvpn -L
   checks:
-    name: lint, format and unit test
+    name: Lint, format and unit test
     needs: build
     runs-on: ubuntu-24.04
     steps:
