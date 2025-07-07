@@ -12,6 +12,7 @@
 
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     rust-overlay = {
@@ -149,6 +150,49 @@
                 src = srcFiles;
               }
             );
+
+          treefmt = {
+            inherit (config.flake-root) projectRootFile;
+
+            settings.global.excludes = [
+              "LICENSE"
+              "LATEST"
+              "target/*"
+              "Cargo.lock"
+              "modules/**"
+            ];
+
+            programs.shfmt.enable = true;
+            programs.yamlfmt.enable = true;
+            # trying setting from https://github.com/google/yamlfmt/blob/main/docs/config-file.md
+            settings.formatter.yamlfmt.settings = {
+              formatter.type = "basic";
+              formatter.max_line_length = 120;
+              formatter.trim_trailing_whitespace = true;
+              formatter.include_document_start = true;
+            };
+            programs.prettier.enable = true;
+            programs.rustfmt.enable = true;
+            # using the official Nixpkgs formatting
+            # see https://github.com/NixOS/rfcs/blob/master/rfcs/0166-nix-formatting.md
+            programs.nixfmt.enable = true;
+            programs.taplo.enable = true;
+            settings.formatter.taplo.settings = {
+              formatting = {
+                reorder_keys = false;
+              };
+              rule = {
+                include = [ "*.toml" "**/Cargo.toml" ];
+                keys = [ "dependencies" ];
+                formatting = {
+                  reorder_keys = true;
+                };
+              };
+            };
+            settings.formatter.rustfmt = {
+              command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
+            };
+          };
         in
         {
           # Per-system attributes can be defined here. The self' and inputs'
@@ -165,7 +209,7 @@
             # Note that this is done as a separate derivation so that
             # we can block the CI if there are issues here, but not
             # prevent downstream consumers from building our crate by itself.
-            gvpn-clippy = craneLib.cargoClippy (
+            clippy = craneLib.cargoClippy (
               commonArgs
               // {
                 inherit cargoArtifacts;
@@ -173,30 +217,20 @@
               }
             );
 
-            gvpn-doc = craneLib.cargoDoc (
+            docs = craneLib.cargoDoc (
               commonArgs
               // {
                 inherit cargoArtifacts;
               }
             );
 
-            gvpn-fmt = craneLib.cargoFmt {
-              inherit src;
-            };
-
-            gvpn-toml-fmt = craneLib.taploFmt {
-              src = pkgs.lib.sources.sourceFilesBySuffices src [ ".toml" ];
-              # taplo arguments can be further customized below as needed
-              taploExtraArgs = "--config ./taplo.toml";
-            };
-
             # Audit dependencies
-            gvpn-audit = craneLib.cargoAudit {
+            audit = craneLib.cargoAudit {
               inherit src advisory-db;
             };
 
             # Audit licenses
-            gvpn-deny = craneLib.cargoDeny {
+            licenses = craneLib.cargoDeny {
               inherit src;
             };
 
@@ -217,6 +251,8 @@
             # Extra inputs can be added here; cargo and rustc are provided by default.
             packages = [ ];
           };
+
+          formatter = config.treefmt.build.wrapper;
         };
       flake = {
         # The usual flake attributes can be defined here, including system-
