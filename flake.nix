@@ -152,7 +152,7 @@
             );
 
           treefmt = {
-            inherit (config.flake-root) projectRootFile;
+            projectRootFile = "LICENSE";
 
             settings.global.excludes = [
               "LICENSE"
