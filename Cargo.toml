@@ -14,7 +14,7 @@ name = "gnosis_vpn"
 backoff = { version = "0.4" }
 bincode = { version = "1.3" }
 clap = { version = "4.5", features = ["derive", "env"] }
-crossbeam-channel = "0.5"
+crossbeam-channel = "0.5.15"
 ctrlc = { version = "3.4", features = ["termination"] }
 directories = { version = "5.0" }
 exitcode = "1.1"
