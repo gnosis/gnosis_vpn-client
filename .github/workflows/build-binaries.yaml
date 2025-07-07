@@ -24,17 +24,15 @@ on:
         options:
           - ubuntu-24.04
           - macos-13
-          - macos-14
+          - macos-15
         required: true
-        description: "GH Runner to use: macos-13=x86_64-darwin and macos-14=aarch64-darwin"
+        description: "GH Runner to use: macos-13=x86_64-darwin and macos-15=aarch64-darwin"
       architecture:
         type: choice
         options:
           - x86_64-linux
-          - aarch64-linux
           - aarch64-darwin
           - x86_64-darwin
-          - armv7l-linux
         required: true
         description: "Architecture to build for"
 concurrency:
@@ -74,7 +72,7 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
       - name: Get version
@@ -97,7 +95,7 @@ jobs:
           fi
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
-          nix build .#gnosisvpn-${{ steps.vars.outputs.architecture}} -L
+          nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
           mkdir -p binaries
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}

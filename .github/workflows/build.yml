@@ -24,13 +24,14 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
       - name: Build
-        run: nix build .#gnosisvpn -L
-  lint:
-    name: Lint
+        run: nix build .#gvpn -L
+  checks:
+    name: Lint, format and unit test
+    needs: build
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -43,26 +44,11 @@ jobs:
           name: gnosis-vpn-client
         env:
           USER: runner
-      - name: Lint and formatting check
-        run: nix run .#check
-  unittest:
-    name: Unit test
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@v16
-        with:
-          name: gnosis-vpn-client
-        env:
-          USER: runner
-      - name: Run unit tests
-        run: nix build .#gnosisvpn-test
+      - name: Run flake checks
+        run: nix flake check
   systemtest:
     name: System test
+    needs: build
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -74,7 +60,6 @@ jobs:
         with:
           name: gnosis-vpn-client
           extraPullNames: "hoprnet"
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
         env:
           USER: runner
       - name: Install just via apt
@@ -87,12 +72,8 @@ jobs:
         binary:
           - architecture: x86_64-linux
             runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: armv7l-linux
-            runner: ubuntu-24.04
           - architecture: aarch64-darwin
-            runner: macos-14
+            runner: macos-15
           - architecture: x86_64-darwin
             runner: macos-13
     name: Binary ${{ matrix.binary.architecture }}

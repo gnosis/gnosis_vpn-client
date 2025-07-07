@@ -145,7 +145,7 @@ impl Response {
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = log_output::serialize(self);
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -172,7 +172,7 @@ impl fmt::Display for Destination {
         let meta = self
             .meta
             .iter()
-            .map(|(k, v)| format!("{}: {}", k, v))
+            .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
         let short_pid = log_output::peer_id(self.peer_id.to_string().as_str());
@@ -200,9 +200,9 @@ impl fmt::Display for WireGuardStatus {
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Status::Connecting(dest) => write!(f, "Connecting to {}", dest),
-            Status::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
-            Status::Connected(dest) => write!(f, "Connected to {}", dest),
+            Status::Connecting(dest) => write!(f, "Connecting to {dest}"),
+            Status::Disconnecting(dest) => write!(f, "Disconnecting from {dest}"),
+            Status::Connected(dest) => write!(f, "Connected to {dest}"),
             Status::Disconnected => write!(f, "Disconnected"),
         }
     }
