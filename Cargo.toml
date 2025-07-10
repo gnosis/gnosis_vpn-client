@@ -22,7 +22,7 @@ humantime = "2.2"
 humantime-serde = "1.1.1"
 libp2p-identity = { version = "0.2", features = ["ed25519", "peerid"] }
 notify = { version = "6.1.1", features = ["serde"] }
-ping = { version = "0.5" }
+ping = { version = "0.6.1" }
 rand = { version = "0.8" }
 reqwest = { version = "0.12.22", features = ["json", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
