@@ -1188,6 +1188,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3163f59cd3fa0e9ef8c32f242966a7b9994fd7378366099593e0e73077cd8c97"
 dependencies = [
  "bitflags 2.9.1",
+ "crossbeam-channel",
  "fsevent-sys",
  "inotify",
  "kqueue",
