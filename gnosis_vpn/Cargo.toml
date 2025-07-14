@@ -9,13 +9,13 @@ license = { workspace = true }
 [dependencies]
 clap.workspace = true
 crossbeam-channel.workspace = true
-ctrlc = { workspace = true }
+ctrlc.workspace = true
 exitcode.workspace = true
-gnosis_vpn-lib = { workspace = true }
+gnosis_vpn-lib.workspace = true
 humantime.workspace = true
-libp2p-identity = { workspace = true }
+libp2p-identity.workspace = true
 notify.workspace = true
-reqwest = { workspace = true }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
