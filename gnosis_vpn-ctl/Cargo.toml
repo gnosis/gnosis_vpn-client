@@ -5,7 +5,7 @@ edition = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-clap = { workspace = true }
+clap.workspace = true
 exitcode = { workspace = true }
 gnosis_vpn-lib = { workspace = true }
 serde_json = { workspace = true }
