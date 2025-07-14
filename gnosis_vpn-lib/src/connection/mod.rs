@@ -625,8 +625,8 @@ impl Connection {
         let range = dest.ping_interval.clone();
         let opts = dest.ping_options.clone();
         thread::spawn(move || {
-            let mut rng = rand::thread_rng();
-            let delay = Duration::from_secs(rng.gen_range(range) as u64);
+            let mut rng = rand::rng();
+            let delay = Duration::from_secs(rng.random_range(range) as u64);
             let after = crossbeam_channel::after(delay);
             crossbeam_channel::select! {
                 recv(after) -> _ => {

@@ -608,7 +608,6 @@ dependencies = [
  "humantime",
  "libp2p-identity",
  "notify",
- "rand 0.9.1",
  "reqwest",
  "serde",
  "serde_json",
