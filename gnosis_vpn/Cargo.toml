@@ -14,7 +14,7 @@ exitcode.workspace = true
 gnosis_vpn-lib = { workspace = true }
 humantime.workspace = true
 libp2p-identity = { workspace = true }
-notify = { workspace = true }
+notify.workspace = true
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
