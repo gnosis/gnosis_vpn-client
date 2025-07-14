@@ -10,7 +10,7 @@ license = { workspace = true }
 clap.workspace = true
 crossbeam-channel.workspace = true
 ctrlc = { workspace = true }
-exitcode = { workspace = true }
+exitcode.workspace = true
 gnosis_vpn-lib = { workspace = true }
 humantime = { workspace = true }
 libp2p-identity = { workspace = true }
