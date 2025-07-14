@@ -17,7 +17,7 @@ libp2p-identity = { workspace = true }
 ping.workspace = true
 rand.workspace = true
 reqwest = { workspace = true }
-serde = { workspace = true }
+serde.workspace = true
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
