@@ -402,6 +402,10 @@ fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
             tracing::debug!("no service state file found - clean start");
             Ok(state::State::default())
         }
+        Err(state::Error::BinCodeDecodeError(err)) => {
+            tracing::warn!(warn = ?err, "service state file is corrupted - clean start");
+            Ok(state::State::default())
+        }
         x => x,
     }?;
 

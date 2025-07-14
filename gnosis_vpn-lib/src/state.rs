@@ -21,8 +21,10 @@ pub enum Error {
     NoParentFolder,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("Serialization/Deserialization error: {0}")]
-    BinCodeError(#[from] bincode::Error),
+    #[error("Serialization error: {0}")]
+    BinCodeEncodeError(#[from] bincode::error::EncodeError),
+    #[error("Deserialization error: {0}")]
+    BinCodeDecodeError(#[from] bincode::error::DecodeError),
 }
 
 fn path() -> Option<PathBuf> {
@@ -41,7 +43,7 @@ pub fn read() -> Result<State, Error> {
             Error::IO(e)
         }
     })?;
-    let state: State = bincode::deserialize(&content[..]).map_err(Error::BinCodeError)?;
+    let (state, _) = bincode::serde::decode_from_slice(&content[..], bincode::config::standard())?;
     Ok(state)
 }
 
@@ -57,7 +59,7 @@ impl State {
 
     fn write(&self) -> Result<(), Error> {
         let path = path().ok_or(Error::NoStateFolder)?;
-        let content = bincode::serialize(&self)?;
+        let content = bincode::serde::encode_to_vec(&self, bincode::config::standard())?;
         let parent = path.parent().ok_or(Error::NoParentFolder)?;
         fs::create_dir_all(parent)?;
         fs::write(path, content).map_err(Error::IO)
