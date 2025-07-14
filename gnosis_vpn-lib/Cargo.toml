@@ -12,7 +12,7 @@ bincode.workspace = true
 crossbeam-channel.workspace = true
 directories.workspace = true
 humantime.workspace = true
-humantime-serde = { workspace = true }
+humantime-serde.workspace = true
 libp2p-identity = { workspace = true }
 ping = { workspace = true }
 rand = { workspace = true }
