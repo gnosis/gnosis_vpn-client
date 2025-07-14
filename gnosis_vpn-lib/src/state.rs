@@ -61,6 +61,6 @@ impl State {
         let parent = path.parent().ok_or(Error::NoParentFolder)?;
         fs::create_dir_all(parent)?;
         let mut f = File::create(&path)?;
-        bincode::encode_into_std_write(&self, &mut f, bincode::config::standard()).map_err(Error::BinCodeEncodeError)
+        bincode::encode_into_std_write(self, &mut f, bincode::config::standard()).map_err(Error::BinCodeEncodeError)
     }
 }
