@@ -14,7 +14,7 @@ directories.workspace = true
 humantime.workspace = true
 humantime-serde.workspace = true
 libp2p-identity = { workspace = true }
-ping = { workspace = true }
+ping.workspace = true
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
