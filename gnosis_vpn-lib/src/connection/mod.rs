@@ -45,6 +45,7 @@ pub enum Error {
 #[derive(Clone, Debug)]
 enum PhaseUp {
     Ready,
+    WgPublicKey(String),
     FixBridgeSession,
     FixBridgeSessionClosing(Session),
     WgRegistration(Session),
@@ -103,7 +104,7 @@ pub struct Connection {
     // static input data
     entry_node: EntryNode,
     destination: Destination,
-    wg_public_key: String,
+    force_wg_priv_key: Option<String>,
     sender: crossbeam_channel::Sender<Event>,
 }
 
