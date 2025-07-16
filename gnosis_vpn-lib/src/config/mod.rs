@@ -11,6 +11,7 @@ use crate::wireguard::config::Config as WireGuardConfig;
 
 mod v1;
 mod v2;
+mod v3;
 
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
@@ -19,6 +20,7 @@ pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 pub enum Config {
     V1(v1::Config),
     V2(v2::Config),
+    V3(v3::Config),
 }
 
 #[derive(Debug, Error)]
@@ -81,21 +83,24 @@ impl Config {
     pub fn entry_node(&self) -> EntryNode {
         match self {
             Config::V1(config) => config.entry_node(),
-            Config::V2(config) => config.entry_node(),
+            Config::V2(config) => Into::<v3::Config>::into(config).entry_node(),
+            Config::V3(config) => config.entry_node(),
         }
     }
 
     pub fn destinations(&self) -> HashMap<PeerId, Destination> {
         match self {
             Config::V1(config) => config.destinations(),
-            Config::V2(config) => config.destinations(),
+            Config::V2(config) => Into::<v3::Config>::into(config).destinations(),
+            Config::V3(config) => config.destinations(),
         }
     }
 
     pub fn wireguard(&self) -> WireGuardConfig {
         match self {
             Config::V1(config) => config.wireguard(),
-            Config::V2(config) => config.wireguard(),
+            Config::V2(config) => Into::<v3::Config>::into(config).wireguard(),
+            Config::V3(config) => config.wireguard(),
         }
     }
 }
