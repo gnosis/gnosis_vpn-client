@@ -8,7 +8,7 @@ use rand::Rng;
 use reqwest::blocking;
 use thiserror::Error;
 
-use crate::entry_node::EntryNode;
+use crate::entry_node::{self, EntryNode};
 use crate::log_output;
 use crate::monitor;
 use crate::session::{self, Protocol, Session};
@@ -22,7 +22,7 @@ pub mod destination;
 #[derive(Clone, Debug)]
 pub enum Event {
     /// Event indicating that the connection has been established and is ready for use.
-    Connected(ConnectInfo),
+    Connected,
     /// Boolean flag indicates if it has ever worked before, true meaning it has worked at least once.
     Disconnected(bool),
     Dismantled,
@@ -34,15 +34,11 @@ pub struct ConnectInfo {
     pub registration: Registration,
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("No active session")]
-    NotConnected,
-    #[error("Failed to send message: {0}")]
-    ChannelError(#[from] crossbeam_channel::SendError<()>),
-    // #[error("WireGuard error: {0}")]
-    // WgError(#[from] wireguard::Error),
-}
+// #[derive(Debug, Error)]
+// pub enum Error {
+//     #[error("Failed to send message: {0}")]
+//     ChannelError(#[from] crossbeam_channel::SendError<()>),
+// }
 
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
@@ -55,15 +51,16 @@ enum PhaseUp {
     PrepareMainSession(Registration),
     FixMainSession(Registration),
     FixMainSessionClosing(Session, Registration),
-    MainSessionEstablished(Session, Registration, SystemTime),
-    MonitorMainSession(Session, Registration, SystemTime),
-    MainSessionBroken(Session, Registration),
+    PrepareWgSession(Session, Registration, SystemTime),
+    SessionEstablished(Session, Registration, SystemTime),
+    MonitorSession(Session, Registration, SystemTime),
+    SessionBroken(Session, Registration),
 }
 
 /// Represents the different phases of dismantling a connection.
 #[derive(Clone, Debug)]
 enum PhaseDown {
-    CloseMainSession(Session, SystemTime, Registration),
+    CloseSession(Session, SystemTime, Registration),
     PrepareBridgeSession(Registration),
     FixBridgeSession(Registration),
     FixBridgeSessionClosing(Session, Registration),
@@ -79,7 +76,15 @@ enum InternalEvent {
     ListSessions(Result<Vec<Session>, session::Error>),
     RegisterWg(Result<Registration, wg_client::Error>),
     UnregisterWg(Result<(), wg_client::Error>),
+    WgOpenSession(WgOpenResult),
     Ping(Result<(), monitor::Error>),
+}
+
+#[derive(Debug)]
+enum WgOpenResult {
+    EntryNode(entry_node::Error),
+    WgTooling(wg_tooling::Error),
+    Ok,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +92,7 @@ enum BackoffState {
     Inactive,
     Active(ExponentialBackoff),
     Triggered(ExponentialBackoff),
+    NotRecoverable(String),
 }
 
 #[derive(Clone, Debug)]
@@ -170,6 +176,7 @@ impl Connection {
                 // Inactive - no backoff was set, act up
                 // Active - backoff was set and can trigger, don't act until backoff delay
                 // Triggered - backoff was triggered, time to act up again keeping backoff active
+                // NotRecoverable - critical error, no backoff needed
                 let (recv_event, recv_backoff) = match me.backoff {
                     BackoffState::Inactive => (me.act_up(), crossbeam_channel::never()),
                     BackoffState::Active(mut backoff) => match backoff.next_backoff() {
@@ -191,6 +198,13 @@ impl Connection {
                         tracing::debug!(?backoff, "Activating backoff during connection establishment");
                         me.backoff = BackoffState::Active(backoff);
                         (me.act_up(), crossbeam_channel::never())
+                    }
+                    BackoffState::NotRecoverable(error) => {
+                        tracing::error!(%error, "Critical error during connection establishment - halting");
+                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                            tracing::error!(%error, "Failed sending dismantled event");
+                        });
+                        break;
                     }
                 };
                 // main listening loop
@@ -222,28 +236,9 @@ impl Connection {
                         match res {
                             Ok(evt) => {
                                 tracing::debug!(event = ?evt, "Received event during connection establishment");
-                                match me.act_event_up(evt) {
-                                    Err(InternalError::WireGuard(error)) => {
-                                        tracing::error!(%error, "Critical error: unrecoverable wireguard error");
-                                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                                            tracing::error!(%error, "Failed sending dismantled event");
-                                        });
-                                        break;
-                                    },
-                                    Err(InternalError::EntryNodeError(error)) => {
-                                        tracing::error!(%error, "Critical error: entry node settings error");
-                                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                                            tracing::error!(%error, "Failed sending dismantled event");
-                                        });
-                                        break;
-                                    },
-                                    Err(error) => {
+                                me.act_event_up(evt).map_err(|error| {
                                     tracing::error!(%error, "Failed to process event during connection establishment");
-                                    },
-                                    Ok(()) => {
-                                        // continue processing events
-                                    }
-                            }
+                                });
                             }
                             Err(error) => {
                                 tracing::error!(%error, "Failed receiving event during connection establishment");
@@ -314,6 +309,13 @@ impl Connection {
                             me.backoff = BackoffState::Active(backoff);
                             (me.act_down(), crossbeam_channel::never())
                         }
+                        BackoffState::NotRecoverable(error) => {
+                            tracing::error!(%error, "Critical error during connection dismantling - halting");
+                            _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                                tracing::error!(%error, "Failed sending dismantled event");
+                            });
+                            break;
+                        }
                     };
                     // main listening loop
                     crossbeam_channel::select! {
@@ -354,16 +356,17 @@ impl Connection {
             PhaseUp::PrepareMainSession(_registration) => self.open_session(self.main_session_params()),
             PhaseUp::FixMainSession(_registration) => self.list_sessions(&Protocol::Udp),
             PhaseUp::FixMainSessionClosing(session, _registration) => self.close_session(&session),
-            PhaseUp::MainSessionEstablished(_session, _registration, _since) => self.immediate_ping(),
-            PhaseUp::MonitorMainSession(_session, _registration, _since) => self.delayed_ping(),
-            PhaseUp::MainSessionBroken(session, _registration) => self.close_session(&session),
+            PhaseUp::PrepareWgSession(session, registration, _since) => self.open_wg_session(&session, &registration),
+            PhaseUp::SessionEstablished(_session, _registration, _since) => self.immediate_ping(),
+            PhaseUp::MonitorSession(_session, _registration, _since) => self.delayed_ping(),
+            PhaseUp::SessionBroken(session, _registration) => self.close_wg_session(&session),
         }
     }
 
     fn act_down(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase_down = %self.phase_down, "Dismantling connection");
         match self.phase_down.clone() {
-            PhaseDown::CloseMainSession(session, _since, _registration) => self.close_session(&session),
+            PhaseDown::CloseSession(session, _since, _registration) => self.close_wg_session(&session),
             PhaseDown::PrepareBridgeSession(_registration) => self.open_session(self.bridge_session_params()),
             PhaseDown::FixBridgeSession(_registration) => self.list_sessions(&Protocol::Tcp),
             PhaseDown::FixBridgeSessionClosing(session, _registration) => self.close_session(&session),
@@ -399,35 +402,34 @@ impl Connection {
                             return Ok(());
                         };
                         let session = res?;
-
-                        // run wg-quick down once to ensure no tangling state
-                        let _ignored = self.wg.close_session();
-
-                        // connect wireguard
-                        let interface_info = wg_tooling::InterfaceInfo {
-                            address: registration.address(),
-                            allowed_ips: self.wg.config.allowed_ips.clone(),
-                            listen_port: self.wg.config.listen_port,
-                        };
-                        let peer_info = wg_tooling::PeerInfo {
-                            public_key: registration.server_public_key(),
-                            endpoint: self.entry_node.endpoint_with_port(session.port)?,
-                        };
-
-                        self.wg.connect_session(&interface_info, &peer_info)?;
-                        log_output::print_session_established(&self.pretty_print_path());
-
-                        self.phase_up =
-                            PhaseUp::MainSessionEstablished(session.clone(), registration.clone(), SystemTime::now());
+                        self.phase_up = PhaseUp::PrepareWgSession(session, registration, SystemTime::now());
                         self.backoff = BackoffState::Inactive;
-                        self.sender
-                            .send(Event::Connected(ConnectInfo {
-                                endpoint: self.entry_node.endpoint_with_port(session.port)?,
-                                registration: registration.clone(),
-                            }))
-                            .map_err(InternalError::SendError)
+                        Ok(())
                     }
+
                     _ => Err(InternalError::UnexpectedPhase),
+                }
+            }
+            InternalEvent::WgOpenSession(res) => {
+                if let PhaseUp::PrepareWgSession(session, registration, _since) = self.phase_up.clone() {
+                    match res {
+                        WgOpenResult::EntryNode(error) => {
+                            self.backoff = BackoffState::NotRecoverable(format!("{}", error));
+                            Ok(())
+                        }
+                        WgOpenResult::WgTooling(error) => {
+                            self.backoff = BackoffState::NotRecoverable(format!("{}", error));
+                            Ok(())
+                        }
+                        WgOpenResult::Ok => {
+                            self.phase_up =
+                                PhaseUp::SessionEstablished(session.clone(), registration.clone(), SystemTime::now());
+                            self.backoff = BackoffState::Inactive;
+                            Ok(())
+                        }
+                    }
+                } else {
+                    return Err(InternalError::UnexpectedPhase);
                 }
             }
             InternalEvent::RegisterWg(res) => {
@@ -452,7 +454,7 @@ impl Connection {
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
-                    PhaseUp::MainSessionBroken(_session, registration) => {
+                    PhaseUp::SessionBroken(_session, registration) => {
                         self.phase_up = PhaseUp::PrepareMainSession(registration);
                         self.backoff = BackoffState::Inactive;
                         Ok(())
@@ -471,26 +473,27 @@ impl Connection {
                 }
             }
             InternalEvent::Ping(res) => match (res, self.phase_up.clone()) {
-                (Ok(_), PhaseUp::MainSessionEstablished(session, registration, since)) => {
+                (Ok(_), PhaseUp::SessionEstablished(session, registration, since)) => {
                     tracing::info!(%session, "Session verified as open");
-                    self.phase_up = PhaseUp::MonitorMainSession(session, registration, since);
+                    self.phase_up = PhaseUp::MonitorSession(session, registration, since);
+                    self.sender.send(Event::Connected).map_err(InternalError::SendError);
                     Ok(())
                 }
-                (Ok(_), PhaseUp::MonitorMainSession(session, _registration, since)) => {
+                (Ok(_), PhaseUp::MonitorSession(session, _registration, since)) => {
                     tracing::info!(%session, "Session verified as open for {}", log_output::elapsed(&since));
                     Ok(())
                 }
-                (Err(_), PhaseUp::MainSessionEstablished(session, registration, _since)) => {
+                (Err(_), PhaseUp::SessionEstablished(session, registration, _since)) => {
                     tracing::warn!(%session, "Immediate session ping failed");
                     log_output::print_port_instructions(session.port, Protocol::Udp);
-                    self.phase_up = PhaseUp::MainSessionBroken(session, registration);
+                    self.phase_up = PhaseUp::SessionBroken(session, registration);
                     self.sender
                         .send(Event::Disconnected(false))
                         .map_err(InternalError::SendError)
                 }
-                (Err(_), PhaseUp::MonitorMainSession(session, registration, since)) => {
+                (Err(_), PhaseUp::MonitorSession(session, registration, since)) => {
                     tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&since));
-                    self.phase_up = PhaseUp::MainSessionBroken(session, registration);
+                    self.phase_up = PhaseUp::SessionBroken(session, registration);
                     self.sender
                         .send(Event::Disconnected(true))
                         .map_err(InternalError::SendError)
@@ -559,7 +562,7 @@ impl Connection {
                     res?;
                 }
                 match self.phase_down.clone() {
-                    PhaseDown::CloseMainSession(_session, _since, registration) => {
+                    PhaseDown::CloseSession(_session, _since, registration) => {
                         self.phase_down = PhaseDown::PrepareBridgeSession(registration);
                         self.backoff = BackoffState::Inactive;
                         Ok(())
@@ -611,7 +614,9 @@ impl Connection {
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
-            InternalEvent::Ping(_) | InternalEvent::RegisterWg(_) => Err(InternalError::UnexpectedEvent(event)),
+            InternalEvent::Ping(_) | InternalEvent::RegisterWg(_) | InternalEvent::WgOpenSession(_) => {
+                Err(InternalError::UnexpectedEvent(event))
+            }
         }
     }
 
@@ -715,6 +720,58 @@ impl Connection {
         r
     }
 
+    fn open_wg_session(
+        &mut self,
+        session: &Session,
+        registration: &Registration,
+    ) -> crossbeam_channel::Receiver<InternalEvent> {
+        let session = session.clone();
+        let registration = registration.clone();
+        let entry_node = self.entry_node.clone();
+        let wg = self.wg.clone();
+        let (s, r) = crossbeam_channel::bounded(1);
+        thread::spawn(move || {
+            let endpoint = match entry_node.endpoint_with_port(session.port) {
+                Ok(endpoint) => endpoint,
+                Err(error) => {
+                    _ = s.send(InternalEvent::WgOpenSession(WgOpenResult::EntryNode(error)));
+                    return;
+                }
+            };
+
+            // run wg-quick down once to ensure no tangling state
+            _ = wg.close_session();
+
+            // connect wireguard
+            let interface_info = wg_tooling::InterfaceInfo {
+                address: registration.address(),
+                allowed_ips: wg.config.allowed_ips.clone(),
+                listen_port: wg.config.listen_port,
+            };
+            let peer_info = wg_tooling::PeerInfo {
+                public_key: registration.server_public_key(),
+                endpoint,
+            };
+
+            match wg.connect_session(&interface_info, &peer_info) {
+                Ok(()) => {
+                    _ = s.send(InternalEvent::WgOpenSession(WgOpenResult::Ok));
+                }
+                Err(error) => {
+                    _ = s.send(InternalEvent::WgOpenSession(WgOpenResult::WgTooling(error)));
+                }
+            }
+        });
+        r
+    }
+
+    fn close_wg_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
+        self.wg.close_session().map_err(|error| {
+            tracing::error!(%error, "Failed closing WireGuard session");
+        });
+        self.close_session(session)
+    }
+
     /// Final state before dropping
     fn shutdown(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         _ = self
@@ -760,22 +817,29 @@ impl Display for PhaseUp {
             PhaseUp::FixMainSessionClosing(session, registration) => {
                 write!(f, "FixMainSessionClosing({session}, {registration})")
             }
-            PhaseUp::MainSessionEstablished(session, registration, since) => write!(
+            PhaseUp::PrepareWgSession(session, registration, since) => write!(
                 f,
-                "MainSessionEstablished({}, since {}, {})",
+                "PrepareWgSession({}, {}, since {})",
+                session,
+                registration,
+                log_output::elapsed(since)
+            ),
+            PhaseUp::SessionEstablished(session, registration, since) => write!(
+                f,
+                "SessionEstablished({}, since {}, {})",
                 session,
                 log_output::elapsed(since),
                 registration,
             ),
-            PhaseUp::MonitorMainSession(session, registration, since) => write!(
+            PhaseUp::MonitorSession(session, registration, since) => write!(
                 f,
-                "MonitorMainSession({}, since {}, {})",
+                "MonitorSession({}, since {}, {})",
                 session,
                 log_output::elapsed(since),
                 registration,
             ),
-            PhaseUp::MainSessionBroken(session, registration) => {
-                write!(f, "MainSessionBroken({session}, {registration})")
+            PhaseUp::SessionBroken(session, registration) => {
+                write!(f, "SessionBroken({session}, {registration})")
             }
         }
     }
@@ -784,9 +848,9 @@ impl Display for PhaseUp {
 impl Display for PhaseDown {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PhaseDown::CloseMainSession(session, since, registration) => write!(
+            PhaseDown::CloseSession(session, since, registration) => write!(
                 f,
-                "CloseMainSession({}, since {}, {})",
+                "CloseSession({}, since {}, {})",
                 session,
                 log_output::elapsed(since),
                 registration
@@ -816,13 +880,16 @@ impl From<PhaseUp> for PhaseDown {
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSessionClosing(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::MainSessionEstablished(session, registration, since) => {
-                PhaseDown::CloseMainSession(session, since, registration)
+            PhaseUp::PrepareWgSession(session, registration, since) => {
+                PhaseDown::CloseSession(session, since, registration)
             }
-            PhaseUp::MonitorMainSession(session, registration, since) => {
-                PhaseDown::CloseMainSession(session, since, registration)
+            PhaseUp::SessionEstablished(session, registration, since) => {
+                PhaseDown::CloseSession(session, since, registration)
             }
-            PhaseUp::MainSessionBroken(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
+            PhaseUp::MonitorSession(session, registration, since) => {
+                PhaseDown::CloseSession(session, since, registration)
+            }
+            PhaseUp::SessionBroken(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
         }
     }
 }
@@ -836,6 +903,7 @@ impl Display for InternalEvent {
             InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({res:?})"),
             InternalEvent::Ping(res) => write!(f, "Ping({res:?})"),
             InternalEvent::ListSessions(res) => write!(f, "ListSessions({res:?})"),
+            InternalEvent::WgOpenSession(res) => write!(f, "WgOpenSession({res:?})"),
         }
     }
 }
