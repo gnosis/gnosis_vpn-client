@@ -13,3 +13,4 @@ mod dirs;
 mod monitor;
 mod remote_data;
 mod wg_client;
+mod wg_tooling;
