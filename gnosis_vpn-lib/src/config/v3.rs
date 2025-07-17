@@ -8,10 +8,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use std::vec::Vec;
 
+use crate::address::Address;
 use crate::connection::{Destination as ConnDestination, SessionParameters};
-use crate::entry_node::EntryNode;
+use crate::entry_node::{self, EntryNode};
 use crate::monitor;
-use crate::peer_id::PeerId;
 use crate::session;
 use crate::wg_tooling::Config as WireGuardConfig;
 
@@ -21,7 +21,7 @@ const MAX_HOPS: u8 = 3;
 pub struct Config {
     pub version: u8,
     pub(super) hoprd_node: HoprdNode,
-    pub(super) destinations: Option<HashMap<PeerId, Destination>>,
+    pub(super) destinations: Option<HashMap<Address, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
 }
@@ -42,7 +42,7 @@ pub(super) struct Destination {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 enum DestinationPath {
     #[serde(alias = "intermediates")]
-    Intermediates(Vec<PeerId>),
+    Intermediates(Vec<Address>),
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
 }
@@ -193,17 +193,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
-                for (peer_id, v) in destinations.iter() {
+                for (address, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _v) in dest.iter() {
                             if k == "meta" || k == "path" {
                                 continue;
                             }
-                            wrong_keys.push(format!("destinations.{peer_id}.{k}"));
+                            wrong_keys.push(format!("destinations.{address}.{k}"));
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("destinations.{peer_id}"));
+                    wrong_keys.push(format!("destinations.{address}"));
                 }
             }
             continue;
@@ -298,14 +298,15 @@ impl Config {
             .and_then(|c| c.session_timeout)
             .unwrap_or(Connection::default_session_timeout());
         EntryNode::new(
-            &self.hoprd_node.endpoint,
-            &self.hoprd_node.api_token,
-            &listen_host,
-            &session_timeout,
+            self.hoprd_node.endpoint.clone(),
+            self.hoprd_node.api_token.clone(),
+            listen_host,
+            session_timeout,
+            entry_node::APIVersion::V4,
         )
     }
 
-    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
         let config_dests = self.destinations.clone().unwrap_or_default();
         let connection = self.connection.as_ref();
         config_dests
@@ -431,17 +432,17 @@ internal_connection_port = 1422
 
 [destinations]
 
-[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
-meta = { location = "Germany" }
-path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+ meta = { location = "Germany" }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
-meta = { location = "USA" }
-path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ" ] }
+[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
+ meta = { location = "USA" }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
-meta = { location = "Spain" }
-path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
+[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
+ meta = { location = "Spain" }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 listen_host = "0.0.0.0:1422"
