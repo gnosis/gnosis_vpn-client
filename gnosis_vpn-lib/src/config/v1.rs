@@ -113,7 +113,7 @@ pub fn default_session_target_port() -> u16 {
 impl Config {
     pub fn entry_node(&self) -> EntryNode {
         let hoprd_node = self.hoprd_node.clone();
-        let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
+        let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{p}"));
 
         let listen_host = self
             .connection
