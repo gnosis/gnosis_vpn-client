@@ -409,11 +409,11 @@ impl Connection {
                 if let PhaseUp::PrepareWgSession(session, registration, _since) = self.phase_up.clone() {
                     match res {
                         WgOpenResult::EntryNode(error) => {
-                            self.backoff = BackoffState::NotRecoverable(format!("{}", error));
+                            self.backoff = BackoffState::NotRecoverable(format!("{error}"));
                             Ok(())
                         }
                         WgOpenResult::WgTooling(error) => {
-                            self.backoff = BackoffState::NotRecoverable(format!("{}", error));
+                            self.backoff = BackoffState::NotRecoverable(format!("{error}"));
                             Ok(())
                         }
                         WgOpenResult::Ok => {
@@ -424,7 +424,7 @@ impl Connection {
                         }
                     }
                 } else {
-                    return Err(InternalError::UnexpectedPhase);
+                    Err(InternalError::UnexpectedPhase)
                 }
             }
             InternalEvent::RegisterWg(res) => {

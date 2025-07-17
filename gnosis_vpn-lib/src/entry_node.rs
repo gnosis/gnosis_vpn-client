@@ -35,6 +35,6 @@ impl EntryNode {
 
     pub fn endpoint_with_port(&self, port: u16) -> Result<String, Error> {
         let host = self.endpoint.host_str().ok_or(Error::NoHost)?;
-        Ok(format!("{}:{}", host, port))
+        Ok(format!("{host}:{port}"))
     }
 }
