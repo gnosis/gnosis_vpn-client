@@ -1,6 +1,6 @@
 use crate::wireguard::{ConnectSession, Error, WireGuard};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct UserSpace {}
 
 pub fn available() -> Result<bool, Error> {

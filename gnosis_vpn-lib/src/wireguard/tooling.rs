@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use crate::dirs;
 use crate::wireguard::{ConnectSession, Error, /*VerifySession,*/ WireGuard};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Tooling {}
 
 pub fn available() -> Result<(), Error> {

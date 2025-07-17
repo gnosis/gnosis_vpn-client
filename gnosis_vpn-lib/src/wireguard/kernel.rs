@@ -1,7 +1,7 @@
 use crate::wireguard::{ConnectSession, Error, WireGuard};
 
 // This will be the implementation using netlink kernel access.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Kernel {}
 
 pub fn available() -> Result<bool, Error> {

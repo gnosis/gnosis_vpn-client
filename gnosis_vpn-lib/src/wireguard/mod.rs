@@ -34,7 +34,7 @@ pub struct ConnectSession {
 
 #[derive(Clone, Debug)]
 pub struct InterfaceInfo {
-    pub private_key: String,
+    pub key_pair: KeyPair,
     pub address: String,
     pub allowed_ips: Option<String>,
     pub listen_port: Option<u16>,
@@ -44,6 +44,12 @@ pub struct InterfaceInfo {
 pub struct PeerInfo {
     pub public_key: String,
     pub endpoint: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct KeyPair {
+    priv_key: String,
+    pub_key: String,
 }
 
 pub fn best_flavor() -> Result<Box<dyn WireGuard>, Error> {
@@ -59,11 +65,30 @@ pub fn best_flavor() -> Result<Box<dyn WireGuard>, Error> {
     Err(Error::NotAvailable)
 }
 
-pub trait WireGuard: Debug {
+pub trait WireGuard: Debug + WireGuardClone + Send {
     fn generate_key(&self) -> Result<String, Error>;
     fn connect_session(&self, session: &ConnectSession) -> Result<(), Error>;
     fn public_key(&self, priv_key: &str) -> Result<String, Error>;
     fn close_session(&self) -> Result<(), Error>;
+}
+
+pub trait WireGuardClone {
+    fn clone_box(&self) -> Box<dyn WireGuard>;
+}
+
+impl<T> WireGuardClone for T
+where
+    T: 'static + WireGuard + Clone,
+{
+    fn clone_box(&self) -> Box<dyn WireGuard> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn WireGuard> {
+    fn clone(&self) -> Box<dyn WireGuard> {
+        self.clone_box()
+    }
 }
 
 impl ConnectSession {
@@ -105,7 +130,7 @@ Endpoint = {endpoint}
 AllowedIPs = {allowed_ips}
 PersistentKeepalive = 30
 ",
-            private_key = self.interface.private_key,
+            private_key = self.interface.key_pair.priv_key,
             address = self.interface.address,
             public_key = self.peer.public_key,
             endpoint = self.peer.endpoint,

@@ -13,6 +13,7 @@ use crate::log_output;
 use crate::monitor;
 use crate::session::{self, Protocol, Session};
 use crate::wg_client::{self, Registration};
+use crate::wireguard::{self, WireGuard};
 
 pub use destination::{Destination, SessionParameters};
 
@@ -39,13 +40,14 @@ pub enum Error {
     NotConnected,
     #[error("Failed to send message: {0}")]
     ChannelError(#[from] crossbeam_channel::SendError<()>),
+    // #[error("WireGuard error: {0}")]
+    // WgError(#[from] wireguard::Error),
 }
 
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum PhaseUp {
     Ready,
-    WgPublicKey(String),
     FixBridgeSession,
     FixBridgeSessionClosing(Session),
     WgRegistration(Session),
@@ -95,17 +97,24 @@ pub struct Connection {
 
     // reuse http client
     client: blocking::Client,
+    // wg interface
+    wg: Box<dyn WireGuard>,
 
     // dynamic runtime data
     phase_up: PhaseUp,
     phase_down: PhaseDown,
     backoff: BackoffState,
+    wg_key_pair: wireguard::KeyPair,
 
     // static input data
     entry_node: EntryNode,
     destination: Destination,
-    force_wg_priv_key: Option<String>,
     sender: crossbeam_channel::Sender<Event>,
+}
+
+struct WgKeyPair {
+    priv_key: String,
+    pub_key: String,
 }
 
 #[derive(Debug, Error)]
@@ -126,20 +135,22 @@ impl Connection {
     pub fn new(
         entry_node: EntryNode,
         destination: Destination,
-        wg_public_key: String,
         sender: crossbeam_channel::Sender<Event>,
+        wg: Box<dyn WireGuard>,
+        key_pair: wireguard::KeyPair,
     ) -> Self {
         Connection {
             destination,
             entry_node,
             sender,
-            wg_public_key,
+            wg,
             backoff: BackoffState::Inactive,
             client: blocking::Client::new(),
             dismantle_channel: crossbeam_channel::bounded(1),
             establish_channel: crossbeam_channel::bounded(1),
             phase_down: PhaseDown::Retired,
             phase_up: PhaseUp::Ready,
+            wg_key_pair: key_pair,
         }
     }
 
