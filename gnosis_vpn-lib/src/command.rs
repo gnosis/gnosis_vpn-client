@@ -152,7 +152,7 @@ impl fmt::Display for Destination {
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let short_addr = log_output::address(self.address.to_string().as_str());
+        let short_addr = log_output::address(&self.address);
         write!(
             f,
             "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
