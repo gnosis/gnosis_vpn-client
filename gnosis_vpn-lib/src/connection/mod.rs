@@ -120,12 +120,12 @@ enum InternalError {
     WgError(#[from] gvpn_client::Error),
     #[error("Channel send error: {0}")]
     SendError(#[from] crossbeam_channel::SendError<Event>),
-    #[error("Unexpected event: {0}")]
-    UnexpectedEvent(InternalEvent),
     #[error("Entry node error: {0}")]
     EntryNodeError(#[from] crate::entry_node::Error),
     #[error("WireGuard error: {0}")]
     WireGuard(#[from] wg_tooling::Error),
+    #[error("Unexpected event: {0}")]
+    UnexpectedEvent(Box<InternalEvent>),
 }
 
 impl Connection {
@@ -521,7 +521,7 @@ impl Connection {
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
-            InternalEvent::UnregisterWg(_) => Err(InternalError::UnexpectedEvent(event)),
+            InternalEvent::UnregisterWg(_) => Err(InternalError::UnexpectedEvent(Box::new(event))),
         }
     }
 
@@ -604,7 +604,7 @@ impl Connection {
                 }
             }
             InternalEvent::Ping(_) | InternalEvent::RegisterWg(_) | InternalEvent::WgOpenSession(_) => {
-                Err(InternalError::UnexpectedEvent(event))
+                Err(InternalError::UnexpectedEvent(Box::new(event)))
             }
         }
     }
