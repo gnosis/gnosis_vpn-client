@@ -54,12 +54,12 @@ pub fn read(path: &Path) -> Result<Config, Error> {
 
     match version {
         1 => {
-            tracing::warn!("found v1 configuration file, please update to configuration file");
+            tracing::warn!("found v1 configuration file, please update configuration file");
             let res_v1 = toml::from_str::<v1::Config>(&content)?;
             Ok(Config::V1(res_v1))
         }
         2 => {
-            tracing::warn!("found v2 configuration file, please update to configuration file");
+            tracing::warn!("found v2 configuration file, please update configuration file");
             let res_v2 = toml::from_str::<v2::Config>(&content)?;
             let wrong_keys = v2::wrong_keys(&table);
             for key in wrong_keys.iter() {
