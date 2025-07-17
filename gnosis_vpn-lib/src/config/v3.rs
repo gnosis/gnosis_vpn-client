@@ -20,10 +20,10 @@ const MAX_HOPS: u8 = 3;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
-    hoprd_node: HoprdNode,
-    destinations: Option<HashMap<PeerId, Destination>>,
-    connection: Option<Connection>,
-    wireguard: Option<WireGuard>,
+    pub(super) hoprd_node: HoprdNode,
+    pub(super) destinations: Option<HashMap<PeerId, Destination>>,
+    pub(super) connection: Option<Connection>,
+    pub(super) wireguard: Option<WireGuard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,9 +106,9 @@ struct PingInterval {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
-    listen_port: Option<u16>,
-    allowed_ips: Option<String>,
-    force_private_key: Option<String>,
+    pub(super) listen_port: Option<u16>,
+    pub(super) allowed_ips: Option<String>,
+    pub(super) force_private_key: Option<String>,
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {

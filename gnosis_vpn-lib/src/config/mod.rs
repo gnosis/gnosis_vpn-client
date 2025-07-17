@@ -27,6 +27,8 @@ pub enum Config {
 pub enum Error {
     #[error("Configuration file not found")]
     NoFile,
+    #[error("Unable to determine configuration version")]
+    VersionNotFound,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("Deserialization error: {0}")]
@@ -45,37 +47,35 @@ pub fn read(path: &Path) -> Result<Config, Error> {
     })?;
 
     let table = content.parse::<toml::Table>()?;
-    let res_v2 = toml::from_str::<v2::Config>(&content);
-    match res_v2 {
-        Ok(config) => {
-            if config.version == 2 {
-                let wrong_keys = v2::wrong_keys(&table);
-                for key in wrong_keys.iter() {
-                    tracing::warn!(%key, "ignoring unsupported key in configuration file");
-                }
-                Ok(Config::V2(config))
-            } else {
-                Err(Error::VersionMismatch(config.version))
-            }
+    let version = match table.get("version").and_then(|v| v.as_integer()) {
+        Some(v) => v,
+        None => return Err(Error::VersionNotFound),
+    };
+
+    match version {
+        1 => {
+            tracing::warn!("found v1 configuration file, please update to configuration file");
+            let res_v1 = toml::from_str::<v1::Config>(&content)?;
+            Ok(Config::V1(res_v1))
         }
-        Err(error) => {
-            tracing::error!("failed to parse v2 configuration file: {}", error);
-            let res_v1 = toml::from_str::<v1::Config>(&content);
-            match res_v1 {
-                Ok(config) => {
-                    if config.version == 1 {
-                        tracing::warn!("found v1 configuration file, please update to configuration file version 2");
-                        Ok(Config::V1(config))
-                    } else {
-                        Err(Error::VersionMismatch(config.version))
-                    }
-                }
-                Err(err) => {
-                    // return error from v2 config as this is the desired config file
-                    Err(Error::Deserialization(err))
-                }
+        2 => {
+            tracing::warn!("found v2 configuration file, please update to configuration file");
+            let res_v2 = toml::from_str::<v2::Config>(&content)?;
+            let wrong_keys = v2::wrong_keys(&table);
+            for key in wrong_keys.iter() {
+                tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }
+            Ok(Config::V2(res_v2))
         }
+        3 => {
+            let res_v3 = toml::from_str::<v3::Config>(&content)?;
+            let wrong_keys = v3::wrong_keys(&table);
+            for key in wrong_keys.iter() {
+                tracing::warn!(%key, "ignoring unsupported key in configuration file");
+            }
+            Ok(Config::V3(res_v3))
+        }
+        _ => Err(Error::VersionMismatch(version as u8)),
     }
 }
 
