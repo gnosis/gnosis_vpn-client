@@ -3,15 +3,15 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::ops::Range;
 
+use crate::address::Address;
 use crate::log_output;
 use crate::monitor;
-use crate::peer_id::PeerId;
 use crate::session;
 
 #[derive(Clone, Debug)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
-    pub peer_id: PeerId,
+    pub address: Address,
     pub path: session::Path,
     pub bridge: SessionParameters,
     pub wg: SessionParameters,
@@ -36,7 +36,7 @@ impl SessionParameters {
 
 impl Destination {
     pub fn new(
-        peer_id: PeerId,
+        address: Address,
         path: session::Path,
         meta: HashMap<String, String>,
         bridge: SessionParameters,
@@ -45,7 +45,7 @@ impl Destination {
         ping_options: monitor::PingOptions,
     ) -> Self {
         Self {
-            peer_id,
+            address,
             path,
             meta,
             bridge,
@@ -56,11 +56,7 @@ impl Destination {
     }
 
     pub fn pretty_print_path(&self) -> String {
-        format!(
-            "{}(x{})",
-            self.path,
-            log_output::peer_id(self.peer_id.to_string().as_str())
-        )
+        format!("{}({})", self.path, log_output::address(&self.address))
     }
 
     fn meta_str(&self) -> String {
@@ -78,15 +74,15 @@ impl Destination {
 
 impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let peer_id = log_output::peer_id(&self.peer_id.to_string());
+        let address = log_output::address(&self.address.to_string());
         let meta = self.meta_str();
-        write!(f, "Destination[{peer_id},{meta}]")
+        write!(f, "Destination[{address},{meta}]")
     }
 }
 
 impl PartialEq for Destination {
     fn eq(&self, other: &Self) -> bool {
-        self.peer_id == other.peer_id && self.path == other.path && self.bridge == other.bridge && self.wg == other.wg
+        self.address == other.address && self.path == other.path && self.bridge == other.bridge && self.wg == other.wg
     }
 }
 
