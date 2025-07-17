@@ -116,11 +116,6 @@ pub struct Connection {
     sender: crossbeam_channel::Sender<Event>,
 }
 
-struct WgKeyPair {
-    priv_key: String,
-    pub_key: String,
-}
-
 #[derive(Debug, Error)]
 enum InternalError {
     #[error("Invalid phase for action")]
@@ -236,7 +231,7 @@ impl Connection {
                         match res {
                             Ok(evt) => {
                                 tracing::debug!(event = ?evt, "Received event during connection establishment");
-                                me.act_event_up(evt).map_err(|error| {
+                                _ = me.act_event_up(evt).map_err(|error| {
                                     tracing::error!(%error, "Failed to process event during connection establishment");
                                 });
                             }
@@ -476,8 +471,7 @@ impl Connection {
                 (Ok(_), PhaseUp::SessionEstablished(session, registration, since)) => {
                     tracing::info!(%session, "Session verified as open");
                     self.phase_up = PhaseUp::MonitorSession(session, registration, since);
-                    self.sender.send(Event::Connected).map_err(InternalError::SendError);
-                    Ok(())
+                    self.sender.send(Event::Connected).map_err(InternalError::SendError)
                 }
                 (Ok(_), PhaseUp::MonitorSession(session, _registration, since)) => {
                     tracing::info!(%session, "Session verified as open for {}", log_output::elapsed(&since));
@@ -766,7 +760,7 @@ impl Connection {
     }
 
     fn close_wg_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        self.wg.close_session().map_err(|error| {
+        _ = self.wg.close_session().map_err(|error| {
             tracing::error!(%error, "Failed closing WireGuard session");
         });
         self.close_session(session)

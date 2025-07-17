@@ -7,8 +7,6 @@ use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, Destination};
 use gnosis_vpn_lib::log_output;
-use gnosis_vpn_lib::state::{self, State};
-use gnosis_vpn_lib::wireguard::{self, WireGuard};
 
 use crate::event::Event;
 
@@ -18,10 +16,6 @@ pub struct Core {
     config: Config,
     // global event transmitter
     sender: crossbeam_channel::Sender<Event>,
-    // internal persistent application state
-    state: State,
-    // wg interface, will be None if manual mode is used
-    wg: Option<Box<dyn WireGuard>>,
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
@@ -35,18 +29,6 @@ pub struct Core {
 pub enum Error {
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
-    #[error("State error: {0}")]
-    State(#[from] state::Error),
-    #[error("WireGuard error: {0}")]
-    WireGuard(#[from] wireguard::Error),
-    #[error("Missing manual_mode configuration")]
-    WireGuardManualModeMissing,
-}
-
-struct ConfigSetup {
-    state: State,
-    config: Config,
-    wg: Option<Box<dyn WireGuard>>,
 }
 
 impl Core {
@@ -148,7 +130,7 @@ impl Core {
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         tracing::debug!(%event, "handling event");
         match event {
-            Event::ConnectWg(conninfo) => self.on_session_ready(conninfo),
+            Event::ConnectWg(conninfo) => self.on_session_ready(),
             Event::Disconnected(ping_has_worked) => self.on_session_disconnect(ping_has_worked),
             Event::DropConnection => self.on_drop_connection(),
         }
@@ -176,7 +158,7 @@ impl Core {
         Ok(())
     }
 
-    fn act_on_target(&mut self) {
+    fn act_on_target(&mut self) -> Result<(), Error> {
         match (self.target_destination.clone(), &mut self.connection) {
             (Some(dest), Some(conn)) => {
                 if conn.has_destination(&dest) {
@@ -184,31 +166,23 @@ impl Core {
                 } else {
                     tracing::info!(current = %conn.destination(), target = %dest, "disconnecting from current destination to connect to target destination");
                     conn.dismantle();
-                    self.disconnect_wg();
                 }
+                Ok(())
             }
             (None, Some(conn)) => {
                 tracing::info!(current = %conn.destination(), "disconnecting from current destination");
                 conn.dismantle();
-                self.disconnect_wg();
+                Ok(())
             }
             (Some(dest), None) => {
                 tracing::info!(destination = %dest, "establishing new connection");
-                self.connect(&dest);
+                self.connect(&dest)
             }
-            (None, None) => {}
+            (None, None) => Ok(()),
         };
     }
 
-    fn connect(&mut self, destination: &Destination) {
-        let wg_pub_key = match self.wg_public_key() {
-            Some(wg_pub_key) => wg_pub_key,
-            None => {
-                tracing::error!("Unable to create connection without WireGuard public key");
-                return;
-            }
-        };
-
+    fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::bounded(1);
         let mut conn = Connection::new(self.config.entry_node(), destination.clone(), wg_pub_key, s);
         conn.establish();
@@ -245,87 +219,10 @@ impl Core {
         });
     }
 
-    fn on_session_ready(&mut self, conninfo: connection::ConnectInfo) -> Result<(), Error> {
-        tracing::debug!(?conninfo, "on session ready");
+    fn on_session_ready(&mut self) -> Result<(), Error> {
+        tracing::debug!("on session ready");
         self.session_connected = true;
-        if self.wg_connected {
-            tracing::debug!("WireGuard connection already established");
-            return Ok(());
-        }
-        if let (Some(wg), Some(privkey)) = (&self.wg, self.state.wg_private_key()) {
-            // automatic wg connection
-            tracing::debug!("initiating WireGuard connection");
-            let interface_info = wireguard::InterfaceInfo {
-                private_key: privkey.clone(),
-                address: conninfo.registration.address(),
-                allowed_ips: self.config.wireguard().allowed_ips,
-                listen_port: self.config.wireguard().listen_port,
-            };
-            let peer_info = wireguard::PeerInfo {
-                public_key: conninfo.registration.server_public_key(),
-                endpoint: conninfo.endpoint,
-            };
-            let connect_session = wireguard::ConnectSession::new(&interface_info, &peer_info);
-
-            match wg.connect_session(&connect_session) {
-                Ok(_) => {
-                    self.wg_connected = true;
-                    tracing::info!(
-                        r"
-
-            /---==========================---\
-            |   VPN CONNECTION ESTABLISHED   |
-            \---==========================---/
-
-            route: {}
-        ",
-                        self.connection
-                            .as_ref()
-                            .map(|c| c.pretty_print_path())
-                            .unwrap_or("<unknown>".to_string())
-                    );
-                    Ok(())
-                }
-                Err(e) => {
-                    tracing::warn!(warn = ?e, "failed to establish WireGuard connection");
-                    Err(Error::WireGuard(e))
-                }
-            }
-        } else {
-            // manual wg connection
-            let interface_info = wireguard::InterfaceInfo {
-                private_key: "<WireGuard private key>".to_string(),
-                address: conninfo.registration.address(),
-                allowed_ips: self.config.wireguard().allowed_ips,
-                listen_port: self.config.wireguard().listen_port,
-            };
-            let peer_info = wireguard::PeerInfo {
-                public_key: conninfo.registration.server_public_key(),
-                endpoint: conninfo.endpoint,
-            };
-            let connect_session = wireguard::ConnectSession::new(&interface_info, &peer_info);
-            tracing::info!(
-                r"
-
-            /---============================---\
-            |   HOPRD CONNECTION ESTABLISHED   |
-            \---============================---/
-
-            route: {}
-
-            --- ready for manual WireGuard connection (wg-quick configuration blueprint) ---
-
-{}
-
-            ",
-                self.connection
-                    .as_ref()
-                    .map(|c| c.pretty_print_path())
-                    .unwrap_or("<unknown>".to_string()),
-                connect_session.to_file_string()
-            );
-            Ok(())
-        }
+        Ok(())
     }
 
     fn on_session_disconnect(&mut self, ping_has_worked: bool) -> Result<(), Error> {
@@ -349,80 +246,15 @@ impl Core {
         }
         Ok(())
     }
-
-    fn wg_public_key(&self) -> Option<String> {
-        self.config.wireguard().manual_mode.map(|mm| mm.public_key).or_else(|| {
-            if let (Some(wg), Some(privkey)) = (&self.wg, &self.state.wg_private_key()) {
-                match wg.public_key(privkey.as_str()) {
-                    Ok(pubkey) => Some(pubkey),
-                    Err(e) => {
-                        tracing::error!(error = %e, "Unable to generate public key from private key");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        })
-    }
-
-    fn disconnect_wg(&mut self) {
-        if let Some(wg) = &self.wg {
-            match wg.close_session() {
-                Ok(_) => {
-                    self.wg_connected = false;
-                    tracing::info!("WireGuard connection closed");
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "failed to close WireGuard connection");
-                }
-            }
-        }
-    }
 }
 
-fn setup_from_config(config_path: &Path) -> Result<ConfigSetup, Error> {
+fn setup_from_config(config_path: &Path) -> Result<Config, Error> {
     let config = config::read(config_path)?;
-    let wireguard = if config.wireguard().manual_mode.is_some() {
-        tracing::warn!("running in manual WireGuard mode, because of `manual_mode` entry in configuration file");
-        None
-    } else {
-        match wireguard::best_flavor() {
-            Ok(wg) => Some(wg),
-            Err(e) => {
-                tracing::error!(error = ?e, "could not determine WireGuard handling mode");
-                log_output::print_wg_manual_instructions();
-                return Err(Error::WireGuardManualModeMissing);
-            }
-        }
-    };
-
-    let mut state = match state::read() {
-        Err(state::Error::NoFile) => {
-            tracing::debug!("no service state file found - clean start");
-            Ok(state::State::default())
-        }
-        Err(state::Error::BinCodeDecodeError(err)) => {
-            tracing::warn!(warn = ?err, "service state file is corrupted - clean start");
-            Ok(state::State::default())
-        }
-        x => x,
-    }?;
-
-    // only triggerd in WireGuard handling mode
-    if let (Some(wg), None) = (&wireguard, &state.wg_private_key()) {
-        let priv_key = wg.generate_key()?;
-        state.set_wg_private_key(priv_key.clone())?;
-    }
 
     // print destinations warning
     if config.destinations().is_empty() {
         log_output::print_no_destinations();
     }
 
-    Ok(ConfigSetup {
-        state,
-        config,
-        wg: wireguard,
-    })
+    Ok(config)
 }
