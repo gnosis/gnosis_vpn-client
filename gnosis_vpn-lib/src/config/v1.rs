@@ -7,9 +7,9 @@ use std::time::Duration;
 use std::vec::Vec;
 use url::Url;
 
+use crate::address::Address;
 use crate::connection::Destination as ConnDestination;
-use crate::entry_node::EntryNode;
-use crate::peer_id::PeerId;
+use crate::entry_node::{APIVersion, EntryNode};
 use crate::wg_tooling::Config as WireGuardConfig;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ pub struct EntryNodeConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfig {
     pub capabilities: Option<Vec<SessionCapabilitiesConfig>>,
-    pub destination: PeerId,
+    pub destination: Address,
     pub listen_host: Option<String>,
     pub path: Option<SessionPathConfig>,
     pub target: Option<SessionTargetConfig>,
@@ -74,7 +74,7 @@ pub enum SessionPathConfig {
     #[serde(alias = "hop")]
     Hop(u8),
     #[serde(alias = "intermediates")]
-    Intermediates(Vec<PeerId>),
+    Intermediates(Vec<Address>),
 }
 
 impl Default for SessionPathConfig {
@@ -113,7 +113,7 @@ pub fn default_session_target_port() -> u16 {
 impl Config {
     pub fn entry_node(&self) -> EntryNode {
         let hoprd_node = self.hoprd_node.clone();
-        let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{p}"));
+        let internal_connection_port = hoprd_node.internal_connection_port.map(|p| format!(":{}", p));
 
         let listen_host = self
             .connection
@@ -123,14 +123,15 @@ impl Config {
             .unwrap_or(":1422".to_string());
 
         EntryNode::new(
-            &hoprd_node.endpoint,
-            &hoprd_node.api_token,
-            &listen_host,
-            &Duration::from_secs(15),
+            hoprd_node.endpoint,
+            hoprd_node.api_token,
+            listen_host,
+            Duration::from_secs(15),
+            APIVersion::V4,
         )
     }
 
-    pub fn destinations(&self) -> HashMap<PeerId, ConnDestination> {
+    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
         HashMap::new()
     }
 
