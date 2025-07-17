@@ -34,12 +34,6 @@ pub struct ConnectInfo {
     pub registration: Registration,
 }
 
-// #[derive(Debug, Error)]
-// pub enum Error {
-//     #[error("Failed to send message: {0}")]
-//     ChannelError(#[from] crossbeam_channel::SendError<()>),
-// }
-
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum PhaseUp {
@@ -733,7 +727,7 @@ impl Connection {
                 }
             };
 
-            // run wg-quick down once to ensure no tangling state
+            // run wg-quick down once to ensure no dangling state
             _ = wg.close_session();
 
             // connect wireguard
