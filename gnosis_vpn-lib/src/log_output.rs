@@ -92,17 +92,6 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
     );
 }
 
-pub fn print_wg_manual_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> If you intend to use manual WireGuard mode, please add your public key to the configuration file:
->>!!>> [wireguard]
->>!!>> manual_mode = {{ public_key = "<wg public key>" }}
-"#
-    );
-}
-
 pub fn print_no_destinations() {
     tracing::error!(
         r#"
