@@ -13,7 +13,7 @@ use crate::entry_node::EntryNode;
 use crate::monitor;
 use crate::peer_id::PeerId;
 use crate::session;
-use crate::wireguard::config::Config as WireGuardConfig;
+use crate::wg_tooling::Config as WireGuardConfig;
 
 const MAX_HOPS: u8 = 3;
 

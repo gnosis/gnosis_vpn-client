@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::connection::Destination;
 use crate::entry_node::EntryNode;
 use crate::peer_id::PeerId;
-use crate::wireguard::config::Config as WireGuardConfig;
+use crate::wg_tooling::Config as WireGuardConfig;
 
 mod v1;
 mod v2;
