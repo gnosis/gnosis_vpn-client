@@ -4,14 +4,14 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::vec::Vec;
 
+use crate::address::Address;
 use crate::config::v3;
-use crate::peer_id::PeerId;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
     hoprd_node: v3::HoprdNode,
-    destinations: Option<HashMap<PeerId, v3::Destination>>,
+    destinations: Option<HashMap<Address, v3::Destination>>,
     connection: Option<v3::Connection>,
     wireguard: Option<WireGuard>,
 }
@@ -121,17 +121,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
-                for (peer_id, v) in destinations.iter() {
+                for (address, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _v) in dest.iter() {
                             if k == "meta" || k == "path" {
                                 continue;
                             }
-                            wrong_keys.push(format!("destinations.{peer_id}.{k}"));
+                            wrong_keys.push(format!("destinations.{address}.{k}"));
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("destinations.{peer_id}"));
+                    wrong_keys.push(format!("destinations.{address}"));
                 }
             }
             continue;
@@ -203,17 +203,17 @@ internal_connection_port = 1422
 
 [destinations]
 
-[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
-meta = { location = "Germany" }
-path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+ meta = { location = "Germany" }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
-meta = { location = "USA" }
-path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ" ] }
+[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
+ meta = { location = "USA" }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
-meta = { location = "Spain" }
-path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
+[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
+ meta = { location = "Spain" }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 listen_host = "0.0.0.0:1422"
