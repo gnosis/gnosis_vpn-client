@@ -30,21 +30,21 @@ fn main() {
 
 fn json_print(resp: &Response) {
     match serde_json::to_string_pretty(resp) {
-        Ok(s) => println!("{}", s),
-        Err(e) => eprintln!("Error serializing response to JSON: {}", e),
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("Error serializing response to JSON: {e}"),
     }
 }
 
 fn pretty_print(resp: &Response) {
     match resp {
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
-            println!("Connecting to {}", dest);
+            println!("Connecting to {dest}");
         }
         Response::Connect(command::ConnectResponse::AddressNotFound) => {
             eprintln!("Node address not found in available destinations");
         }
         Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
-            println!("Disconnecting from {}", dest);
+            println!("Disconnecting from {dest}");
         }
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
