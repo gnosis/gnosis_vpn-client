@@ -21,8 +21,8 @@ pub mod destination;
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Connected(ConnectInfo),
     /// Event indicating that the connection has been established and is ready for use.
+    Connected(ConnectInfo),
     /// Boolean flag indicates if it has ever worked before, true meaning it has worked at least once.
     Disconnected(bool),
     Dismantled,
@@ -127,6 +127,10 @@ enum InternalError {
     SendError(#[from] crossbeam_channel::SendError<Event>),
     #[error("Unexpected event: {0}")]
     UnexpectedEvent(InternalEvent),
+    #[error("Entry node error: {0}")]
+    EntryNodeError(#[from] crate::entry_node::Error),
+    #[error("WireGuard error: {0}")]
+    WireGuard(#[from] wg_tooling::Error),
 }
 
 impl Connection {
@@ -176,9 +180,7 @@ impl Connection {
                         }
                         None => {
                             me.backoff = BackoffState::Inactive;
-                            tracing::error!(
-                                "Critical error: backoff exhausted during connection establishment - halting"
-                            );
+                            tracing::error!("Critical error: backoff exhausted during connection establishment");
                             _ = me.sender.send(Event::Dismantled).map_err(|error| {
                                 tracing::error!(%error, "Failed sending dismantled event");
                             });
@@ -200,7 +202,7 @@ impl Connection {
                                 match me.dismantle_channel.0.send(me.phase_up) {
                                     Ok(()) => (),
                                     Err(error) => {
-                                        tracing::error!(%error, "Critical error sending connection data on dismantle channel - halting");
+                                        tracing::error!(%error, "Critical error: sending connection data on dismantle channel");
                                         _ = me.sender.send(Event::Dismantled).map_err(|error| {
                                             tracing::error!(%error, "Failed sending dismantled event");
                                         });
@@ -220,9 +222,28 @@ impl Connection {
                         match res {
                             Ok(evt) => {
                                 tracing::debug!(event = ?evt, "Received event during connection establishment");
-                                _ = me.act_event_up(evt).map_err(|error| {
+                                match me.act_event_up(evt) {
+                                    Err(InternalError::WireGuard(error)) => {
+                                        tracing::error!(%error, "Critical error: unrecoverable wireguard error");
+                                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                                            tracing::error!(%error, "Failed sending dismantled event");
+                                        });
+                                        break;
+                                    },
+                                    Err(InternalError::EntryNodeError(error)) => {
+                                        tracing::error!(%error, "Critical error: entry node settings error");
+                                        _ = me.sender.send(Event::Dismantled).map_err(|error| {
+                                            tracing::error!(%error, "Failed sending dismantled event");
+                                        });
+                                        break;
+                                    },
+                                    Err(error) => {
                                     tracing::error!(%error, "Failed to process event during connection establishment");
-                                });
+                                    },
+                                    Ok(()) => {
+                                        // continue processing events
+                                    }
+                            }
                             }
                             Err(error) => {
                                 tracing::error!(%error, "Failed receiving event during connection establishment");
@@ -369,6 +390,7 @@ impl Connection {
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
+
                     PhaseUp::PrepareMainSession(registration) => {
                         if listen_host_used {
                             tracing::warn!("Listen host already used - trying to close existing session");
@@ -377,18 +399,30 @@ impl Connection {
                             return Ok(());
                         };
                         let session = res?;
+
+                        // run wg-quick down once to ensure no tangling state
+                        let _ignored = self.wg.close_session();
+
+                        // connect wireguard
+                        let interface_info = wg_tooling::InterfaceInfo {
+                            address: registration.address(),
+                            allowed_ips: self.wg.config.allowed_ips.clone(),
+                            listen_port: self.wg.config.listen_port,
+                        };
+                        let peer_info = wg_tooling::PeerInfo {
+                            public_key: registration.server_public_key(),
+                            endpoint: self.entry_node.endpoint_with_port(session.port)?,
+                        };
+
+                        self.wg.connect_session(&interface_info, &peer_info)?;
+                        log_output::print_session_established(&self.pretty_print_path());
+
                         self.phase_up =
                             PhaseUp::MainSessionEstablished(session.clone(), registration.clone(), SystemTime::now());
                         self.backoff = BackoffState::Inactive;
-                        let host = self
-                            .entry_node
-                            .endpoint
-                            .host()
-                            .map(|host| host.to_string())
-                            .unwrap_or("".to_string());
                         self.sender
                             .send(Event::Connected(ConnectInfo {
-                                endpoint: format!("{}:{}", host, session.port),
+                                endpoint: self.entry_node.endpoint_with_port(session.port)?,
                                 registration: registration.clone(),
                             }))
                             .map_err(InternalError::SendError)
@@ -582,7 +616,7 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = wg_client::Input::new(&self.wg.public_key(), &self.entry_node.endpoint, session);
+        let ri = wg_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -609,20 +643,12 @@ impl Connection {
     }
 
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        // immediate ping needs to wait for wg-quick to finish it's job
-        // that's why it is not immediate until wg connection handling moves here as well
         let (s, r) = crossbeam_channel::bounded(1);
         let dest = self.destination.clone();
         let opts = dest.ping_options.clone();
         thread::spawn(move || {
-            let delay = Duration::from_millis(333);
-            let after = crossbeam_channel::after(delay);
-            crossbeam_channel::select! {
-                recv(after) -> _ => {
-                    let res = monitor::ping(&opts);
-                    _ = s.send(InternalEvent::Ping(res));
-                }
-            }
+            let res = monitor::ping(&opts);
+            _ = s.send(InternalEvent::Ping(res));
         });
         r
     }
@@ -661,7 +687,7 @@ impl Connection {
     }
 
     fn unregister_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = wg_client::Input::new(&self.wg.public_key(), &self.entry_node.endpoint, session);
+        let params = wg_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -691,9 +717,10 @@ impl Connection {
 
     /// Final state before dropping
     fn shutdown(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        _ = self.sender.send(Event::Dismantled).map_err(|error| {
-            tracing::error!(%error, "Failed sending dismantled event");
-        });
+        _ = self
+            .sender
+            .send(Event::Dismantled)
+            .map_err(|error| tracing::error!(%error, "Failed sending dismantled event"));
         crossbeam_channel::never()
     }
 

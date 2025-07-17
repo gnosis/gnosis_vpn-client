@@ -27,7 +27,8 @@ pub enum Error {
 
 #[derive(Clone, Debug)]
 pub struct WireGuard {
-    key_pair: KeyPair,
+    pub config: Config,
+    pub key_pair: KeyPair,
 }
 
 #[derive(Clone, Debug)]
@@ -45,8 +46,8 @@ pub struct PeerInfo {
 
 #[derive(Clone, Debug)]
 pub struct KeyPair {
-    priv_key: String,
-    public_key: String,
+    pub priv_key: String,
+    pub public_key: String,
 }
 
 #[derive(Clone, Debug)]
@@ -133,18 +134,14 @@ fn public_key(priv_key: &str) -> Result<String, Error> {
 }
 
 impl WireGuard {
-    pub fn generate(priv_key: Option<String>) -> Result<Self, Error> {
-        let priv_key = match priv_key {
+    pub fn from_config(config: Config) -> Result<Self, Error> {
+        let priv_key = match config.force_private_key.clone() {
             Some(key) => key,
             None => generate_key()?,
         };
         let public_key = public_key(&priv_key)?;
         let key_pair = KeyPair { priv_key, public_key };
-        Ok(WireGuard { key_pair })
-    }
-
-    pub fn public_key(&self) -> String {
-        self.key_pair.public_key.clone()
+        Ok(WireGuard { config, key_pair })
     }
 
     pub fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
