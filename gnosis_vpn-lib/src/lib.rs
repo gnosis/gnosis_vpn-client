@@ -9,6 +9,6 @@ pub mod socket;
 pub mod wg_tooling;
 
 mod dirs;
+mod gvpn_client;
 mod monitor;
 mod remote_data;
-mod wg_client;
