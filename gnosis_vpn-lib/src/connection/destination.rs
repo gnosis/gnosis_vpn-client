@@ -74,7 +74,7 @@ impl Destination {
 
 impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let address = log_output::address(&self.address.to_string());
+        let address = log_output::address(&self.address);
         let meta = self.meta_str();
         write!(f, "Destination[{address},{meta}]")
     }
