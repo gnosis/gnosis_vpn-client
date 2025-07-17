@@ -464,6 +464,7 @@ impl Connection {
             InternalEvent::Ping(res) => match (res, self.phase_up.clone()) {
                 (Ok(_), PhaseUp::SessionEstablished(session, registration, since)) => {
                     tracing::info!(%session, "Session verified as open");
+                    log_output::print_session_established(&self.pretty_print_path());
                     self.phase_up = PhaseUp::MonitorSession(session, registration, since);
                     self.sender.send(Event::Connected).map_err(InternalError::SendError)
                 }
