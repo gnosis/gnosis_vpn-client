@@ -9,10 +9,10 @@ use reqwest::blocking;
 use thiserror::Error;
 
 use crate::entry_node::{self, EntryNode};
+use crate::gvpn_client::{self, Registration};
 use crate::log_output;
 use crate::monitor;
 use crate::session::{self, Protocol, Session};
-use crate::wg_client::{self, Registration};
 use crate::wg_tooling;
 
 pub use destination::{Destination, SessionParameters};
@@ -68,8 +68,8 @@ enum InternalEvent {
     OpenSession(Result<Session, session::Error>),
     CloseSession(Result<(), session::Error>),
     ListSessions(Result<Vec<Session>, session::Error>),
-    RegisterWg(Result<Registration, wg_client::Error>),
-    UnregisterWg(Result<(), wg_client::Error>),
+    RegisterWg(Result<Registration, gvpn_client::Error>),
+    UnregisterWg(Result<(), gvpn_client::Error>),
     WgOpenSession(WgOpenResult),
     Ping(Result<(), monitor::Error>),
 }
@@ -117,7 +117,7 @@ enum InternalError {
     #[error("External session error: {0}")]
     SessionError(#[from] session::Error),
     #[error("External Gnosis VPN error: {0}")]
-    WgError(#[from] wg_client::Error),
+    WgError(#[from] gvpn_client::Error),
     #[error("Channel send error: {0}")]
     SendError(#[from] crossbeam_channel::SendError<Event>),
     #[error("Unexpected event: {0}")]
@@ -572,7 +572,7 @@ impl Connection {
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
                     check_tcp_session(&res, session.port);
-                    let already_unregistered = matches!(&res, Err(wg_client::Error::RegistrationNotFound));
+                    let already_unregistered = matches!(&res, Err(gvpn_client::Error::RegistrationNotFound));
                     if !already_unregistered {
                         res?;
                     }
@@ -610,14 +610,14 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = wg_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
+        let ri = gvpn_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
-            let res = wg_client::register(&client, &ri);
+            let res = gvpn_client::register(&client, &ri);
             _ = s.send(InternalEvent::RegisterWg(res));
         });
         r
@@ -681,14 +681,14 @@ impl Connection {
     }
 
     fn unregister_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = wg_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
+        let params = gvpn_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
-            let res = wg_client::unregister(&client, &params);
+            let res = gvpn_client::unregister(&client, &params);
             _ = s.send(InternalEvent::UnregisterWg(res));
         });
         r
@@ -773,7 +773,7 @@ impl Connection {
     fn bridge_session_params(&self) -> session::OpenSession {
         session::OpenSession::bridge(
             self.entry_node.clone(),
-            self.destination.peer_id,
+            self.destination.address,
             self.destination.bridge.capabilities.clone(),
             self.destination.path.clone(),
             self.destination.bridge.target.clone(),
@@ -783,7 +783,7 @@ impl Connection {
     fn main_session_params(&self) -> session::OpenSession {
         session::OpenSession::main(
             self.entry_node.clone(),
-            self.destination.peer_id,
+            self.destination.address,
             self.destination.wg.capabilities.clone(),
             self.destination.path.clone(),
             self.destination.wg.target.clone(),
@@ -897,10 +897,10 @@ impl Display for InternalEvent {
     }
 }
 
-fn check_tcp_session<R>(res: &Result<R, wg_client::Error>, port: u16) {
+fn check_tcp_session<R>(res: &Result<R, gvpn_client::Error>, port: u16) {
     match res {
-        Err(wg_client::Error::SocketConnect(_)) => log_output::print_port_instructions(port, Protocol::Tcp),
-        Err(wg_client::Error::ConnectionReset(_)) => log_output::print_session_path_instructions(),
+        Err(gvpn_client::Error::SocketConnect(_)) => log_output::print_port_instructions(port, Protocol::Tcp),
+        Err(gvpn_client::Error::ConnectionReset(_)) => log_output::print_session_path_instructions(),
         _ => (),
     }
 }
