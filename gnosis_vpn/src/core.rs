@@ -71,15 +71,15 @@ impl Core {
         tracing::debug!(%cmd, "handling command");
         match cmd {
             Command::Ping => Ok(Response::Pong),
-            Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
+            Command::Connect(address) => match self.config.destinations().get(address) {
                 Some(dest) => {
                     self.target_destination = Some(dest.clone());
                     self.act_on_target()?;
                     Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
                 }
                 None => {
-                    tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
-                    Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
+                    tracing::info!(address = %address, "cannot connect to destination - address not found");
+                    Ok(Response::connect(command::ConnectResponse::address_not_found()))
                 }
             },
             Command::Disconnect => {
@@ -135,7 +135,7 @@ impl Core {
             conn.dismantle();
         }
         if let Some(dest) = self.target_destination.as_ref() {
-            if let Some(new_dest) = self.config.destinations().get(&dest.peer_id) {
+            if let Some(new_dest) = self.config.destinations().get(&dest.address) {
                 tracing::debug!(current = %dest, new = %new_dest, "target destination updated");
                 self.target_destination = Some(new_dest.clone());
             } else {
