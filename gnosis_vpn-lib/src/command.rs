@@ -27,16 +27,8 @@ pub enum Response {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub wireguard: WireGuardStatus,
     pub status: Status,
     pub available_destinations: Vec<Destination>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum WireGuardStatus {
-    Up,
-    Down,
-    ManuallyManaged,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -64,20 +56,6 @@ pub struct Destination {
     pub meta: HashMap<String, String>,
     pub peer_id: PeerId,
     pub path: session::Path,
-}
-
-impl WireGuardStatus {
-    pub fn new(connected: bool) -> Self {
-        if connected {
-            WireGuardStatus::Up
-        } else {
-            WireGuardStatus::Down
-        }
-    }
-
-    pub fn manual() -> Self {
-        WireGuardStatus::ManuallyManaged
-    }
 }
 
 impl Status {
@@ -119,9 +97,8 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(wireguard: WireGuardStatus, status: Status, available_destinations: Vec<Destination>) -> Self {
+    pub fn new(status: Status, available_destinations: Vec<Destination>) -> Self {
         StatusResponse {
-            wireguard,
             status,
             available_destinations,
         }
@@ -184,16 +161,6 @@ impl fmt::Display for Destination {
             pid = self.peer_id,
             short_pid = short_pid,
         )
-    }
-}
-
-impl fmt::Display for WireGuardStatus {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            WireGuardStatus::Up => write!(f, "Up"),
-            WireGuardStatus::Down => write!(f, "Down"),
-            WireGuardStatus::ManuallyManaged => write!(f, "Manually Managed"),
-        }
     }
 }
 

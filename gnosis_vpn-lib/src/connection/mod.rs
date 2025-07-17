@@ -138,8 +138,8 @@ impl Connection {
     pub fn new(
         entry_node: EntryNode,
         destination: Destination,
-        sender: crossbeam_channel::Sender<Event>,
         wg: wg_tooling::WireGuard,
+        sender: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Connection {
             destination,
