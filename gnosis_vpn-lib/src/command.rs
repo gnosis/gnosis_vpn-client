@@ -4,15 +4,15 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
+use crate::address::Address;
 use crate::connection::Destination as ConnectionDestination;
 use crate::log_output;
-use crate::peer_id::PeerId;
 use crate::session;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     Status,
-    Connect(PeerId),
+    Connect(Address),
     Disconnect,
     Ping,
 }
@@ -42,7 +42,7 @@ pub enum Status {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    PeerIdNotFound,
+    AddressNotFound,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,7 +54,7 @@ pub enum DisconnectResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
-    pub peer_id: PeerId,
+    pub address: Address,
     pub path: session::Path,
 }
 
@@ -81,8 +81,8 @@ impl ConnectResponse {
         ConnectResponse::Connecting(destination)
     }
 
-    pub fn peer_id_not_found() -> Self {
-        ConnectResponse::PeerIdNotFound
+    pub fn address_not_found() -> Self {
+        ConnectResponse::AddressNotFound
     }
 }
 
@@ -137,7 +137,7 @@ impl FromStr for Command {
 impl From<ConnectionDestination> for Destination {
     fn from(destination: ConnectionDestination) -> Self {
         Destination {
-            peer_id: destination.peer_id,
+            address: destination.address,
             meta: destination.meta,
             path: destination.path,
         }
@@ -152,14 +152,14 @@ impl fmt::Display for Destination {
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let short_pid = log_output::peer_id(self.peer_id.to_string().as_str());
+        let short_addr = log_output::address(self.address.to_string().as_str());
         write!(
             f,
-            "Peer ID: {pid}, Route: (entry){path}(x{short_pid}), {meta}",
+            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
             meta = meta,
             path = self.path,
-            pid = self.peer_id,
-            short_pid = short_pid,
+            address = self.address,
+            short_addr = short_addr,
         )
     }
 }
