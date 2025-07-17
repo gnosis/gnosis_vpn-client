@@ -65,7 +65,7 @@ struct ConnectionProtocol {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum SessionCapability {
+pub(super) enum SessionCapability {
     #[serde(alias = "segmentation")]
     Segmentation,
     #[serde(alias = "retransmission")]
@@ -99,7 +99,7 @@ struct PingOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct PingInterval {
+pub(super) struct PingInterval {
     min: u8,
     max: u8,
 }
