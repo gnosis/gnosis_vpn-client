@@ -9,8 +9,6 @@ use crate::dirs;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("implementation pending: {0}")]
-    NotYetImplemented(String),
     #[error("implementation not available")]
     NotAvailable,
     #[error("IO error: {0}")]
@@ -21,14 +19,14 @@ pub enum Error {
     Toml(#[from] toml::ser::Error),
     #[error("monitoring error: {0}")]
     Monitoring(String),
-    #[error("wireguard error: {0}")]
-    WgError(String),
+    #[error("wireguard error [status: {0}]: {1}")]
+    WgError(i32, String),
     #[error("Unable to determine project directories")]
     ProjectDirs,
 }
 
 #[derive(Clone, Debug)]
-pub struct Tooling {
+pub struct WireGuard {
     key_pair: KeyPair,
 }
 
@@ -98,9 +96,16 @@ fn wg_config_file() -> Result<PathBuf, Error> {
 
 fn generate_key() -> Result<String, Error> {
     let output = Command::new("wg").arg("genkey").output()?;
-    String::from_utf8(output.stdout)
-        .map(|s| s.trim().to_string())
-        .map_err(Error::FromUtf8Error)
+
+    if output.status.success() {
+        let key = String::from_utf8(output.stdout).map(|s| s.trim().to_string())?;
+        Ok(key)
+    } else {
+        Err(Error::WgError(
+            output.status.code().unwrap_or_default(),
+            format!("wg genkey failed: {}", String::from_utf8_lossy(&output.stderr)),
+        ))
+    }
 }
 
 fn public_key(priv_key: &str) -> Result<String, Error> {
@@ -116,19 +121,18 @@ fn public_key(priv_key: &str) -> Result<String, Error> {
 
     let output = command.wait_with_output()?;
 
-    // Print the command output
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout.trim().to_string())
     } else {
-        Err(Error::WgError(format!(
-            "Command failed with stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )))
+        Err(Error::WgError(
+            output.status.code().unwrap_or_default(),
+            format!("wg pubkey failed: {}", String::from_utf8_lossy(&output.stderr)),
+        ))
     }
 }
 
-impl Tooling {
+impl WireGuard {
     pub fn generate(priv_key: Option<String>) -> Result<Self, Error> {
         let priv_key = match priv_key {
             Some(key) => key,
@@ -136,7 +140,11 @@ impl Tooling {
         };
         let public_key = public_key(&priv_key)?;
         let key_pair = KeyPair { priv_key, public_key };
-        Ok(Tooling { key_pair })
+        Ok(WireGuard { key_pair })
+    }
+
+    pub fn public_key(&self) -> String {
+        self.key_pair.public_key.clone()
     }
 
     pub fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
@@ -147,36 +155,44 @@ impl Tooling {
         fs::set_permissions(&conf_file, fs::Permissions::from_mode(0o600))?;
 
         let output = Command::new("wg-quick").arg("up").arg(conf_file).output()?;
-
-        if !output.status.success() {
-            tracing::info!("wg-quick up status: {}", output.status);
-            tracing::info!("wg-quick up stderr: {:?}", String::from_utf8_lossy(&output.stderr));
-        } else if !output.stderr.is_empty() {
-            // wg-quick populates stderr with info and warnings, log those in debug mode
-            tracing::debug!("wg-quick up stderr: {:?}", String::from_utf8_lossy(&output.stderr));
-        }
         if !output.stdout.is_empty() {
-            tracing::info!("wg-quick up stdout: {:?}", String::from_utf8_lossy(&output.stdout));
+            tracing::info!("wg-quick up stdout: {}", String::from_utf8_lossy(&output.stdout));
         }
-        Ok(())
+
+        if output.status.success() {
+            if !output.stderr.is_empty() {
+                // wg-quick populates stderr with info and warnings, log those in debug mode
+                tracing::debug!("wg-quick up stderr: {}", String::from_utf8_lossy(&output.stderr));
+            }
+            Ok(())
+        } else {
+            Err(Error::WgError(
+                output.status.code().unwrap_or_default(),
+                format!("wg-quick up failed: {}", String::from_utf8_lossy(&output.stderr)),
+            ))
+        }
     }
 
     pub fn close_session(&self) -> Result<(), Error> {
         let conf_file = wg_config_file()?;
 
         let output = Command::new("wg-quick").arg("down").arg(conf_file).output()?;
-
-        if !output.status.success() {
-            tracing::info!("wg-quick down status: {}", output.status);
-            tracing::info!("wg-quick down stderr: {:?}", String::from_utf8_lossy(&output.stderr));
-        } else if !output.stderr.is_empty() {
-            // wg-quick populates stderr with info and warnings, log those in debug mode
-            tracing::debug!("wg-quick down stderr: {:?}", String::from_utf8_lossy(&output.stderr));
-        }
         if !output.stdout.is_empty() {
-            tracing::info!("wg-quick down stdout: {:?}", String::from_utf8_lossy(&output.stdout));
+            tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
         }
-        Ok(())
+
+        if output.status.success() {
+            if !output.stderr.is_empty() {
+                // wg-quick populates stderr with info and warnings, log those in debug mode
+                tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
+            }
+            Ok(())
+        } else {
+            Err(Error::WgError(
+                output.status.code().unwrap_or_default(),
+                format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
+            ))
+        }
     }
 
     fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {

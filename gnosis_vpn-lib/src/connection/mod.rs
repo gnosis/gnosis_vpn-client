@@ -13,7 +13,7 @@ use crate::log_output;
 use crate::monitor;
 use crate::session::{self, Protocol, Session};
 use crate::wg_client::{self, Registration};
-use crate::wireguard::{self, WireGuard};
+use crate::wg_tooling;
 
 pub use destination::{Destination, SessionParameters};
 
@@ -97,18 +97,16 @@ pub struct Connection {
 
     // reuse http client
     client: blocking::Client,
-    // wg interface
-    wg: Box<dyn WireGuard>,
 
     // dynamic runtime data
     phase_up: PhaseUp,
     phase_down: PhaseDown,
     backoff: BackoffState,
-    wg_key_pair: wireguard::KeyPair,
 
     // static input data
     entry_node: EntryNode,
     destination: Destination,
+    wg: wg_tooling::WireGuard,
     sender: crossbeam_channel::Sender<Event>,
 }
 
@@ -136,8 +134,7 @@ impl Connection {
         entry_node: EntryNode,
         destination: Destination,
         sender: crossbeam_channel::Sender<Event>,
-        wg: Box<dyn WireGuard>,
-        key_pair: wireguard::KeyPair,
+        wg: wg_tooling::WireGuard,
     ) -> Self {
         Connection {
             destination,
@@ -150,7 +147,6 @@ impl Connection {
             establish_channel: crossbeam_channel::bounded(1),
             phase_down: PhaseDown::Retired,
             phase_up: PhaseUp::Ready,
-            wg_key_pair: key_pair,
         }
     }
 
@@ -586,7 +582,7 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = wg_client::Input::new(&self.wg_public_key, &self.entry_node.endpoint, session);
+        let ri = wg_client::Input::new(&self.wg.public_key(), &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -665,7 +661,7 @@ impl Connection {
     }
 
     fn unregister_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = wg_client::Input::new(&self.wg_public_key, &self.entry_node.endpoint, session);
+        let params = wg_client::Input::new(&self.wg.public_key(), &self.entry_node.endpoint, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
