@@ -16,6 +16,8 @@ pub use protocol::Protocol;
 mod path;
 mod protocol;
 
+const BRIDGE_BUFFER_SIZE: &str = "176B";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub destination: Address,
@@ -51,6 +53,8 @@ pub struct OpenSession {
     path: Path,
     target: Target,
     protocol: Protocol,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    response_buffer: String,
 }
 
 pub struct CloseSession {
@@ -121,6 +125,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
+            response_buffer: BRIDGE_BUFFER_SIZE.to_string(),
         }
     }
 
@@ -138,6 +143,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
+            response_buffer: "5MB".to_string(),
         }
     }
 }
@@ -188,6 +194,7 @@ impl Session {
         json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
+        json.insert("responseBuffer".to_string(), json!(open_session.response_buffer));
         // creates a TCP session as part of the session pool, so we immediately know if it might work
         if open_session.protocol == Protocol::Tcp {
             json.insert("sessionPool".to_string(), json!(1));
