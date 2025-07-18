@@ -16,7 +16,11 @@ pub use protocol::Protocol;
 mod path;
 mod protocol;
 
-const BRIDGE_BUFFER_SIZE: &str = "176B";
+// derived from wireshark observed response
+const BRIDGE_RESP_BUFFER_SIZE: &str = "473B";
+// derived from wireshark observed response: Handshake ack 134 + Ping ack 138
+const INITIAL_MAIN_RESP_BUFFER_SIZE: &str = "272B";
+const WORKING_MAIN_RESP_BUFFER_SIZE: &str = "5MB";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -125,7 +129,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
-            response_buffer: BRIDGE_BUFFER_SIZE.to_string(),
+            response_buffer: BRIDGE_RESP_BUFFER_SIZE.to_string(),
         }
     }
 
