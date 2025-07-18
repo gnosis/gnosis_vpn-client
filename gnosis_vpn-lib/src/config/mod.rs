@@ -47,7 +47,10 @@ pub fn read(path: &Path) -> Result<Config, Error> {
     })?;
 
     let table = content.parse::<toml::Table>()?;
-    let version = table.get("version").and_then(|v| v.as_integer()).map_err(Error::VersionNotFound)?;
+    let version = table
+        .get("version")
+        .and_then(|v| v.as_integer())
+        .ok_or(Error::VersionNotFound)?;
 
     match version {
         1 => {
