@@ -1,4 +1,4 @@
-use backoff::{ExponentialBackoff, backoff::Backoff};
+use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use std::fmt::{self, Display};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -627,7 +627,7 @@ impl Connection {
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(ExponentialBackoff::default());
+            self.backoff = BackoffState::Active(session_backoff());
         }
         thread::spawn(move || {
             let res = Session::open(&client, &params);
@@ -912,4 +912,13 @@ fn check_entry_node<R>(res: &Result<R, session::Error>) {
         Err(session::Error::Timeout(_)) => log_output::print_node_timeout_instructions(),
         _ => (),
     }
+}
+
+fn session_backoff() -> ExponentialBackoff {
+    ExponentialBackoffBuilder::new()
+        .with_initial_interval(Duration::from_secs(1))
+        .with_randomization_factor(0.2)
+        .with_multiplier(1.5)
+        .with_max_elapsed_time(Some(Duration::from_secs(10)))
+        .build()
 }

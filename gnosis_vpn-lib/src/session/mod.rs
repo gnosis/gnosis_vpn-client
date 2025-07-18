@@ -20,7 +20,7 @@ mod protocol;
 const BRIDGE_RESP_BUFFER_SIZE: &str = "473B";
 // derived from wireshark observed response: Handshake ack 134 + Ping ack 138
 const INITIAL_MAIN_RESP_BUFFER_SIZE: &str = "272B";
-const WORKING_MAIN_RESP_BUFFER_SIZE: &str = "5MB";
+const MAIN_RESP_BUFFER_SIZE: &str = "5MB";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -133,6 +133,24 @@ impl OpenSession {
         }
     }
 
+    pub fn initial_main(
+        entry_node: EntryNode,
+        destination: Address,
+        capabilities: Vec<Capability>,
+        path: Path,
+        target: Target,
+    ) -> Self {
+        OpenSession {
+            entry_node: entry_node.clone(),
+            destination,
+            capabilities,
+            path: path.clone(),
+            target: target.clone(),
+            protocol: Protocol::Udp,
+            response_buffer: INITIAL_MAIN_RESP_BUFFER_SIZE.to_string(),
+        }
+    }
+
     pub fn main(
         entry_node: EntryNode,
         destination: Address,
@@ -147,7 +165,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
-            response_buffer: "5MB".to_string(),
+            response_buffer: MAIN_RESP_BUFFER_SIZE.to_string(),
         }
     }
 }
