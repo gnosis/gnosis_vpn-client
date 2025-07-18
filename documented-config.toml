@@ -6,7 +6,7 @@
 ###
 
 # general config file version
-version = 2
+version = 3
 
 ###
 ## hoprd node section - your hoprd node that acts as the connection entry point
@@ -98,7 +98,5 @@ path = { intermediates = [
 # listen_port = 51820
 # manually override derived allowed_ips for the WireGuard interface
 # allowed_ips = "10.128.0.1/9"
-# Gnosis VPN will handle this automatically, but can only do so on supported platforms.
-# If you manually handle the WireGuard interface, you need to specify a public_key here
-# [wireguard.manual_mode]
-# public_key = "<your WireGuard public key>"
+# If you want to disable WireGuard key rotation, provide a static private key here.
+# force_private_key = "<your WireGuard private key>"

@@ -50,12 +50,10 @@ fn pretty_print(resp: &Response) {
             eprintln!("Currently not connected to any destination");
         }
         Response::Status(command::StatusResponse {
-            wireguard,
             status,
             available_destinations,
         }) => {
-            let mut str_resp = format!("WireGuard status: {wireguard}\n");
-            str_resp.push_str(&format!("Status: {status}\n"));
+            let mut str_resp = format!("Status: {status}\n");
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
             } else {
