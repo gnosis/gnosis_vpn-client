@@ -427,7 +427,7 @@ check_wireguard() {
         if ! check_wg_commands; then
             echo ""
             echo "[NON-INTERACTIVE] WireGuard tools are not installed."
-            echo "[NON-INTERACTIVE] Cannot continue non interactive installation."
+            echo "[NON-INTERACTIVE] Cannot continue non-interactive installation."
             exit 1
         fi
         if [[ -n ${WG_PRIVATE_KEY} ]]; then

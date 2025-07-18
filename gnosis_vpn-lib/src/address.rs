@@ -13,7 +13,7 @@ pub struct Address([u8; 20]);
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Error in hex represantation: {0}")]
+    #[error("Error in hex representation: {0}")]
     Hex(#[from] hex::FromHexError),
     #[error("Invalid length, expected 20 bytes, got {0}")]
     InvalidLength(usize),
