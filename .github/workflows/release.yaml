@@ -21,10 +21,6 @@ jobs:
         binary:
           - architecture: x86_64-linux
             runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: armv7l-linux
-            runner: ubuntu-24.04
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
