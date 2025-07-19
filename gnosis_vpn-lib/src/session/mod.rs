@@ -133,7 +133,7 @@ impl OpenSession {
         }
     }
 
-    pub fn initial_main(
+    pub fn ping(
         entry_node: EntryNode,
         destination: Address,
         capabilities: Vec<Capability>,
