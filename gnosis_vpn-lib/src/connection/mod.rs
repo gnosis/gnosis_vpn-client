@@ -63,7 +63,7 @@ enum PhaseUp {
 /// Represents the different phases of dismantling a connection.
 #[derive(Clone, Debug)]
 enum PhaseDown {
-    CloseSession(Session, SystemTime, Registration),
+    CloseTunnel(Session, Registration),
     PrepareBridgeSession(Registration),
     FixBridgeSession(Registration),
     FixBridgeSessionClosing(Session, Registration),
@@ -371,7 +371,7 @@ impl Connection {
     fn act_down(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase_down = %self.phase_down, "Dismantling connection");
         match self.phase_down.clone() {
-            PhaseDown::CloseSession(session, _since, _registration) => self.close_wg_session(&session),
+            PhaseDown::CloseTunnel(session, _registration) => self.close_wg_session(&session),
             PhaseDown::PrepareBridgeSession(_registration) => self.open_session(self.bridge_session_params()),
             PhaseDown::FixBridgeSession(_registration) => self.list_sessions(&Protocol::Tcp),
             PhaseDown::FixBridgeSessionClosing(session, _registration) => self.close_session(&session),
@@ -622,7 +622,7 @@ impl Connection {
                     res?;
                 }
                 match self.phase_down.clone() {
-                    PhaseDown::CloseSession(_session, _since, registration) => {
+                    PhaseDown::CloseTunnel(_session, registration) => {
                         self.phase_down = PhaseDown::PrepareBridgeSession(registration);
                         self.backoff = BackoffState::Inactive;
                         Ok(())
@@ -830,7 +830,7 @@ impl Connection {
 
     fn close_wg_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
         _ = self.wg.close_session().map_err(|error| {
-            tracing::error!(%error, "Failed closing WireGuard tunnel");
+            tracing::warn!(warn = %error, "Failed closing WireGuard tunnel");
         });
         self.close_session(session)
     }
@@ -935,13 +935,7 @@ impl Display for PhaseUp {
 impl Display for PhaseDown {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PhaseDown::CloseSession(session, since, registration) => write!(
-                f,
-                "CloseSession({}, since {}, {})",
-                session,
-                log_output::elapsed(since),
-                registration
-            ),
+            PhaseDown::CloseTunnel(session, registration) => write!(f, "CloseTunnel({}, {})", session, registration),
             PhaseDown::PrepareBridgeSession(registration) => write!(f, "PrepareBridgeSession({registration})"),
             PhaseDown::FixBridgeSession(registration) => write!(f, "FixBridgeSession({registration})"),
             PhaseDown::FixBridgeSessionClosing(session, registration) => {
@@ -961,34 +955,22 @@ impl From<PhaseUp> for PhaseDown {
         match phase_up {
             PhaseUp::Ready => PhaseDown::Retired,
             PhaseUp::FixBridgeSession => PhaseDown::Retired,
-            PhaseUp::FixBridgeSessionClosing(_session) => PhaseDown::Retired,
+            PhaseUp::FixBridgeSessionClosing(session) => PhaseDown::CloseBridgeSession(session),
             PhaseUp::WgRegistration(session) => PhaseDown::CloseBridgeSession(session),
             PhaseUp::CloseBridgeSession(session, registration) => PhaseDown::WgUnregistration(session, registration),
             PhaseUp::PreparePingSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixPingSession(registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::FixPingSessionClosing(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::PreparePingTunnel(session, registration) => {
-                PhaseDown::CloseSession(session, SystemTime::now(), registration)
-            }
-            PhaseUp::CheckPingTunnel(session, registration) => {
-                PhaseDown::CloseSession(session, SystemTime::now(), registration)
-            }
-            PhaseUp::ClosePingTunnel(session, registration) => {
-                PhaseDown::CloseSession(session, SystemTime::now(), registration)
-            }
+            PhaseUp::FixPingSessionClosing(session, registration) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::PreparePingTunnel(session, registration) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::CheckPingTunnel(session, registration) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::ClosePingTunnel(session, registration) => PhaseDown::CloseTunnel(session, registration),
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::FixMainSessionClosing(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::PrepareMainTunnel(session, registration, since) => {
-                PhaseDown::CloseSession(session, since, registration)
-            }
-            PhaseUp::TunnelEstablished(session, registration, since) => {
-                PhaseDown::CloseSession(session, since, registration)
-            }
-            PhaseUp::MonitorTunnel(session, registration, since) => {
-                PhaseDown::CloseSession(session, since, registration)
-            }
-            PhaseUp::TunnelBroken(_session, registration) => PhaseDown::PrepareBridgeSession(registration),
+            PhaseUp::FixMainSessionClosing(session, registration) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::PrepareMainTunnel(session, registration, since) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::TunnelEstablished(session, registration, since) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::MonitorTunnel(session, registration, since) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::TunnelBroken(session, registration) => PhaseDown::CloseTunnel(session, registration),
         }
     }
 }
