@@ -121,14 +121,10 @@ impl Core {
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         tracing::debug!(%event, "handling event");
         match event {
-            Event::ConnectWg => self.on_session_ready(),
-            Event::Disconnected(ping_has_worked) => self.on_session_disconnect(ping_has_worked),
-            Event::Broken => {
-                tracing::warn!("connection broken - attempting to reconnect");
-                self.act_on_target()?;
-                Ok(())
-            }
-            Event::DropConnection => self.on_drop_connection(),
+            Event::ConnectionEvent(connection::Event::Connected) => self.on_connected(),
+            Event::ConnectionEvent(connection::Event::Disconnected) => self.on_disconnected(),
+            Event::ConnectionEvent(connection::Event::Broken) => self.on_broken(),
+            Event::ConnectionEvent(connection::Event::Dismantled) => self.on_dismantled(),
         }
     }
 
@@ -185,28 +181,12 @@ impl Core {
         thread::spawn(move || {
             loop {
                 crossbeam_channel::select! {
-                    recv(r) -> event => {
-                        match event {
-                            Ok(connection::Event::Connected) => {
-                                _ = sender.send(Event::ConnectWg).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send ConnectWg event");
+                    recv(r) -> conn_event => {
+                        match conn_event {
+                            Ok(event) => {
+                                _ = sender.send(Event::ConnectionEvent(event)).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send ConnectionEvent event");
                                 });
-                            }
-                            Ok(connection::Event::Disconnected(ping_has_worked)) => {
-                                _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send Disconnected event");
-                                });
-                            }
-                            Ok(connection::Event::Broken) => {
-                                _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send Disconnected event");
-                                });
-                            }
-                            Ok(connection::Event::Dismantled) => {
-                                _ = sender.send(Event::DropConnection).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send DropConnection event");
-                                });
-                                break;
                             }
                             Err(e) => {
                                 tracing::warn!(error = ?e, "failed to receive event");
@@ -219,26 +199,36 @@ impl Core {
         Ok(())
     }
 
-    fn on_session_ready(&mut self) -> Result<(), Error> {
-        tracing::debug!("on session ready");
+    fn on_connected(&mut self) -> Result<(), Error> {
+        tracing::debug!("connection ready");
         self.session_connected = true;
         Ok(())
     }
 
-    fn on_session_disconnect(&mut self, ping_has_worked: bool) -> Result<(), Error> {
+    fn on_disconnected(&mut self) -> Result<(), Error> {
         self.session_connected = false;
-        if ping_has_worked {
-            tracing::info!("session disconnected - might be connection hiccup");
-        } else {
-            tracing::warn!("session cannot send data");
+        tracing::info!("connection disconnected - might be network hiccup");
+        Ok(())
+    }
+
+    fn on_broken(&mut self) -> Result<(), Error> {
+        tracing::warn!("connection broken - attempting to reconnect");
+        self.session_connected = false;
+        match self.connection.as_mut() {
+            Some(conn) => {
+                conn.dismantle();
+            }
+            None => {
+                tracing::warn!("received broken event from unreferenced connection");
+            }
         }
         Ok(())
     }
 
-    fn on_drop_connection(&mut self) -> Result<(), Error> {
+    fn on_dismantled(&mut self) -> Result<(), Error> {
+        tracing::info!("connection closed");
         self.session_connected = false;
         self.connection = None;
-        tracing::info!("connection closed");
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
             _ = sender.send(());

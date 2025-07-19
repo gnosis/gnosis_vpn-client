@@ -19,14 +19,15 @@ pub use destination::{Destination, SessionParameters};
 
 pub mod destination;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Event {
-    /// Event indicating that the connection has been established and is ready for use.
+    /// Connection has been fully established and ping tested
     Connected,
-    /// Boolean flag indicates if it has ever worked before, true meaning it has worked at least once.
-    Disconnected(bool),
-    /// Event indicating that connection is broken and should be dismantled.
+    /// Currently not connected
+    Disconnected,
+    /// Connection is broken and should be dismantled
     Broken,
+    /// Connection has reached final state
     Dismantled,
 }
 
@@ -534,9 +535,7 @@ impl Connection {
                 (Err(_), PhaseUp::MonitorTunnel(session, registration, since)) => {
                     tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&since));
                     self.phase_up = PhaseUp::TunnelBroken(session, registration);
-                    self.sender
-                        .send(Event::Disconnected(true))
-                        .map_err(InternalError::SendError)
+                    self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
                 }
                 _ => Err(InternalError::UnexpectedPhase),
             },
@@ -997,6 +996,17 @@ impl Display for InternalEvent {
             InternalEvent::Ping(res) => write!(f, "Ping({res:?})"),
             InternalEvent::ListSessions(res) => write!(f, "ListSessions({res:?})"),
             InternalEvent::WgOpenTunnel(res) => write!(f, "WgOpenTunnel({res:?})"),
+        }
+    }
+}
+
+impl Display for Event {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Event::Connected => write!(f, "Connected"),
+            Event::Disconnected => write!(f, "Disconnected"),
+            Event::Broken => write!(f, "Broken"),
+            Event::Dismantled => write!(f, "Dismantled"),
         }
     }
 }
