@@ -967,9 +967,9 @@ impl From<PhaseUp> for PhaseDown {
             PhaseUp::PrepareMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSession(registration) => PhaseDown::PrepareBridgeSession(registration),
             PhaseUp::FixMainSessionClosing(session, registration) => PhaseDown::CloseTunnel(session, registration),
-            PhaseUp::PrepareMainTunnel(session, registration, since) => PhaseDown::CloseTunnel(session, registration),
-            PhaseUp::TunnelEstablished(session, registration, since) => PhaseDown::CloseTunnel(session, registration),
-            PhaseUp::MonitorTunnel(session, registration, since) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::PrepareMainTunnel(session, registration, _since) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::TunnelEstablished(session, registration, _since) => PhaseDown::CloseTunnel(session, registration),
+            PhaseUp::MonitorTunnel(session, registration, _since) => PhaseDown::CloseTunnel(session, registration),
             PhaseUp::TunnelBroken(session, registration) => PhaseDown::CloseTunnel(session, registration),
         }
     }
