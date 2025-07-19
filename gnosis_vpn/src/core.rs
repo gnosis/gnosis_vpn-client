@@ -123,6 +123,11 @@ impl Core {
         match event {
             Event::ConnectWg => self.on_session_ready(),
             Event::Disconnected(ping_has_worked) => self.on_session_disconnect(ping_has_worked),
+            Event::Broken => {
+                tracing::warn!("connection broken - attempting to reconnect");
+                self.act_on_target()?;
+                Ok(())
+            }
             Event::DropConnection => self.on_drop_connection(),
         }
     }
@@ -188,6 +193,11 @@ impl Core {
                                 });
                             }
                             Ok(connection::Event::Disconnected(ping_has_worked)) => {
+                                _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
+                                    tracing::error!(error = %error, "failed to send Disconnected event");
+                                });
+                            }
+                            Ok(connection::Event::Broken) => {
                                 _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
                                     tracing::error!(error = %error, "failed to send Disconnected event");
                                 });

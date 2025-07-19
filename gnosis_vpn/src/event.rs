@@ -6,6 +6,7 @@ pub enum Event {
     ConnectWg,
     /// Boolean flag indicates if it has ever worked before, true meaning it has worked at least once.
     Disconnected(bool),
+    Broken,
     DropConnection,
 }
 
@@ -15,6 +16,7 @@ impl fmt::Display for Event {
             Event::ConnectWg => write!(f, "ConnectWg"),
             Event::Disconnected(true) => write!(f, "Disconnected (ping has worked)"),
             Event::Disconnected(false) => write!(f, "Disconnected (ping never worked)"),
+            Event::Broken => write!(f, "Broken"),
             Event::DropConnection => write!(f, "DropConnection"),
         }
     }
