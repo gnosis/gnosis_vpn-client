@@ -10,7 +10,7 @@ pub enum Event {
 impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::ConnectionEvent(event) => write!(f, "ConnectionEvent: {}", event),
+            Event::ConnectionEvent(event) => write!(f, "ConnectionEvent: {event}"),
         }
     }
 }
