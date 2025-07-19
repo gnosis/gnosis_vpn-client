@@ -232,9 +232,9 @@ impl Connection {
                     },
                     recv(recv_event) -> res => {
                         match res {
-                            Ok(evt) => {
-                                tracing::debug!(event = ?evt, "Received event during connection establishment");
-                                _ = me.act_event_up(evt).map_err(|error| {
+                            Ok(event) => {
+                                tracing::debug!(%event, "Received event during connection establishment");
+                                _ = me.act_event_up(event).map_err(|error| {
                                     tracing::error!(%error, "Failed to process event during connection establishment");
                                 });
                             }
@@ -476,6 +476,11 @@ impl Connection {
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
+                    PhaseUp::ClosePingTunnel(_session, registration) => {
+                        self.phase_up = PhaseUp::PrepareMainSession(registration);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
                     PhaseUp::FixPingSessionClosing(_session, registration) => {
                         self.phase_up = PhaseUp::PreparePingSession(registration);
                         self.backoff = BackoffState::Inactive;
@@ -512,6 +517,7 @@ impl Connection {
                     tracing::info!(%session, "Session verified as open");
                     log_output::print_session_established(&self.pretty_print_path());
                     self.phase_up = PhaseUp::MonitorTunnel(session, registration, since);
+                    self.backoff = BackoffState::Inactive;
                     self.sender.send(Event::Connected).map_err(InternalError::SendError)
                 }
                 (Ok(_), PhaseUp::MonitorTunnel(session, _registration, since)) => {
@@ -535,6 +541,7 @@ impl Connection {
                 (Err(_), PhaseUp::MonitorTunnel(session, registration, since)) => {
                     tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&since));
                     self.phase_up = PhaseUp::TunnelBroken(session, registration);
+                    self.backoff = BackoffState::Inactive;
                     self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
                 }
                 _ => Err(InternalError::UnexpectedPhase),
