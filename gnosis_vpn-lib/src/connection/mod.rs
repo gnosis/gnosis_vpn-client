@@ -935,7 +935,7 @@ impl Display for PhaseUp {
 impl Display for PhaseDown {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PhaseDown::CloseTunnel(session, registration) => write!(f, "CloseTunnel({}, {})", session, registration),
+            PhaseDown::CloseTunnel(session, registration) => write!(f, "CloseTunnel({session}, {registration})"),
             PhaseDown::PrepareBridgeSession(registration) => write!(f, "PrepareBridgeSession({registration})"),
             PhaseDown::FixBridgeSession(registration) => write!(f, "FixBridgeSession({registration})"),
             PhaseDown::FixBridgeSessionClosing(session, registration) => {
