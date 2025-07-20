@@ -210,7 +210,7 @@ system-setup mode='keep-running': submodules docker-build
 
         echo "[PHASE3] Waiting for 30 seconds to ensure connection stability"
         echo "[PHASE3] This will remove the client from the server and the client has to recover"
-        sleep 30
+        sleep 40
 
         echo "[PHASE3] Checking external ping again"
         time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
