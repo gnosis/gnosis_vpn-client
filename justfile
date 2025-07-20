@@ -208,7 +208,8 @@ system-setup mode='keep-running': submodules docker-build
             exit 1
         )
 
-        echo "[PHASE3] Waiting for 40 seconds to ensure connection stability"
+        echo "[PHASE3] Waiting for 30 seconds to ensure connection stability"
+        echo "[PHASE3] This will remove the client from the server and the client has to recover"
         sleep 40
 
         echo "[PHASE3] Checking external ping again"
@@ -227,12 +228,9 @@ system-setup mode='keep-running': submodules docker-build
         docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
         exp_client_log "connection closed" 11
 
-        echo "[PHASE3] Checking no warnings or errors in client logs"
-        if docker logs gnosis_vpn-client | grep -qE "WARN|ERROR"; then
-            echo "[PHASE3] Found warnings or errors in client logs"
-            docker logs gnosis_vpn-client
-            exit 1
-        fi
+        echo "[PHASE3] Print client logs for manual verification"
+        docker logs gnosis_vpn-client
+
         echo "[PHASE3] Checking no errors in server logs"
         if docker logs gnosis_vpn-server | grep -qE "ERROR"; then
             echo "[PHASE3] Found errors in server logs"

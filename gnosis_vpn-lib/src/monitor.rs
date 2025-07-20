@@ -27,6 +27,15 @@ impl Default for PingOptions {
     }
 }
 
+impl Error {
+    pub fn would_block(&self) -> bool {
+        match self {
+            Error::PingFailed(ping::Error::IoError { error: err }) => err.kind() == std::io::ErrorKind::WouldBlock,
+            _ => false,
+        }
+    }
+}
+
 pub fn ping(opts: &PingOptions) -> Result<(), Error> {
     ping::ping(
         opts.address,
