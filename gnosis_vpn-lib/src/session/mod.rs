@@ -16,6 +16,12 @@ pub use protocol::Protocol;
 mod path;
 mod protocol;
 
+// derived from wireshark observed response
+const BRIDGE_RESP_BUFFER_SIZE: &str = "473B";
+// derived from wireshark observed response: Handshake ack 134 + Ping ack 138
+const INITIAL_MAIN_RESP_BUFFER_SIZE: &str = "272B";
+const MAIN_RESP_BUFFER_SIZE: &str = "5MB";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub destination: Address,
@@ -51,6 +57,8 @@ pub struct OpenSession {
     path: Path,
     target: Target,
     protocol: Protocol,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    response_buffer: String,
 }
 
 pub struct CloseSession {
@@ -121,6 +129,25 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
+            response_buffer: BRIDGE_RESP_BUFFER_SIZE.to_string(),
+        }
+    }
+
+    pub fn ping(
+        entry_node: EntryNode,
+        destination: Address,
+        capabilities: Vec<Capability>,
+        path: Path,
+        target: Target,
+    ) -> Self {
+        OpenSession {
+            entry_node: entry_node.clone(),
+            destination,
+            capabilities,
+            path: path.clone(),
+            target: target.clone(),
+            protocol: Protocol::Udp,
+            response_buffer: INITIAL_MAIN_RESP_BUFFER_SIZE.to_string(),
         }
     }
 
@@ -138,6 +165,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
+            response_buffer: MAIN_RESP_BUFFER_SIZE.to_string(),
         }
     }
 }
@@ -188,6 +216,7 @@ impl Session {
         json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
+        json.insert("responseBuffer".to_string(), json!(open_session.response_buffer));
         // creates a TCP session as part of the session pool, so we immediately know if it might work
         if open_session.protocol == Protocol::Tcp {
             json.insert("sessionPool".to_string(), json!(1));
