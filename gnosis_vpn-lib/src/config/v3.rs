@@ -52,9 +52,12 @@ pub(super) struct Connection {
     listen_host: Option<String>,
     #[serde(default, with = "humantime_serde::option")]
     session_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    ping_retry_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
+    buffer: Option<BufferOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -82,12 +85,6 @@ enum SessionTargetType {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct ConnectionTarget {
-    bridge: Option<SocketAddr>,
-    wg: Option<SocketAddr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct PingOptions {
     address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
@@ -102,6 +99,14 @@ struct PingOptions {
 pub(super) struct PingInterval {
     min: u8,
     max: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct BufferOptions {
+    // could be improved by using bytesize crates parser
+    bridge: Option<String>,
+    ping: Option<String>,
+    main: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -446,6 +451,8 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 listen_host = "0.0.0.0:1422"
+session_timeout = "15s"
+ping_retry_timeout = "10s"
 
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
@@ -465,6 +472,11 @@ seq_count = 1
 [connection.ping.interval]
 min = 5
 max = 10
+
+[connection.buffer]
+bridge = "0 B"
+ping = "0 B"
+main = "5 MB"
 
 [wireguard]
 listen_port = 51820
