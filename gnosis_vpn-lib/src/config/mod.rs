@@ -5,7 +5,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::address::Address;
-use crate::connection::Destination;
+use crate::connection::{destination::Destination, options::Options};
 use crate::entry_node::EntryNode;
 use crate::wg_tooling::Config as WireGuardConfig;
 
@@ -93,6 +93,14 @@ impl Config {
             Config::V1(config) => config.destinations(),
             Config::V2(config) => Into::<v3::Config>::into(config).destinations(),
             Config::V3(config) => config.destinations(),
+        }
+    }
+
+    pub fn connection(&self) -> Options {
+        match self {
+            Config::V1(_config) => Options::default(),
+            Config::V2(config) => Into::<v3::Config>::into(config).connection(),
+            Config::V3(config) => config.connection(),
         }
     }
 

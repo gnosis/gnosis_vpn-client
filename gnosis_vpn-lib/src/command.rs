@@ -5,7 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::address::Address;
-use crate::connection::Destination as ConnectionDestination;
+use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
 use crate::session;
 
