@@ -1,0 +1,59 @@
+use std::ops::Range;
+use std::time::Duration;
+
+use crate::{monitor, session};
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub(super) bridge: SessionParameters,
+    pub(super) wg: SessionParameters,
+    pub(super) ping_interval: Range<u8>,
+    pub(super) ping_options: monitor::PingOptions,
+    pub(super) buffer_sizes: BufferSizes,
+    pub(super) ping_retry_timeout: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionParameters {
+    pub(super) target: session::Target,
+    pub(super) capabilities: Vec<session::Capability>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BufferSizes {
+    pub(super) bridge: String,
+    pub(super) ping: String,
+    pub(super) main: String,
+}
+
+impl SessionParameters {
+    pub fn new(target: session::Target, capabilities: Vec<session::Capability>) -> Self {
+        Self { target, capabilities }
+    }
+}
+
+impl BufferSizes {
+    pub fn new(bridge: String, ping: String, main: String) -> Self {
+        Self { bridge, ping, main }
+    }
+}
+
+impl Options {
+    pub fn new(
+        bridge: SessionParameters,
+        wg: SessionParameters,
+        ping_interval: Range<u8>,
+        ping_options: monitor::PingOptions,
+        buffer_sizes: BufferSizes,
+        ping_retry_timeout: Duration,
+    ) -> Self {
+        Self {
+            bridge,
+            wg,
+            ping_interval,
+            ping_options,
+            buffer_sizes,
+            ping_retry_timeout,
+        }
+    }
+}
