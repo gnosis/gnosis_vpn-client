@@ -715,7 +715,7 @@ impl Connection {
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         let opts = self.options.ping_options.clone();
-        let timeout = self.options.ping_retry_timeout.clone();
+        let timeout = self.options.ping_retry_timeout;
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(immediate_ping_backoff(timeout));
         }
