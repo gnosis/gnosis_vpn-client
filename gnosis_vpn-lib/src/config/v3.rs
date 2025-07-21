@@ -9,7 +9,7 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::address::Address;
-use crate::connection::{Destination as ConnDestination, SessionParameters};
+use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::entry_node::{self, EntryNode};
 use crate::monitor;
 use crate::session;
@@ -157,6 +157,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "session_timeout" {
                         continue;
                     }
+                    if k == "ping_retry_timeout" {
+                        continue;
+                    }
                     if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k, _v) in prot.iter() {
@@ -186,6 +189,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.ping.{k}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "buffer" {
+                        if let Some(buffer) = v.as_table() {
+                            for (k, _v) in buffer.iter() {
+                                if k == "bridge" || k == "ping" || k == "main" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.buffer.{k}"));
                             }
                         }
                         continue;
@@ -283,8 +297,33 @@ impl Connection {
         Duration::from_secs(15)
     }
 
+    pub fn default_ping_retry_timeout() -> Duration {
+        Duration::from_secs(10)
+    }
+
     pub fn default_ping_interval() -> PingInterval {
         PingInterval { min: 5, max: 10 }
+    }
+
+    pub fn default_buffer_sizes() -> options::BufferSizes {
+        options::BufferSizes::new(
+            // bridge
+            "0 B".to_string(),
+            // ping
+            "0 B".to_string(),
+            // main
+            "5 MB".to_string(),
+        )
+    }
+}
+
+impl From<BufferOptions> for options::BufferSizes {
+    fn from(buffer: BufferOptions) -> Self {
+        options::BufferSizes::new(
+            buffer.bridge.unwrap_or("0 B".to_string()),
+            buffer.ping.unwrap_or("0 B".to_string()),
+            buffer.main.unwrap_or("5 MB".to_string()),
+        )
     }
 }
 
@@ -313,7 +352,6 @@ impl Config {
 
     pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
         let config_dests = self.destinations.clone().unwrap_or_default();
-        let connection = self.connection.as_ref();
         config_dests
             .iter()
             .map(|(k, v)| {
@@ -323,69 +361,90 @@ impl Config {
                     None => session::Path::default(),
                 };
 
-                let bridge_caps = connection
-                    .and_then(|c| c.bridge.as_ref())
-                    .and_then(|b| b.capabilities.clone())
-                    .unwrap_or(Connection::default_bridge_capabilities())
-                    .iter()
-                    .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
-                    .collect::<Vec<session::Capability>>();
-                let bridge_target_socket = connection
-                    .and_then(|c| c.bridge.as_ref())
-                    .and_then(|b| b.target)
-                    .unwrap_or(Connection::default_bridge_target());
-                let bridge_target_type = connection
-                    .and_then(|c| c.bridge.as_ref())
-                    .and_then(|b| b.target_type.clone())
-                    .unwrap_or_default();
-                let bridge_target = match bridge_target_type {
-                    SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
-                    SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
-                };
-                let params_bridge = SessionParameters::new(&bridge_target, &bridge_caps);
-
-                let wg_caps = connection
-                    .and_then(|c| c.wg.as_ref())
-                    .and_then(|w| w.capabilities.clone())
-                    .unwrap_or(Connection::default_wg_capabilities())
-                    .iter()
-                    .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
-                    .collect::<Vec<session::Capability>>();
-                let wg_target_socket = connection
-                    .and_then(|c| c.wg.as_ref())
-                    .and_then(|w| w.target)
-                    .unwrap_or(Connection::default_wg_target());
-                let wg_target_type = connection
-                    .and_then(|c| c.wg.as_ref())
-                    .and_then(|w| w.target_type.clone())
-                    .unwrap_or_default();
-                let wg_target = match wg_target_type {
-                    SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
-                    SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
-                };
-                let params_wg = SessionParameters::new(&wg_target, &wg_caps);
                 let meta = v.meta.clone().unwrap_or_default();
 
-                let interval = connection
-                    .and_then(|c| c.ping.as_ref())
-                    .and_then(|p| p.interval.clone())
-                    .unwrap_or(Connection::default_ping_interval());
-
-                let def_opts = monitor::PingOptions::default();
-                let opts = connection
-                    .and_then(|c| c.ping.as_ref())
-                    .map(|p| monitor::PingOptions {
-                        address: p.address.unwrap_or(def_opts.address),
-                        timeout: p.timeout.unwrap_or(def_opts.timeout),
-                        ttl: p.ttl.unwrap_or(def_opts.ttl),
-                        seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
-                    })
-                    .unwrap_or(def_opts);
-                let ping_range = interval.min..interval.max;
-                let dest = ConnDestination::new(*k, path, meta, params_bridge, params_wg, ping_range, opts);
+                let dest = ConnDestination::new(*k, path, meta);
                 (*k, dest)
             })
             .collect()
+    }
+
+    pub fn connection(&self) -> options::Options {
+        let connection = self.connection.as_ref();
+        let bridge_caps = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.capabilities.clone())
+            .unwrap_or(Connection::default_bridge_capabilities())
+            .iter()
+            .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
+            .collect::<Vec<session::Capability>>();
+        let bridge_target_socket = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target)
+            .unwrap_or(Connection::default_bridge_target());
+        let bridge_target_type = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target_type.clone())
+            .unwrap_or_default();
+        let bridge_target = match bridge_target_type {
+            SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
+            SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
+        };
+        let params_bridge = options::SessionParameters::new(bridge_target, bridge_caps);
+        let wg_caps = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.capabilities.clone())
+            .unwrap_or(Connection::default_wg_capabilities())
+            .iter()
+            .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
+            .collect::<Vec<session::Capability>>();
+        let wg_target_socket = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .unwrap_or(Connection::default_wg_target());
+        let wg_target_type = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target_type.clone())
+            .unwrap_or_default();
+        let wg_target = match wg_target_type {
+            SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
+            SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
+        };
+        let params_wg = options::SessionParameters::new(wg_target, wg_caps);
+
+        let interval = connection
+            .and_then(|c| c.ping.as_ref())
+            .and_then(|p| p.interval.clone())
+            .unwrap_or(Connection::default_ping_interval());
+
+        let def_opts = monitor::PingOptions::default();
+        let ping_opts = connection
+            .and_then(|c| c.ping.as_ref())
+            .map(|p| monitor::PingOptions {
+                address: p.address.unwrap_or(def_opts.address),
+                timeout: p.timeout.unwrap_or(def_opts.timeout),
+                ttl: p.ttl.unwrap_or(def_opts.ttl),
+                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
+            })
+            .unwrap_or(def_opts);
+        let ping_range = interval.min..interval.max;
+
+        let buffer_sizes = connection
+            .and_then(|c| c.buffer.clone())
+            .map(|b| b.into())
+            .unwrap_or(Connection::default_buffer_sizes());
+        let ping_retry_timeout = connection
+            .and_then(|c| c.ping_retry_timeout)
+            .unwrap_or(Connection::default_ping_retry_timeout());
+
+        options::Options::new(
+            params_bridge,
+            params_wg,
+            ping_range,
+            ping_opts,
+            buffer_sizes,
+            ping_retry_timeout,
+        )
     }
 
     pub fn wireguard(&self) -> WireGuardConfig {
@@ -438,15 +497,15 @@ internal_connection_port = 1422
 [destinations]
 
 [destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
- meta = { location = "Germany" }
+meta = { location = "Germany" }
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
 [destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
- meta = { location = "USA" }
+meta = { location = "USA" }
 path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
 [destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
- meta = { location = "Spain" }
+meta = { location = "Spain" }
 path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
