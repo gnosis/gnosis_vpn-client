@@ -263,8 +263,8 @@ where
     }
 }
 
-impl From<SessionCapability> for session::Capability {
-    fn from(val: SessionCapability) -> Self {
+impl From<&SessionCapability> for session::Capability {
+    fn from(val: &SessionCapability) -> Self {
         match val {
             SessionCapability::Segmentation => session::Capability::Segmentation,
             SessionCapability::Retransmission => session::Capability::Retransmission,
@@ -273,12 +273,12 @@ impl From<SessionCapability> for session::Capability {
 }
 
 impl Connection {
-    pub fn default_bridge_capabilities() -> Vec<SessionCapability> {
-        vec![SessionCapability::Segmentation, SessionCapability::Retransmission]
+    pub fn default_bridge_capabilities() -> Vec<session::Capability> {
+        vec![session::Capability::Segmentation, session::Capability::Retransmission]
     }
 
-    pub fn default_wg_capabilities() -> Vec<SessionCapability> {
-        vec![SessionCapability::Segmentation]
+    pub fn default_wg_capabilities() -> Vec<session::Capability> {
+        vec![session::Capability::Segmentation]
     }
 
     pub fn default_bridge_target() -> SocketAddr {
@@ -313,6 +313,23 @@ impl Connection {
             "0 B".to_string(),
             // main
             "5 MB".to_string(),
+        )
+    }
+}
+
+impl Default for options::Options {
+    fn default() -> Self {
+        let bridge_target = session::Target::Plain(Connection::default_bridge_target());
+        let wg_target = session::Target::Plain(Connection::default_wg_target());
+        let bridge_caps = Connection::default_bridge_capabilities();
+        let wg_caps = Connection::default_wg_capabilities();
+        options::Options::new(
+            options::SessionParameters::new(bridge_target, bridge_caps),
+            options::SessionParameters::new(wg_target, wg_caps),
+            Connection::default_ping_interval().min..Connection::default_ping_interval().max,
+            monitor::PingOptions::default(),
+            Connection::default_buffer_sizes(),
+            Connection::default_ping_retry_timeout(),
         )
     }
 }
@@ -374,10 +391,8 @@ impl Config {
         let bridge_caps = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
-            .unwrap_or(Connection::default_bridge_capabilities())
-            .iter()
-            .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
-            .collect::<Vec<session::Capability>>();
+            .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
+            .unwrap_or(Connection::default_bridge_capabilities());
         let bridge_target_socket = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.target)
@@ -394,10 +409,8 @@ impl Config {
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
-            .unwrap_or(Connection::default_wg_capabilities())
-            .iter()
-            .map(|cap| <SessionCapability as Into<session::Capability>>::into(cap.clone()))
-            .collect::<Vec<session::Capability>>();
+            .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
+            .unwrap_or(Connection::default_wg_capabilities());
         let wg_target_socket = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.target)

@@ -98,7 +98,7 @@ impl Config {
 
     pub fn connection(&self) -> Options {
         match self {
-            Config::V1(config) => config.connection(),
+            Config::V1(_config) => Options::default(),
             Config::V2(config) => Into::<v3::Config>::into(config).connection(),
             Config::V3(config) => config.connection(),
         }

@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, Connection, Destination};
+use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::wg_tooling;
 
@@ -174,7 +174,13 @@ impl Core {
     fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::unbounded();
         let wg = wg_tooling::WireGuard::from_config(self.config.wireguard())?;
-        let mut conn = Connection::new(self.config.entry_node(), destination.clone(), wg, s);
+        let mut conn = Connection::new(
+            self.config.entry_node(),
+            destination.clone(),
+            wg,
+            s,
+            self.config.connection(),
+        );
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
