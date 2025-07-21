@@ -15,9 +15,11 @@ use crate::monitor;
 use crate::session::{self, Protocol, Session};
 use crate::wg_tooling;
 
-pub use destination::{Destination, SessionParameters};
+use destination::Destination;
+use options::Options;
 
 pub mod destination;
+pub mod options;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
@@ -117,6 +119,7 @@ pub struct Connection {
     destination: Destination,
     wg: wg_tooling::WireGuard,
     sender: crossbeam_channel::Sender<Event>,
+    options: Options,
 }
 
 #[derive(Debug, Error)]
@@ -143,6 +146,7 @@ impl Connection {
         destination: Destination,
         wg: wg_tooling::WireGuard,
         sender: crossbeam_channel::Sender<Event>,
+        options: Options,
     ) -> Self {
         Connection {
             destination,
@@ -155,11 +159,12 @@ impl Connection {
             establish_channel: crossbeam_channel::bounded(1),
             phase_down: PhaseDown::Retired,
             phase_up: PhaseUp::Ready,
+            options,
         }
     }
 
     pub fn has_destination(&self, destination: &Destination) -> bool {
-        self.destination == *destination
+        self.destination.address == destination.address
     }
 
     pub fn destination(&self) -> Destination {
@@ -698,7 +703,7 @@ impl Connection {
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(session_backoff());
+            self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
             let res = Session::open(&client, &params);
@@ -709,10 +714,10 @@ impl Connection {
 
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
-        let dest = self.destination.clone();
-        let opts = dest.ping_options.clone();
+        let opts = self.options.ping_options.clone();
+        let timeout = self.options.ping_retry_timeout;
         if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(immediate_ping_backoff());
+            self.backoff = BackoffState::Active(immediate_ping_backoff(timeout));
         }
         thread::spawn(move || {
             let res = monitor::ping(&opts);
@@ -723,9 +728,8 @@ impl Connection {
 
     fn delayed_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
-        let dest = self.destination.clone();
-        let range = dest.ping_interval.clone();
-        let opts = dest.ping_options.clone();
+        let opts = self.options.ping_options.clone();
+        let range = self.options.ping_interval.clone();
         thread::spawn(move || {
             let mut rng = rand::rng();
             let delay = Duration::from_secs(rng.random_range(range) as u64);
@@ -848,9 +852,10 @@ impl Connection {
         session::OpenSession::bridge(
             self.entry_node.clone(),
             self.destination.address,
-            self.destination.bridge.capabilities.clone(),
+            self.options.bridge.capabilities.clone(),
             self.destination.path.clone(),
-            self.destination.bridge.target.clone(),
+            self.options.bridge.target.clone(),
+            self.options.buffer_sizes.bridge.clone(),
         )
     }
 
@@ -858,9 +863,10 @@ impl Connection {
         session::OpenSession::ping(
             self.entry_node.clone(),
             self.destination.address,
-            self.destination.wg.capabilities.clone(),
+            self.options.wg.capabilities.clone(),
             self.destination.path.clone(),
-            self.destination.wg.target.clone(),
+            self.options.wg.target.clone(),
+            self.options.buffer_sizes.ping.clone(),
         )
     }
 
@@ -868,9 +874,10 @@ impl Connection {
         session::OpenSession::main(
             self.entry_node.clone(),
             self.destination.address,
-            self.destination.wg.capabilities.clone(),
+            self.options.wg.capabilities.clone(),
             self.destination.path.clone(),
-            self.destination.wg.target.clone(),
+            self.options.wg.target.clone(),
+            self.options.buffer_sizes.main.clone(),
         )
     }
 }
@@ -1017,20 +1024,11 @@ fn check_entry_node<R>(res: &Result<R, session::Error>) {
     }
 }
 
-fn immediate_ping_backoff() -> ExponentialBackoff {
+fn immediate_ping_backoff(timeout: Duration) -> ExponentialBackoff {
     ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(30))
         .with_randomization_factor(0.3)
         .with_multiplier(1.1)
-        .with_max_elapsed_time(Some(Duration::from_secs(3)))
-        .build()
-}
-
-fn session_backoff() -> ExponentialBackoff {
-    ExponentialBackoffBuilder::new()
-        .with_initial_interval(Duration::from_secs(1))
-        .with_randomization_factor(0.2)
-        .with_multiplier(1.5)
-        .with_max_elapsed_time(Some(Duration::from_secs(10)))
+        .with_max_elapsed_time(Some(timeout))
         .build()
 }
