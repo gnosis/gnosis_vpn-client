@@ -855,6 +855,7 @@ impl Connection {
             self.options.bridge.capabilities.clone(),
             self.destination.path.clone(),
             self.options.bridge.target.clone(),
+            self.options.buffer_sizes.bridge.clone(),
         )
     }
 
@@ -865,6 +866,7 @@ impl Connection {
             self.options.wg.capabilities.clone(),
             self.destination.path.clone(),
             self.options.wg.target.clone(),
+            self.options.buffer_sizes.ping.clone(),
         )
     }
 
@@ -875,6 +877,7 @@ impl Connection {
             self.options.wg.capabilities.clone(),
             self.destination.path.clone(),
             self.options.wg.target.clone(),
+            self.options.buffer_sizes.main.clone(),
         )
     }
 }
