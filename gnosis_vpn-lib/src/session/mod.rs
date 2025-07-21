@@ -16,12 +16,6 @@ pub use protocol::Protocol;
 mod path;
 mod protocol;
 
-// derived from wireshark observed response
-const BRIDGE_RESP_BUFFER_SIZE: &str = "473B";
-// derived from wireshark observed response: Handshake ack 134 + Ping ack 138
-const INITIAL_MAIN_RESP_BUFFER_SIZE: &str = "272B";
-const MAIN_RESP_BUFFER_SIZE: &str = "5MB";
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub destination: Address,
@@ -121,6 +115,7 @@ impl OpenSession {
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
+        buffer_size: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -129,7 +124,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
-            response_buffer: BRIDGE_RESP_BUFFER_SIZE.to_string(),
+            response_buffer: buffer_size,
         }
     }
 
@@ -139,6 +134,7 @@ impl OpenSession {
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
+        buffer_size: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -147,7 +143,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
-            response_buffer: INITIAL_MAIN_RESP_BUFFER_SIZE.to_string(),
+            response_buffer: buffer_size,
         }
     }
 
@@ -157,6 +153,7 @@ impl OpenSession {
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
+        buffer_size: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -165,7 +162,7 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
-            response_buffer: MAIN_RESP_BUFFER_SIZE.to_string(),
+            response_buffer: buffer_size,
         }
     }
 }
