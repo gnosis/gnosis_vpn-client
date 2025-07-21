@@ -63,6 +63,8 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # session timeout - specify HTTP timeout for session requests.
 # While this will be used for all HTTP request, it will only have a real impact on session creation requests.
 # session_timeout = "15s"
+# specify how long a connection will try sending an initial ping request before giving up.
+# ping_retry_timeout = "10s"
 
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
@@ -83,6 +85,11 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # min = 5
 # max = 10
 
+# adjust internal response buffer sizes
+# [connection.buffer]
+# bridge = "0 B"
+# ping = "0 B"
+# main = "5 MB"
 
 ###
 ## wireguard section - specific VPN-related settings

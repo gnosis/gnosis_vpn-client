@@ -8,7 +8,7 @@ use std::vec::Vec;
 use url::Url;
 
 use crate::address::Address;
-use crate::connection::Destination as ConnDestination;
+use crate::connection::destination::Destination as ConnDestination;
 use crate::entry_node::{APIVersion, EntryNode};
 use crate::wg_tooling::Config as WireGuardConfig;
 
