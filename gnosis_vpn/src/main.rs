@@ -234,17 +234,27 @@ fn incoming_config_fs_event(
     tracing::debug!(event = ?event, "incoming config event");
 
     match event {
-        Ok(notify::Event { kind, paths, attrs: _ })
-            if (kind == notify::event::EventKind::Create(notify::event::CreateKind::File)
-                || kind
-                    == notify::event::EventKind::Modify(notify::event::ModifyKind::Data(
-                        notify::event::DataChange::Any,
-                    ))
-                || kind == notify::event::EventKind::Remove(notify::event::RemoveKind::File))
-                && paths == vec![config_path] =>
-        {
-            tracing::debug!(?kind, "config file change detected");
-            Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
+        Ok(notify::Event {
+            kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
+            paths,
+            attrs: _,
+        })
+        | Ok(notify::Event {
+            kind: kind @ notify::event::EventKind::Remove(notify::event::RemoveKind::File),
+            paths,
+            attrs: _,
+        })
+        | Ok(notify::Event {
+            kind: kind @ notify::event::EventKind::Modify(notify::event::ModifyKind::Data(_)),
+            paths,
+            attrs: _,
+        }) => {
+            if paths == vec![config_path] {
+                tracing::debug!(?kind, "config file change detected");
+                Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
+            } else {
+                None
+            }
         }
         Ok(_) => None,
         Err(e) => {
