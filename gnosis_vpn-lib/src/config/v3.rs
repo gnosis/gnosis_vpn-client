@@ -298,7 +298,7 @@ impl Connection {
     }
 
     pub fn default_ping_retry_timeout() -> Duration {
-        Duration::from_secs(20)
+        Duration::from_secs(10)
     }
 
     pub fn default_ping_interval() -> PingInterval {
@@ -548,7 +548,7 @@ max = 10
 [connection.buffer]
 bridge = "0 B"
 ping = "0 B"
-main = "5 MB"
+main = "1.5 MB"
 
 [wireguard]
 listen_port = 51820
