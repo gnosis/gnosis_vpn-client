@@ -89,7 +89,8 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # [connection.buffer]
 # bridge = "0 B"
 # ping = "0 B"
-# main = "5 MB"
+# main = "1.5 MB"
+
 
 ###
 ## wireguard section - specific VPN-related settings
