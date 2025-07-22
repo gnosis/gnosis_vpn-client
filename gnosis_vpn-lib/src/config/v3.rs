@@ -298,7 +298,7 @@ impl Connection {
     }
 
     pub fn default_ping_retry_timeout() -> Duration {
-        Duration::from_secs(10)
+        Duration::from_secs(20)
     }
 
     pub fn default_ping_interval() -> PingInterval {
@@ -312,7 +312,7 @@ impl Connection {
             // ping
             "0 B".to_string(),
             // main
-            "5 MB".to_string(),
+            "1.5 MB".to_string(),
         )
     }
 }
