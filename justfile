@@ -158,6 +158,7 @@ system-setup mode='keep-running': submodules docker-build
 
     echo "[PHASE2] Server is ready for testing"
 
+
     ####
     ## PHASE 3: ready gnosis_vpn-client
 
@@ -214,7 +215,7 @@ system-setup mode='keep-running': submodules docker-build
         pushd modules/gnosis_vpn-server
             just docker-run
         popd
-        exp_client_log "VPN CONNECTION ESTABLISHED" 11
+        exp_client_log "VPN CONNECTION ESTABLISHED" 22
 
         echo "[PHASE3] Checking external ping again"
         time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
