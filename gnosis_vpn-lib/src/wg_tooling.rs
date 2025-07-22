@@ -221,8 +221,9 @@ AllowedIPs = {allowed_ips}
             endpoint = peer.endpoint,
             allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
-            // subtract 38 bytes WireGuard overhead from MTU
-            mtu = interface.mtu - 38,
+            // WireGuard has differnently sized packets not exactly adhering to MTU
+            // so we postpone optimizing on this level for now
+            mtu = interface.mtu,
         )
     }
 }
