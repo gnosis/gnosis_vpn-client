@@ -184,13 +184,13 @@ impl Connection {
                     BackoffState::Inactive => (me.act_up(), crossbeam_channel::never()),
                     BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                         Some(delay) => {
-                            tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay during connection establishment");
+                            tracing::debug!(phase = "up", ?backoff, delay = ?delay, "Triggering backoff delay");
                             me.backoff = BackoffState::Triggered(backoff);
                             (crossbeam_channel::never(), crossbeam_channel::after(delay))
                         }
                         None => {
                             me.backoff = BackoffState::Inactive;
-                            tracing::error!("Critical error: backoff exhausted during connection establishment");
+                            tracing::error!(phase = "up", "Unrecoverable error: backoff exhausted");
                             _ = me.sender.send(Event::Broken).map_err(|error| {
                                 tracing::error!(%error, "Failed sending broken event");
                             });
@@ -198,14 +198,14 @@ impl Connection {
                         }
                     },
                     BackoffState::Triggered(backoff) => {
-                        tracing::debug!(?backoff, "Activating backoff during connection establishment");
+                        tracing::debug!(phase = "up", ?backoff, "Activating backoff");
                         me.backoff = BackoffState::Active(backoff);
                         (me.act_up(), crossbeam_channel::never())
                     }
                     BackoffState::NotRecoverable(error) => {
-                        tracing::error!(%error, "Critical error during connection establishment - halting");
+                        tracing::error!(phase = "up", %error, "Unrecoverable error: connection broken");
                         _ = me.sender.send(Event::Broken).map_err(|error| {
-                            tracing::error!(%error, "Failed sending dismantled event");
+                            tracing::error!(phase = "up", %error, "Failed sending dismantled event");
                         });
                         (crossbeam_channel::never(), crossbeam_channel::never())
                     }
@@ -219,7 +219,7 @@ impl Connection {
                                 match me.dismantle_channel.0.send(me.phase_up) {
                                     Ok(()) => (),
                                     Err(error) => {
-                                        tracing::error!(%error, "Critical error: sending connection data on dismantle channel");
+                                        tracing::error!(phase = "up", %error, "Unrecoverable error: sending connection data on dismantle channel");
                                         _ = me.sender.send(Event::Dismantled).map_err(|error| {
                                             tracing::error!(%error, "Failed sending dismantled event");
                                         });
@@ -228,23 +228,23 @@ impl Connection {
                                 break;
                             }
                             Err(error) => {
-                                tracing::error!(%error, "Failed receiving signal on establish channel");
+                                tracing::error!(phase = "up", %error, "Failed receiving signal on establish channel");
                             }
                         }
                     },
                     recv(recv_backoff) -> _ => {
-                        tracing::debug!("Backoff delay expired during connection establishment");
+                        tracing::debug!(phase = "up", "Backoff delay hit - loop to act");
                     },
                     recv(recv_event) -> res => {
                         match res {
                             Ok(event) => {
-                                tracing::debug!(%event, "Received event during connection establishment");
+                                tracing::debug!(phase = "up", %event, "Received event");
                                 _ = me.act_event_up(event).map_err(|error| {
-                                    tracing::error!(%error, "Failed to process event during connection establishment");
+                                    tracing::error!(phase = "up", %error, "Failed to process event");
                                 });
                             }
                             Err(error) => {
-                                tracing::error!(%error, "Failed receiving event during connection establishment");
+                                tracing::error!(phase = "up", %error, "Failed receiving event");
                             }
                         }
                     }
@@ -260,7 +260,7 @@ impl Connection {
             match outer.establish_channel.0.send(()) {
                 Ok(()) => (),
                 Err(error) => {
-                    tracing::error!(%error, "Critical error sending dismantle signal on establish channel - halting");
+                    tracing::error!(phase = "down", %error, "Unrecoverable error: sending dismantle signal on establish channel");
                     return;
                 }
             }
@@ -269,13 +269,13 @@ impl Connection {
                     match res {
                         Ok(data) => data,
                         Err(error) => {
-                            tracing::error!(%error, "Critical error receiving runtime data on dismantle channel - halting");
+                            tracing::error!(phase = "down", %error, "Unrecoverable error: receiving runtime data on dismantle channel");
                             return;
                         }
                     }
                 }
                 default(Duration::from_secs(5)) => {
-                            tracing::error!("Critical timeout receiving connection data on dismantle channel - halting");
+                            tracing::error!(phase = "down", "Unrecoverable error: timeout receiving connection data on dismantle channel");
                             return;
                 }
             };
@@ -293,30 +293,28 @@ impl Connection {
                         BackoffState::Inactive => (me.act_down(), crossbeam_channel::never()),
                         BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                             Some(delay) => {
-                                tracing::debug!(?backoff, delay = ?delay, "Triggering backoff delay during connection dismantling");
+                                tracing::debug!(phase = "down", ?backoff, delay = ?delay, "Triggering backoff delay");
                                 me.backoff = BackoffState::Triggered(backoff);
                                 (crossbeam_channel::never(), crossbeam_channel::after(delay))
                             }
                             None => {
                                 me.backoff = BackoffState::Inactive;
-                                tracing::error!(
-                                    "Critical error: backoff exhausted during connection dismantling - halting"
-                                );
+                                tracing::error!(phase = "down", "Unrecoverable error: backoff exhausted");
                                 _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                                    tracing::error!(%error, "Failed sending dismantled event");
+                                    tracing::error!(phase = "down", %error, "Failed sending dismantled event");
                                 });
                                 break;
                             }
                         },
                         BackoffState::Triggered(backoff) => {
-                            tracing::debug!(?backoff, "Activating backoff during connection dismantling");
+                            tracing::debug!(phase = "down", ?backoff, "Activating backoff");
                             me.backoff = BackoffState::Active(backoff);
                             (me.act_down(), crossbeam_channel::never())
                         }
                         BackoffState::NotRecoverable(error) => {
-                            tracing::error!(%error, "Critical error during connection dismantling - halting");
+                            tracing::error!(phase = "down", %error, "Unrecoverable error: connection broken");
                             _ = me.sender.send(Event::Dismantled).map_err(|error| {
-                                tracing::error!(%error, "Failed sending dismantled event");
+                                tracing::error!(phase = "down", %error, "Failed sending dismantled event");
                             });
                             break;
                         }
@@ -324,18 +322,18 @@ impl Connection {
                     // main listening loop
                     crossbeam_channel::select! {
                         recv(recv_backoff) -> _ => {
-                            tracing::debug!("Backoff delay expired during connection dismantling");
+                            tracing::debug!(phase = "up", "Backoff delay hit - loop to act");
                         }
                         recv(recv_event) -> res => {
                             match res {
                                 Ok(evt) => {
-                                    tracing::debug!(event = ?evt, "Received event during connection dismantling");
+                                    tracing::debug!(phase = "up", event = ?evt, "Received event");
                                     _ = me.act_event_down(evt).map_err(|error| {
-                                        tracing::error!(%error, "Failed to process event during connection dismantling");
+                                        tracing::error!(phase = "up", %error, "Failed to process event");
                                     });
                                 }
                                 Err(error) => {
-                                    tracing::error!(%error, "Failed receiving event during connection dismantling");
+                                    tracing::error!(phase = "up", %error, "Failed receiving event");
                                 }
                             }
                         }
@@ -814,6 +812,7 @@ impl Connection {
                 address: registration.address(),
                 allowed_ips: wg.config.allowed_ips.clone(),
                 listen_port: wg.config.listen_port,
+                mtu: session.mtu,
             };
             let peer_info = wg_tooling::PeerInfo {
                 public_key: registration.server_public_key(),
