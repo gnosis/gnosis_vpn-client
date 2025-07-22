@@ -24,7 +24,8 @@ allow = [
   "CC0-1.0",
   "ISC",
   "MIT",
-  "MPL-2.0",
+  # this is the license in question
+  # "MPL-2.0",
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
