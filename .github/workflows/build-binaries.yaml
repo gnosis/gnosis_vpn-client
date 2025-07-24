@@ -80,13 +80,18 @@ jobs:
         id: version
         run: |
           base_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
-          if [[ ${{ inputs.version_type }} == "commit" ]]; then
+          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             echo "binary_version=${base_version}-commit.$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-            echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
-          elif [[ ${{ inputs.version_type }} == "pr" ]]; then
+            labels=$(echo '${{ toJson(github.event.pull_request.labels) }}' | jq -r '.[].name')
+            if echo "$labels" | grep -q '^publish-commits$'; then
+              echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
+            else
+              echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
+            fi
+          elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
             echo "binary_version=${base_version}-pr.${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
-          elif [[ ${{ inputs.version_type }} == "release" ]]; then
+          elif [[ "${{ inputs.version_type }}" == "release" ]]; then
             echo "binary_version=${base_version}" >> $GITHUB_OUTPUT
             echo "publish_type=github" | tee -a $GITHUB_OUTPUT
           else
@@ -100,8 +105,9 @@ jobs:
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            mv binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
-            mv binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
+            mkdir -p binaries/upload
+            cp binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
+            cp binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
           fi
       - name: Setup GCP
         if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
@@ -136,4 +142,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ steps.vars.outputs.architecture }}
-          path: ${{ github.workspace }}/binaries/*
+          path: ${{ github.workspace }}/binaries/upload/*
