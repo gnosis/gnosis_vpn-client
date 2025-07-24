@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, Connection, Destination};
+use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::wg_tooling;
 
@@ -71,15 +71,15 @@ impl Core {
         tracing::debug!(%cmd, "handling command");
         match cmd {
             Command::Ping => Ok(Response::Pong),
-            Command::Connect(peer_id) => match self.config.destinations().get(peer_id) {
+            Command::Connect(address) => match self.config.destinations().get(address) {
                 Some(dest) => {
                     self.target_destination = Some(dest.clone());
                     self.act_on_target()?;
                     Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
                 }
                 None => {
-                    tracing::info!(peer_id = %peer_id, "cannot connect to destination - peer id not found");
-                    Ok(Response::connect(command::ConnectResponse::peer_id_not_found()))
+                    tracing::info!(address = %address, "cannot connect to destination - address not found");
+                    Ok(Response::connect(command::ConnectResponse::address_not_found()))
                 }
             },
             Command::Disconnect => {
@@ -121,9 +121,10 @@ impl Core {
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         tracing::debug!(%event, "handling event");
         match event {
-            Event::ConnectWg => self.on_session_ready(),
-            Event::Disconnected(ping_has_worked) => self.on_session_disconnect(ping_has_worked),
-            Event::DropConnection => self.on_drop_connection(),
+            Event::ConnectionEvent(connection::Event::Connected) => self.on_connected(),
+            Event::ConnectionEvent(connection::Event::Disconnected) => self.on_disconnected(),
+            Event::ConnectionEvent(connection::Event::Broken) => self.on_broken(),
+            Event::ConnectionEvent(connection::Event::Dismantled) => self.on_dismantled(),
         }
     }
 
@@ -135,7 +136,7 @@ impl Core {
             conn.dismantle();
         }
         if let Some(dest) = self.target_destination.as_ref() {
-            if let Some(new_dest) = self.config.destinations().get(&dest.peer_id) {
+            if let Some(new_dest) = self.config.destinations().get(&dest.address) {
                 tracing::debug!(current = %dest, new = %new_dest, "target destination updated");
                 self.target_destination = Some(new_dest.clone());
             } else {
@@ -173,30 +174,25 @@ impl Core {
     fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::unbounded();
         let wg = wg_tooling::WireGuard::from_config(self.config.wireguard())?;
-        let mut conn = Connection::new(self.config.entry_node(), destination.clone(), wg, s);
+        let mut conn = Connection::new(
+            self.config.entry_node(),
+            destination.clone(),
+            wg,
+            s,
+            self.config.connection(),
+        );
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
         thread::spawn(move || {
             loop {
                 crossbeam_channel::select! {
-                    recv(r) -> event => {
-                        match event {
-                            Ok(connection::Event::Connected) => {
-                                _ = sender.send(Event::ConnectWg).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send ConnectWg event");
+                    recv(r) -> conn_event => {
+                        match conn_event {
+                            Ok(event) => {
+                                _ = sender.send(Event::ConnectionEvent(event)).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send ConnectionEvent event");
                                 });
-                            }
-                            Ok(connection::Event::Disconnected(ping_has_worked)) => {
-                                _ = sender.send(Event::Disconnected(ping_has_worked)).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send Disconnected event");
-                                });
-                            }
-                            Ok(connection::Event::Dismantled) => {
-                                _ = sender.send(Event::DropConnection).map_err(|error| {
-                                    tracing::error!(error = %error, "failed to send DropConnection event");
-                                });
-                                break;
                             }
                             Err(e) => {
                                 tracing::warn!(error = ?e, "failed to receive event");
@@ -209,26 +205,36 @@ impl Core {
         Ok(())
     }
 
-    fn on_session_ready(&mut self) -> Result<(), Error> {
-        tracing::debug!("on session ready");
+    fn on_connected(&mut self) -> Result<(), Error> {
+        tracing::debug!("connection ready");
         self.session_connected = true;
         Ok(())
     }
 
-    fn on_session_disconnect(&mut self, ping_has_worked: bool) -> Result<(), Error> {
+    fn on_disconnected(&mut self) -> Result<(), Error> {
         self.session_connected = false;
-        if ping_has_worked {
-            tracing::info!("session disconnected - might be connection hiccup");
-        } else {
-            tracing::warn!("session cannot send data");
+        tracing::info!("connection disconnected - might be network hiccup");
+        Ok(())
+    }
+
+    fn on_broken(&mut self) -> Result<(), Error> {
+        tracing::warn!("connection broken - attempting to reconnect");
+        self.session_connected = false;
+        match self.connection.as_mut() {
+            Some(conn) => {
+                conn.dismantle();
+            }
+            None => {
+                tracing::warn!("received broken event from unreferenced connection");
+            }
         }
         Ok(())
     }
 
-    fn on_drop_connection(&mut self) -> Result<(), Error> {
+    fn on_dismantled(&mut self) -> Result<(), Error> {
+        tracing::info!("connection closed");
         self.session_connected = false;
         self.connection = None;
-        tracing::info!("connection closed");
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
             _ = sender.send(());
