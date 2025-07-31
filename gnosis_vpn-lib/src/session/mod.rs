@@ -6,8 +6,8 @@ use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use thiserror::Error;
 
+use crate::address::Address;
 use crate::entry_node::EntryNode;
-use crate::peer_id::PeerId;
 use crate::remote_data;
 
 pub use path::Path;
@@ -18,9 +18,15 @@ mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
+    pub destination: Address,
+    #[serde(rename = "forwardPath")]
+    pub forward_path: Path,
     pub ip: String,
+    pub mtu: u16,
     pub port: u16,
     pub protocol: Protocol,
+    #[serde(rename = "returnPath")]
+    pub return_path: Path,
     pub target: String,
 }
 
@@ -28,6 +34,8 @@ pub struct Session {
 pub enum Capability {
     Segmentation,
     Retransmission,
+    RetransmissionAckOnly,
+    NoDelay,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,11 +46,13 @@ pub enum Target {
 
 pub struct OpenSession {
     entry_node: EntryNode,
-    destination: PeerId,
+    destination: Address,
     capabilities: Vec<Capability>,
     path: Path,
     target: Target,
     protocol: Protocol,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    response_buffer: String,
 }
 
 pub struct CloseSession {
@@ -101,10 +111,11 @@ impl Target {
 impl OpenSession {
     pub fn bridge(
         entry_node: EntryNode,
-        destination: PeerId,
+        destination: Address,
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
+        buffer_size: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -113,15 +124,17 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Tcp,
+            response_buffer: buffer_size,
         }
     }
 
-    pub fn main(
+    pub fn ping(
         entry_node: EntryNode,
-        destination: PeerId,
+        destination: Address,
         capabilities: Vec<Capability>,
         path: Path,
         target: Target,
+        buffer_size: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -130,6 +143,26 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             protocol: Protocol::Udp,
+            response_buffer: buffer_size,
+        }
+    }
+
+    pub fn main(
+        entry_node: EntryNode,
+        destination: Address,
+        capabilities: Vec<Capability>,
+        path: Path,
+        target: Target,
+        buffer_size: String,
+    ) -> Self {
+        OpenSession {
+            entry_node: entry_node.clone(),
+            destination,
+            capabilities,
+            path: path.clone(),
+            target: target.clone(),
+            protocol: Protocol::Udp,
+            response_buffer: buffer_size,
         }
     }
 }
@@ -154,11 +187,12 @@ impl ListSession {
 impl Session {
     pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Self, Error> {
         let headers = remote_data::authentication_headers(open_session.entry_node.api_token.as_str())?;
-        let url = open_session
-            .entry_node
-            .endpoint
-            .join("api/v3/session/")?
-            .join(open_session.protocol.to_string().as_str())?;
+        let path = format!(
+            "api/{}/session/{}",
+            open_session.entry_node.api_version, open_session.protocol
+        );
+        let url = open_session.entry_node.endpoint.join(&path)?;
+
         let mut json = serde_json::Map::new();
         json.insert("destination".to_string(), json!(open_session.destination));
 
@@ -170,14 +204,20 @@ impl Session {
             Path::Hops(hop) => {
                 json!({"Hops": hop})
             }
-            Path::IntermediatePath(ids) => {
-                json!({ "IntermediatePath": ids.clone() })
+            Path::IntermediatePath(addresses) => {
+                json!({ "IntermediatePath": addresses.clone() })
             }
         };
-        json.insert("path".to_string(), path_json);
+        json.insert("forwardPath".to_string(), path_json.clone());
+        json.insert("returnPath".to_string(), path_json);
         json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
+        json.insert("responseBuffer".to_string(), json!(open_session.response_buffer));
+        // creates a TCP session as part of the session pool, so we immediately know if it might work
+        if open_session.protocol == Protocol::Tcp {
+            json.insert("sessionPool".to_string(), json!(1));
+        }
 
         tracing::debug!(?headers, body = ?json, %url, "post open session");
         let resp = client
@@ -197,8 +237,11 @@ impl Session {
 
     pub fn close(&self, client: &blocking::Client, close_session: &CloseSession) -> Result<(), Error> {
         let headers = remote_data::authentication_headers(close_session.entry_node.api_token.as_str())?;
-        let path = format!("api/v3/session/{}/{}/{}", self.protocol, self.ip, self.port);
-        let url = close_session.entry_node.endpoint.join(path.as_str())?;
+        let path = format!(
+            "api/{}/session/{}/{}/{}",
+            close_session.entry_node.api_version, self.protocol, self.ip, self.port
+        );
+        let url = close_session.entry_node.endpoint.join(&path)?;
 
         tracing::debug!(?headers, %url, "delete session");
         client
@@ -216,8 +259,11 @@ impl Session {
 
     pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Session>, Error> {
         let headers = remote_data::authentication_headers(list_session.entry_node.api_token.as_str())?;
-        let path = format!("api/v3/session/{}", list_session.protocol);
-        let url = list_session.entry_node.endpoint.join(path.as_str())?;
+        let path = format!(
+            "api/{}/session/{}",
+            list_session.entry_node.api_version, list_session.protocol
+        );
+        let url = list_session.entry_node.endpoint.join(&path)?;
 
         tracing::debug!(?headers, %url, "list sessions");
 

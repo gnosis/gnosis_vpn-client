@@ -36,6 +36,7 @@ pub struct InterfaceInfo {
     pub address: String,
     pub allowed_ips: Option<String>,
     pub listen_port: Option<u16>,
+    pub mtu: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -207,12 +208,12 @@ impl WireGuard {
 PrivateKey = {private_key}
 Address = {address}
 {listen_port_line}
+MTU = {mtu}
 
 [Peer]
 PublicKey = {public_key}
 Endpoint = {endpoint}
 AllowedIPs = {allowed_ips}
-PersistentKeepalive = 30
 ",
             private_key = self.key_pair.priv_key,
             address = interface.address,
@@ -220,6 +221,9 @@ PersistentKeepalive = 30
             endpoint = peer.endpoint,
             allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
+            // WireGuard has differnently sized packets not exactly adhering to MTU
+            // so we postpone optimizing on this level for now
+            mtu = interface.mtu,
         )
     }
 }
