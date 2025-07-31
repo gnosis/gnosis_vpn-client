@@ -75,29 +75,36 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
+      - name: Get PR labels
+        id: pr-labels
+        uses: joerick/pr-labels-action@0543b277721e852d821c6738d449f2f4dea03d5f # v1.0.9
       - name: Get version
         if: inputs.version_type != ''
         id: version
         run: |
           base_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            echo "binary_version=${base_version}-commit.$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-            labels=$(echo '${{ toJson(github.event.pull_request.labels) }}' | jq -r '.[].name')
-            if echo "$labels" | grep -q '^publish-commits$'; then
+            bumped_version=${base_version}-commit.$(git rev-parse --short HEAD)
+            echo "binary_version=${bumped_version}" >> $GITHUB_OUTPUT
+            if [ "${GITHUB_PR_LABEL_PUBLISH_COMMITS:-0}" == '1' ]; then
               echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
             else
               echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
             fi
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            echo "binary_version=${base_version}-pr.${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            bumped_version=${base_version}-pr.${{ github.event.pull_request.number }}
+            echo "binary_version=${bumped_version}" >> $GITHUB_OUTPUT
             echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
-            echo "binary_version=${base_version}" >> $GITHUB_OUTPUT
+            bumped_version=${base_version}
+            echo "binary_version=${bumped_version}" >> $GITHUB_OUTPUT
             echo "publish_type=github" | tee -a $GITHUB_OUTPUT
           else
             echo "Invalid version type"
             exit 1
           fi
+          sed -i'.original' 's/^version = ".*"$/version = "'${bumped_version}'"/' Cargo.toml
+          rm Cargo.toml.original
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
