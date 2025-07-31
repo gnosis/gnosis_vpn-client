@@ -84,27 +84,28 @@ jobs:
         run: |
           base_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            bumped_version=${base_version}-commit.$(git rev-parse --short HEAD)
-            echo "binary_version=${bumped_version}" >> $GITHUB_OUTPUT
+            bump_version=${base_version}-commit.$(git rev-parse --short HEAD)
+            echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             if [ "${GITHUB_PR_LABEL_PUBLISH_COMMITS:-0}" == '1' ]; then
               echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
             else
               echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
             fi
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            bumped_version=${base_version}-pr.${{ github.event.pull_request.number }}
-            echo "binary_version=${bumped_version}" >> $GITHUB_OUTPUT
+            bump_version=${base_version}-pr.${{ github.event.pull_request.number }}
+            echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
-            bumped_version=${base_version}
-            echo "binary_version=${bumped_version}" >> $GITHUB_OUTPUT
+            bump_version=${base_version}
+            echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             echo "publish_type=github" | tee -a $GITHUB_OUTPUT
           else
             echo "Invalid version type"
             exit 1
           fi
-          sed -i'.original' 's/^version = ".*"$/version = "'${bumped_version}'"/' Cargo.toml
-          rm Cargo.toml.original
+          nix develop --command cargo generate-lockfile
+          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" Cargo.toml
+          rm Cargo.toml.bak
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
