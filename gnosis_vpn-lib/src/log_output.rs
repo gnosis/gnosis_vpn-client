@@ -92,17 +92,6 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
     );
 }
 
-pub fn print_wg_manual_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> If you intend to use manual WireGuard mode, please add your public key to the configuration file:
->>!!>> [wireguard]
->>!!>> manual_mode = {{ public_key = "<wg public key>" }}
-"#
-    );
-}
-
 pub fn print_no_destinations() {
     tracing::error!(
         r#"
@@ -121,5 +110,19 @@ pub fn print_session_path_instructions() {
 >>!!>> This could mean you are missing channel connections to relayers.
 >>!!>> Please check your hoprd node and open channels to relayers as specified here: https://github.com/gnosis/gnosis_vpn-client/blob/main/ONBOARDING.md#relayers.
 "#
+    );
+}
+
+pub fn print_session_established(path: &str) {
+    tracing::info!(
+        r#"
+
+            /---==========================---\
+            |   VPN CONNECTION ESTABLISHED   |
+            \---==========================---/
+
+            route: {}
+        "#,
+        path
     );
 }

@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 [hoprd_node]
 endpoint = "http://host.docker.internal:<api port>"

@@ -21,10 +21,6 @@ jobs:
         binary:
           - architecture: x86_64-linux
             runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: armv7l-linux
-            runner: ubuntu-24.04
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
@@ -60,7 +56,7 @@ jobs:
           echo "release_version=${release_version}" >> $GITHUB_OUTPUT
       - name: Create release and publish binaries
         run: |
-          architectures=("aarch64-linux" "x86_64-linux" "armv7l-linux" "aarch64-darwin" "x86_64-darwin" )
+          architectures=("x86_64-linux" "aarch64-darwin" "x86_64-darwin" )
           mkdir -p binaries
           echo "Generating release notes"
           gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
