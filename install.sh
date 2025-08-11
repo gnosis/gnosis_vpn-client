@@ -147,7 +147,7 @@ print_intro() {
             printf "\rProceeding in %d seconds..." "$i"
             sleep 1
         done
-        printf "\rProceeding in 1 second..."
+        printf "\rProceeding in 1 second...\n"
         sleep 1
     else
         read -r -n 1 -s -p "Press any key to continue or Ctrl+C to exit..."
@@ -340,7 +340,7 @@ check_channels() {
             printf "\rRechecking open channels to Gnosis VPN relayer nodes in %d seconds... " "$i"
             sleep 1
         done
-        printf "\rRechecking open channels to Gnosis VPN relayer nodes in 1 second...  "
+        printf "\rRechecking open channels to Gnosis VPN relayer nodes in 1 second...\n"
         sleep 1
         check_channels
         return
