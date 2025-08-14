@@ -27,6 +27,8 @@ pub struct Session {
     pub protocol: Protocol,
     #[serde(rename = "returnPath")]
     pub return_path: Path,
+    #[serde(rename = "surbLen")]
+    pub surb_len: u16,
     pub target: String,
 }
 
