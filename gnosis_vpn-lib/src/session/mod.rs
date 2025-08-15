@@ -48,6 +48,16 @@ pub enum Target {
     Sealed(SocketAddr),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Config {
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    #[serde(rename = "maxSurbUpstream")]
+    pub max_surb_upstream: String,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    #[serde(rename = "responseBuffer")]
+    pub response_buffer: String,
+}
+
 pub struct OpenSession {
     entry_node: EntryNode,
     destination: Address,
@@ -66,6 +76,11 @@ pub struct CloseSession {
 pub struct ListSession {
     entry_node: EntryNode,
     protocol: Protocol,
+}
+
+pub struct ConfigSession {
+    entry_node: EntryNode,
+    session_id: String,
 }
 
 #[derive(Error, Debug)]
@@ -188,6 +203,15 @@ impl ListSession {
     }
 }
 
+impl ConfigSession {
+    pub fn new(entry_node: &EntryNode, session_id: &str) -> Self {
+        ConfigSession {
+            entry_node: entry_node.clone(),
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
 impl Session {
     pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Self, Error> {
         let headers = remote_data::authentication_headers(open_session.entry_node.api_token.as_str())?;
@@ -282,6 +306,31 @@ impl Session {
             // response error checks happen after response
             .map_err(response_errors)?
             .json::<Vec<Session>>()?;
+
+        Ok(resp)
+    }
+
+    pub fn config(client: &blocking::Client, config: &ConfigSession) -> Result<Config, Error> {
+        let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
+        let path = format!(
+            "api/{}/session/config/{}",
+            config.entry_node.api_version, config.session_id
+        );
+        let url = config.entry_node.endpoint.join(&path)?;
+
+        tracing::debug!(?headers, %url, "get config");
+
+        let resp = client
+            .get(url)
+            .timeout(config.entry_node.session_timeout)
+            .headers(headers)
+            .send()
+            // connection error checks happen before response
+            .map_err(connect_errors)?
+            .error_for_status()
+            // response error checks happen after response
+            .map_err(response_errors)?
+            .json::<Config>()?;
 
         Ok(resp)
     }
