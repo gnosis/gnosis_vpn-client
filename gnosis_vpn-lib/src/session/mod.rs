@@ -18,6 +18,8 @@ mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(rename = "activeClients")]
+    pub active_clients: Vec<String>,
     pub destination: Address,
     #[serde(rename = "forwardPath")]
     pub forward_path: Path,
