@@ -410,6 +410,18 @@ impl Connection {
                             return Ok(());
                         };
                         let session = res?;
+                        let mut first_id: String = String::new();
+                        match session.active_clients.first() {
+                            Some(client) => first_id = client.clone(),
+                            None => (),
+                        }
+                        let params = session::ConfigSession::new(&self.entry_node, &first_id);
+
+                        let client = self.client.clone();
+                        thread::spawn(move || {
+                            let res = Session::config(&client, &params);
+                            tracing::debug!(?res, "Session config result");
+                        });
                         self.phase_up = PhaseUp::PreparePingTunnel(session, registration);
                         self.backoff = BackoffState::Inactive;
                         Ok(())
