@@ -52,12 +52,7 @@ enum PhaseUp {
     FixPingSessionClosing(Session, Registration),
     PreparePingTunnel(Session, Registration),
     CheckPingTunnel(Session, Registration),
-    ClosePingTunnel(Session, Registration),
-    PrepareMainSession(Registration),
-    FixMainSession(Registration),
-    FixMainSessionClosing(Session, Registration),
-    PrepareMainTunnel(Session, Registration, SystemTime),
-    TunnelEstablished(Session, Registration, SystemTime),
+    UpgradeToMainTunnel(Session, Registration),
     MonitorTunnel(Session, Registration, SystemTime),
     TunnelBroken(Session, Registration),
 }
@@ -360,12 +355,9 @@ impl Connection {
             PhaseUp::FixPingSessionClosing(session, _registration) => self.close_session(&session),
             PhaseUp::PreparePingTunnel(session, registration) => self.open_wg_session(&session, &registration),
             PhaseUp::CheckPingTunnel(_session, _registration) => self.immediate_ping(),
-            PhaseUp::ClosePingTunnel(session, _registration) => self.close_wg_session(&session),
-            PhaseUp::PrepareMainSession(_registration) => self.open_session(self.main_session_params()),
-            PhaseUp::FixMainSession(_registration) => self.list_sessions(&Protocol::Udp),
-            PhaseUp::FixMainSessionClosing(session, _registration) => self.close_session(&session),
-            PhaseUp::PrepareMainTunnel(session, registration, _since) => self.open_wg_session(&session, &registration),
-            PhaseUp::TunnelEstablished(_session, _registration, _since) => self.immediate_ping(),
+            PhaseUp::UpgradeToMainTunnel(session, registration) => {
+                self.adjust_response_buffer(&session, self.options.buffer_sizes.main.clone())
+            }
             PhaseUp::MonitorTunnel(_session, _registration, _since) => self.delayed_ping(),
             PhaseUp::TunnelBroken(session, _registration) => self.close_wg_session(&session),
         }

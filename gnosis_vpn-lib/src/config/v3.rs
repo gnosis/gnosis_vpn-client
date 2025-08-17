@@ -110,6 +110,14 @@ struct BufferOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct MaxSurbUpstreamOptions {
+    // could be improved by using bytesize crates parser
+    bridge: Option<String>,
+    ping: Option<String>,
+    main: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
     pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
@@ -305,15 +313,27 @@ impl Connection {
         PingInterval { min: 5, max: 10 }
     }
 
-    pub fn default_buffer_sizes() -> options::BufferSizes {
-        options::BufferSizes::new(
-            // bridge
-            "0 B".to_string(),
-            // ping
-            "0 B".to_string(),
-            // main
-            "1.5 MB".to_string(),
-        )
+    pub fn default_bridge_buffer_size() -> String {
+        "0 B".to_string()
+    }
+
+    pub fn default_ping_buffer_size() -> String {
+        "0 B".to_string()
+    }
+    pub fn default_main_buffer_size() -> String {
+        "1.5 MB".to_string()
+    }
+
+    pub fn default_bridge_max_surb_upstream() -> String {
+        "0 B".to_string()
+    }
+
+    pub fn default_ping_max_surb_upstream() -> String {
+        "0 B".to_string()
+    }
+
+    pub fn default_main_max_surb_upstream() -> String {
+        "1.0 MB".to_string()
     }
 }
 
@@ -328,7 +348,16 @@ impl Default for options::Options {
             options::SessionParameters::new(wg_target, wg_caps),
             Connection::default_ping_interval().min..Connection::default_ping_interval().max,
             monitor::PingOptions::default(),
-            Connection::default_buffer_sizes(),
+            options::BufferSizes::from(BufferOptions {
+                bridge: None,
+                ping: None,
+                main: None,
+            }),
+            options::MaxSurbUpstream::from(MaxSurbUpstreamOptions {
+                bridge: None,
+                ping: None,
+                main: None,
+            }),
             Connection::default_ping_retry_timeout(),
         )
     }
@@ -337,9 +366,19 @@ impl Default for options::Options {
 impl From<BufferOptions> for options::BufferSizes {
     fn from(buffer: BufferOptions) -> Self {
         options::BufferSizes::new(
-            buffer.bridge.unwrap_or("0 B".to_string()),
-            buffer.ping.unwrap_or("0 B".to_string()),
-            buffer.main.unwrap_or("5 MB".to_string()),
+            buffer.bridge.unwrap_or(Connection::default_bridge_buffer_size()),
+            buffer.ping.unwrap_or(Connection::default_ping_buffer_size()),
+            buffer.main.unwrap_or(Connection::default_main_buffer_size()),
+        )
+    }
+}
+
+impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
+    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
+        options::MaxSurbUpstream::new(
+            surbs.bridge.unwrap_or(Connection::default_bridge_max_surb_upstream()),
+            surbs.ping.unwrap_or(Connection::default_ping_max_surb_upstream()),
+            surbs.main.unwrap_or(Connection::default_main_max_surb_upstream()),
         )
     }
 }
@@ -549,6 +588,11 @@ max = 10
 bridge = "0 B"
 ping = "0 B"
 main = "1.5 MB"
+
+[connection.max_surb_upstream]
+bridge = "0 B"
+ping = "0 B"
+main = "1.0 MB"
 
 [wireguard]
 listen_port = 51820

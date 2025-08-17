@@ -67,6 +67,8 @@ pub struct OpenSession {
     protocol: Protocol,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    max_surb_upstream: String,
 }
 
 pub struct CloseSession {
@@ -78,9 +80,18 @@ pub struct ListSession {
     protocol: Protocol,
 }
 
-pub struct ConfigSession {
+pub struct SessionConfig {
     entry_node: EntryNode,
     session_id: String,
+}
+
+pub struct UpdateSessionConfig {
+    entry_node: EntryNode,
+    session_id: String,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    response_buffer: String,
+    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    max_surb_upstream: String,
 }
 
 #[derive(Error, Debug)]
@@ -135,6 +146,7 @@ impl OpenSession {
         path: Path,
         target: Target,
         buffer_size: String,
+        max_surb_upstream: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -144,25 +156,7 @@ impl OpenSession {
             target: target.clone(),
             protocol: Protocol::Tcp,
             response_buffer: buffer_size,
-        }
-    }
-
-    pub fn ping(
-        entry_node: EntryNode,
-        destination: Address,
-        capabilities: Vec<Capability>,
-        path: Path,
-        target: Target,
-        buffer_size: String,
-    ) -> Self {
-        OpenSession {
-            entry_node: entry_node.clone(),
-            destination,
-            capabilities,
-            path: path.clone(),
-            target: target.clone(),
-            protocol: Protocol::Udp,
-            response_buffer: buffer_size,
+            max_surb_upstream,
         }
     }
 
@@ -173,6 +167,7 @@ impl OpenSession {
         path: Path,
         target: Target,
         buffer_size: String,
+        max_surb_upstream: String,
     ) -> Self {
         OpenSession {
             entry_node: entry_node.clone(),
@@ -182,6 +177,7 @@ impl OpenSession {
             target: target.clone(),
             protocol: Protocol::Udp,
             response_buffer: buffer_size,
+            max_surb_upstream,
         }
     }
 }
@@ -203,11 +199,22 @@ impl ListSession {
     }
 }
 
-impl ConfigSession {
+impl SessionConfig {
     pub fn new(entry_node: &EntryNode, session_id: &str) -> Self {
-        ConfigSession {
+        SessionConfig {
             entry_node: entry_node.clone(),
             session_id: session_id.to_string(),
+        }
+    }
+}
+
+impl UpdateSessionConfig {
+    pub fn new(entry_node: &EntryNode, session_id: &str, response_buffer: String, max_surb_upstream: String) -> Self {
+        UpdateSessionConfig {
+            entry_node: entry_node.clone(),
+            session_id: session_id.to_string(),
+            response_buffer,
+            max_surb_upstream,
         }
     }
 }
@@ -242,6 +249,7 @@ impl Session {
 
         json.insert("capabilities".to_string(), json!(open_session.capabilities));
         json.insert("responseBuffer".to_string(), json!(open_session.response_buffer));
+        json.insert("maxSurbUpstream".to_string(), json!(open_session.max_surb_upstream));
         // creates a TCP session as part of the session pool, so we immediately know if it might work
         if open_session.protocol == Protocol::Tcp {
             json.insert("sessionPool".to_string(), json!(1));
@@ -310,7 +318,7 @@ impl Session {
         Ok(resp)
     }
 
-    pub fn config(client: &blocking::Client, config: &ConfigSession) -> Result<Config, Error> {
+    pub fn config(client: &blocking::Client, config: &SessionConfig) -> Result<Config, Error> {
         let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
         let path = format!(
             "api/{}/session/config/{}",
@@ -332,6 +340,35 @@ impl Session {
             .map_err(response_errors)?
             .json::<Config>()?;
 
+        Ok(resp)
+    }
+
+    pub fn update(client: &blocking::Client, config: &UpdateSessionConfig) -> Result<Config, Error> {
+        let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
+        let path = format!(
+            "api/{}/session/config/{}",
+            config.entry_node.api_version, config.session_id
+        );
+        let url = config.entry_node.endpoint.join(&path)?;
+
+        let mut json = serde_json::Map::new();
+        json.insert("maxSurbUpstream".to_string(), json!(config.max_surb_upstream));
+        json.insert("responseBuffer".to_string(), json!(config.response_buffer));
+
+        tracing::debug!(?headers, body = ?json, %url, "post config");
+
+        let resp = client
+            .post(url)
+            .json(&json)
+            .timeout(config.entry_node.session_timeout)
+            .headers(headers)
+            .send()
+            // connection error checks happen before response
+            .map_err(connect_errors)?
+            .error_for_status()
+            // response error can only be mapped after sending
+            .map_err(response_errors)?
+            .json::<Self>()?;
         Ok(resp)
     }
 
