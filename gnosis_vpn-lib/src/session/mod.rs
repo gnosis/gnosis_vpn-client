@@ -87,7 +87,6 @@ pub struct SessionConfig {
 
 pub struct UpdateSessionConfig {
     entry_node: EntryNode,
-    session_id: String,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
@@ -112,6 +111,10 @@ pub enum Error {
     SocketConnect(reqwest::Error),
     #[error("Timeout: {0:?}")]
     Timeout(reqwest::Error),
+    #[error("Session does not have any active clients")]
+    NoSessionId,
+    #[error("Session has more than one active client")]
+    AmbiguousSessionId,
 }
 
 impl Target {
@@ -209,10 +212,9 @@ impl SessionConfig {
 }
 
 impl UpdateSessionConfig {
-    pub fn new(entry_node: &EntryNode, session_id: &str, response_buffer: String, max_surb_upstream: String) -> Self {
+    pub fn new(entry_node: &EntryNode, response_buffer: String, max_surb_upstream: String) -> Self {
         UpdateSessionConfig {
             entry_node: entry_node.clone(),
-            session_id: session_id.to_string(),
             response_buffer,
             max_surb_upstream,
         }
@@ -343,12 +345,14 @@ impl Session {
         Ok(resp)
     }
 
-    pub fn update(client: &blocking::Client, config: &UpdateSessionConfig) -> Result<Config, Error> {
+    pub fn update(&self, client: &blocking::Client, config: &UpdateSessionConfig) -> Result<Config, Error> {
+        let active_client = match &self.active_clients.as_slice() {
+            [] => return Err(Error::NoSessionId),
+            [client] => client,
+            _ => return Err(Error::AmbiguousSessionId),
+        };
         let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/config/{}",
-            config.entry_node.api_version, config.session_id
-        );
+        let path = format!("api/{}/session/config/{}", config.entry_node.api_version, active_client);
         let url = config.entry_node.endpoint.join(&path)?;
 
         let mut json = serde_json::Map::new();
@@ -368,7 +372,7 @@ impl Session {
             .error_for_status()
             // response error can only be mapped after sending
             .map_err(response_errors)?
-            .json::<Self>()?;
+            .json::<Config>()?;
         Ok(resp)
     }
 
