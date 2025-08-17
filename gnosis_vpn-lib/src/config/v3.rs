@@ -58,6 +58,7 @@ pub(super) struct Connection {
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
     buffer: Option<BufferOptions>,
+    max_surb_upstream: Option<MaxSurbUpstreamOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -208,6 +209,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.buffer.{k}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "max_surb_upstream" {
+                        if let Some(surbs) = v.as_table() {
+                            for (k, _v) in surbs.iter() {
+                                if k == "bridge" || k == "ping" || k == "main" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
                         continue;
@@ -373,12 +385,32 @@ impl From<BufferOptions> for options::BufferSizes {
     }
 }
 
+impl Default for options::BufferSizes {
+    fn default() -> Self {
+        options::BufferSizes::new(
+            Connection::default_bridge_buffer_size(),
+            Connection::default_ping_buffer_size(),
+            Connection::default_main_buffer_size(),
+        )
+    }
+}
+
 impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
     fn from(surbs: MaxSurbUpstreamOptions) -> Self {
         options::MaxSurbUpstream::new(
             surbs.bridge.unwrap_or(Connection::default_bridge_max_surb_upstream()),
             surbs.ping.unwrap_or(Connection::default_ping_max_surb_upstream()),
             surbs.main.unwrap_or(Connection::default_main_max_surb_upstream()),
+        )
+    }
+}
+
+impl Default for options::MaxSurbUpstream {
+    fn default() -> Self {
+        options::MaxSurbUpstream::new(
+            Connection::default_bridge_max_surb_upstream(),
+            Connection::default_ping_max_surb_upstream(),
+            Connection::default_main_max_surb_upstream(),
         )
     }
 }
@@ -484,7 +516,11 @@ impl Config {
         let buffer_sizes = connection
             .and_then(|c| c.buffer.clone())
             .map(|b| b.into())
-            .unwrap_or(Connection::default_buffer_sizes());
+            .unwrap_or(options::BufferSizes::default());
+        let max_surb_upstream = connection
+            .and_then(|c| c.max_surb_upstream.clone())
+            .map(|b| b.into())
+            .unwrap_or(options::MaxSurbUpstream::default());
         let ping_retry_timeout = connection
             .and_then(|c| c.ping_retry_timeout)
             .unwrap_or(Connection::default_ping_retry_timeout());
@@ -495,6 +531,7 @@ impl Config {
             ping_range,
             ping_opts,
             buffer_sizes,
+            max_surb_upstream,
             ping_retry_timeout,
         )
     }
