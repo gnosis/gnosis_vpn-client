@@ -12,7 +12,7 @@ name = "gnosis_vpn"
 
 [workspace.dependencies]
 backoff = "0.4.0"
-clap = { version = "4.5.43", features = ["derive", "env"] }
+clap = { version = "4.5.45", features = ["derive", "env"] }
 crossbeam-channel = "0.5.15"
 ctrlc = { version = "3.4.7", features = ["termination"] }
 directories = "6.0.0"
@@ -20,14 +20,14 @@ exitcode = "1.1.2"
 humantime = "2.2.0"
 humantime-serde = "1.1.1"
 libp2p-identity = { version = "0.2", features = ["ed25519", "peerid"] }
-notify = { version = "8.1.0", features = ["crossbeam-channel"] }
+notify = { version = "8.2.0", features = ["crossbeam-channel"] }
 ping = "0.6.1"
-rand = "0.9.1"
-reqwest = { version = "0.12.22", features = ["json", "blocking"] }
+rand = "0.9.2"
+reqwest = { version = "0.12.23", features = ["json", "blocking"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
-thiserror = "2.0.14"
-toml = "0.9.4"
+thiserror = "2.0.15"
+toml = "0.9.5"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 url = { version = "2.5.4", features = ["serde"] }
