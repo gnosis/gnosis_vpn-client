@@ -50,7 +50,7 @@ pub enum Target {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
-    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
     #[serde(rename = "maxSurbUpstream")]
     pub max_surb_upstream: String,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
@@ -67,7 +67,7 @@ pub struct OpenSession {
     protocol: Protocol,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
-    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
     max_surb_upstream: String,
 }
 
@@ -89,7 +89,7 @@ pub struct UpdateSessionConfig {
     entry_node: EntryNode,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
-    // https://docs.rs/bytesize/2.0.1/bytesize/ string
+    // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
     max_surb_upstream: String,
 }
 
@@ -115,6 +115,8 @@ pub enum Error {
     NoSessionId,
     #[error("Session has more than one active client")]
     AmbiguousSessionId,
+    #[error("Invalid config parameter")]
+    InvalidConfigParameter,
 }
 
 impl Target {
@@ -371,7 +373,7 @@ impl Session {
             .map_err(connect_errors)?
             .error_for_status()
             // response error can only be mapped after sending
-            .map_err(response_errors)?
+            .map_err(update_response_errors)?
             .json::<Config>()?;
         Ok(resp)
     }
@@ -396,6 +398,19 @@ fn close_response_errors(err: reqwest::Error) -> Error {
         Error::SessionNotFound
     } else if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
         Error::Unauthorized
+    } else {
+        err.into()
+    }
+}
+
+fn update_response_errors(err: reqwest::Error) -> Error {
+    if err.status() == Some(StatusCode::NOT_FOUND) {
+        Error::SessionNotFound
+    } else if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
+        Error::Unauthorized
+    // 406 Not Acceptable
+    } else if err.status() == Some(reqwest::StatusCode::NOT_ACCEPTABLE) {
+        Error::InvalidConfigParameter
     } else {
         err.into()
     }

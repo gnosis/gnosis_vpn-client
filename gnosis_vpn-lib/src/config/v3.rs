@@ -112,7 +112,7 @@ struct BufferOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct MaxSurbUpstreamOptions {
-    // could be improved by using bytesize crates parser
+    // could be improved by using human-bandwidth crates parser
     bridge: Option<String>,
     ping: Option<String>,
     main: Option<String>,
@@ -337,15 +337,15 @@ impl Connection {
     }
 
     pub fn default_bridge_max_surb_upstream() -> String {
-        "0 B".to_string()
+        "0 bps".to_string()
     }
 
     pub fn default_ping_max_surb_upstream() -> String {
-        "0 B".to_string()
+        "0 bps".to_string()
     }
 
     pub fn default_main_max_surb_upstream() -> String {
-        "1.0 MB".to_string()
+        "1 MB/s".to_string()
     }
 }
 
@@ -627,9 +627,9 @@ ping = "0 B"
 main = "1.5 MB"
 
 [connection.max_surb_upstream]
-bridge = "0 B"
-ping = "0 B"
-main = "1.0 MB"
+bridge = "0 bps"
+ping = "0 bps"
+main = "1.0 mbps"
 
 [wireguard]
 listen_port = 51820

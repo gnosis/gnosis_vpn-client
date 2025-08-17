@@ -534,6 +534,7 @@ impl Connection {
             }
             InternalEvent::UpdateSession(res) => {
                 check_entry_node(&res);
+                check_config_parameters(&res);
                 res?;
                 match self.phase_up.clone() {
                     PhaseUp::UpgradeToMainTunnel(session, registration) => {
@@ -958,6 +959,13 @@ fn check_entry_node<R>(res: &Result<R, session::Error>) {
         Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
         Err(session::Error::SocketConnect(_)) => log_output::print_node_port_instructions(),
         Err(session::Error::Timeout(_)) => log_output::print_node_timeout_instructions(),
+        _ => (),
+    }
+}
+
+fn check_config_parameters<R>(res: &Result<R, session::Error>) {
+    match res {
+        Err(session::Error::InvalidConfigParameter) => log_output::print_invalid_session_config_parameter(),
         _ => (),
     }
 }
