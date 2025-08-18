@@ -516,11 +516,11 @@ impl Config {
         let buffer_sizes = connection
             .and_then(|c| c.buffer.clone())
             .map(|b| b.into())
-            .unwrap_or(options::BufferSizes::default());
+            .unwrap_or_default();
         let max_surb_upstream = connection
             .and_then(|c| c.max_surb_upstream.clone())
             .map(|b| b.into())
-            .unwrap_or(options::MaxSurbUpstream::default());
+            .unwrap_or_default();
         let ping_retries_timeout = connection
             .and_then(|c| c.ping_retries_timeout)
             .unwrap_or(Connection::default_ping_retry_timeout());

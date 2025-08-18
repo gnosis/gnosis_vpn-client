@@ -877,7 +877,7 @@ impl Display for PhaseUp {
                 write!(f, "UpgradeToMainTunnel({session}, {registration})")
             }
             PhaseUp::MonitorTunnel(session, registration, monitor) => {
-                write!(f, "MonitorTunnel({}, {}, {})", session, monitor, registration,)
+                write!(f, "MonitorTunnel({session}, {monitor}, {registration})",)
             }
             PhaseUp::TunnelBroken(session, registration) => {
                 write!(f, "TunnelBroken({session}, {registration})")
