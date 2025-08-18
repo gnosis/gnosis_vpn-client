@@ -72,7 +72,7 @@ enum PhaseDown {
 #[derive(Debug)]
 enum InternalEvent {
     OpenSession(Result<Session, session::Error>),
-    UpdateSession(Result<session::Config, session::Error>),
+    UpdateSession(Result<(), session::Error>),
     CloseSession(Result<(), session::Error>),
     ListSessions(Result<Vec<Session>, session::Error>),
     RegisterWg(Result<Registration, gvpn_client::Error>),

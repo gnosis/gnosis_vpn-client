@@ -347,7 +347,7 @@ impl Session {
         Ok(resp)
     }
 
-    pub fn update(&self, client: &blocking::Client, config: &UpdateSessionConfig) -> Result<Config, Error> {
+    pub fn update(&self, client: &blocking::Client, config: &UpdateSessionConfig) -> Result<(), Error> {
         let active_client = match &self.active_clients.as_slice() {
             [] => return Err(Error::NoSessionId),
             [client] => client,
@@ -363,7 +363,7 @@ impl Session {
 
         tracing::debug!(?headers, body = ?json, %url, "post config");
 
-        let resp = client
+        client
             .post(url)
             .json(&json)
             .timeout(config.entry_node.session_timeout)
@@ -373,9 +373,8 @@ impl Session {
             .map_err(connect_errors)?
             .error_for_status()
             // response error can only be mapped after sending
-            .map_err(update_response_errors)?
-            .json::<Config>()?;
-        Ok(resp)
+            .map_err(update_response_errors)?;
+        Ok(())
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {

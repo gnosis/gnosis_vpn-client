@@ -621,15 +621,15 @@ seq_count = 1
 min = 5
 max = 10
 
-[connection.buffer]
-bridge = "0 B"
-ping = "0 B"
-main = "1.5 MB"
-
 [connection.max_surb_upstream]
-bridge = "0 bps"
-ping = "0 bps"
-main = "1.0 mbps"
+bridge = "0 Mb/s"
+ping = "1 Mb/s"
+main = "2 Mb/s"
+
+[connection.buffer]
+bridge = "0 kB"
+ping = "32 kB"
+main = "8 MB"
 
 [wireguard]
 listen_port = 51820
