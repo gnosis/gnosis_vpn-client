@@ -1,17 +1,17 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use crate::{monitor, session};
+use crate::{ping, session};
 
 #[derive(Clone, Debug)]
 pub struct Options {
     pub(super) bridge: SessionParameters,
     pub(super) wg: SessionParameters,
     pub(super) ping_interval: Range<u8>,
-    pub(super) ping_options: monitor::PingOptions,
+    pub(super) ping_options: ping::PingOptions,
     pub(super) buffer_sizes: BufferSizes,
     pub(super) max_surb_upstream: MaxSurbUpstream,
-    pub(super) ping_retry_timeout: Duration,
+    pub(super) ping_retries_timeout: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -57,10 +57,10 @@ impl Options {
         bridge: SessionParameters,
         wg: SessionParameters,
         ping_interval: Range<u8>,
-        ping_options: monitor::PingOptions,
+        ping_options: ping::PingOptions,
         buffer_sizes: BufferSizes,
         max_surb_upstream: MaxSurbUpstream,
-        ping_retry_timeout: Duration,
+        ping_retries_timeout: Duration,
     ) -> Self {
         Self {
             bridge,
@@ -69,7 +69,7 @@ impl Options {
             ping_options,
             buffer_sizes,
             max_surb_upstream,
-            ping_retry_timeout,
+            ping_retries_timeout,
         }
     }
 }

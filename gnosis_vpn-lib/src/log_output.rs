@@ -114,32 +114,6 @@ pub fn print_session_path_instructions() {
     );
 }
 
-pub fn print_invalid_session_config_parameter() {
-    tracing::error!(
-        r#"
-
->>!!>> Either your buffer size or max surb upstream parameter configuration is invalid.
->>!!>> Buffer sizes must be human readable bytesize values like "1.5 MB" or "10 KB".
->>!!>> Detailed docs at https://docs.rs/bytesize/2.0.1/bytesize/.
->>!!>>
->>!!>> Max surb upstream values need to be a human readable bandwidth value like "1 mbps" or "10 kbps".
->>!!>> Detailed docs at https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/.
->>!!>>
->>!!>> Please update your configuration file:
->>!!>>
->>!!>> [connection.buffer]
->>!!>> bridge = "0 B"
->>!!>> ping = "0 B"
->>!!>> main = "1.5 MB"
->>!!>>
->>!!>> [connection.max_surb_upstream]
->>!!>> bridge = "0 bps"
->>!!>> ping = "0 bps"
->>!!>> main = "1.0 mbps"
-"#
-    );
-}
-
 pub fn print_session_established(path: &str) {
     tracing::info!(
         r#"

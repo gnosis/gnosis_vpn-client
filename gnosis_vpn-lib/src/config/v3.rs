@@ -11,7 +11,7 @@ use std::vec::Vec;
 use crate::address::Address;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::entry_node::{self, EntryNode};
-use crate::monitor;
+use crate::ping;
 use crate::session;
 use crate::wg_tooling::Config as WireGuardConfig;
 
@@ -53,7 +53,7 @@ pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     session_timeout: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
-    ping_retry_timeout: Option<Duration>,
+    ping_retries_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
@@ -166,7 +166,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "session_timeout" {
                         continue;
                     }
-                    if k == "ping_retry_timeout" {
+                    if k == "ping_retries_timeout" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
@@ -359,7 +359,7 @@ impl Default for options::Options {
             options::SessionParameters::new(bridge_target, bridge_caps),
             options::SessionParameters::new(wg_target, wg_caps),
             Connection::default_ping_interval().min..Connection::default_ping_interval().max,
-            monitor::PingOptions::default(),
+            ping::PingOptions::default(),
             options::BufferSizes::from(BufferOptions {
                 bridge: None,
                 ping: None,
@@ -501,10 +501,10 @@ impl Config {
             .and_then(|p| p.interval.clone())
             .unwrap_or(Connection::default_ping_interval());
 
-        let def_opts = monitor::PingOptions::default();
+        let def_opts = ping::PingOptions::default();
         let ping_opts = connection
             .and_then(|c| c.ping.as_ref())
-            .map(|p| monitor::PingOptions {
+            .map(|p| ping::PingOptions {
                 address: p.address.unwrap_or(def_opts.address),
                 timeout: p.timeout.unwrap_or(def_opts.timeout),
                 ttl: p.ttl.unwrap_or(def_opts.ttl),
@@ -521,8 +521,8 @@ impl Config {
             .and_then(|c| c.max_surb_upstream.clone())
             .map(|b| b.into())
             .unwrap_or(options::MaxSurbUpstream::default());
-        let ping_retry_timeout = connection
-            .and_then(|c| c.ping_retry_timeout)
+        let ping_retries_timeout = connection
+            .and_then(|c| c.ping_retries_timeout)
             .unwrap_or(Connection::default_ping_retry_timeout());
 
         options::Options::new(
@@ -532,7 +532,7 @@ impl Config {
             ping_opts,
             buffer_sizes,
             max_surb_upstream,
-            ping_retry_timeout,
+            ping_retries_timeout,
         )
     }
 
@@ -600,7 +600,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 [connection]
 listen_host = "0.0.0.0:1422"
 session_timeout = "15s"
-ping_retry_timeout = "10s"
+ping_retries_timeout = "20s"
 
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
@@ -614,8 +614,8 @@ target_type = "sealed"
 
 [connection.ping]
 address = "10.128.0.1"
-timeout = "4s"
-ttl = 5
+timeout = "7s"
+ttl = 6
 seq_count = 1
 [connection.ping.interval]
 min = 5

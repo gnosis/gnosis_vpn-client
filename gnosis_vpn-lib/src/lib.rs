@@ -10,5 +10,5 @@ pub mod wg_tooling;
 
 mod dirs;
 mod gvpn_client;
-mod monitor;
+mod ping;
 mod remote_data;

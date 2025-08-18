@@ -1,7 +1,7 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use std::fmt::{self, Display};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use crossbeam_channel;
 use rand::Rng;
@@ -11,14 +11,16 @@ use thiserror::Error;
 use crate::entry_node::{self, EntryNode};
 use crate::gvpn_client::{self, Registration};
 use crate::log_output;
-use crate::monitor;
+use crate::ping;
 use crate::session::{self, Protocol, Session};
 use crate::wg_tooling;
 
 use destination::Destination;
+use monitor::Monitor;
 use options::Options;
 
 pub mod destination;
+mod monitor;
 pub mod options;
 
 #[derive(Clone, Copy, Debug)]
@@ -53,7 +55,7 @@ enum PhaseUp {
     PreparePingTunnel(Session, Registration),
     CheckPingTunnel(Session, Registration),
     UpgradeToMainTunnel(Session, Registration),
-    MonitorTunnel(Session, Registration, SystemTime),
+    MonitorTunnel(Session, Registration, Monitor),
     TunnelBroken(Session, Registration),
 }
 
@@ -78,7 +80,7 @@ enum InternalEvent {
     RegisterWg(Result<Registration, gvpn_client::Error>),
     UnregisterWg(Result<(), gvpn_client::Error>),
     WgOpenTunnel(WgOpenResult),
-    Ping(Result<(), monitor::Error>),
+    Ping(Result<(), ping::Error>),
 }
 
 #[derive(Debug)]
@@ -357,7 +359,7 @@ impl Connection {
             PhaseUp::PreparePingTunnel(session, registration) => self.open_wg_session(&session, &registration),
             PhaseUp::CheckPingTunnel(_session, _registration) => self.immediate_ping(),
             PhaseUp::UpgradeToMainTunnel(session, _registration) => self.set_main_config(&session),
-            PhaseUp::MonitorTunnel(_session, _registration, _since) => self.delayed_ping(),
+            PhaseUp::MonitorTunnel(_session, _registration, _monitor) => self.delayed_ping(),
             PhaseUp::TunnelBroken(session, _registration) => self.close_wg_session(&session),
         }
     }
@@ -479,8 +481,9 @@ impl Connection {
                     self.backoff = BackoffState::Inactive;
                     Ok(())
                 }
-                (Ok(_), PhaseUp::MonitorTunnel(session, _registration, since)) => {
-                    tracing::info!(%session, "Session verified as open for {}", log_output::elapsed(&since));
+                (Ok(_), PhaseUp::MonitorTunnel(session, registration, monitor)) => {
+                    tracing::info!(%session, "Session verified as open for {}", log_output::elapsed(&monitor.since));
+                    self.phase_up = PhaseUp::MonitorTunnel(session, registration, monitor.add_success());
                     Ok(())
                 }
                 (Err(error), PhaseUp::CheckPingTunnel(session, _registration)) => {
@@ -490,11 +493,17 @@ impl Connection {
                     }
                     Ok(())
                 }
-                (Err(_), PhaseUp::MonitorTunnel(session, registration, since)) => {
-                    tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&since));
-                    self.phase_up = PhaseUp::TunnelBroken(session, registration);
-                    self.backoff = BackoffState::Inactive;
-                    self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
+                (Err(_), PhaseUp::MonitorTunnel(session, registration, monitor)) => {
+                    if monitor.success_count > 3 {
+                        tracing::warn!(%session, "Ignoring failed session ping after {}", log_output::elapsed(&monitor.since));
+                        self.phase_up = PhaseUp::MonitorTunnel(session, registration, monitor.reset_success());
+                        Ok(())
+                    } else {
+                        tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&monitor.since));
+                        self.phase_up = PhaseUp::TunnelBroken(session, registration);
+                        self.backoff = BackoffState::Inactive;
+                        self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
+                    }
                 }
                 _ => Err(InternalError::UnexpectedPhase),
             },
@@ -534,13 +543,12 @@ impl Connection {
             }
             InternalEvent::UpdateSession(res) => {
                 check_entry_node(&res);
-                check_config_parameters(&res);
                 res?;
                 match self.phase_up.clone() {
                     PhaseUp::UpgradeToMainTunnel(session, registration) => {
                         tracing::info!(%session, "Session upgraded to main tunnel");
                         log_output::print_session_established(&self.pretty_print_path());
-                        self.phase_up = PhaseUp::MonitorTunnel(session, registration, SystemTime::now());
+                        self.phase_up = PhaseUp::MonitorTunnel(session, registration, Monitor::new());
                         self.backoff = BackoffState::Inactive;
                         self.sender.send(Event::Connected).map_err(InternalError::SendError)
                     }
@@ -666,12 +674,12 @@ impl Connection {
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         let opts = self.options.ping_options.clone();
-        let timeout = self.options.ping_retry_timeout;
+        let timeout = self.options.ping_retries_timeout;
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(immediate_ping_backoff(timeout));
         }
         thread::spawn(move || {
-            let res = monitor::ping(&opts);
+            let res = ping::ping(&opts);
             _ = s.send(InternalEvent::Ping(res));
         });
         r
@@ -687,7 +695,7 @@ impl Connection {
             let after = crossbeam_channel::after(delay);
             crossbeam_channel::select! {
                 recv(after) -> _ => {
-                    let res = monitor::ping(&opts);
+                    let res = ping::ping(&opts);
                     _ = s.send(InternalEvent::Ping(res));
                 }
             }
@@ -868,13 +876,9 @@ impl Display for PhaseUp {
             PhaseUp::UpgradeToMainTunnel(session, registration) => {
                 write!(f, "UpgradeToMainTunnel({session}, {registration})")
             }
-            PhaseUp::MonitorTunnel(session, registration, since) => write!(
-                f,
-                "MonitorTunnel({}, since {}, {})",
-                session,
-                log_output::elapsed(since),
-                registration,
-            ),
+            PhaseUp::MonitorTunnel(session, registration, monitor) => {
+                write!(f, "MonitorTunnel({}, {}, {})", session, monitor, registration,)
+            }
             PhaseUp::TunnelBroken(session, registration) => {
                 write!(f, "TunnelBroken({session}, {registration})")
             }
@@ -959,13 +963,6 @@ fn check_entry_node<R>(res: &Result<R, session::Error>) {
         Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
         Err(session::Error::SocketConnect(_)) => log_output::print_node_port_instructions(),
         Err(session::Error::Timeout(_)) => log_output::print_node_timeout_instructions(),
-        _ => (),
-    }
-}
-
-fn check_config_parameters<R>(res: &Result<R, session::Error>) {
-    match res {
-        Err(session::Error::InvalidConfigParameter) => log_output::print_invalid_session_config_parameter(),
         _ => (),
     }
 }
