@@ -330,22 +330,22 @@ impl Connection {
     }
 
     pub fn default_ping_buffer_size() -> String {
-        "0 B".to_string()
+        "32 kB".to_string()
     }
     pub fn default_main_buffer_size() -> String {
-        "1.5 MB".to_string()
+        "8 MB".to_string()
     }
 
     pub fn default_bridge_max_surb_upstream() -> String {
-        "0 bps".to_string()
+        "0 Mb/s".to_string()
     }
 
     pub fn default_ping_max_surb_upstream() -> String {
-        "0 bps".to_string()
+        "1 Mb/s".to_string()
     }
 
     pub fn default_main_max_surb_upstream() -> String {
-        "1 MB/s".to_string()
+        "2 Mb/s".to_string()
     }
 }
 
@@ -627,7 +627,7 @@ ping = "1 Mb/s"
 main = "2 Mb/s"
 
 [connection.buffer]
-bridge = "0 kB"
+bridge = "0 B"
 ping = "32 kB"
 main = "8 MB"
 
