@@ -227,6 +227,7 @@ system-setup mode='keep-running': submodules docker-build
         docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL6}
         echo "[PHASE3] Checking working ping second node"
         exp_client_log "VPN CONNECTION ESTABLISHED" 11
+        exp_client_log "Session verified as open" 11
 
         echo "[PHASE3] Curling example.com to check external connectivity"
         docker exec gnosis_vpn-client curl --fail-with-body --connect-timeout 30 --proxy 10.129.0.1:3128 www.example.com || (
