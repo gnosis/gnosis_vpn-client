@@ -210,12 +210,12 @@ system-setup mode='keep-running': submodules docker-build
 
         echo "[PHASE3] Dropping connection from the server side and let the client recover"
         docker kill gnosis_vpn-server
-        sleep 10
         echo "[PHASE3] Restarting server and wait for reconnection"
         pushd modules/gnosis_vpn-server
             just docker-run
         popd
-        exp_client_log "VPN CONNECTION ESTABLISHED" 22
+        sleep 3 # ensure previous log rolled out of checked log time window
+        exp_client_log "VPN CONNECTION ESTABLISHED" 55
 
         echo "[PHASE3] Checking external ping again"
         time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
