@@ -575,7 +575,7 @@ max = 10
 [connection.max_surb_upstream]
 bridge = "0 Mb/s"
 ping = "1 Mb/s"
-main = "2 Mb/s"
+main = "16 Mb/s"
 
 [connection.buffer]
 bridge = "0 B"
