@@ -360,16 +360,8 @@ impl Default for options::Options {
             options::SessionParameters::new(wg_target, wg_caps),
             Connection::default_ping_interval().min..Connection::default_ping_interval().max,
             ping::PingOptions::default(),
-            options::BufferSizes::from(BufferOptions {
-                bridge: None,
-                ping: None,
-                main: None,
-            }),
-            options::MaxSurbUpstream::from(MaxSurbUpstreamOptions {
-                bridge: None,
-                ping: None,
-                main: None,
-            }),
+            options::BufferSizes::default(),
+            options::MaxSurbUpstream::default(),
             Connection::default_ping_retry_timeout(),
         )
     }
