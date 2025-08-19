@@ -244,6 +244,8 @@ system-setup mode='keep-running': submodules docker-build
         echo "[SUCCESS] System test completed successfully"
         exit 0
     else
+        echo "[PHASE3] Connect via first local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}
         echo "[PHASE3] System setup complete, keeping components running"
         echo "[PHASE3] Press Ctrl+C to stop the cluster and containers"
         wait $CLUSTER_PID
