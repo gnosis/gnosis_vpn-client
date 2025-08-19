@@ -22,16 +22,16 @@ pub struct SessionParameters {
 
 #[derive(Clone, Debug)]
 pub struct BufferSizes {
-    pub(super) bridge: String,
-    pub(super) ping: String,
-    pub(super) main: String,
+    pub bridge: String,
+    pub ping: String,
+    pub main: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct MaxSurbUpstream {
-    pub(super) bridge: String,
-    pub(super) ping: String,
-    pub(super) main: String,
+    pub bridge: String,
+    pub ping: String,
+    pub main: String,
 }
 
 impl SessionParameters {
@@ -71,5 +71,17 @@ impl Options {
             max_surb_upstream,
             ping_retries_timeout,
         }
+    }
+}
+
+impl Default for MaxSurbUpstream {
+    fn default() -> Self {
+        MaxSurbUpstream::new("0 Mb/s".to_string(), "1 Mb/s".to_string(), "16 Mb/s".to_string())
+    }
+}
+
+impl Default for BufferSizes {
+    fn default() -> Self {
+        BufferSizes::new("0 B".to_string(), "32 kB".to_string(), "8 MB".to_string())
     }
 }

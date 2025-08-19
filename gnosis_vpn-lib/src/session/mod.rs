@@ -17,19 +17,16 @@ mod path;
 mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
-    #[serde(rename = "activeClients")]
     pub active_clients: Vec<String>,
     pub destination: Address,
-    #[serde(rename = "forwardPath")]
     pub forward_path: Path,
     pub ip: String,
     pub mtu: u16,
     pub port: u16,
     pub protocol: Protocol,
-    #[serde(rename = "returnPath")]
     pub return_path: Path,
-    #[serde(rename = "surbLen")]
     pub surb_len: u16,
     pub target: String,
 }
@@ -49,12 +46,11 @@ pub enum Target {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Config {
     // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
-    #[serde(rename = "maxSurbUpstream")]
     pub max_surb_upstream: String,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
-    #[serde(rename = "responseBuffer")]
     pub response_buffer: String,
 }
 

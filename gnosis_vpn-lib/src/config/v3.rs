@@ -324,29 +324,6 @@ impl Connection {
     pub fn default_ping_interval() -> PingInterval {
         PingInterval { min: 5, max: 10 }
     }
-
-    pub fn default_bridge_buffer_size() -> String {
-        "0 B".to_string()
-    }
-
-    pub fn default_ping_buffer_size() -> String {
-        "32 kB".to_string()
-    }
-    pub fn default_main_buffer_size() -> String {
-        "8 MB".to_string()
-    }
-
-    pub fn default_bridge_max_surb_upstream() -> String {
-        "0 Mb/s".to_string()
-    }
-
-    pub fn default_ping_max_surb_upstream() -> String {
-        "1 Mb/s".to_string()
-    }
-
-    pub fn default_main_max_surb_upstream() -> String {
-        "2 Mb/s".to_string()
-    }
 }
 
 impl Default for options::Options {
@@ -369,40 +346,22 @@ impl Default for options::Options {
 
 impl From<BufferOptions> for options::BufferSizes {
     fn from(buffer: BufferOptions) -> Self {
+        let def = options::BufferSizes::default();
         options::BufferSizes::new(
-            buffer.bridge.unwrap_or(Connection::default_bridge_buffer_size()),
-            buffer.ping.unwrap_or(Connection::default_ping_buffer_size()),
-            buffer.main.unwrap_or(Connection::default_main_buffer_size()),
-        )
-    }
-}
-
-impl Default for options::BufferSizes {
-    fn default() -> Self {
-        options::BufferSizes::new(
-            Connection::default_bridge_buffer_size(),
-            Connection::default_ping_buffer_size(),
-            Connection::default_main_buffer_size(),
+            buffer.bridge.unwrap_or(def.bridge),
+            buffer.ping.unwrap_or(def.ping),
+            buffer.main.unwrap_or(def.main),
         )
     }
 }
 
 impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
     fn from(surbs: MaxSurbUpstreamOptions) -> Self {
+        let def = options::MaxSurbUpstream::default();
         options::MaxSurbUpstream::new(
-            surbs.bridge.unwrap_or(Connection::default_bridge_max_surb_upstream()),
-            surbs.ping.unwrap_or(Connection::default_ping_max_surb_upstream()),
-            surbs.main.unwrap_or(Connection::default_main_max_surb_upstream()),
-        )
-    }
-}
-
-impl Default for options::MaxSurbUpstream {
-    fn default() -> Self {
-        options::MaxSurbUpstream::new(
-            Connection::default_bridge_max_surb_upstream(),
-            Connection::default_ping_max_surb_upstream(),
-            Connection::default_main_max_surb_upstream(),
+            surbs.bridge.unwrap_or(def.bridge),
+            surbs.ping.unwrap_or(def.ping),
+            surbs.main.unwrap_or(def.main),
         )
     }
 }
