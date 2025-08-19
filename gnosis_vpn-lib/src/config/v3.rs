@@ -74,6 +74,12 @@ pub(super) enum SessionCapability {
     Segmentation,
     #[serde(alias = "retransmission")]
     Retransmission,
+    #[serde(alias = "retransmission_ack_only")]
+    RetransmissionAckOnly,
+    #[serde(alias = "no_delay")]
+    NoDelay,
+    #[serde(alias = "no_rate_control")]
+    NoRateControl
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -288,6 +294,9 @@ impl From<&SessionCapability> for session::Capability {
         match val {
             SessionCapability::Segmentation => session::Capability::Segmentation,
             SessionCapability::Retransmission => session::Capability::Retransmission,
+            SessionCapability::RetransmissionAckOnly => session::Capability::RetransmissionAckOnly,
+            SessionCapability::NoDelay => session::Capability::NoDelay,
+            SessionCapability::NoRateControl => session::Capability::NoRateControl,
         }
     }
 }
