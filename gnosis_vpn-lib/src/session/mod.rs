@@ -37,6 +37,7 @@ pub enum Capability {
     Retransmission,
     RetransmissionAckOnly,
     NoDelay,
+    NoRateControl
 }
 
 #[derive(Clone, Debug, PartialEq)]
