@@ -40,10 +40,10 @@ pub(super) struct Destination {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 enum DestinationPath {
-    #[serde(alias = "intermediates")]
     Intermediates(Vec<Address>),
-    #[serde(alias = "hops", deserialize_with = "validate_hops")]
+    #[serde(deserialize_with = "validate_hops")]
     Hops(u8),
 }
 
@@ -69,25 +69,20 @@ struct ConnectionProtocol {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) enum SessionCapability {
-    #[serde(alias = "segmentation")]
     Segmentation,
-    #[serde(alias = "retransmission")]
     Retransmission,
-    #[serde(alias = "retransmission_ack_only")]
     RetransmissionAckOnly,
-    #[serde(alias = "no_delay")]
     NoDelay,
-    #[serde(alias = "no_rate_control")]
-    NoRateControl
+    NoRateControl,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 enum SessionTargetType {
     #[default]
-    #[serde(alias = "plain")]
     Plain,
-    #[serde(alias = "sealed")]
     Sealed,
 }
 
