@@ -302,7 +302,7 @@ impl Connection {
     }
 
     pub fn default_wg_capabilities() -> Vec<session::Capability> {
-        vec![session::Capability::Segmentation]
+        vec![session::Capability::Segmentation, session::Capability::NoDelay]
     }
 
     pub fn default_bridge_target() -> SocketAddr {
@@ -563,7 +563,7 @@ target = "127.0.0.1:8000"
 target_type = "plain"
 
 [connection.wg]
-capabilities = [ "segmentation" ]
+capabilities = [ "segmentation", "no_delay" ]
 target = "127.0.0.1:51820"
 target_type = "sealed"
 
