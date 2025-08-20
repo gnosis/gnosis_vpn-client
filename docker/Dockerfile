@@ -3,6 +3,7 @@ FROM alpine:3.22@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c4
 # enable wireguard
 RUN \
     apk add --no-cache --update \
+        curl \
         iptables \
         wireguard-tools && \
     # copied from https://github.com/linuxserver/docker-wireguard/blob/master/Dockerfile#L41C3-L41C246
