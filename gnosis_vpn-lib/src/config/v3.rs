@@ -73,8 +73,11 @@ struct ConnectionProtocol {
 pub(super) enum SessionCapability {
     Segmentation,
     Retransmission,
+    #[serde(alias = "retransmission_ack_only")]
     RetransmissionAckOnly,
+    #[serde(alias = "no_delay")]
     NoDelay,
+    #[serde(alias = "no_rate_control")]
     NoRateControl,
 }
 
