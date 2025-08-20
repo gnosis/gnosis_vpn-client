@@ -33,11 +33,11 @@ pub struct Session {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 pub enum Capability {
-    Segmentation,
+    NoDelay,
+    NoRateControl,
     Retransmission,
     RetransmissionAckOnly,
-    NoDelay,
-    NoRateControl
+    Segmentation,
 }
 
 #[derive(Clone, Debug, PartialEq)]
