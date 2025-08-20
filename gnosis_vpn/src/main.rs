@@ -231,7 +231,7 @@ fn incoming_config_fs_event(
         }
     };
 
-    tracing::debug!(event = ?event, "incoming config event");
+    tracing::debug!(?event, ?config_path, "incoming config event");
 
     match event {
         Ok(notify::Event {
@@ -264,13 +264,20 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(socket_path: &Path, config_path: &Path) -> Result<(), exitcode::ExitCode> {
+fn daemon(socket_path: &Path, provided_config_path: &Path) -> Result<(), exitcode::ExitCode> {
+    let config_path = match provided_config_path.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(error = %e, "error canonicalizing config path");
+            return Err(exitcode::IOERR);
+        }
+    };
     let ctrlc_receiver = ctrlc_channel()?;
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = config_channel(config_path)?;
+    let (_config_watcher, config_receiver) = config_channel(&config_path)?;
     let socket_receiver = socket_channel(socket_path)?;
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, config_path);
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, &config_path);
     match fs::remove_file(socket_path) {
         Ok(_) => (),
         Err(e) => {
