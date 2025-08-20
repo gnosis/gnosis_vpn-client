@@ -11,7 +11,7 @@ use std::vec::Vec;
 use crate::address::Address;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::entry_node::{self, EntryNode};
-use crate::monitor;
+use crate::ping;
 use crate::session;
 use crate::wg_tooling::Config as WireGuardConfig;
 
@@ -53,11 +53,12 @@ pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     session_timeout: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
-    ping_retry_timeout: Option<Duration>,
+    ping_retries_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
     buffer: Option<BufferOptions>,
+    max_surb_upstream: Option<MaxSurbUpstreamOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -104,6 +105,14 @@ pub(super) struct PingInterval {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct BufferOptions {
     // could be improved by using bytesize crates parser
+    bridge: Option<String>,
+    ping: Option<String>,
+    main: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct MaxSurbUpstreamOptions {
+    // could be improved by using human-bandwidth crates parser
     bridge: Option<String>,
     ping: Option<String>,
     main: Option<String>,
@@ -157,7 +166,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "session_timeout" {
                         continue;
                     }
-                    if k == "ping_retry_timeout" {
+                    if k == "ping_retries_timeout" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
@@ -200,6 +209,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.buffer.{k}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "max_surb_upstream" {
+                        if let Some(surbs) = v.as_table() {
+                            for (k, _v) in surbs.iter() {
+                                if k == "bridge" || k == "ping" || k == "main" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
                         continue;
@@ -304,17 +324,6 @@ impl Connection {
     pub fn default_ping_interval() -> PingInterval {
         PingInterval { min: 5, max: 10 }
     }
-
-    pub fn default_buffer_sizes() -> options::BufferSizes {
-        options::BufferSizes::new(
-            // bridge
-            "0 B".to_string(),
-            // ping
-            "0 B".to_string(),
-            // main
-            "1.5 MB".to_string(),
-        )
-    }
 }
 
 impl Default for options::Options {
@@ -327,8 +336,9 @@ impl Default for options::Options {
             options::SessionParameters::new(bridge_target, bridge_caps),
             options::SessionParameters::new(wg_target, wg_caps),
             Connection::default_ping_interval().min..Connection::default_ping_interval().max,
-            monitor::PingOptions::default(),
-            Connection::default_buffer_sizes(),
+            ping::PingOptions::default(),
+            options::BufferSizes::default(),
+            options::MaxSurbUpstream::default(),
             Connection::default_ping_retry_timeout(),
         )
     }
@@ -336,10 +346,22 @@ impl Default for options::Options {
 
 impl From<BufferOptions> for options::BufferSizes {
     fn from(buffer: BufferOptions) -> Self {
+        let def = options::BufferSizes::default();
         options::BufferSizes::new(
-            buffer.bridge.unwrap_or("0 B".to_string()),
-            buffer.ping.unwrap_or("0 B".to_string()),
-            buffer.main.unwrap_or("5 MB".to_string()),
+            buffer.bridge.unwrap_or(def.bridge),
+            buffer.ping.unwrap_or(def.ping),
+            buffer.main.unwrap_or(def.main),
+        )
+    }
+}
+
+impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
+    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
+        let def = options::MaxSurbUpstream::default();
+        options::MaxSurbUpstream::new(
+            surbs.bridge.unwrap_or(def.bridge),
+            surbs.ping.unwrap_or(def.ping),
+            surbs.main.unwrap_or(def.main),
         )
     }
 }
@@ -430,10 +452,10 @@ impl Config {
             .and_then(|p| p.interval.clone())
             .unwrap_or(Connection::default_ping_interval());
 
-        let def_opts = monitor::PingOptions::default();
+        let def_opts = ping::PingOptions::default();
         let ping_opts = connection
             .and_then(|c| c.ping.as_ref())
-            .map(|p| monitor::PingOptions {
+            .map(|p| ping::PingOptions {
                 address: p.address.unwrap_or(def_opts.address),
                 timeout: p.timeout.unwrap_or(def_opts.timeout),
                 ttl: p.ttl.unwrap_or(def_opts.ttl),
@@ -445,9 +467,13 @@ impl Config {
         let buffer_sizes = connection
             .and_then(|c| c.buffer.clone())
             .map(|b| b.into())
-            .unwrap_or(Connection::default_buffer_sizes());
-        let ping_retry_timeout = connection
-            .and_then(|c| c.ping_retry_timeout)
+            .unwrap_or_default();
+        let max_surb_upstream = connection
+            .and_then(|c| c.max_surb_upstream.clone())
+            .map(|b| b.into())
+            .unwrap_or_default();
+        let ping_retries_timeout = connection
+            .and_then(|c| c.ping_retries_timeout)
             .unwrap_or(Connection::default_ping_retry_timeout());
 
         options::Options::new(
@@ -456,7 +482,8 @@ impl Config {
             ping_range,
             ping_opts,
             buffer_sizes,
-            ping_retry_timeout,
+            max_surb_upstream,
+            ping_retries_timeout,
         )
     }
 
@@ -524,7 +551,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 [connection]
 listen_host = "0.0.0.0:1422"
 session_timeout = "15s"
-ping_retry_timeout = "10s"
+ping_retries_timeout = "20s"
 
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
@@ -538,17 +565,22 @@ target_type = "sealed"
 
 [connection.ping]
 address = "10.128.0.1"
-timeout = "4s"
-ttl = 5
+timeout = "7s"
+ttl = 6
 seq_count = 1
 [connection.ping.interval]
 min = 5
 max = 10
 
+[connection.max_surb_upstream]
+bridge = "0 Mb/s"
+ping = "1 Mb/s"
+main = "16 Mb/s"
+
 [connection.buffer]
 bridge = "0 B"
-ping = "0 B"
-main = "1.5 MB"
+ping = "32 kB"
+main = "8 MB"
 
 [wireguard]
 listen_port = 51820

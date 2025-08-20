@@ -17,7 +17,7 @@ Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node a
 
 To validate the signature of the downloaded binary from GitHub, follow these steps:
 
-1. Import the public key:
+1. Import the public key (checkout the repository first):
 
    ```bash
    gpg --import gpg-publickey.asc

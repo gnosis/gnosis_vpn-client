@@ -210,12 +210,12 @@ system-setup mode='keep-running': submodules docker-build
 
         echo "[PHASE3] Dropping connection from the server side and let the client recover"
         docker kill gnosis_vpn-server
-        sleep 10
         echo "[PHASE3] Restarting server and wait for reconnection"
         pushd modules/gnosis_vpn-server
             just docker-run
         popd
-        exp_client_log "VPN CONNECTION ESTABLISHED" 22
+        sleep 3 # ensure previous log rolled out of checked log time window
+        exp_client_log "VPN CONNECTION ESTABLISHED" 55
 
         echo "[PHASE3] Checking external ping again"
         time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
@@ -227,6 +227,13 @@ system-setup mode='keep-running': submodules docker-build
         docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL6}
         echo "[PHASE3] Checking working ping second node"
         exp_client_log "VPN CONNECTION ESTABLISHED" 11
+        exp_client_log "Session verified as open" 11
+
+        echo "[PHASE3] Curling example.com to check external connectivity"
+        docker exec gnosis_vpn-client curl --fail-with-body --connect-timeout 30 --proxy 10.129.0.1:3128 www.example.com || (
+            docker logs gnosis_vpn-client
+            exit 1
+        )
 
         echo "[PHASE3] Checking disconnect"
         docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
@@ -244,6 +251,8 @@ system-setup mode='keep-running': submodules docker-build
         echo "[SUCCESS] System test completed successfully"
         exit 0
     else
+        echo "[PHASE3] Connect via first local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}
         echo "[PHASE3] System setup complete, keeping components running"
         echo "[PHASE3] Press Ctrl+C to stop the cluster and containers"
         wait $CLUSTER_PID
