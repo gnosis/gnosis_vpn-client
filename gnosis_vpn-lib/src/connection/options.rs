@@ -1,16 +1,17 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use crate::{monitor, session};
+use crate::{ping, session};
 
 #[derive(Clone, Debug)]
 pub struct Options {
     pub(super) bridge: SessionParameters,
     pub(super) wg: SessionParameters,
     pub(super) ping_interval: Range<u8>,
-    pub(super) ping_options: monitor::PingOptions,
+    pub(super) ping_options: ping::PingOptions,
     pub(super) buffer_sizes: BufferSizes,
-    pub(super) ping_retry_timeout: Duration,
+    pub(super) max_surb_upstream: MaxSurbUpstream,
+    pub(super) ping_retries_timeout: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -21,9 +22,16 @@ pub struct SessionParameters {
 
 #[derive(Clone, Debug)]
 pub struct BufferSizes {
-    pub(super) bridge: String,
-    pub(super) ping: String,
-    pub(super) main: String,
+    pub bridge: String,
+    pub ping: String,
+    pub main: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct MaxSurbUpstream {
+    pub bridge: String,
+    pub ping: String,
+    pub main: String,
 }
 
 impl SessionParameters {
@@ -38,14 +46,21 @@ impl BufferSizes {
     }
 }
 
+impl MaxSurbUpstream {
+    pub fn new(bridge: String, ping: String, main: String) -> Self {
+        Self { bridge, ping, main }
+    }
+}
+
 impl Options {
     pub fn new(
         bridge: SessionParameters,
         wg: SessionParameters,
         ping_interval: Range<u8>,
-        ping_options: monitor::PingOptions,
+        ping_options: ping::PingOptions,
         buffer_sizes: BufferSizes,
-        ping_retry_timeout: Duration,
+        max_surb_upstream: MaxSurbUpstream,
+        ping_retries_timeout: Duration,
     ) -> Self {
         Self {
             bridge,
@@ -53,7 +68,20 @@ impl Options {
             ping_interval,
             ping_options,
             buffer_sizes,
-            ping_retry_timeout,
+            max_surb_upstream,
+            ping_retries_timeout,
         }
+    }
+}
+
+impl Default for MaxSurbUpstream {
+    fn default() -> Self {
+        MaxSurbUpstream::new("0 Mb/s".to_string(), "1 Mb/s".to_string(), "16 Mb/s".to_string())
+    }
+}
+
+impl Default for BufferSizes {
+    fn default() -> Self {
+        BufferSizes::new("0 B".to_string(), "32 kB".to_string(), "8 MB".to_string())
     }
 }

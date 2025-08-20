@@ -78,19 +78,23 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 # adjust internal session monitoring
 # [connection.ping]
-# timeout = "4s"
-# ttl = 5
+# timeout = "7s"
+# ttl = 6
 # seq_count = 1
 # [connection.ping.interval]
 # min = 5
 # max = 10
 
-# adjust internal response buffer sizes
+# adjust session internal options
+# [connection.max_surb_upstream]
+# bridge = "0 Mb/s"
+# ping = "1 Mb/s"
+# main = "16 Mb/s"
+#
 # [connection.buffer]
 # bridge = "0 B"
-# ping = "0 B"
-# main = "1.5 MB"
-
+# ping = "32 kB"
+# main = "8 MB"
 
 ###
 ## wireguard section - specific VPN-related settings
