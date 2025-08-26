@@ -589,7 +589,7 @@ main = "16 Mb/s"
 [connection.buffer]
 bridge = "0 B"
 ping = "32 kB"
-main = "8 MB"
+main = "2 MB"
 
 [wireguard]
 listen_port = 51820
