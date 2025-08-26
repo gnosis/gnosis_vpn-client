@@ -82,6 +82,6 @@ impl Default for MaxSurbUpstream {
 
 impl Default for BufferSizes {
     fn default() -> Self {
-        BufferSizes::new("0 B".to_string(), "32 kB".to_string(), "8 MB".to_string())
+        BufferSizes::new("0 B".to_string(), "32 kB".to_string(), "2 MB".to_string())
     }
 }
