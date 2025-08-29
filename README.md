@@ -64,6 +64,6 @@ The resulting binaries are in `result/bin/`:
 $ ls -l result*/bin/
 result/bin/:
 total 4752
--r-xr-xr-x 1 root root 4863368 Jan  1  1970 gnosis_vpn
+-r-xr-xr-x 1 root root 4863367 Jan  1  1970 gnosis_vpn
 -r-xr-xr-x 1 root root 1740050 Jan  1  1970 gnosis_vpn-ctl
 ```
