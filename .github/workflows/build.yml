@@ -6,7 +6,7 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-      - lableled
+      - labeled
 concurrency:
   group: ${{ github.ref }}-build
   cancel-in-progress: true
