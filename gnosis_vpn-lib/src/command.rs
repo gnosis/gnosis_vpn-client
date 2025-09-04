@@ -15,6 +15,7 @@ pub enum Command {
     Connect(Address),
     Disconnect,
     Ping,
+    Balance,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +23,7 @@ pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
+    Balance(BalanceResponse),
     Pong,
 }
 
@@ -29,6 +31,7 @@ pub enum Response {
 pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
+    pub funding_state: FundingState, // top prio funding state
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,6 +40,18 @@ pub enum Status {
     Disconnecting(Destination),
     Connected(Destination),
     Disconnected,
+}
+
+// in order of priority
+#[derive(Debug, Serialize, Deserialize)]
+pub enum FundingState {
+    Unfunded,           // cannot work at all - initial state
+    ChannelsOutOfFunds, // does not work - no traffic possible
+    SafeOutOfFunds,     // keeps working - cannot top up channels
+    SafeLowOnFunds,     // warning before SafeOutOfFunds
+    NodeUnderfunded,    // keeps working - cannot open new channels
+    NodeLowOnFunds,     // warning before NodeUnderfunded
+    WellFunded,         // everything is fine
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +71,14 @@ pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,
     pub path: session::Path,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BalanceResponse {
+    pub node: String,
+    pub safe: String,
+    pub channels_out: String,
+    pub issues: Vec<FundingState>,
 }
 
 impl Status {
@@ -97,10 +120,11 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(status: Status, available_destinations: Vec<Destination>) -> Self {
+    pub fn new(status: Status, available_destinations: Vec<Destination>, funding_state: FundingState) -> Self {
         StatusResponse {
             status,
             available_destinations,
+            funding_state,
         }
     }
 }
