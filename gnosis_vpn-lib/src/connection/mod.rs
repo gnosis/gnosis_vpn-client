@@ -35,12 +35,6 @@ pub enum Event {
     Dismantled,
 }
 
-#[derive(Clone, Debug)]
-pub struct ConnectInfo {
-    pub endpoint: String,
-    pub registration: Registration,
-}
-
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum PhaseUp {

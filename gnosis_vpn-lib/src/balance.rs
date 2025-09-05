@@ -21,18 +21,10 @@ pub struct Balance {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Invalid header: {0}")]
-    Header(#[from] remote_data::HeaderError),
+    #[error("RemoteData error: {0}")]
+    RemoteData(#[from] remote_data::Error),
     #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Error making http request: {0:?}")]
-    Request(#[from] reqwest::Error),
-    #[error("Timeout: {0:?}")]
-    Timeout(reqwest::Error),
-    #[error("Error connecting on specified port: {0:?}")]
-    SocketConnect(reqwest::Error),
-    #[error("Unauthorized")]
-    Unauthorized,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,10 +85,10 @@ impl Balance {
             .headers(headers)
             .send()
             // connection error checks happen before response
-            .map_err(connect_errors)?
+            .map_err(remote_data::connect_errors)?
             .error_for_status()
             // response error checks happen after response
-            .map_err(response_errors)?
+            .map_err(remote_data::response_errors)?
             .json::<ResponseBalances>()?;
 
         let chs_path = format!("api/{}/channels", entry_node.api_version);
@@ -109,10 +101,10 @@ impl Balance {
             .headers(headers)
             .send()
             // connection error checks happen before response
-            .map_err(connect_errors)?
+            .map_err(remote_data::connect_errors)?
             .error_for_status()
             // response error checks happen after response
-            .map_err(response_errors)?
+            .map_err(remote_data::response_errors)?
             .json::<ResponseChannels>()?;
 
         let channels_out_wxhopr: f64 = resp_channels
@@ -131,23 +123,5 @@ impl Balance {
             channels_out_wxhopr,
         })
 
-    }
-}
-
-fn connect_errors(err: reqwest::Error) -> Error {
-    if err.is_connect() {
-        Error::SocketConnect(err)
-    } else if err.is_timeout() {
-        Error::Timeout(err)
-    } else {
-        err.into()
-    }
-}
-
-fn response_errors(err: reqwest::Error) -> Error {
-    if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
-        Error::Unauthorized
-    } else {
-        err.into()
     }
 }
