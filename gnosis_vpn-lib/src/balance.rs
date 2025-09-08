@@ -2,13 +2,14 @@ use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use std::fmt::{self, Display};
 use std::time::SystemTime;
 
 use crate::address::Address;
 use crate::entry_node::EntryNode;
 use crate::remote_data;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Balance {
     pub node_xdai: f64,
     pub safe_wxhopr: f64,
@@ -123,5 +124,15 @@ impl Balance {
             safe_wxhopr,
             channels_out_wxhopr,
         })
+    }
+}
+
+impl Display for Balance {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Balance(node_xdai: {:.6}, safe_wxhopr: {:.6}, channels_out_wxhopr: {:.6})",
+            self.node_xdai, self.safe_wxhopr, self.channels_out_wxhopr
+        )
     }
 }

@@ -7,10 +7,10 @@ use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::log_output;
+use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::wg_tooling;
 
 use crate::event::Event;
-use crate::node;
 
 #[derive(Debug)]
 pub struct Core {
@@ -22,7 +22,7 @@ pub struct Core {
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
     connection: Option<connection::Connection>,
-    node: node::Node,
+    node: Node,
     session_connected: bool,
     target_destination: Option<Destination>,
 }
@@ -45,7 +45,7 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
-            node: node::Node::new(),
+            node: Node::new(),
             session_connected: false,
             target_destination: None,
         })
