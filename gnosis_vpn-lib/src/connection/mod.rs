@@ -1,12 +1,12 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
-use std::fmt::{self, Display};
-use std::thread;
-use std::time::Duration;
-
 use crossbeam_channel;
 use rand::Rng;
 use reqwest::blocking;
 use thiserror::Error;
+
+use std::fmt::{self, Display};
+use std::thread;
+use std::time::Duration;
 
 use crate::entry_node::{self, EntryNode};
 use crate::gvpn_client::{self, Registration};

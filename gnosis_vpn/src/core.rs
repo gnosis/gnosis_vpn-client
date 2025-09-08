@@ -10,6 +10,7 @@ use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::wg_tooling;
 
 use crate::event::Event;
+use crate::node;
 
 #[derive(Debug)]
 pub struct Core {
@@ -44,6 +45,7 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
+            node: node::Node::new(),
             session_connected: false,
             target_destination: None,
         })

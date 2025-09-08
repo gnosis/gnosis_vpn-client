@@ -1,18 +1,12 @@
-use reqwest::{StatusCode, blocking};
+use reqwest::blocking;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use thiserror::Error;
-
-use std::cmp;
-use std::fmt::{self, Display};
-use std::net::SocketAddr;
-use std::time::SystemTime;
 
 use crate::address::Address;
 use crate::entry_node::EntryNode;
 use crate::remote_data;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
     pub node_address: Address,
     pub safe_address: Address,
@@ -30,36 +24,37 @@ pub enum Error {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ResponseAddresses = {
-  native: Address,
+struct ResponseAddresses {
+    native: Address,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ResponseInfo = {
-  //  skip not interested fields
-  //  "announcedAddress",
-  //  "listeningAddress",
-  //  "chain",
-  //  "provider",
-  //  "hoprToken",
-  //  "hoprChannels",
-  //  "hoprNetworkRegistry",
-  //  "hoprNodeSafeRegistry",
-  //  "hoprManagementModule",
-  //  "isEligible",
-  //  "connectivityStatus",
-  //  "channelClosurePeriod",
-  //  "indexerBlock",
-  //  "indexerLastLogBlock",
-  //  "indexerLastLogChecksum",
-  //  "isIndexerCorrupted",
-  "network": String,
-  "hopr_node_safe": Address,
+struct ResponseInfo {
+    //  skip not interested fields
+    //  "announcedAddress",
+    //  "listeningAddress",
+    //  "chain",
+    //  "provider",
+    //  "hoprToken",
+    //  "hoprChannels",
+    //  "hoprNetworkRegistry",
+    //  "hoprNodeSafeRegistry",
+    //  "hoprManagementModule",
+    //  "isEligible",
+    //  "connectivityStatus",
+    //  "channelClosurePeriod",
+    //  "indexerBlock",
+    //  "indexerLastLogBlock",
+    //  "indexerLastLogChecksum",
+    //  "isIndexerCorrupted",
+    network: String,
+    hopr_node_safe: Address,
 }
 
 impl Info {
-    pub fn new(node_address: Address, safe_address: Address) -> Self {
+    pub fn new(node_address: Address, safe_address: Address, network: String) -> Self {
         Info {
+            network,
             node_address,
             safe_address,
         }
@@ -70,11 +65,11 @@ impl Info {
         let addr_path = format!("api/{}/account/addresses", entry_node.api_version);
         let addr_url = entry_node.endpoint.join(&addr_path)?;
 
-        tracing::debug!(?headers, %url, "get addresses");
+        tracing::debug!(?headers, %addr_url, "get addresses");
 
         let resp_addresses = client
-            .get(bal_url)
-            .headers(headers)
+            .get(addr_url)
+            .headers(headers.clone())
             .timeout(entry_node.http_timeout)
             .send()
             // connection error checks happen before response
@@ -87,7 +82,7 @@ impl Info {
         let info_path = format!("api/{}/node/info", entry_node.api_version);
         let info_url = entry_node.endpoint.join(&info_path)?;
 
-        tracing::debug!(?headers, %url, "get info");
+        tracing::debug!(?headers, %info_url, "get info");
 
         let resp_info = client
             .get(info_url)

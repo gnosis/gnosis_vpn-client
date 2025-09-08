@@ -8,7 +8,10 @@ pub mod session;
 pub mod socket;
 pub mod wg_tooling;
 
+mod balance;
 mod dirs;
 mod gvpn_client;
+mod info;
+mod node;
 mod ping;
 mod remote_data;

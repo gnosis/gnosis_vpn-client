@@ -1,7 +1,19 @@
-#[derive(Clone, Copy, Debug)]
+use backoff::{ExponentialBackoff, backoff::Backoff};
+use reqwest::blocking;
+use thiserror::Error;
+
+use std::thread;
+use std::time::Duration;
+
+use crate::balance::{self, Balance};
+use crate::entry_node::EntryNode;
+use crate::info::{self, Info};
+
+#[derive(Clone, Debug)]
 pub enum Event {
-    Info(Info)
+    Info(Info),
     Balance(Balance),
+    BackoffExhausted,
 }
 
 /// Represents the different phases of establishing a connection.
@@ -36,6 +48,7 @@ pub struct Node {
 
     // dynamic runtime data
     backoff: BackoffState,
+    phase: Phase,
 
     // static input data
     entry_node: EntryNode,
@@ -47,9 +60,12 @@ enum InternalError {
     #[error("Invalid phase for event")]
     UnexpectedPhase,
     #[error("Channel send error: {0}")]
-    SendError(#[from] crossbeam_channel::SendError<Event>),
+    Send(#[from] crossbeam_channel::SendError<Event>),
+    #[error("Info error: {0}")]
+    Info(#[from] info::Error),
+    #[error("Balance error: {0}")]
+    Balance(#[from] balance::Error),
 }
-
 
 impl Node {
     pub fn new(entry_node: EntryNode, sender: crossbeam_channel::Sender<Event>) -> Self {
@@ -57,6 +73,7 @@ impl Node {
             cancel_channel: crossbeam_channel::bounded(1),
             client: blocking::Client::new(),
             backoff: BackoffState::Inactive,
+            phase: Phase::Info,
             entry_node,
             sender,
         }
@@ -75,21 +92,21 @@ impl Node {
                     BackoffState::Inactive => (me.act(), crossbeam_channel::never()),
                     BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                         Some(delay) => {
-                            tracing::debug!(phase = me.phase, ?backoff, delay = ?delay, "Triggering backoff delay");
+                            tracing::debug!(phase = ?me.phase, ?backoff, delay = ?delay, "Triggering backoff delay");
                             me.backoff = BackoffState::Triggered(backoff);
                             (crossbeam_channel::never(), crossbeam_channel::after(delay))
                         }
                         None => {
                             me.backoff = BackoffState::Inactive;
-                            tracing::error!(phase = me.phase, "Unrecoverable error: backoff exhausted");
-                            _ = me.sender.send(Event::Broken).map_err(|error| {
-                                tracing::error!(%error, "Failed sending broken event");
+                            tracing::error!(phase = ?me.phase, "Unrecoverable error: backoff exhausted");
+                            _ = me.sender.send(Event::BackoffExhausted).map_err(|error| {
+                                tracing::error!(%error, "Failed sending exhausted event");
                             });
                             (crossbeam_channel::never(), crossbeam_channel::never())
                         }
                     },
                     BackoffState::Triggered(backoff) => {
-                        tracing::debug!(phase = me.phase, ?backoff, "Activating backoff");
+                        tracing::debug!(phase = ?me.phase, ?backoff, "Activating backoff");
                         me.backoff = BackoffState::Active(backoff);
                         (me.act(), crossbeam_channel::never())
                     }
@@ -99,18 +116,18 @@ impl Node {
                     // checking on cancel signal
                     recv(me.cancel_channel.1) -> _ => break,
                     recv(recv_backoff) -> _ => {
-                        tracing::debug!(phase = me.phase, "Backoff delay hit - loop to act");
+                        tracing::debug!(phase = ?me.phase, "Backoff delay hit - loop to act");
                     },
                     recv(recv_event) -> res => {
                         match res {
                             Ok(event) => {
-                                tracing::debug!(phase = me.phase, %event, "Received event");
-                                _ = me.act(event).map_err(|error| {
-                                    tracing::error!(phase = me.phase, %error, "Failed to process event");
+                                tracing::debug!(phase = ?me.phase, ?event, "Received event");
+                                _ = me.event(event).map_err(|error| {
+                                    tracing::error!(phase = ?me.phase, %error, "Failed to process event");
                                 });
                             }
                             Err(error) => {
-                                tracing::error!(phase = me.phase, %error, "Failed receiving event");
+                                tracing::error!(phase = ?me.phase, %error, "Failed receiving event");
                             }
                         }
                     }
@@ -121,13 +138,13 @@ impl Node {
 
     pub fn cancel(&mut self) {
         self.cancel_channel.0.send(()).map_err(|error| {
-            tracing::error!(phase = self.phase, %error, "Failed sending cancel signal");
+            tracing::error!(phase = ?self.phase, %error, "Failed sending cancel signal");
         });
     }
 
     fn act(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        tracing::debug!(phase = self.phase, "Acting on phase");
-        match self.phase.clone() {
+        tracing::debug!(phase = ?self.phase, "Acting on phase");
+        match self.phase {
             Phase::Info => self.fetch_info(),
             Phase::Balance => self.fetch_balance(),
             Phase::Idle => self.idle(),
@@ -141,13 +158,13 @@ impl Node {
                 self.phase = Phase::Balance;
                 self.backoff = BackoffState::Inactive;
                 Ok(())
-            },
+            }
             InternalEvent::Balance(res) => {
                 self.sender.send(Event::Balance(res?))?;
                 self.phase = Phase::Idle;
                 self.backoff = BackoffState::Inactive;
                 Ok(())
-            },
+            }
             InternalEvent::Tick => {
                 self.phase = Phase::Balance;
                 Ok(())
@@ -189,5 +206,4 @@ impl Node {
         });
         r
     }
-
 }

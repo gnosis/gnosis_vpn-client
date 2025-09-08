@@ -1,11 +1,7 @@
-use reqwest::{StatusCode, blocking};
+use reqwest::blocking;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use thiserror::Error;
 
-use std::cmp;
-use std::fmt::{self, Display};
-use std::net::SocketAddr;
 use std::time::SystemTime;
 
 use crate::address::Address;
@@ -23,25 +19,29 @@ pub struct Balance {
 pub enum Error {
     #[error("RemoteData error: {0}")]
     RemoteData(#[from] remote_data::Error),
+    #[error("Error making http request: {0:?}")]
+    Request(#[from] reqwest::Error),
     #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
+    #[error("Error parsing float: {0}")]
+    ParseFloat(#[from] std::num::ParseFloatError),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ResponseBalances = {
-  safe_native: String,
-  native: String,
-  safe_hopr: String,
-  hopr: String,
-  safe_hopr_allowance: String,
+struct ResponseBalances {
+    safe_native: String,
+    native: String,
+    safe_hopr: String,
+    hopr: String,
+    safe_hopr_allowance: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ChannelEntry = {
-      id: String,
-      peer_address: Address,
-      status: String,
-      balance: String,
+struct ChannelEntry {
+    id: String,
+    peer_address: Address,
+    status: String,
+    balance: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,20 +56,19 @@ pub enum ChannelStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ResponseChannels = {
+struct ResponseChannels {
     // we don't care about incoming and all
     // incoming: Vec<ChannelEntry>,
     // all: Vec<ChannelEntryFull>,
     outgoing: Vec<ChannelEntry>,
 }
 
-
 impl Balance {
-    pub fn new(node: String, safe: String, channels_out: String) -> Self {
+    pub fn new(node_xdai: f64, safe_wxhopr: f64, channels_out_wxhopr: f64) -> Self {
         Balance {
-            node,
-            safe,
-            channels_out,
+            node_xdai,
+            safe_wxhopr,
+            channels_out_wxhopr,
         }
     }
 
@@ -78,11 +77,11 @@ impl Balance {
         let bal_path = format!("api/{}/account/balances", entry_node.api_version);
         let bal_url = entry_node.endpoint.join(&bal_path)?;
 
-        tracing::debug!(?headers, %url, "get balances");
+        tracing::debug!(?headers, %bal_url, "get balances");
 
         let resp_balances = client
             .get(bal_url)
-            .headers(headers)
+            .headers(headers.clone())
             .timeout(entry_node.http_timeout)
             .send()
             // connection error checks happen before response
@@ -95,7 +94,7 @@ impl Balance {
         let chs_path = format!("api/{}/channels", entry_node.api_version);
         let chs_url = entry_node.endpoint.join(&chs_path)?;
 
-        tracing::debug!(?headers, %url, "get channels");
+        tracing::debug!(?headers, %chs_url, "get channels");
 
         let resp_channels = client
             .get(chs_url)
@@ -112,7 +111,7 @@ impl Balance {
         let channels_out_wxhopr: f64 = resp_channels
             .outgoing
             .iter()
-            .filter_map(|ch| ch.balance.split_white_space().next())
+            .filter_map(|ch| ch.balance.split_whitespace().next())
             .filter_map(|bal| bal.parse::<f64>().ok())
             .sum();
 
@@ -124,6 +123,5 @@ impl Balance {
             safe_wxhopr,
             channels_out_wxhopr,
         })
-
     }
 }
