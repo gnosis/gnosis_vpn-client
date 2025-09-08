@@ -281,7 +281,7 @@ impl Session {
         tracing::debug!(?headers, %url, "delete session");
         client
             .delete(url)
-            .timeout(close_session.entry_node.session_timeout)
+            .timeout(close_session.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response
@@ -304,7 +304,7 @@ impl Session {
 
         let resp = client
             .get(url)
-            .timeout(list_session.entry_node.session_timeout)
+            .timeout(list_session.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response
@@ -329,7 +329,7 @@ impl Session {
 
         let resp = client
             .get(url)
-            .timeout(config.entry_node.session_timeout)
+            .timeout(config.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response
@@ -361,7 +361,7 @@ impl Session {
         client
             .post(url)
             .json(&json)
-            .timeout(config.entry_node.session_timeout)
+            .timeout(config.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response

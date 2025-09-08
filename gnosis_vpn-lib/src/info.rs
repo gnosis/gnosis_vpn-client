@@ -73,6 +73,7 @@ impl Info {
         let resp_addresses = client
             .get(bal_url)
             .headers(headers)
+            .timeout(entry_node.http_timeout)
             .send()
             // connection error checks happen before response
             .map_err(remote_data::connect_errors)?
@@ -89,6 +90,7 @@ impl Info {
         let resp_info = client
             .get(info_url)
             .headers(headers)
+            .timeout(entry_node.http_timeout)
             .send()
             // connection error checks happen before response
             .map_err(remote_data::connect_errors)?

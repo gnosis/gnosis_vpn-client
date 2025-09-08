@@ -60,8 +60,10 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # It is best to only use the `internal_connection_port` from the [hoprd_node] section.
 # If listen_host is enabled, `internal_connection_port` is ignored.
 # listen_host = "0.0.0.0:1422"
+# http_timeout - specify general HTTP timeouts for requests to your hoprd node.
+# http_timeout = "5s"
 # session timeout - specify HTTP timeout for session requests.
-# While this will be used for all HTTP request, it will only have a real impact on session creation requests.
+# Session creation usually takes longer than normal requests.
 # session_timeout = "15s"
 # specify how long a connection will try sending an initial ping request before giving up.
 # ping_retry_timeout = "10s"

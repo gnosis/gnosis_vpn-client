@@ -83,6 +83,7 @@ impl Balance {
         let resp_balances = client
             .get(bal_url)
             .headers(headers)
+            .timeout(entry_node.http_timeout)
             .send()
             // connection error checks happen before response
             .map_err(remote_data::connect_errors)?
@@ -99,6 +100,7 @@ impl Balance {
         let resp_channels = client
             .get(chs_url)
             .headers(headers)
+            .timeout(entry_node.http_timeout)
             .send()
             // connection error checks happen before response
             .map_err(remote_data::connect_errors)?
