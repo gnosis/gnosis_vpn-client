@@ -6,9 +6,8 @@ use thiserror::Error;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::node::{self, Node};
-use gnosis_vpn_lib::wg_tooling;
+use gnosis_vpn_lib::{balance, info, log_output, wg_tooling};
 
 use crate::event::Event;
 
@@ -21,10 +20,16 @@ pub struct Core {
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
+    // connection to exit
     connection: Option<connection::Connection>,
+    // connection to entry
     node: Node,
     session_connected: bool,
     target_destination: Option<Destination>,
+
+    // results from node
+    balance: Option<balance::Balance>,
+    info: Option<info::Info>,
 }
 
 #[derive(Debug, Error)]
@@ -37,7 +42,7 @@ pub enum Error {
 
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
-        let config = setup_from_config(config_path)?;
+        let (config, node) = setup_from_config(config_path)?;
         wg_tooling::available()?;
 
         Ok(Core {
@@ -45,9 +50,11 @@ impl Core {
             sender,
             shutdown_sender: None,
             connection: None,
-            node: Node::new(),
+            node,
             session_connected: false,
             target_destination: None,
+            balance: None,
+            info: None,
         })
     }
 
@@ -128,12 +135,19 @@ impl Core {
             Event::ConnectionEvent(connection::Event::Disconnected) => self.on_disconnected(),
             Event::ConnectionEvent(connection::Event::Broken) => self.on_broken(),
             Event::ConnectionEvent(connection::Event::Dismantled) => self.on_dismantled(),
+            Event::NodeEvent(node::Event::Info(info)) => self.on_info(info),
+            Event::NodeEvent(node::Event::Balance(balance)) => self.on_balance(balance),
+            Event::NodeEvent(node::Event::BackoffExhausted) => self.on_inoperable_node(),
         }
     }
 
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        let config = setup_from_config(config_path)?;
+        self.node.cancel();
+        let (config, node) = setup_from_config(config_path)?;
         self.config = config;
+        self.node = node;
+        self.balance = None;
+        self.info = None;
         if let Some(conn) = &mut self.connection {
             tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
             conn.dismantle();
@@ -246,9 +260,24 @@ impl Core {
             self.act_on_target()
         }
     }
+
+    fn on_info(&mut self, info: info::Info) -> Result<(), Error> {
+        tracing::info!("on info: {info}");
+        Ok(())
+    }
+
+    fn on_balance(&mut self, balance: balance::Balance) -> Result<(), Error> {
+        tracing::info!("on balance: {balance}");
+        Ok(())
+    }
+
+    fn on_inoperable_node(&mut self) -> Result<(), Error> {
+        tracing::error!("node is inoperable - please check your configuration and network connectivity");
+        Ok(())
+    }
 }
 
-fn setup_from_config(config_path: &Path) -> Result<Config, Error> {
+fn setup_from_config(config_path: &Path) -> Result<(Config, Node), Error> {
     let config = config::read(config_path)?;
 
     // print destinations warning
@@ -256,5 +285,29 @@ fn setup_from_config(config_path: &Path) -> Result<Config, Error> {
         log_output::print_no_destinations();
     }
 
-    Ok(config)
+    let node = setup_node(config.clone());
+    node.run();
+    Ok((config, node))
+}
+
+fn setup_node(config: Config) -> Node {
+    let (s, r) = crossbeam_channel::unbounded();
+    let node = Node::new(config.entry_node(), s);
+    thread::spawn(move || {
+        loop {
+            crossbeam_channel::select! {
+                recv(r) -> node_event => {
+                    match node_event {
+                        Ok(event) => {
+                            tracing::debug!(%event, "node event received");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                }
+            }
+        }
+    });
+    node
 }

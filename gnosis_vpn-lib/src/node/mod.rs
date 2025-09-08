@@ -92,7 +92,7 @@ impl Node {
                     BackoffState::Inactive => (me.act(), crossbeam_channel::never()),
                     BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                         Some(delay) => {
-                            tracing::debug!(phase = %me.phase, %backoff, delay = %delay, "Triggering backoff delay");
+                            tracing::debug!(phase = %me.phase, ?backoff, delay = ?delay, "Triggering backoff delay");
                             me.backoff = BackoffState::Triggered(backoff);
                             (crossbeam_channel::never(), crossbeam_channel::after(delay))
                         }
@@ -106,7 +106,7 @@ impl Node {
                         }
                     },
                     BackoffState::Triggered(backoff) => {
-                        tracing::debug!(phase = %me.phase, %backoff, "Activating backoff");
+                        tracing::debug!(phase = %me.phase, ?backoff, "Activating backoff");
                         me.backoff = BackoffState::Active(backoff);
                         (me.act(), crossbeam_channel::never())
                     }
@@ -215,7 +215,7 @@ impl Display for Phase {
         match self {
             Phase::Info => write!(f, "Info"),
             Phase::Balance => write!(f, "Balance"),
-            Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(&since)),
+            Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
         }
     }
 }
