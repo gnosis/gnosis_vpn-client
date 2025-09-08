@@ -65,7 +65,7 @@ impl Info {
 
     pub fn gather(client: &blocking::Client, entry_node: &EntryNode) -> Result<Self, Error> {
         let headers = remote_data::authentication_headers(entry_node.api_token.as_str())?;
-        let addr_path = format!("api/{}/account/balances", entry_node.api_version);
+        let addr_path = format!("api/{}/account/addresses", entry_node.api_version);
         let addr_url = entry_node.endpoint.join(&addr_path)?;
 
         tracing::debug!(?headers, %url, "get addresses");
