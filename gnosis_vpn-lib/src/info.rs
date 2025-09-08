@@ -23,6 +23,8 @@ pub struct Info {
 pub enum Error {
     #[error("RemoteData error: {0}")]
     RemoteData(#[from] remote_data::Error),
+    #[error("Error making http request: {0:?}")]
+    Request(#[from] reqwest::Error),
     #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
 }

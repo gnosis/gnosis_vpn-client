@@ -30,7 +30,7 @@ pub fn json_headers() -> HeaderMap {
     headers
 }
 
-fn connect_errors(err: reqwest::Error) -> Error {
+pub fn connect_errors(err: reqwest::Error) -> Error {
     if err.is_connect() {
         Error::SocketConnect(err)
     } else if err.is_timeout() {
@@ -40,7 +40,7 @@ fn connect_errors(err: reqwest::Error) -> Error {
     }
 }
 
-fn response_errors(err: reqwest::Error) -> Error {
+pub fn response_errors(err: reqwest::Error) -> Error {
     if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
         Error::Unauthorized
     } else {

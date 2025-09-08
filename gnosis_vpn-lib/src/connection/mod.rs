@@ -12,6 +12,7 @@ use crate::entry_node::{self, EntryNode};
 use crate::gvpn_client::{self, Registration};
 use crate::log_output;
 use crate::ping;
+use crate::remote_data;
 use crate::session::{self, Protocol, Session};
 use crate::wg_tooling;
 
@@ -954,9 +955,15 @@ fn check_tcp_session<R>(res: &Result<R, gvpn_client::Error>, port: u16) {
 
 fn check_entry_node<R>(res: &Result<R, session::Error>) {
     match res {
-        Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
-        Err(session::Error::SocketConnect(_)) => log_output::print_node_port_instructions(),
-        Err(session::Error::Timeout(_)) => log_output::print_node_timeout_instructions(),
+        Err(session::Error::RemoteData(remote_data::Error::Unauthorized)) => {
+            log_output::print_node_access_instructions()
+        }
+        Err(session::Error::RemoteData(remote_data::Error::SocketConnect(_))) => {
+            log_output::print_node_port_instructions()
+        }
+        Err(session::Error::RemoteData(remote_data::Error::Timeout(_))) => {
+            log_output::print_node_timeout_instructions()
+        }
         _ => (),
     }
 }

@@ -21,6 +21,7 @@ pub struct Core {
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
     connection: Option<connection::Connection>,
+    node: node::Node,
     session_connected: bool,
     target_destination: Option<Destination>,
 }
