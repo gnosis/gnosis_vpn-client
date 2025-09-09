@@ -77,11 +77,6 @@ pub struct ListSession {
     protocol: Protocol,
 }
 
-pub struct SessionConfig {
-    entry_node: EntryNode,
-    session_id: String,
-}
-
 pub struct UpdateSessionConfig {
     entry_node: EntryNode,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
@@ -193,15 +188,6 @@ impl ListSession {
     }
 }
 
-impl SessionConfig {
-    pub fn new(entry_node: &EntryNode, session_id: &str) -> Self {
-        SessionConfig {
-            entry_node: entry_node.clone(),
-            session_id: session_id.to_string(),
-        }
-    }
-}
-
 impl UpdateSessionConfig {
     pub fn new(entry_node: &EntryNode, response_buffer: String, max_surb_upstream: String) -> Self {
         UpdateSessionConfig {
@@ -307,31 +293,6 @@ impl Session {
             // response error checks happen after response
             .map_err(remote_data::response_errors)?
             .json::<Vec<Session>>()?;
-
-        Ok(resp)
-    }
-
-    pub fn config(client: &blocking::Client, config: &SessionConfig) -> Result<Config, Error> {
-        let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/config/{}",
-            config.entry_node.api_version, config.session_id
-        );
-        let url = config.entry_node.endpoint.join(&path)?;
-
-        tracing::debug!(?headers, %url, "get config");
-
-        let resp = client
-            .get(url)
-            .timeout(config.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error checks happen after response
-            .map_err(remote_data::response_errors)?
-            .json::<Config>()?;
 
         Ok(resp)
     }
