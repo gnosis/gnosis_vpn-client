@@ -169,3 +169,17 @@ impl Display for Balance {
         )
     }
 }
+
+impl Display for FundingIssue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            FundingIssue::Unfunded => "unfunded - connections will not work",
+            FundingIssue::ChannelsOutOfFunds => "channels are out of funds - connections will not work",
+            FundingIssue::SafeOutOfFunds => "safe is out of funds - connections will stop working",
+            FundingIssue::SafeLowOnFunds => "safe is low on funds - connections will soon stop working",
+            FundingIssue::NodeUnderfunded => "underfunded - cannot open new channels",
+            FundingIssue::NodeLowOnFunds => "low on funds - cannot open new channels soon",
+        };
+        write!(f, "{s}")
+    }
+}

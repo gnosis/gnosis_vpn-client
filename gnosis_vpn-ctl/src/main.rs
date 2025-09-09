@@ -52,8 +52,22 @@ fn pretty_print(resp: &Response) {
         Response::Status(command::StatusResponse {
             status,
             available_destinations,
+            funding,
+            address,
         }) => {
             let mut str_resp = format!("Status: {status}\n");
+            match funding {
+                command::FundingState::Unknown | command::FundingState::WellFunded => {}
+                command::FundingState::TopIssue(issue) => {
+                    str_resp.push_str(&format!("WARNING: {issue}\n"));
+                }
+            }
+            match address {
+                command::AddressState::Unknown => {}
+                command::AddressState::Known(address) => {
+                    str_resp.push_str(&format!("Address: {address}\n"));
+                }
+            }
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
             } else {
@@ -63,6 +77,24 @@ fn pretty_print(resp: &Response) {
                 }
             }
             println!("{str_resp}");
+        }
+        Response::Balance(Some(command::BalanceResponse {
+            node,
+            safe,
+            channels_out,
+            issues,
+        })) => {
+            let mut str_resp = format!("Node Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n");
+            if !issues.is_empty() {
+                str_resp.push_str("Funding Issues:\n");
+                for issue in issues {
+                    str_resp.push_str(&format!("  - {issue}\n"));
+                }
+            }
+            println!("{str_resp}");
+        }
+        Response::Balance(None) => {
+            println!("No balance information available.");
         }
         Response::Pong => {
             println!("Pong");
@@ -77,6 +109,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
+        Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
     }
 }
