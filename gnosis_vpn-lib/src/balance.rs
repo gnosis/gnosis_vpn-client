@@ -16,6 +16,17 @@ pub struct Balance {
     pub channels_out_wxhopr: f64,
 }
 
+// in order of priority
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FundingIssue {
+    Unfunded,           // cannot work at all - initial state
+    ChannelsOutOfFunds, // does not work - no traffic possible
+    SafeOutOfFunds,     // keeps working - cannot top up channels
+    SafeLowOnFunds,     // warning before SafeOutOfFunds
+    NodeUnderfunded,    // keeps working - cannot open new channels
+    NodeLowOnFunds,     // warning before NodeUnderfunded
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("RemoteData error: {0}")]
@@ -124,6 +135,28 @@ impl Balance {
             safe_wxhopr,
             channels_out_wxhopr,
         })
+    }
+
+    pub fn prioritized_funding_issues(&self) -> Vec<FundingIssue> {
+        let mut issues = Vec::new();
+        if self.node_xdai <= 0.0 && self.safe_wxhopr <= 0.0 {
+            issues.push(FundingIssue::Unfunded);
+            return issues;
+        }
+        if self.channels_out_wxhopr < 0.1 {
+            issues.push(FundingIssue::ChannelsOutOfFunds);
+        }
+        if self.safe_wxhopr < 0.1 {
+            issues.push(FundingIssue::SafeOutOfFunds);
+        } else if self.safe_wxhopr < 1.0 {
+            issues.push(FundingIssue::SafeLowOnFunds);
+        }
+        if self.node_xdai < 0.01 {
+            issues.push(FundingIssue::NodeUnderfunded);
+        } else if self.node_xdai < 0.1 {
+            issues.push(FundingIssue::NodeLowOnFunds);
+        }
+        issues
     }
 }
 

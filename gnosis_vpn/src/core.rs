@@ -27,6 +27,9 @@ pub struct Core {
     session_connected: bool,
     target_destination: Option<Destination>,
 
+    // internal cancellation sender
+    cancel_sender: crossbeam_channel::Channel<Cancel>,
+
     // results from node
     balance: Option<balance::Balance>,
     info: Option<info::Info>,
@@ -38,6 +41,11 @@ pub enum Error {
     Config(#[from] config::Error),
     #[error("WireGuard error: {0}")]
     WgTooling(#[from] wg_tooling::Error),
+}
+
+enum Cancel {
+    Node,
+    Connection,
 }
 
 impl Core {
@@ -114,6 +122,7 @@ impl Core {
                 };
 
                 let destinations = self.config.destinations();
+                let funding_issues = self.balance.as_ref().map(|b| b.prioritized_funding_issues());
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     destinations
@@ -123,8 +132,23 @@ impl Core {
                             dest.into()
                         })
                         .collect(),
+                    funding_issues.into(),
+                    self.info.as_ref().into(),
                 )))
             }
+            Command::Balance => match &self.balance {
+                Some(balance) => {
+                    let issues = balance.prioritized_funding_issues();
+                    let resp = command::BalanceResponse::new(
+                        format!("{} xDai", balance.node_xdai),
+                        format!("{} wxHOPR", balance.safe_wxhopr),
+                        format!("{} wxHOPR", balance.channels_out_wxhopr),
+                        issues,
+                    );
+                    Ok(Response::Balance(Some(resp)))
+                }
+                None => Ok(Response::Balance(None)),
+            },
         }
     }
 
@@ -285,12 +309,12 @@ fn setup_from_config(config_path: &Path) -> Result<(Config, Node), Error> {
         log_output::print_no_destinations();
     }
 
-    let node = setup_node(config.clone());
+    let node = setup_node(config.clone(), self.sender.clone());
     node.run();
     Ok((config, node))
 }
 
-fn setup_node(config: Config) -> Node {
+fn setup_node(config: Config, sender: crossbeam_channel::Sender<Event>) -> Node {
     let (s, r) = crossbeam_channel::unbounded();
     let node = Node::new(config.entry_node(), s);
     thread::spawn(move || {
@@ -298,8 +322,10 @@ fn setup_node(config: Config) -> Node {
             crossbeam_channel::select! {
                 recv(r) -> node_event => {
                     match node_event {
-                        Ok(event) => {
-                            tracing::debug!(%event, "node event received");
+                        Ok(ref event) => {
+                                _ = sender.send(Event::NodeEvent(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send NodeEvent event");
+                                });
                         }
                         Err(e) => {
                             tracing::warn!(error = ?e, "failed to receive event");

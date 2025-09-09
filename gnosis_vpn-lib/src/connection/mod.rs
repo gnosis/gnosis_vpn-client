@@ -198,7 +198,7 @@ impl Connection {
                     BackoffState::NotRecoverable(error) => {
                         tracing::error!(phase = "up", %error, "Unrecoverable error: connection broken");
                         _ = me.sender.send(Event::Broken).map_err(|error| {
-                            tracing::error!(phase = "up", %error, "Failed sending dismantled event");
+                            tracing::error!(phase = "up", %error, "Failed sending broken event");
                         });
                         (crossbeam_channel::never(), crossbeam_channel::never())
                     }
