@@ -68,7 +68,7 @@ impl Core {
             target_destination: None,
             balance: None,
             info: None,
-            cancel_channel: crossbeam_channel::unbounded(),
+            cancel_channel,
         })
     }
 
@@ -311,11 +311,13 @@ impl Core {
 
     fn on_info(&mut self, info: info::Info) -> Result<(), Error> {
         tracing::info!("on info: {info}");
+        self.info = Some(info);
         Ok(())
     }
 
     fn on_balance(&mut self, balance: balance::Balance) -> Result<(), Error> {
         tracing::info!("on balance: {balance}");
+        self.balance = Some(balance);
         Ok(())
     }
 
