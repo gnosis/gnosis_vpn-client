@@ -54,8 +54,8 @@ struct ResponseBalances {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChannelEntry {
-    id: String,
-    peer_address: Address,
+    // id: String,
+    // peer_address: Address,
     status: String,
     balance: String,
 }
@@ -128,6 +128,7 @@ impl Balance {
         let channels_out_wxhopr: f64 = resp_channels
             .outgoing
             .iter()
+            .filter(|ch| ch.status == "Open" || ch.status == "PendingToClose")
             .filter_map(|ch| ch.balance.split_whitespace().next())
             .filter_map(|bal| bal.parse::<f64>().ok())
             .sum();
