@@ -286,7 +286,7 @@ impl Session {
         Ok(())
     }
 
-    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Session>, Error> {
+    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Self>, Error> {
         let headers = remote_data::authentication_headers(list_session.entry_node.api_token.as_str())?;
         let path = format!(
             "api/{}/session/{}",
