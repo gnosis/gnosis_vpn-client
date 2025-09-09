@@ -5,7 +5,6 @@ use thiserror::Error;
 use std::fmt::{self, Display};
 use std::time::SystemTime;
 
-use crate::address::Address;
 use crate::entry_node::EntryNode;
 use crate::remote_data;
 
