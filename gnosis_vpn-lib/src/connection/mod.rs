@@ -1,17 +1,18 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
-use std::fmt::{self, Display};
-use std::thread;
-use std::time::Duration;
-
 use crossbeam_channel;
 use rand::Rng;
 use reqwest::blocking;
 use thiserror::Error;
 
+use std::fmt::{self, Display};
+use std::thread;
+use std::time::Duration;
+
 use crate::entry_node::{self, EntryNode};
 use crate::gvpn_client::{self, Registration};
 use crate::log_output;
 use crate::ping;
+use crate::remote_data;
 use crate::session::{self, Protocol, Session};
 use crate::wg_tooling;
 
@@ -33,12 +34,6 @@ pub enum Event {
     Broken,
     /// Connection has reached final state
     Dismantled,
-}
-
-#[derive(Clone, Debug)]
-pub struct ConnectInfo {
-    pub endpoint: String,
-    pub registration: Registration,
 }
 
 /// Represents the different phases of establishing a connection.
@@ -203,7 +198,7 @@ impl Connection {
                     BackoffState::NotRecoverable(error) => {
                         tracing::error!(phase = "up", %error, "Unrecoverable error: connection broken");
                         _ = me.sender.send(Event::Broken).map_err(|error| {
-                            tracing::error!(phase = "up", %error, "Failed sending dismantled event");
+                            tracing::error!(phase = "up", %error, "Failed sending broken event");
                         });
                         (crossbeam_channel::never(), crossbeam_channel::never())
                     }
@@ -960,9 +955,15 @@ fn check_tcp_session<R>(res: &Result<R, gvpn_client::Error>, port: u16) {
 
 fn check_entry_node<R>(res: &Result<R, session::Error>) {
     match res {
-        Err(session::Error::Unauthorized) => log_output::print_node_access_instructions(),
-        Err(session::Error::SocketConnect(_)) => log_output::print_node_port_instructions(),
-        Err(session::Error::Timeout(_)) => log_output::print_node_timeout_instructions(),
+        Err(session::Error::RemoteData(remote_data::Error::Unauthorized)) => {
+            log_output::print_node_access_instructions()
+        }
+        Err(session::Error::RemoteData(remote_data::Error::SocketConnect(_))) => {
+            log_output::print_node_port_instructions()
+        }
+        Err(session::Error::RemoteData(remote_data::Error::Timeout(_))) => {
+            log_output::print_node_timeout_instructions()
+        }
         _ => (),
     }
 }

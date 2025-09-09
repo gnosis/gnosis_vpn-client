@@ -6,8 +6,9 @@ use thiserror::Error;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::log_output;
-use gnosis_vpn_lib::wg_tooling;
+use gnosis_vpn_lib::entry_node::EntryNode;
+use gnosis_vpn_lib::node::{self, Node};
+use gnosis_vpn_lib::{balance, info, log_output, wg_tooling};
 
 use crate::event::Event;
 
@@ -20,9 +21,19 @@ pub struct Core {
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
+    // connection to exit
     connection: Option<connection::Connection>,
+    // connection to entry
+    node: Node,
     session_connected: bool,
     target_destination: Option<Destination>,
+
+    // internal cancellation sender
+    cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
+
+    // results from node
+    balance: Option<balance::Balance>,
+    info: Option<info::Info>,
 }
 
 #[derive(Debug, Error)]
@@ -33,24 +44,40 @@ pub enum Error {
     WgTooling(#[from] wg_tooling::Error),
 }
 
+enum Cancel {
+    Node,
+    Connection,
+}
+
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
-        let config = setup_from_config(config_path)?;
+        let config = read_config(config_path)?;
         wg_tooling::available()?;
+
+        let cancel_channel = crossbeam_channel::unbounded();
+        let node = setup_node(config.entry_node(), sender.clone(), cancel_channel.1.clone());
+        node.run();
 
         Ok(Core {
             config,
             sender,
             shutdown_sender: None,
             connection: None,
+            node,
             session_connected: false,
             target_destination: None,
+            balance: None,
+            info: None,
+            cancel_channel,
         })
     }
 
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
+        _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+            tracing::error!(%e, "failed to send cancel to node");
+        });
         match &mut self.connection {
             Some(conn) => {
                 tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
@@ -59,6 +86,9 @@ impl Core {
             }
             None => {
                 tracing::debug!("direct shutdown - no connection to disconnect");
+                _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to connection");
+                });
                 if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(());
                 };
@@ -104,6 +134,7 @@ impl Core {
                 };
 
                 let destinations = self.config.destinations();
+                let funding_issues = self.balance.as_ref().map(|b| b.prioritized_funding_issues());
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     destinations
@@ -113,8 +144,27 @@ impl Core {
                             dest.into()
                         })
                         .collect(),
+                    funding_issues.into(),
+                    self.info.as_ref().map(|i| i.network.to_string()),
                 )))
             }
+            Command::Balance => match (&self.balance, &self.info) {
+                (Some(balance), Some(info)) => {
+                    let issues = balance.prioritized_funding_issues();
+                    let resp = command::BalanceResponse::new(
+                        format!("{} xDai", balance.node_xdai),
+                        format!("{} wxHOPR", balance.safe_wxhopr),
+                        format!("{} wxHOPR", balance.channels_out_wxhopr),
+                        issues,
+                        command::Addresses {
+                            node: info.node_address,
+                            safe: info.safe_address,
+                        },
+                    );
+                    Ok(Response::Balance(Some(resp)))
+                }
+                _ => Ok(Response::Balance(None)),
+            },
         }
     }
 
@@ -125,18 +175,22 @@ impl Core {
             Event::ConnectionEvent(connection::Event::Disconnected) => self.on_disconnected(),
             Event::ConnectionEvent(connection::Event::Broken) => self.on_broken(),
             Event::ConnectionEvent(connection::Event::Dismantled) => self.on_dismantled(),
+            Event::NodeEvent(node::Event::Info(info)) => self.on_info(info),
+            Event::NodeEvent(node::Event::Balance(balance)) => self.on_balance(balance),
+            Event::NodeEvent(node::Event::BackoffExhausted) => self.on_inoperable_node(),
         }
     }
 
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        let config = setup_from_config(config_path)?;
-        self.config = config;
+        let config = read_config(config_path)?;
+        // handle existing connection
         if let Some(conn) = &mut self.connection {
             tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
             conn.dismantle();
         }
+        // update target
         if let Some(dest) = self.target_destination.as_ref() {
-            if let Some(new_dest) = self.config.destinations().get(&dest.address) {
+            if let Some(new_dest) = config.destinations().get(&dest.address) {
                 tracing::debug!(current = %dest, new = %new_dest, "target destination updated");
                 self.target_destination = Some(new_dest.clone());
             } else {
@@ -144,6 +198,18 @@ impl Core {
                 self.target_destination = None;
             }
         }
+
+        // handle existing node
+        self.node.cancel();
+        self.balance = None;
+        self.info = None;
+
+        // setup new node
+        let node = setup_node(config.entry_node(), self.sender.clone(), self.cancel_channel.1.clone());
+        node.run();
+
+        self.config = config;
+        self.node = node;
         Ok(())
     }
 
@@ -235,6 +301,9 @@ impl Core {
         tracing::info!("connection closed");
         self.session_connected = false;
         self.connection = None;
+        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+            tracing::error!(%e, "failed to send cancel to connection");
+        });
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
             _ = sender.send(());
@@ -243,9 +312,36 @@ impl Core {
             self.act_on_target()
         }
     }
+
+    fn on_info(&mut self, info: info::Info) -> Result<(), Error> {
+        tracing::info!("on info: {info}");
+        self.info = Some(info);
+        Ok(())
+    }
+
+    fn on_balance(&mut self, balance: balance::Balance) -> Result<(), Error> {
+        tracing::info!("on balance: {balance}");
+        self.balance = Some(balance);
+        Ok(())
+    }
+
+    fn on_inoperable_node(&mut self) -> Result<(), Error> {
+        tracing::error!("node is inoperable - please check your configuration and network connectivity");
+        _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+            tracing::error!(%e, "failed to send cancel to node");
+        });
+        let node = setup_node(
+            self.config.entry_node(),
+            self.sender.clone(),
+            self.cancel_channel.1.clone(),
+        );
+        node.run();
+        self.node = node;
+        Ok(())
+    }
 }
 
-fn setup_from_config(config_path: &Path) -> Result<Config, Error> {
+fn read_config(config_path: &Path) -> Result<Config, Error> {
     let config = config::read(config_path)?;
 
     // print destinations warning
@@ -254,4 +350,46 @@ fn setup_from_config(config_path: &Path) -> Result<Config, Error> {
     }
 
     Ok(config)
+}
+
+fn setup_node(
+    entry_node: EntryNode,
+    sender: crossbeam_channel::Sender<Event>,
+    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+) -> Node {
+    let (s, r) = crossbeam_channel::unbounded();
+    let node = Node::new(entry_node, s);
+    thread::spawn(move || {
+        loop {
+            crossbeam_channel::select! {
+                recv(cancel_receiver) -> msg => {
+                    match msg {
+                        Ok(Cancel::Node) => {
+                            tracing::info!("shutting down node event handler");
+                            break;
+                        }
+                        Ok(Cancel::Connection) => {
+                            // ignoring connection cancel in node handler
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive cancel event");
+                        }
+                    }
+                },
+                recv(r) -> node_event => {
+                    match node_event {
+                        Ok(ref event) => {
+                                _ = sender.send(Event::NodeEvent(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send NodeEvent event");
+                                });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                }
+            }
+        }
+    });
+    node
 }

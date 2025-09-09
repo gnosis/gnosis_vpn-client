@@ -53,6 +53,8 @@ pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     session_timeout: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
+    http_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
     ping_retries_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
@@ -167,6 +169,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
                     if k == "listen_host" {
+                        continue;
+                    }
+                    if k == "http_timeout" {
                         continue;
                     }
                     if k == "session_timeout" {
@@ -322,6 +327,10 @@ impl Connection {
         ":1422".to_string()
     }
 
+    pub fn default_http_timeout() -> Duration {
+        Duration::from_secs(5)
+    }
+
     pub fn default_session_timeout() -> Duration {
         Duration::from_secs(15)
     }
@@ -384,6 +393,11 @@ impl Config {
             .and_then(|c| c.listen_host.clone())
             .or(internal_connection_port)
             .unwrap_or(Connection::default_listen_host());
+        let http_timeout = self
+            .connection
+            .as_ref()
+            .and_then(|c| c.http_timeout)
+            .unwrap_or(Connection::default_http_timeout());
         let session_timeout = self
             .connection
             .as_ref()
@@ -393,6 +407,7 @@ impl Config {
             self.hoprd_node.endpoint.clone(),
             self.hoprd_node.api_token.clone(),
             listen_host,
+            http_timeout,
             session_timeout,
             entry_node::APIVersion::V4,
         )
@@ -559,6 +574,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 listen_host = "0.0.0.0:1422"
+http_timeout = "5s"
 session_timeout = "15s"
 ping_retries_timeout = "20s"
 

@@ -5,6 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::address::Address;
+use crate::balance::FundingIssue;
 use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
 use crate::session;
@@ -15,6 +16,7 @@ pub enum Command {
     Connect(Address),
     Disconnect,
     Ping,
+    Balance,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +24,7 @@ pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
+    Balance(Option<BalanceResponse>),
     Pong,
 }
 
@@ -29,6 +32,8 @@ pub enum Response {
 pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
+    pub funding: FundingState,
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,6 +42,14 @@ pub enum Status {
     Disconnecting(Destination),
     Connected(Destination),
     Disconnected,
+}
+
+// in order of priority
+#[derive(Debug, Serialize, Deserialize)]
+pub enum FundingState {
+    Unknown, // state not queried yet
+    TopIssue(FundingIssue),
+    WellFunded,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +69,21 @@ pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,
     pub path: session::Path,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BalanceResponse {
+    pub node: String,
+    pub safe: String,
+    pub channels_out: String,
+    pub addresses: Addresses,
+    pub issues: Vec<FundingIssue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Addresses {
+    pub node: Address,
+    pub safe: Address,
 }
 
 impl Status {
@@ -97,10 +125,35 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(status: Status, available_destinations: Vec<Destination>) -> Self {
+    pub fn new(
+        status: Status,
+        available_destinations: Vec<Destination>,
+        funding: FundingState,
+        network: Option<String>,
+    ) -> Self {
         StatusResponse {
             status,
             available_destinations,
+            funding,
+            network,
+        }
+    }
+}
+
+impl BalanceResponse {
+    pub fn new(
+        node: String,
+        safe: String,
+        channels_out: String,
+        issues: Vec<FundingIssue>,
+        addresses: Addresses,
+    ) -> Self {
+        BalanceResponse {
+            node,
+            safe,
+            channels_out,
+            issues,
+            addresses,
         }
     }
 }
@@ -172,5 +225,19 @@ impl fmt::Display for Status {
             Status::Connected(dest) => write!(f, "Connected to {dest}"),
             Status::Disconnected => write!(f, "Disconnected"),
         }
+    }
+}
+
+impl From<Option<Vec<FundingIssue>>> for FundingState {
+    fn from(issues: Option<Vec<FundingIssue>>) -> Self {
+        let issues = match issues {
+            Some(issues) => issues,
+            None => return FundingState::Unknown,
+        };
+        if issues.is_empty() {
+            return FundingState::WellFunded;
+        }
+        let top_issue = &issues[0];
+        FundingState::TopIssue(top_issue.clone())
     }
 }

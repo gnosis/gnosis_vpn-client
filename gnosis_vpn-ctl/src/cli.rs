@@ -41,6 +41,10 @@ pub enum Command {
     /// Disconnect from current exit location
     #[command()]
     Disconnect {},
+
+    /// Query balance information
+    #[command()]
+    Balance {},
 }
 
 impl From<Command> for LibCommand {
@@ -49,6 +53,7 @@ impl From<Command> for LibCommand {
             Command::Status {} => LibCommand::Status,
             Command::Connect { address } => LibCommand::Connect(address),
             Command::Disconnect {} => LibCommand::Disconnect,
+            Command::Balance {} => LibCommand::Balance,
         }
     }
 }
