@@ -26,11 +26,13 @@ pub enum Error {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ResponseAddresses {
     native: Address,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ResponseInfo {
     //  skip not interested fields
     //  "announcedAddress",

@@ -40,6 +40,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ResponseBalances {
     safe_native: String,
     native: String,
@@ -49,6 +50,7 @@ struct ResponseBalances {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ChannelEntry {
     id: String,
     peer_address: Address,
@@ -68,6 +70,7 @@ pub enum ChannelStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ResponseChannels {
     // we don't care about incoming and all
     // incoming: Vec<ChannelEntry>,
