@@ -52,8 +52,16 @@ fn pretty_print(resp: &Response) {
         Response::Status(command::StatusResponse {
             status,
             available_destinations,
+            funding,
+            network,
         }) => {
             let mut str_resp = format!("Status: {status}\n");
+            if let Some(network) = network {
+                str_resp.push_str(&format!("Network: {network}\n"));
+            }
+            if let command::FundingState::TopIssue(issue) = funding {
+                str_resp.push_str(&format!("---\nWARNING: {issue}\n---\n"));
+            }
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
             } else {
@@ -63,6 +71,28 @@ fn pretty_print(resp: &Response) {
                 }
             }
             println!("{str_resp}");
+        }
+        Response::Balance(Some(command::BalanceResponse {
+            node,
+            safe,
+            channels_out,
+            issues,
+            addresses,
+        })) => {
+            let mut str_resp = format!("Node Address: {}\nSafe Address: {}\n", addresses.node, addresses.safe);
+            str_resp.push_str(&format!(
+                "---\nNode Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n"
+            ));
+            if !issues.is_empty() {
+                str_resp.push_str("---\nFunding Issues:\n");
+                for issue in issues {
+                    str_resp.push_str(&format!("  - {issue}\n"));
+                }
+            }
+            println!("{str_resp}");
+        }
+        Response::Balance(None) => {
+            println!("No balance information available.");
         }
         Response::Pong => {
             println!("Pong");
@@ -77,6 +107,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
+        Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
     }
 }
