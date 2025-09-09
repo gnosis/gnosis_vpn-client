@@ -37,6 +37,8 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("Error parsing float: {0}")]
     ParseFloat(#[from] std::num::ParseFloatError),
+    #[error("Expected whitespace delimited tuple")]
+    SplitError,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,8 +132,19 @@ impl Balance {
             .filter_map(|bal| bal.parse::<f64>().ok())
             .sum();
 
-        let node_xdai = resp_balances.native.parse::<f64>()?;
-        let safe_wxhopr = resp_balances.safe_hopr.parse::<f64>()?;
+        let node_xdai = resp_balances
+            .native
+            .split_whitespace()
+            .next()
+            .ok_or(Error::SplitError)?
+            .parse::<f64>()?;
+
+        let safe_wxhopr = resp_balances
+            .safe_hopr
+            .split_whitespace()
+            .next()
+            .ok_or(Error::SplitError)?
+            .parse::<f64>()?;
 
         Ok(Balance {
             node_xdai,

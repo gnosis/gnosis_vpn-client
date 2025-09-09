@@ -145,21 +145,25 @@ impl Core {
                         })
                         .collect(),
                     funding_issues.into(),
-                    self.info.as_ref().into(),
+                    self.info.as_ref().map(|i| i.network.to_string()),
                 )))
             }
-            Command::Balance => match &self.balance {
-                Some(balance) => {
+            Command::Balance => match (&self.balance, &self.info) {
+                (Some(balance), Some(info)) => {
                     let issues = balance.prioritized_funding_issues();
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
                         format!("{} wxHOPR", balance.safe_wxhopr),
                         format!("{} wxHOPR", balance.channels_out_wxhopr),
                         issues,
+                        command::Addresses {
+                            node: info.node_address,
+                            safe: info.safe_address,
+                        },
                     );
                     Ok(Response::Balance(Some(resp)))
                 }
-                None => Ok(Response::Balance(None)),
+                _ => Ok(Response::Balance(None)),
             },
         }
     }

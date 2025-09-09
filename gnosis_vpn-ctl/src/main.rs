@@ -53,20 +53,14 @@ fn pretty_print(resp: &Response) {
             status,
             available_destinations,
             funding,
-            address,
+            network,
         }) => {
             let mut str_resp = format!("Status: {status}\n");
-            match funding {
-                command::FundingState::Unknown | command::FundingState::WellFunded => {}
-                command::FundingState::TopIssue(issue) => {
-                    str_resp.push_str(&format!("WARNING: {issue}\n"));
-                }
+            if let command::FundingState::TopIssue(issue) = funding {
+                str_resp.push_str(&format!("WARNING: {issue}\n"));
             }
-            match address {
-                command::AddressState::Unknown => {}
-                command::AddressState::Known(address) => {
-                    str_resp.push_str(&format!("Address: {address}\n"));
-                }
+            if let Some(network) = network {
+                str_resp.push_str(&format!("Network: {network}\n"));
             }
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
@@ -83,10 +77,15 @@ fn pretty_print(resp: &Response) {
             safe,
             channels_out,
             issues,
+            addresses,
         })) => {
             let mut str_resp = format!("Node Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n");
+            str_resp.push_str(&format!(
+                "---\nNode Address: {}\nSafe Address: {}\n",
+                addresses.node, addresses.safe
+            ));
             if !issues.is_empty() {
-                str_resp.push_str("Funding Issues:\n");
+                str_resp.push_str("---\nFunding Issues:\n");
                 for issue in issues {
                     str_resp.push_str(&format!("  - {issue}\n"));
                 }

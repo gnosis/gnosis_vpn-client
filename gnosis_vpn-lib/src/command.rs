@@ -7,7 +7,6 @@ use std::str::FromStr;
 use crate::address::Address;
 use crate::balance::FundingIssue;
 use crate::connection::destination::Destination as ConnectionDestination;
-use crate::info::Info;
 use crate::log_output;
 use crate::session;
 
@@ -34,7 +33,7 @@ pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
     pub funding: FundingState,
-    pub address: AddressState,
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,12 +50,6 @@ pub enum FundingState {
     Unknown, // state not queried yet
     TopIssue(FundingIssue),
     WellFunded,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum AddressState {
-    Unknown,
-    Known(Address),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,7 +76,14 @@ pub struct BalanceResponse {
     pub node: String,
     pub safe: String,
     pub channels_out: String,
+    pub addresses: Addresses,
     pub issues: Vec<FundingIssue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Addresses {
+    pub node: Address,
+    pub safe: Address,
 }
 
 impl Status {
@@ -129,24 +129,31 @@ impl StatusResponse {
         status: Status,
         available_destinations: Vec<Destination>,
         funding: FundingState,
-        address: AddressState,
+        network: Option<String>,
     ) -> Self {
         StatusResponse {
             status,
             available_destinations,
             funding,
-            address,
+            network,
         }
     }
 }
 
 impl BalanceResponse {
-    pub fn new(node: String, safe: String, channels_out: String, issues: Vec<FundingIssue>) -> Self {
+    pub fn new(
+        node: String,
+        safe: String,
+        channels_out: String,
+        issues: Vec<FundingIssue>,
+        addresses: Addresses,
+    ) -> Self {
         BalanceResponse {
             node,
             safe,
             channels_out,
             issues,
+            addresses,
         }
     }
 }
@@ -232,14 +239,5 @@ impl From<Option<Vec<FundingIssue>>> for FundingState {
         }
         let top_issue = &issues[0];
         FundingState::TopIssue(top_issue.clone())
-    }
-}
-
-impl From<Option<&Info>> for AddressState {
-    fn from(info: Option<&Info>) -> Self {
-        match info {
-            Some(info) => AddressState::Known(info.node_address),
-            None => AddressState::Unknown,
-        }
     }
 }
