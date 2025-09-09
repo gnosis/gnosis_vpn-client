@@ -77,11 +77,6 @@ pub struct ListSession {
     protocol: Protocol,
 }
 
-pub struct SessionConfig {
-    entry_node: EntryNode,
-    session_id: String,
-}
-
 pub struct UpdateSessionConfig {
     entry_node: EntryNode,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
@@ -92,22 +87,16 @@ pub struct UpdateSessionConfig {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Invalid header: {0}")]
-    Header(#[from] remote_data::HeaderError),
-    #[error("Error parsing url: {0}")]
-    Url(#[from] url::ParseError),
+    #[error("RemoteData error: {0}")]
+    RemoteData(#[from] remote_data::Error),
     #[error("Error making http request: {0:?}")]
     Request(#[from] reqwest::Error),
+    #[error("Error parsing url: {0}")]
+    Url(#[from] url::ParseError),
     #[error("Session listen host already used")]
     ListenHostAlreadyUsed,
     #[error("Session not found")]
     SessionNotFound,
-    #[error("Unauthorized")]
-    Unauthorized,
-    #[error("Error connecting on specified port: {0:?}")]
-    SocketConnect(reqwest::Error),
-    #[error("Timeout: {0:?}")]
-    Timeout(reqwest::Error),
     #[error("Session does not have any active clients")]
     NoSessionId,
     #[error("Session has more than one active client")]
@@ -199,15 +188,6 @@ impl ListSession {
     }
 }
 
-impl SessionConfig {
-    pub fn new(entry_node: &EntryNode, session_id: &str) -> Self {
-        SessionConfig {
-            entry_node: entry_node.clone(),
-            session_id: session_id.to_string(),
-        }
-    }
-}
-
 impl UpdateSessionConfig {
     pub fn new(entry_node: &EntryNode, response_buffer: String, max_surb_upstream: String) -> Self {
         UpdateSessionConfig {
@@ -262,7 +242,7 @@ impl Session {
             .headers(headers)
             .send()
             // connection error checks happen before response
-            .map_err(connect_errors)?
+            .map_err(remote_data::connect_errors)?
             .error_for_status()
             // response error can only be mapped after sending
             .map_err(open_response_errors)?
@@ -281,18 +261,18 @@ impl Session {
         tracing::debug!(?headers, %url, "delete session");
         client
             .delete(url)
-            .timeout(close_session.entry_node.session_timeout)
+            .timeout(close_session.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response
-            .map_err(connect_errors)?
+            .map_err(remote_data::connect_errors)?
             .error_for_status()
             // response error checks happen after response
             .map_err(close_response_errors)?;
         Ok(())
     }
 
-    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Session>, Error> {
+    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Self>, Error> {
         let headers = remote_data::authentication_headers(list_session.entry_node.api_token.as_str())?;
         let path = format!(
             "api/{}/session/{}",
@@ -304,40 +284,15 @@ impl Session {
 
         let resp = client
             .get(url)
-            .timeout(list_session.entry_node.session_timeout)
+            .timeout(list_session.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response
-            .map_err(connect_errors)?
+            .map_err(remote_data::connect_errors)?
             .error_for_status()
             // response error checks happen after response
-            .map_err(response_errors)?
+            .map_err(remote_data::response_errors)?
             .json::<Vec<Session>>()?;
-
-        Ok(resp)
-    }
-
-    pub fn config(client: &blocking::Client, config: &SessionConfig) -> Result<Config, Error> {
-        let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/config/{}",
-            config.entry_node.api_version, config.session_id
-        );
-        let url = config.entry_node.endpoint.join(&path)?;
-
-        tracing::debug!(?headers, %url, "get config");
-
-        let resp = client
-            .get(url)
-            .timeout(config.entry_node.session_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(connect_errors)?
-            .error_for_status()
-            // response error checks happen after response
-            .map_err(response_errors)?
-            .json::<Config>()?;
 
         Ok(resp)
     }
@@ -361,14 +316,14 @@ impl Session {
         client
             .post(url)
             .json(&json)
-            .timeout(config.entry_node.session_timeout)
+            .timeout(config.entry_node.http_timeout)
             .headers(headers)
             .send()
             // connection error checks happen before response
-            .map_err(connect_errors)?
+            .map_err(remote_data::connect_errors)?
             .error_for_status()
             // response error can only be mapped after sending
-            .map_err(response_errors)?;
+            .map_err(remote_data::response_errors)?;
         Ok(())
     }
 
@@ -380,38 +335,16 @@ impl Session {
 fn open_response_errors(err: reqwest::Error) -> Error {
     if err.status() == Some(StatusCode::CONFLICT) {
         Error::ListenHostAlreadyUsed
-    } else if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
-        Error::Unauthorized
     } else {
-        err.into()
+        remote_data::response_errors(err).into()
     }
 }
 
 fn close_response_errors(err: reqwest::Error) -> Error {
     if err.status() == Some(StatusCode::NOT_FOUND) {
         Error::SessionNotFound
-    } else if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
-        Error::Unauthorized
     } else {
-        err.into()
-    }
-}
-
-fn response_errors(err: reqwest::Error) -> Error {
-    if err.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
-        Error::Unauthorized
-    } else {
-        err.into()
-    }
-}
-
-fn connect_errors(err: reqwest::Error) -> Error {
-    if err.is_connect() {
-        Error::SocketConnect(err)
-    } else if err.is_timeout() {
-        Error::Timeout(err)
-    } else {
-        err.into()
+        remote_data::response_errors(err).into()
     }
 }
 

@@ -11,6 +11,7 @@ pub struct EntryNode {
     pub endpoint: Url,
     pub api_token: String,
     pub listen_host: String,
+    pub http_timeout: Duration,
     pub session_timeout: Duration,
     pub api_version: APIVersion,
 }
@@ -31,6 +32,7 @@ impl EntryNode {
         endpoint: Url,
         api_token: String,
         listen_host: String,
+        http_timeout: Duration,
         session_timeout: Duration,
         api_version: APIVersion,
     ) -> Self {
@@ -38,6 +40,7 @@ impl EntryNode {
             endpoint,
             api_token,
             listen_host,
+            http_timeout,
             session_timeout,
             api_version,
         }

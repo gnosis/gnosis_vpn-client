@@ -126,6 +126,7 @@ impl Config {
             hoprd_node.endpoint,
             hoprd_node.api_token,
             listen_host,
+            Duration::from_secs(5),
             Duration::from_secs(15),
             APIVersion::V4,
         )
