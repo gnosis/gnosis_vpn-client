@@ -45,6 +45,10 @@ pub enum Command {
     /// Query balance information
     #[command()]
     Balance {},
+
+    /// Trigger a refresh of node information including balance
+    #[command()]
+    RefreshNode {},
 }
 
 impl From<Command> for LibCommand {
@@ -54,6 +58,7 @@ impl From<Command> for LibCommand {
             Command::Connect { address } => LibCommand::Connect(address),
             Command::Disconnect {} => LibCommand::Disconnect,
             Command::Balance {} => LibCommand::Balance,
+            Command::RefreshNode {} => LibCommand::RefreshNode,
         }
     }
 }

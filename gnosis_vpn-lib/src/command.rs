@@ -17,6 +17,7 @@ pub enum Command {
     Disconnect,
     Ping,
     Balance,
+    RefreshNode,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +26,7 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
+    RefreshNode,
     Pong,
 }
 

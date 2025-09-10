@@ -1,7 +1,11 @@
 # Gnosis VPN Client
 
 Gnosis VPN is a VPN solution build on top the HOPR mixnet.
-It manages VPN connections to remote targets.
+This repo contains the system service and a control application.
+It is part of a larger project consisting of:
+
+- [Gnosis VPN App](https://github.com/gnosis/gnosis_vpn-app) handling user interface
+- [Gnosis VPN Server](https://github.com/gnosis/gnosis_vpn-server) handling VPN server side
 
 ## General concept
 

@@ -165,6 +165,10 @@ impl Core {
                 }
                 _ => Ok(Response::Balance(None)),
             },
+            Command::RefreshNode => {
+                self.refresh_node()?;
+                Ok(Response::RefreshNode)
+            }
         }
     }
 
@@ -200,17 +204,12 @@ impl Core {
         }
 
         // handle existing node
-        self.node.cancel();
         self.balance = None;
         self.info = None;
+        self.config = config;
 
         // setup new node
-        let node = setup_node(config.entry_node(), self.sender.clone(), self.cancel_channel.1.clone());
-        node.run();
-
-        self.config = config;
-        self.node = node;
-        Ok(())
+        self.refresh_node()
     }
 
     fn act_on_target(&mut self) -> Result<(), Error> {
@@ -327,6 +326,11 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
+        self.refresh_node()
+    }
+
+    fn refresh_node(&mut self) -> Result<(), Error> {
+        self.node.cancel();
         _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to node");
         });
