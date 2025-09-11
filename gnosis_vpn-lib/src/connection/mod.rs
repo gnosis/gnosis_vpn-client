@@ -768,7 +768,7 @@ impl Connection {
                 address: registration.address(),
                 allowed_ips: wg.config.allowed_ips.clone(),
                 listen_port: wg.config.listen_port,
-                mtu: session.mtu,
+                mtu: session.hopr_mtu,
             };
             let peer_info = wg_tooling::PeerInfo {
                 public_key: registration.server_public_key(),

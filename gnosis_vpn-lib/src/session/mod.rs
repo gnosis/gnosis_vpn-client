@@ -23,12 +23,16 @@ pub struct Session {
     pub destination: Address,
     pub forward_path: Path,
     pub ip: String,
-    pub mtu: u16,
+    pub hopr_mtu: u16,
     pub port: u16,
     pub protocol: Protocol,
     pub return_path: Path,
     pub surb_len: u16,
     pub target: String,
+    pub max_client_sessions: u16,
+    pub max_surb_upstream: String,
+    pub response_buffer: String,
+    pub session_pool: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
