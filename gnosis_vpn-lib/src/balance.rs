@@ -22,7 +22,7 @@ pub enum FundingIssue {
     ChannelsOutOfFunds, // does not work - no traffic possible
     SafeOutOfFunds,     // keeps working - cannot top up channels
     SafeLowOnFunds,     // warning before SafeOutOfFunds
-    NodeUnderfunded,    // keeps working - cannot open new channels
+    NodeUnderfunded,    // keeps working until channels are drained - cannot open new or top up existing channels
     NodeLowOnFunds,     // warning before NodeUnderfunded
 }
 
@@ -189,12 +189,12 @@ impl Display for Balance {
 impl Display for FundingIssue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
-            FundingIssue::Unfunded => "unfunded - connections will not work",
+            FundingIssue::Unfunded => "unfunded - nothing will work",
             FundingIssue::ChannelsOutOfFunds => "channels are out of funds - connections will not work",
             FundingIssue::SafeOutOfFunds => "safe is out of funds - connections will stop working",
             FundingIssue::SafeLowOnFunds => "safe is low on funds - connections will soon stop working",
-            FundingIssue::NodeUnderfunded => "underfunded - cannot open new channels",
-            FundingIssue::NodeLowOnFunds => "low on funds - cannot open new channels soon",
+            FundingIssue::NodeUnderfunded => "underfunded - cannot open new connection or keep existing ones",
+            FundingIssue::NodeLowOnFunds => "low on funds - soon cannot open new connection or keep existing ones",
         };
         write!(f, "{s}")
     }
