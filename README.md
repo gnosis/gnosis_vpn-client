@@ -1,7 +1,11 @@
 # Gnosis VPN Client
 
 Gnosis VPN is a VPN solution build on top the HOPR mixnet.
-It manages VPN connections to remote targets.
+This repo contains the system service and a control application.
+It is part of a larger project consisting of:
+
+- [Gnosis VPN App](https://github.com/gnosis/gnosis_vpn-app) handling user interface
+- [Gnosis VPN Server](https://github.com/gnosis/gnosis_vpn-server) handling VPN server side
 
 ## General concept
 
@@ -17,7 +21,7 @@ Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node a
 
 To validate the signature of the downloaded binary from GitHub, follow these steps:
 
-1. Import the public key:
+1. Import the public key (checkout the repository first):
 
    ```bash
    gpg --import gpg-publickey.asc
@@ -64,6 +68,6 @@ The resulting binaries are in `result/bin/`:
 $ ls -l result*/bin/
 result/bin/:
 total 4752
--r-xr-xr-x 1 root root 4863368 Jan  1  1970 gnosis_vpn
+-r-xr-xr-x 1 root root 4863367 Jan  1  1970 gnosis_vpn
 -r-xr-xr-x 1 root root 1740050 Jan  1  1970 gnosis_vpn-ctl
 ```

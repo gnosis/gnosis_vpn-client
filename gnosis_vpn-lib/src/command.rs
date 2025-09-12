@@ -4,17 +4,20 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::connection::Destination as ConnectionDestination;
+use crate::address::Address;
+use crate::balance::FundingIssue;
+use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
-use crate::peer_id::PeerId;
 use crate::session;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     Status,
-    Connect(PeerId),
+    Connect(Address),
     Disconnect,
     Ping,
+    Balance,
+    RefreshNode,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +25,8 @@ pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
+    Balance(Option<BalanceResponse>),
+    RefreshNode,
     Pong,
 }
 
@@ -29,6 +34,8 @@ pub enum Response {
 pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
+    pub funding: FundingState,
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,10 +46,18 @@ pub enum Status {
     Disconnected,
 }
 
+// in order of priority
+#[derive(Debug, Serialize, Deserialize)]
+pub enum FundingState {
+    Unknown, // state not queried yet
+    TopIssue(FundingIssue),
+    WellFunded,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    PeerIdNotFound,
+    AddressNotFound,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,8 +69,23 @@ pub enum DisconnectResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
-    pub peer_id: PeerId,
+    pub address: Address,
     pub path: session::Path,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BalanceResponse {
+    pub node: String,
+    pub safe: String,
+    pub channels_out: String,
+    pub addresses: Addresses,
+    pub issues: Vec<FundingIssue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Addresses {
+    pub node: Address,
+    pub safe: Address,
 }
 
 impl Status {
@@ -81,8 +111,8 @@ impl ConnectResponse {
         ConnectResponse::Connecting(destination)
     }
 
-    pub fn peer_id_not_found() -> Self {
-        ConnectResponse::PeerIdNotFound
+    pub fn address_not_found() -> Self {
+        ConnectResponse::AddressNotFound
     }
 }
 
@@ -97,10 +127,35 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(status: Status, available_destinations: Vec<Destination>) -> Self {
+    pub fn new(
+        status: Status,
+        available_destinations: Vec<Destination>,
+        funding: FundingState,
+        network: Option<String>,
+    ) -> Self {
         StatusResponse {
             status,
             available_destinations,
+            funding,
+            network,
+        }
+    }
+}
+
+impl BalanceResponse {
+    pub fn new(
+        node: String,
+        safe: String,
+        channels_out: String,
+        issues: Vec<FundingIssue>,
+        addresses: Addresses,
+    ) -> Self {
+        BalanceResponse {
+            node,
+            safe,
+            channels_out,
+            issues,
+            addresses,
         }
     }
 }
@@ -137,7 +192,7 @@ impl FromStr for Command {
 impl From<ConnectionDestination> for Destination {
     fn from(destination: ConnectionDestination) -> Self {
         Destination {
-            peer_id: destination.peer_id,
+            address: destination.address,
             meta: destination.meta,
             path: destination.path,
         }
@@ -152,14 +207,14 @@ impl fmt::Display for Destination {
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let short_pid = log_output::peer_id(self.peer_id.to_string().as_str());
+        let short_addr = log_output::address(&self.address);
         write!(
             f,
-            "Peer ID: {pid}, Route: (entry){path}(x{short_pid}), {meta}",
+            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
             meta = meta,
             path = self.path,
-            pid = self.peer_id,
-            short_pid = short_pid,
+            address = self.address,
+            short_addr = short_addr,
         )
     }
 }
@@ -172,5 +227,19 @@ impl fmt::Display for Status {
             Status::Connected(dest) => write!(f, "Connected to {dest}"),
             Status::Disconnected => write!(f, "Disconnected"),
         }
+    }
+}
+
+impl From<Option<Vec<FundingIssue>>> for FundingState {
+    fn from(issues: Option<Vec<FundingIssue>>) -> Self {
+        let issues = match issues {
+            Some(issues) => issues,
+            None => return FundingState::Unknown,
+        };
+        if issues.is_empty() {
+            return FundingState::WellFunded;
+        }
+        let top_issue = &issues[0];
+        FundingState::TopIssue(top_issue.clone())
     }
 }
