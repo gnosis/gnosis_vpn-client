@@ -1,20 +1,19 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
-use reqwest::blocking;
 use thiserror::Error;
 
 use std::fmt::{self, Display};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::{self, Balance};
-use crate::entry_node::EntryNode;
-use crate::info::{self, Info};
+use crate::balance::Balances;
+use crate::info::Info;
 use crate::log_output;
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Info(Info),
-    Balance(Balance),
+    Balance(Balances),
     BackoffExhausted,
 }
 
@@ -28,8 +27,8 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    Info(Result<Info, info::Error>),
-    Balance(Result<Balance, balance::Error>),
+    Info(Result<Info, edgli::hopr_lib::errors::HoprLibError>),
+    Balance(Result<Balances, edgli::hopr_lib::errors::HoprLibError>),
     Tick,
 }
 
@@ -40,38 +39,32 @@ enum BackoffState {
     Triggered(ExponentialBackoff),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Error)]
+enum InternalError {
+    #[error("Channel send error: {0}")]
+    Send(#[from] crossbeam_channel::SendError<Event>),
+    #[error("hopr-lib error: {0}")]
+    Hopr(#[from] edgli::hopr_lib::errors::HoprLibError),
+}
+
+#[derive(Clone)]
 pub struct Node {
     // message passing helper
     cancel_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
-
-    // reuse http client
-    client: blocking::Client,
 
     // dynamic runtime data
     backoff: BackoffState,
     phase: Phase,
 
     // static input data
-    entry_node: EntryNode,
+    entry_node: Arc<edgli::hopr_lib::Hopr>,
     sender: crossbeam_channel::Sender<Event>,
 }
 
-#[derive(Debug, Error)]
-enum InternalError {
-    #[error("Channel send error: {0}")]
-    Send(#[from] crossbeam_channel::SendError<Event>),
-    #[error("Info error: {0}")]
-    Info(#[from] info::Error),
-    #[error("Balance error: {0}")]
-    Balance(#[from] balance::Error),
-}
-
 impl Node {
-    pub fn new(entry_node: EntryNode, sender: crossbeam_channel::Sender<Event>) -> Self {
+    pub fn new(entry_node: Arc<edgli::hopr_lib::Hopr>, sender: crossbeam_channel::Sender<Event>) -> Self {
         Node {
             cancel_channel: crossbeam_channel::bounded(1),
-            client: blocking::Client::new(),
             backoff: BackoffState::Inactive,
             phase: Phase::Info,
             entry_node,
@@ -173,29 +166,29 @@ impl Node {
     }
 
     fn fetch_info(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         let entry_node = self.entry_node.clone();
         thread::spawn(move || {
-            let res = Info::gather(&client, &entry_node);
-            _ = s.send(InternalEvent::Info(res));
+            // let res = Info::load_from(&entry_node);
+            // _ = s.send(InternalEvent::Info(res));
+            todo!("implement using edgli")
         });
         r
     }
 
     fn fetch_balance(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         let entry_node = self.entry_node.clone();
         thread::spawn(move || {
-            let res = Balance::calc_for_node(&client, &entry_node);
-            _ = s.send(InternalEvent::Balance(res));
+            // let res = Balance::load_from(&entry_node).await;
+            // _ = s.send(InternalEvent::Balance(res));
+            todo!("implement using edgli")
         });
         r
     }
