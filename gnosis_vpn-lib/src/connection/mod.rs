@@ -8,7 +8,6 @@ use std::fmt::{self, Display};
 use std::thread;
 use std::time::Duration;
 
-use crate::entry_node::{self, EntryNode};
 use crate::gvpn_client::{self, Registration};
 use crate::log_output;
 use crate::ping;
@@ -125,8 +124,6 @@ enum InternalError {
     WgError(#[from] gvpn_client::Error),
     #[error("Channel send error: {0}")]
     SendError(#[from] crossbeam_channel::SendError<Event>),
-    #[error("Entry node error: {0}")]
-    EntryNodeError(#[from] crate::entry_node::Error),
     #[error("WireGuard error: {0}")]
     WireGuard(#[from] wg_tooling::Error),
     #[error("Unexpected event: {0}")]

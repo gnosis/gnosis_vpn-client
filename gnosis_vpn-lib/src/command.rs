@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::address::Address;
+use edgli::hopr_lib::Address;
 use crate::balance::FundingIssue;
 use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;

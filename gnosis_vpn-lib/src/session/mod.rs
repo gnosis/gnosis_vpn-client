@@ -6,8 +6,7 @@ use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use thiserror::Error;
 
-use crate::address::Address;
-use crate::entry_node::EntryNode;
+use edgli::hopr_lib::{Address, Hopr};
 use crate::remote_data;
 
 pub use path::Path;

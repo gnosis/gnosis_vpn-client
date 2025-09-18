@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use gnosis_vpn_lib::address::Address;
 use gnosis_vpn_lib::command::Command as LibCommand;
+use gnosis_vpn_lib::prelude::Address;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 

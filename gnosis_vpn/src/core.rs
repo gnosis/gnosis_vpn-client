@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 
 use thiserror::Error;
@@ -6,13 +7,11 @@ use thiserror::Error;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::entry_node::EntryNode;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::{balance, info, log_output, wg_tooling};
 
 use crate::event::Event;
 
-#[derive(Debug)]
 pub struct Core {
     // configuration data
     config: Config,
@@ -32,14 +31,18 @@ pub struct Core {
     cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
 
     // results from node
-    balance: Option<balance::Balance>,
+    balance: Option<balance::Balances>,
     info: Option<info::Info>,
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("general error: {0}")]
+    General(String),
+
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
+
     #[error("WireGuard error: {0}")]
     WgTooling(#[from] wg_tooling::Error),
 }
@@ -54,22 +57,34 @@ impl Core {
         let config = read_config(config_path)?;
         wg_tooling::available()?;
 
-        let cancel_channel = crossbeam_channel::unbounded();
-        let node = setup_node(config.entry_node(), sender.clone(), cancel_channel.1.clone());
-        node.run();
+        let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
 
-        Ok(Core {
-            config,
-            sender,
-            shutdown_sender: None,
-            connection: None,
-            node,
-            session_connected: false,
-            target_destination: None,
-            balance: None,
-            info: None,
-            cancel_channel,
-        })
+        // TODO: integrate properly with edgli
+        unimplemented!();
+
+        // let node = setup_node(
+        //     std::sync::Arc::new(
+        //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
+        //             .map_err(|e| Error::General(e.to_string()))?,
+        //     ),
+        //     sender.clone(),
+        //     cancel_channel.1.clone(),
+        // );
+
+        // node.run();
+
+        // Ok(Core {
+        //     config,
+        //     sender,
+        //     shutdown_sender: None,
+        //     connection: None,
+        //     node,
+        //     session_connected: false,
+        //     target_destination: None,
+        //     balance: None,
+        //     info: None,
+        //     cancel_channel,
+        // })
     }
 
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
@@ -134,7 +149,7 @@ impl Core {
                 };
 
                 let destinations = self.config.destinations();
-                let funding_issues = self.balance.as_ref().map(|b| b.prioritized_funding_issues());
+                let funding_issues: Option<Vec<balance::FundingIssue>> = self.balance.as_ref().map(|b| b.into());
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     destinations
@@ -150,7 +165,7 @@ impl Core {
             }
             Command::Balance => match (&self.balance, &self.info) {
                 (Some(balance), Some(info)) => {
-                    let issues = balance.prioritized_funding_issues();
+                    let issues: Vec<balance::FundingIssue> = balance.into();
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
                         format!("{} wxHOPR", balance.safe_wxhopr),
@@ -318,7 +333,7 @@ impl Core {
         Ok(())
     }
 
-    fn on_balance(&mut self, balance: balance::Balance) -> Result<(), Error> {
+    fn on_balance(&mut self, balance: balance::Balances) -> Result<(), Error> {
         tracing::info!("on balance: {balance}");
         self.balance = Some(balance);
         Ok(())
@@ -334,14 +349,21 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to node");
         });
-        let node = setup_node(
-            self.config.entry_node(),
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-        );
-        node.run();
-        self.node = node;
-        Ok(())
+        // TODO: integrate properly with edgli
+        unimplemented!();
+        // let hopr_cfg = gnosis_vpn_lib::prelude::HoprLibConfig::default();
+
+        // let node = setup_node(
+        //     std::sync::Arc::new(
+        //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
+        //             .map_err(|e| Error::General(e.to_string()))?,
+        //     ),
+        //     self.sender.clone(),
+        //     self.cancel_channel.1.clone(),
+        // );
+        // node.run();
+        // self.node = node;
+        // Ok(())
     }
 }
 
@@ -356,8 +378,9 @@ fn read_config(config_path: &Path) -> Result<Config, Error> {
     Ok(config)
 }
 
+// TODO: insert the node here
 fn setup_node(
-    entry_node: EntryNode,
+    entry_node: Arc<gnosis_vpn_lib::prelude::Hopr>,
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
 ) -> Node {

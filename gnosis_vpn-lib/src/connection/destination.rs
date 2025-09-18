@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 
-use crate::address::Address;
+use edgli::hopr_lib::Address;
+
 use crate::log_output;
 use crate::session;
 

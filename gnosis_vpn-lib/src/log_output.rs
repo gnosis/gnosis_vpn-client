@@ -3,7 +3,7 @@ use serde::ser::Serialize;
 
 use std::time::SystemTime;
 
-use crate::address::Address;
+use edgli::hopr_lib::Address;
 use crate::session;
 
 pub fn serialize<T>(v: &T) -> String
