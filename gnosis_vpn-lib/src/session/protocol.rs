@@ -2,7 +2,7 @@ use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum Protocol {
     Udp,
     Tcp,

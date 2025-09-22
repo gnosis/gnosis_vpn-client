@@ -71,8 +71,6 @@ impl Core {
         //     cancel_channel.1.clone(),
         // );
 
-        // node.run();
-
         // Ok(Core {
         //     config,
         //     sender,

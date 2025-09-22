@@ -5,13 +5,14 @@ use reqwest::blocking;
 use thiserror::Error;
 
 use std::fmt::{self, Display};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use crate::gvpn_client::{self, Registration};
+use crate::hopr::{Hopr, HoprError};
 use crate::log_output;
 use crate::ping;
-use crate::remote_data;
 use crate::session::{self, Protocol, Session};
 use crate::wg_tooling;
 
@@ -67,10 +68,10 @@ enum PhaseDown {
 
 #[derive(Debug)]
 enum InternalEvent {
-    OpenSession(Result<Session, session::Error>),
-    UpdateSession(Result<(), session::Error>),
-    CloseSession(Result<(), session::Error>),
-    ListSessions(Result<Vec<Session>, session::Error>),
+    OpenSession(Result<Session, HoprError>),
+    UpdateSession(Result<(), HoprError>),
+    CloseSession(Result<(), HoprError>),
+    ListSessions(Result<Vec<Session>, HoprError>),
     RegisterWg(Result<Registration, gvpn_client::Error>),
     UnregisterWg(Result<(), gvpn_client::Error>),
     WgOpenTunnel(WgOpenResult),
@@ -79,7 +80,7 @@ enum InternalEvent {
 
 #[derive(Debug)]
 enum WgOpenResult {
-    EntryNode(entry_node::Error),
+    EntryNode(HoprError),
     WgTooling(wg_tooling::Error),
     Ok,
 }
@@ -92,7 +93,23 @@ enum BackoffState {
     NotRecoverable(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Error)]
+enum InternalError {
+    #[error("Invalid phase for action")]
+    UnexpectedPhase,
+    #[error("External session error: {0}")]
+    SessionError(#[from] HoprError),
+    #[error("External Gnosis VPN error: {0}")]
+    WgError(#[from] gvpn_client::Error),
+    #[error("Channel send error: {0}")]
+    SendError(#[from] crossbeam_channel::SendError<Event>),
+    #[error("WireGuard error: {0}")]
+    WireGuard(#[from] wg_tooling::Error),
+    #[error("Unexpected event: {0}")]
+    UnexpectedEvent(Box<InternalEvent>),
+}
+
+#[derive(Clone)]
 pub struct Connection {
     // message passing helper
     establish_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
@@ -107,32 +124,16 @@ pub struct Connection {
     backoff: BackoffState,
 
     // static input data
-    entry_node: EntryNode,
+    entry_node: Arc<Hopr>,
     destination: Destination,
     wg: wg_tooling::WireGuard,
     sender: crossbeam_channel::Sender<Event>,
     options: Options,
 }
 
-#[derive(Debug, Error)]
-enum InternalError {
-    #[error("Invalid phase for action")]
-    UnexpectedPhase,
-    #[error("External session error: {0}")]
-    SessionError(#[from] session::Error),
-    #[error("External Gnosis VPN error: {0}")]
-    WgError(#[from] gvpn_client::Error),
-    #[error("Channel send error: {0}")]
-    SendError(#[from] crossbeam_channel::SendError<Event>),
-    #[error("WireGuard error: {0}")]
-    WireGuard(#[from] wg_tooling::Error),
-    #[error("Unexpected event: {0}")]
-    UnexpectedEvent(Box<InternalEvent>),
-}
-
 impl Connection {
     pub fn new(
-        entry_node: EntryNode,
+        entry_node: Arc<Hopr>,
         destination: Destination,
         wg: wg_tooling::WireGuard,
         sender: crossbeam_channel::Sender<Event>,
@@ -373,8 +374,7 @@ impl Connection {
         match event {
             // handle open session event depending on phase
             InternalEvent::OpenSession(res) => {
-                check_entry_node(&res);
-                let listen_host_used = matches!(&res, Err(session::Error::ListenHostAlreadyUsed));
+                let listen_host_used = matches!(&res, Err(HoprError::ListenHostAlreadyUsed));
                 match self.phase_up.clone() {
                     PhaseUp::Ready => {
                         if listen_host_used {
@@ -435,8 +435,7 @@ impl Connection {
 
             // handle close session event depending on phase
             InternalEvent::CloseSession(res) => {
-                check_entry_node(&res);
-                let session_closed = matches!(&res, Err(session::Error::SessionNotFound));
+                let session_closed = matches!(&res, Err(HoprError::SessionNotFound));
                 if !session_closed {
                     res?;
                 }
@@ -502,9 +501,8 @@ impl Connection {
 
             // handle list session event depending on phase
             InternalEvent::ListSessions(res) => {
-                check_entry_node(&res);
                 let sessions = res?;
-                let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
+                let open_session = sessions.get(0); // TODO: find the session that conflicts
                 match (open_session, self.phase_up.clone()) {
                     (Some(session), PhaseUp::FixBridgeSession) => {
                         tracing::info!(%session, "Found conflicting session - closing");
@@ -534,7 +532,6 @@ impl Connection {
                 }
             }
             InternalEvent::UpdateSession(res) => {
-                check_entry_node(&res);
                 res?;
                 match self.phase_up.clone() {
                     PhaseUp::UpgradeToMainTunnel(session, registration) => {
@@ -554,8 +551,7 @@ impl Connection {
     fn act_event_down(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::OpenSession(res) => {
-                check_entry_node(&res);
-                let listen_host_used = matches!(&res, Err(session::Error::ListenHostAlreadyUsed));
+                let listen_host_used = matches!(&res, Err(HoprError::ListenHostAlreadyUsed));
                 if let PhaseDown::PrepareBridgeSession(registration) = self.phase_down.clone() {
                     if listen_host_used {
                         tracing::warn!("Listen host already used - trying to close existing session");
@@ -571,8 +567,7 @@ impl Connection {
                 }
             }
             InternalEvent::CloseSession(res) => {
-                check_entry_node(&res);
-                let session_closed = matches!(&res, Err(session::Error::SessionNotFound));
+                let session_closed = matches!(&res, Err(HoprError::SessionNotFound));
                 if !session_closed {
                     res?;
                 }
@@ -610,9 +605,11 @@ impl Connection {
                 }
             }
             InternalEvent::ListSessions(res) => {
-                check_entry_node(&res);
                 let sessions = res?;
-                let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
+
+                // let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
+                // TODO: fix conflict detection?
+                let open_session: Option<Session> = None;
                 match (open_session, self.phase_down.clone()) {
                     (Some(session), PhaseDown::FixBridgeSession(reg)) => {
                         tracing::info!(%session, "Found conflicting session - closing");
@@ -637,7 +634,7 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = gvpn_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
+        let ri = gvpn_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -651,13 +648,12 @@ impl Connection {
     }
 
     fn open_session(&mut self, params: session::OpenSession) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
-            let res = Session::open(&client, &params);
+            let res = Session::open(&params);
             _ = s.send(InternalEvent::OpenSession(res));
         });
         r
@@ -697,13 +693,12 @@ impl Connection {
 
     fn list_sessions(&mut self, protocol: &Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
         let params = session::ListSession::new(&self.entry_node, protocol);
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
-            let res = Session::list(&client, &params);
+            let res = Session::list(&params);
             _ = s.send(InternalEvent::ListSessions(res));
         });
         r
@@ -725,14 +720,13 @@ impl Connection {
 
     fn close_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
         let params = session::CloseSession::new(&self.entry_node);
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         let session = session.clone();
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         thread::spawn(move || {
-            let res = session.close(&client, &params);
+            let res = session.close(&params);
             _ = s.send(InternalEvent::CloseSession(res));
         });
         r
@@ -749,13 +743,13 @@ impl Connection {
         let wg = self.wg.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            let endpoint = match entry_node.endpoint_with_port(session.port) {
-                Ok(endpoint) => endpoint,
-                Err(error) => {
-                    _ = s.send(InternalEvent::WgOpenTunnel(WgOpenResult::EntryNode(error)));
-                    return;
-                }
-            };
+            // let endpoint = match entry_node.endpoint_with_port(session.port) {
+            //     Ok(endpoint) => endpoint,
+            //     Err(error) => {
+            //         _ = s.send(InternalEvent::WgOpenTunnel(WgOpenResult::EntryNode(error)));
+            //         return;
+            //     }
+            // };       // TODO: replace with local port
 
             // run wg-quick down once to ensure no dangling state
             _ = wg.close_session();
@@ -769,7 +763,7 @@ impl Connection {
             };
             let peer_info = wg_tooling::PeerInfo {
                 public_key: registration.server_public_key(),
-                endpoint,
+                endpoint: format!("127.0.0.1:{}", session.port),
             };
 
             match wg.connect_session(&interface_info, &peer_info) {
@@ -797,14 +791,13 @@ impl Connection {
             self.options.buffer_sizes.main.clone(),
             self.options.max_surb_upstream.main.clone(),
         );
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         let session = session.clone();
         thread::spawn(move || {
-            let res = session.update(&client, &params);
+            let res = session.update(&params);
             _ = s.send(InternalEvent::UpdateSession(res));
         });
         r
@@ -824,7 +817,7 @@ impl Connection {
             self.entry_node.clone(),
             self.destination.address,
             self.options.bridge.capabilities.clone(),
-            self.destination.path.clone(),
+            self.destination.routing.clone(),
             self.options.bridge.target.clone(),
             self.options.buffer_sizes.bridge.clone(),
             self.options.max_surb_upstream.bridge.clone(),
@@ -836,7 +829,7 @@ impl Connection {
             self.entry_node.clone(),
             self.destination.address,
             self.options.wg.capabilities.clone(),
-            self.destination.path.clone(),
+            self.destination.routing.clone(),
             self.options.wg.target.clone(),
             self.options.buffer_sizes.ping.clone(),
             self.options.max_surb_upstream.ping.clone(),
@@ -946,21 +939,6 @@ fn check_tcp_session<R>(res: &Result<R, gvpn_client::Error>, port: u16) {
     match res {
         Err(gvpn_client::Error::SocketConnect(_)) => log_output::print_port_instructions(port, Protocol::Tcp),
         Err(gvpn_client::Error::ConnectionReset(_)) => log_output::print_session_path_instructions(),
-        _ => (),
-    }
-}
-
-fn check_entry_node<R>(res: &Result<R, session::Error>) {
-    match res {
-        Err(session::Error::RemoteData(remote_data::Error::Unauthorized)) => {
-            log_output::print_node_access_instructions()
-        }
-        Err(session::Error::RemoteData(remote_data::Error::SocketConnect(_))) => {
-            log_output::print_node_port_instructions()
-        }
-        Err(session::Error::RemoteData(remote_data::Error::Timeout(_))) => {
-            log_output::print_node_timeout_instructions()
-        }
         _ => (),
     }
 }

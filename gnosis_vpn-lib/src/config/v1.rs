@@ -1,5 +1,7 @@
+use edgli::hopr_lib::SessionCapabilities;
+use edgli::hopr_lib::SessionCapability;
+use edgli::hopr_lib::SessionTarget;
 use serde::{Deserialize, Deserializer, Serialize};
-use url::Url;
 
 use std::cmp::PartialEq;
 use std::collections::HashMap;
@@ -19,17 +21,9 @@ const MAX_HOPS: u8 = 3;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
-    pub(super) hoprd_node: EdgeNode,
     pub(super) destinations: Option<HashMap<Address, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct EdgeNode {
-    endpoint: Url,
-    api_token: String,
-    internal_connection_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,32 +58,9 @@ pub(super) struct Connection {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ConnectionProtocol {
-    capabilities: Option<Vec<SessionCapability>>,
+    capabilities: Option<SessionCapabilities>,
     target: Option<SocketAddr>,
-    target_type: Option<SessionTargetType>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) enum SessionCapability {
-    #[serde(alias = "segmentation")]
-    Segmentation,
-    #[serde(alias = "retransmission")]
-    Retransmission,
-    #[serde(alias = "retransmission_ack_only")]
-    RetransmissionAckOnly,
-    #[serde(alias = "no_delay")]
-    NoDelay,
-    #[serde(alias = "no_rate_control")]
-    NoRateControl,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-enum SessionTargetType {
-    #[default]
-    #[serde(alias = "plain")]
-    Plain,
-    #[serde(alias = "sealed")]
-    Sealed,
+    target_type: Option<SessionTarget>, // TODO: should be `plain` or `sealed`
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -293,25 +264,15 @@ where
     }
 }
 
-impl From<&SessionCapability> for session::Capability {
-    fn from(val: &SessionCapability) -> Self {
-        match val {
-            SessionCapability::Segmentation => session::Capability::Segmentation,
-            SessionCapability::Retransmission => session::Capability::Retransmission,
-            SessionCapability::RetransmissionAckOnly => session::Capability::RetransmissionAckOnly,
-            SessionCapability::NoDelay => session::Capability::NoDelay,
-            SessionCapability::NoRateControl => session::Capability::NoRateControl,
-        }
-    }
-}
-
 impl Connection {
-    pub fn default_bridge_capabilities() -> Vec<session::Capability> {
-        vec![session::Capability::Segmentation, session::Capability::Retransmission]
+    pub fn default_bridge_capabilities() -> SessionCapabilities {
+        SessionCapabilities::new((SessionCapability::Segmentation | SessionCapability::RetransmissionAck).bits())
+            .expect("should work") // TODO: retransmission no_ack?
     }
 
-    pub fn default_wg_capabilities() -> Vec<session::Capability> {
-        vec![session::Capability::Segmentation, session::Capability::NoDelay]
+    pub fn default_wg_capabilities() -> SessionCapabilities {
+        SessionCapabilities::new((SessionCapability::Segmentation | SessionCapability::NoDelay).bits())
+            .expect("should work")
     }
 
     pub fn default_bridge_target() -> SocketAddr {

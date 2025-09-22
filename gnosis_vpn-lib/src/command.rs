@@ -1,14 +1,14 @@
+use edgli::hopr_lib::RoutingOptions;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use edgli::hopr_lib::Address;
 use crate::balance::FundingIssue;
 use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
-use crate::session;
+use edgli::hopr_lib::Address;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
@@ -70,7 +70,7 @@ pub enum DisconnectResponse {
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,
-    pub path: session::Path,
+    pub path: RoutingOptions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -194,7 +194,7 @@ impl From<ConnectionDestination> for Destination {
         Destination {
             address: destination.address,
             meta: destination.meta,
-            path: destination.path,
+            path: destination.routing,
         }
     }
 }
@@ -210,7 +210,7 @@ impl fmt::Display for Destination {
         let short_addr = log_output::address(&self.address);
         write!(
             f,
-            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
+            "Address: {address}, Route: (entry){path:?}({short_addr}), {meta}",
             meta = meta,
             path = self.path,
             address = self.address,

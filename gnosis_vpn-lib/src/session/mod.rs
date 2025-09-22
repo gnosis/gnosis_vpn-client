@@ -1,18 +1,19 @@
-use reqwest::{StatusCode, blocking};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::cmp;
 use std::fmt::{self, Display};
-use std::net::SocketAddr;
+use std::sync::Arc;
 use thiserror::Error;
 
-use edgli::hopr_lib::{Address, Hopr};
-use crate::remote_data;
+use edgli::hopr_lib::{
+    RoutingOptions, SessionCapabilities as Capabilities, SessionCapability as Capability, SessionTarget as Target,
+};
 
-pub use path::Path;
+use crate::hopr::{Hopr, HoprError};
+use crate::remote_data;
+use edgli::hopr_lib::Address;
+
 pub use protocol::Protocol;
 
-mod path;
 mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,33 +21,18 @@ mod protocol;
 pub struct Session {
     pub active_clients: Vec<String>,
     pub destination: Address,
-    pub forward_path: Path,
+    pub forward_path: RoutingOptions,
     pub ip: String,
     pub hopr_mtu: u16,
     pub port: u16,
     pub protocol: Protocol,
-    pub return_path: Path,
+    pub return_path: RoutingOptions,
     pub surb_len: u16,
     pub target: String,
     pub max_client_sessions: u16,
     pub max_surb_upstream: String,
     pub response_buffer: String,
     pub session_pool: Option<u16>,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-pub enum Capability {
-    NoDelay,
-    NoRateControl,
-    Retransmission,
-    RetransmissionAckOnly,
-    Segmentation,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Target {
-    Plain(SocketAddr),
-    Sealed(SocketAddr),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,10 +45,10 @@ pub struct Config {
 }
 
 pub struct OpenSession {
-    entry_node: EntryNode,
+    entry_node: Arc<Hopr>,
     destination: Address,
-    capabilities: Vec<Capability>,
-    path: Path,
+    capabilities: Capabilities,
+    path: RoutingOptions,
     target: Target,
     protocol: Protocol,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
@@ -72,16 +58,16 @@ pub struct OpenSession {
 }
 
 pub struct CloseSession {
-    entry_node: EntryNode,
+    entry_node: Arc<Hopr>,
 }
 
 pub struct ListSession {
-    entry_node: EntryNode,
+    entry_node: Arc<Hopr>,
     protocol: Protocol,
 }
 
 pub struct UpdateSessionConfig {
-    entry_node: EntryNode,
+    entry_node: Arc<Hopr>,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
     // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
@@ -106,36 +92,12 @@ pub enum Error {
     AmbiguousSessionId,
 }
 
-impl Target {
-    pub fn plain(addr: &SocketAddr) -> Self {
-        Target::Plain(*addr)
-    }
-
-    pub fn sealed(addr: &SocketAddr) -> Self {
-        Target::Sealed(*addr)
-    }
-
-    pub fn type_(&self) -> String {
-        match self {
-            Target::Plain(_) => "Plain".to_string(),
-            Target::Sealed(_) => "Sealed".to_string(),
-        }
-    }
-
-    pub fn address(&self) -> String {
-        match self {
-            Target::Plain(addr) => addr.to_string(),
-            Target::Sealed(addr) => addr.to_string(),
-        }
-    }
-}
-
 impl OpenSession {
     pub fn bridge(
-        entry_node: EntryNode,
+        entry_node: Arc<Hopr>,
         destination: Address,
-        capabilities: Vec<Capability>,
-        path: Path,
+        capabilities: Capabilities,
+        path: RoutingOptions,
         target: Target,
         buffer_size: String,
         max_surb_upstream: String,
@@ -153,10 +115,10 @@ impl OpenSession {
     }
 
     pub fn main(
-        entry_node: EntryNode,
+        entry_node: Arc<Hopr>,
         destination: Address,
-        capabilities: Vec<Capability>,
-        path: Path,
+        capabilities: Capabilities,
+        path: RoutingOptions,
         target: Target,
         buffer_size: String,
         max_surb_upstream: String,
@@ -174,8 +136,19 @@ impl OpenSession {
     }
 }
 
+impl From<&OpenSession> for edgli::hopr_lib::SessionClientConfig {
+    fn from(open: &OpenSession) -> Self {
+        Self {
+            capabilities: open.capabilities,
+            forward_path_options: open.path.clone(),
+            return_path_options: open.path.clone(), // TODO: check this for intermediate behavior
+            ..Default::default()
+        }
+    }
+}
+
 impl CloseSession {
-    pub fn new(entry_node: &EntryNode) -> Self {
+    pub fn new(entry_node: &Arc<Hopr>) -> Self {
         CloseSession {
             entry_node: entry_node.clone(),
         }
@@ -183,7 +156,7 @@ impl CloseSession {
 }
 
 impl ListSession {
-    pub fn new(entry_node: &EntryNode, protocol: &Protocol) -> Self {
+    pub fn new(entry_node: &Arc<Hopr>, protocol: &Protocol) -> Self {
         ListSession {
             entry_node: entry_node.clone(),
             protocol: protocol.clone(),
@@ -192,7 +165,7 @@ impl ListSession {
 }
 
 impl UpdateSessionConfig {
-    pub fn new(entry_node: &EntryNode, response_buffer: String, max_surb_upstream: String) -> Self {
+    pub fn new(entry_node: &Arc<Hopr>, response_buffer: String, max_surb_upstream: String) -> Self {
         UpdateSessionConfig {
             entry_node: entry_node.clone(),
             response_buffer,
@@ -202,152 +175,49 @@ impl UpdateSessionConfig {
 }
 
 impl Session {
-    pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Self, Error> {
-        let headers = remote_data::authentication_headers(open_session.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/{}",
-            open_session.entry_node.api_version, open_session.protocol
-        );
-        let url = open_session.entry_node.endpoint.join(&path)?;
+    /// TODO: implement
+    pub fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
+        let r = open_session.entry_node.open_session(
+            open_session.destination,
+            open_session.target.clone(),
+            open_session.into(),
+        )?;
 
-        let mut json = serde_json::Map::new();
-        json.insert("destination".to_string(), json!(open_session.destination));
-
-        let target = open_session.target.clone();
-        let target_json = json!({ target.type_(): target.address() });
-        json.insert("target".to_string(), target_json);
-
-        let path_json = match open_session.path.clone() {
-            Path::Hops(hop) => {
-                json!({"Hops": hop})
-            }
-            Path::IntermediatePath(addresses) => {
-                json!({ "IntermediatePath": addresses.clone() })
-            }
-        };
-        json.insert("forwardPath".to_string(), path_json.clone());
-        json.insert("returnPath".to_string(), path_json);
-        json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
-
-        json.insert("capabilities".to_string(), json!(open_session.capabilities));
-        json.insert("responseBuffer".to_string(), json!(open_session.response_buffer));
-        json.insert("maxSurbUpstream".to_string(), json!(open_session.max_surb_upstream));
-        // creates a TCP session as part of the session pool, so we immediately know if it might work
-        if open_session.protocol == Protocol::Tcp {
-            json.insert("sessionPool".to_string(), json!(1));
-        }
-
-        tracing::debug!(?headers, body = ?json, %url, "post open session");
-        let resp = client
-            .post(url)
-            .json(&json)
-            .timeout(open_session.entry_node.session_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error can only be mapped after sending
-            .map_err(open_response_errors)?
-            .json::<Self>()?;
-        Ok(resp)
+        unimplemented!(); // TODO: fill in fields from `r` --- IGNORE ---
     }
 
-    pub fn close(&self, client: &blocking::Client, close_session: &CloseSession) -> Result<(), Error> {
-        let headers = remote_data::authentication_headers(close_session.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/{}/{}/{}",
-            close_session.entry_node.api_version, self.protocol, self.ip, self.port
-        );
-        let url = close_session.entry_node.endpoint.join(&path)?;
-
-        tracing::debug!(?headers, %url, "delete session");
-        client
-            .delete(url)
-            .timeout(close_session.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error checks happen after response
-            .map_err(close_response_errors)?;
+    /// TODO: implement
+    pub fn close(&self, close_session: &CloseSession) -> Result<(), HoprError> {
+        close_session.entry_node.close_session(0)?; // TODO: pass session id
         Ok(())
     }
 
-    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Self>, Error> {
-        let headers = remote_data::authentication_headers(list_session.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/{}",
-            list_session.entry_node.api_version, list_session.protocol
-        );
-        let url = list_session.entry_node.endpoint.join(&path)?;
-
-        tracing::debug!(?headers, %url, "list sessions");
-
-        let resp = client
-            .get(url)
-            .timeout(list_session.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error checks happen after response
-            .map_err(remote_data::response_errors)?
-            .json::<Vec<Session>>()?;
-
-        Ok(resp)
+    /// TODO: implement
+    pub fn list(list_session: &ListSession) -> Result<Vec<Self>, HoprError> {
+        list_session.entry_node.list_sessions(list_session.protocol)?;
+        unimplemented!()
     }
 
-    pub fn update(&self, client: &blocking::Client, config: &UpdateSessionConfig) -> Result<(), Error> {
-        let active_client = match &self.active_clients.as_slice() {
-            [] => return Err(Error::NoSessionId),
-            [client] => client,
-            _ => return Err(Error::AmbiguousSessionId),
-        };
-        let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
-        let path = format!("api/{}/session/config/{}", config.entry_node.api_version, active_client);
-        let url = config.entry_node.endpoint.join(&path)?;
+    /// TODO: implement
+    pub fn update(&self, config: &UpdateSessionConfig) -> Result<(), HoprError> {
+        // let active_client = match &self.active_clients.as_slice() {
+        //     [] => return Err(Error::NoSessionId),
+        //     [client] => client,
+        //     _ => return Err(Error::AmbiguousSessionId),
+        // };       // TODO: handle these specifically
 
-        let mut json = serde_json::Map::new();
-        json.insert("maxSurbUpstream".to_string(), json!(config.max_surb_upstream));
-        json.insert("responseBuffer".to_string(), json!(config.response_buffer));
+        let active_client = "".to_string(); // TODO: fix this
 
-        tracing::debug!(?headers, body = ?json, %url, "post config");
-
-        client
-            .post(url)
-            .json(&json)
-            .timeout(config.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error can only be mapped after sending
-            .map_err(remote_data::response_errors)?;
+        config.entry_node.update_session(
+            config.max_surb_upstream.clone(),
+            config.response_buffer.clone(),
+            active_client.clone(),
+        )?;
         Ok(())
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {
         sessions.iter().any(|entry| entry == self)
-    }
-}
-
-fn open_response_errors(err: reqwest::Error) -> Error {
-    if err.status() == Some(StatusCode::CONFLICT) {
-        Error::ListenHostAlreadyUsed
-    } else {
-        remote_data::response_errors(err).into()
-    }
-}
-
-fn close_response_errors(err: reqwest::Error) -> Error {
-    if err.status() == Some(StatusCode::NOT_FOUND) {
-        Error::SessionNotFound
-    } else {
-        remote_data::response_errors(err).into()
     }
 }
 
