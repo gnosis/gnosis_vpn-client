@@ -2401,7 +2401,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=b22e9c4d83b68fbb26a675e85906b4b7e2a43b4d#b22e9c4d83b68fbb26a675e85906b4b7e2a43b4d"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=254c1609f2fe44e1fbe0aadd21022e25cbdf6273#254c1609f2fe44e1fbe0aadd21022e25cbdf6273"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2409,10 +2409,10 @@ dependencies = [
  "clap",
  "futures",
  "hopr-lib",
- "mimalloc",
  "serde_yaml",
  "signal-hook",
  "thiserror 2.0.16",
+ "tikv-jemallocator",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5751,16 +5751,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
-name = "libmimalloc-sys"
-version = "0.1.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "667f4fec20f29dfc6bc7357c582d91796c169ad7e2fce709468aefeb2c099870"
-dependencies = [
- "cc",
- "libc",
-]
-
-[[package]]
 name = "libp2p"
 version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6259,15 +6249,6 @@ dependencies = [
  "keccak",
  "rand_core 0.6.4",
  "zeroize",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.48"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1ee66a4b64c74f4ef288bcbb9192ad9c3feaad75193129ac8509af543894fd8"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]
