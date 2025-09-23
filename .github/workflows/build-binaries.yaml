@@ -41,7 +41,7 @@ concurrency:
 jobs:
   binary:
     if: >-
-      github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))) || (github.event_name == 'pull_request' && github.event.action == 'closed')
+      github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))) || (github.event_name == 'pull_request' && github.event.pull_request.merged)
     runs-on: ${{ github.event.inputs.runner || inputs.runner }}
     timeout-minutes: 60
     steps:
@@ -84,7 +84,7 @@ jobs:
         run: |
           base_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            bump_version=${base_version}-commit.$(git rev-parse --short HEAD)
+            bump_version=${base_version}+commit.$(git rev-parse --short HEAD)
             echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             if [ "${GITHUB_PR_LABEL_PUBLISH_COMMITS:-0}" == '1' ]; then
               echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
@@ -92,7 +92,7 @@ jobs:
               echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
             fi
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            bump_version=${base_version}-pr.${{ github.event.pull_request.number }}
+            bump_version=${base_version}+pr.${{ github.event.pull_request.number }}
             echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
@@ -106,6 +106,7 @@ jobs:
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" Cargo.toml
           nix develop --command cargo generate-lockfile
           rm Cargo.toml.bak
+          
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
