@@ -6,6 +6,12 @@ use gnosis_vpn_lib::socket;
 
 mod cli;
 
+// Avoid musl's default allocator due to degraded performance
+// https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 fn main() {
     let args = cli::parse();
 
