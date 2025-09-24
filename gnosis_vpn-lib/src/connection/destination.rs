@@ -13,12 +13,8 @@ pub struct Destination {
 }
 
 impl Destination {
-    pub fn new(address: Address, path: RoutingOptions, meta: HashMap<String, String>) -> Self {
-        Self {
-            address,
-            routing: path,
-            meta,
-        }
+    pub fn new(address: Address, routing: RoutingOptions, meta: HashMap<String, String>) -> Self {
+        Self { address, routing, meta }
     }
 
     pub fn pretty_print_path(&self) -> String {

@@ -1,6 +1,6 @@
-use edgli::hopr_lib::SessionCapabilities;
-use edgli::hopr_lib::SessionCapability;
-use edgli::hopr_lib::SessionTarget;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
+use edgli::hopr_lib::exports::types::primitive::bounded::BoundedSize;
+use edgli::hopr_lib::{SessionCapabilities, SessionCapability, SessionTarget};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use std::cmp::PartialEq;
@@ -12,7 +12,6 @@ use std::vec::Vec;
 
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
-use crate::session;
 use crate::wg_tooling::Config as WireGuardConfig;
 use edgli::hopr_lib::Address;
 
@@ -267,20 +266,26 @@ where
 impl Connection {
     pub fn default_bridge_capabilities() -> SessionCapabilities {
         SessionCapabilities::new((SessionCapability::Segmentation | SessionCapability::RetransmissionAck).bits())
-            .expect("should work") // TODO: retransmission no_ack?
+            .expect("TODO: fix me - should work") // TODO: retransmission no_ack?
     }
 
     pub fn default_wg_capabilities() -> SessionCapabilities {
         SessionCapabilities::new((SessionCapability::Segmentation | SessionCapability::NoDelay).bits())
-            .expect("should work")
+            .expect("TODO: fix me - should work")
     }
 
-    pub fn default_bridge_target() -> SocketAddr {
-        SocketAddr::from(([172, 30, 0, 1], 8000))
+    pub fn default_bridge_target() -> SessionTarget {
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            8000,
+        )))))
     }
 
-    pub fn default_wg_target() -> SocketAddr {
-        SocketAddr::from(([172, 30, 0, 1], 51820))
+    pub fn default_wg_target() -> SessionTarget {
+        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            51820,
+        )))))
     }
 
     pub fn default_listen_host() -> String {
@@ -306,8 +311,8 @@ impl Connection {
 
 impl Default for options::Options {
     fn default() -> Self {
-        let bridge_target = session::Target::Plain(Connection::default_bridge_target());
-        let wg_target = session::Target::Plain(Connection::default_wg_target());
+        let bridge_target = Connection::default_bridge_target();
+        let wg_target = Connection::default_wg_target();
         let bridge_caps = Connection::default_bridge_capabilities();
         let wg_caps = Connection::default_wg_capabilities();
         options::Options::new(
@@ -351,9 +356,11 @@ impl Config {
             .iter()
             .map(|(k, v)| {
                 let path = match v.path.clone() {
-                    Some(DestinationPath::Intermediates(p)) => session::Path::IntermediatePath(p),
-                    Some(DestinationPath::Hops(h)) => session::Path::Hops(h),
-                    None => session::Path::default(),
+                    Some(DestinationPath::Intermediates(p)) => {
+                        RoutingOptions::IntermediatePath(p.try_into().expect("TODO: fix me"))
+                    }
+                    Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into().expect("TODO: fix me")),
+                    None => RoutingOptions::Hops(BoundedSize::try_from(1).expect("TODO: fix me")),
                 };
 
                 let meta = v.meta.clone().unwrap_or_default();
@@ -366,12 +373,16 @@ impl Config {
 
     pub fn connection(&self) -> options::Options {
         let connection = self.connection.as_ref();
-        let bridge_caps = connection
+        // TODO make customizable
+        /*
+        let bridge_caps =
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
             .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
+
             .unwrap_or(Connection::default_bridge_capabilities());
-        let bridge_target_socket = connection
+        let bridge_target_socket =
+            connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.target)
             .unwrap_or(Connection::default_bridge_target());
@@ -384,6 +395,14 @@ impl Config {
             SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
         };
         let params_bridge = options::SessionParameters::new(bridge_target, bridge_caps);
+        */
+        let params_bridge = options::SessionParameters::new(
+            Connection::default_bridge_target(),
+            Connection::default_bridge_capabilities(),
+        );
+
+        // TODO make customizable
+        /*
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
@@ -402,7 +421,10 @@ impl Config {
             SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
         };
         let params_wg = options::SessionParameters::new(wg_target, wg_caps);
+            */
 
+        let params_wg =
+            options::SessionParameters::new(Connection::default_wg_target(), Connection::default_wg_capabilities());
         let interval = connection
             .and_then(|c| c.ping.as_ref())
             .and_then(|p| p.interval.clone())

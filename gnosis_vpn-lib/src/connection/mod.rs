@@ -124,7 +124,7 @@ pub struct Connection {
     backoff: BackoffState,
 
     // static input data
-    entry_node: Arc<Hopr>,
+    edgli: Arc<Hopr>,
     destination: Destination,
     wg: wg_tooling::WireGuard,
     sender: crossbeam_channel::Sender<Event>,
@@ -133,7 +133,7 @@ pub struct Connection {
 
 impl Connection {
     pub fn new(
-        entry_node: Arc<Hopr>,
+        edgli: Arc<Hopr>,
         destination: Destination,
         wg: wg_tooling::WireGuard,
         sender: crossbeam_channel::Sender<Event>,
@@ -141,7 +141,7 @@ impl Connection {
     ) -> Self {
         Connection {
             destination,
-            entry_node,
+            edgli,
             sender,
             wg,
             backoff: BackoffState::Inactive,
@@ -607,7 +607,7 @@ impl Connection {
             InternalEvent::ListSessions(res) => {
                 let sessions = res?;
 
-                // let open_session = sessions.iter().find(|s| self.entry_node.conflicts_listen_host(s));
+                // let open_session = sessions.iter().find(|s| self.edgli.conflicts_listen_host(s));
                 // TODO: fix conflict detection?
                 let open_session: Option<Session> = None;
                 match (open_session, self.phase_down.clone()) {
@@ -634,7 +634,7 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = gvpn_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node, session);
+        let ri = gvpn_client::Input::new(&self.wg.key_pair.public_key, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -692,7 +692,7 @@ impl Connection {
     }
 
     fn list_sessions(&mut self, protocol: &Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::ListSession::new(&self.entry_node, protocol);
+        let params = session::ListSession::new(&self.edgli, protocol);
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
@@ -705,7 +705,7 @@ impl Connection {
     }
 
     fn unregister_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = gvpn_client::Input::new(&self.wg.key_pair.public_key, &self.entry_node.endpoint, session);
+        let params = gvpn_client::Input::new(&self.wg.key_pair.public_key, session);
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -719,7 +719,7 @@ impl Connection {
     }
 
     fn close_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::CloseSession::new(&self.entry_node);
+        let params = session::CloseSession::new(&self.edgli);
         let (s, r) = crossbeam_channel::bounded(1);
         let session = session.clone();
         if let BackoffState::Inactive = self.backoff {
@@ -739,11 +739,11 @@ impl Connection {
     ) -> crossbeam_channel::Receiver<InternalEvent> {
         let session = session.clone();
         let registration = registration.clone();
-        let entry_node = self.entry_node.clone();
+        let edgli = self.edgli.clone();
         let wg = self.wg.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            // let endpoint = match entry_node.endpoint_with_port(session.port) {
+            // let endpoint = match edgli.endpoint_with_port(session.port) {
             //     Ok(endpoint) => endpoint,
             //     Err(error) => {
             //         _ = s.send(InternalEvent::WgOpenTunnel(WgOpenResult::EntryNode(error)));
@@ -787,7 +787,7 @@ impl Connection {
 
     fn set_main_config(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
         let params = session::UpdateSessionConfig::new(
-            &self.entry_node,
+            &self.edgli,
             self.options.buffer_sizes.main.clone(),
             self.options.max_surb_upstream.main.clone(),
         );
@@ -814,7 +814,7 @@ impl Connection {
 
     fn bridge_session_params(&self) -> session::OpenSession {
         session::OpenSession::bridge(
-            self.entry_node.clone(),
+            self.edgli.clone(),
             self.destination.address,
             self.options.bridge.capabilities.clone(),
             self.destination.routing.clone(),
@@ -826,7 +826,7 @@ impl Connection {
 
     fn ping_session_params(&self) -> session::OpenSession {
         session::OpenSession::main(
-            self.entry_node.clone(),
+            self.edgli.clone(),
             self.destination.address,
             self.options.wg.capabilities.clone(),
             self.destination.routing.clone(),

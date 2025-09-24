@@ -57,17 +57,17 @@ pub struct Node {
     phase: Phase,
 
     // static input data
-    entry_node: Arc<edgli::hopr_lib::Hopr>,
+    edgli: Arc<edgli::hopr_lib::Hopr>,
     sender: crossbeam_channel::Sender<Event>,
 }
 
 impl Node {
-    pub fn new(entry_node: Arc<edgli::hopr_lib::Hopr>, sender: crossbeam_channel::Sender<Event>) -> Self {
+    pub fn new(edgli: Arc<edgli::hopr_lib::Hopr>, sender: crossbeam_channel::Sender<Event>) -> Self {
         Node {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             phase: Phase::Info,
-            entry_node,
+            edgli,
             sender,
         }
     }
@@ -170,9 +170,9 @@ impl Node {
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let entry_node = self.entry_node.clone();
+        let edgli = self.edgli.clone();
         thread::spawn(move || {
-            // let res = Info::load_from(&entry_node);
+            // let res = Info::load_from(&edgli);
             // _ = s.send(InternalEvent::Info(res));
             todo!("implement using edgli")
         });
@@ -184,9 +184,9 @@ impl Node {
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let entry_node = self.entry_node.clone();
+        let edgli = self.edgli.clone();
         thread::spawn(move || {
-            // let res = Balance::load_from(&entry_node).await;
+            // let res = Balance::load_from(&edgli).await;
             // _ = s.send(InternalEvent::Balance(res));
             todo!("implement using edgli")
         });

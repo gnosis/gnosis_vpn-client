@@ -19,7 +19,6 @@ pub struct Registration {
 
 pub struct Input {
     public_key: String,
-    endpoint: Url,
     session: Session,
 }
 
@@ -40,10 +39,9 @@ pub enum Error {
 }
 
 impl Input {
-    pub fn new(public_key: &str, endpoint: &Url, session: &Session) -> Self {
+    pub fn new(public_key: &str, session: &Session) -> Self {
         Input {
             public_key: public_key.to_string(),
-            endpoint: endpoint.clone(),
             session: session.clone(),
         }
     }
@@ -61,7 +59,7 @@ impl Registration {
 
 pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration, Error> {
     let headers = remote_data::json_headers();
-    let mut url = input.endpoint.join("api/v1/clients/register")?;
+    let mut url = Url::parse("http://localhost/api/v1/clients/register")?;
     url.set_port(Some(input.session.port)).map_err(|_| Error::InvalidPort)?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
@@ -82,7 +80,7 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
 
 pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error> {
     let headers = remote_data::json_headers();
-    let mut url = input.endpoint.join("api/v1/clients/unregister")?;
+    let mut url = Url::parse("http://localhost/api/v1/clients/unregister")?;
     url.set_port(Some(input.session.port)).map_err(|_| Error::InvalidPort)?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));

@@ -45,7 +45,7 @@ pub struct Config {
 }
 
 pub struct OpenSession {
-    entry_node: Arc<Hopr>,
+    edgli: Arc<Hopr>,
     destination: Address,
     capabilities: Capabilities,
     path: RoutingOptions,
@@ -58,16 +58,16 @@ pub struct OpenSession {
 }
 
 pub struct CloseSession {
-    entry_node: Arc<Hopr>,
+    edgli: Arc<Hopr>,
 }
 
 pub struct ListSession {
-    entry_node: Arc<Hopr>,
+    edgli: Arc<Hopr>,
     protocol: Protocol,
 }
 
 pub struct UpdateSessionConfig {
-    entry_node: Arc<Hopr>,
+    edgli: Arc<Hopr>,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
     // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
@@ -94,7 +94,7 @@ pub enum Error {
 
 impl OpenSession {
     pub fn bridge(
-        entry_node: Arc<Hopr>,
+        edgli: Arc<Hopr>,
         destination: Address,
         capabilities: Capabilities,
         path: RoutingOptions,
@@ -103,7 +103,7 @@ impl OpenSession {
         max_surb_upstream: String,
     ) -> Self {
         OpenSession {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             destination,
             capabilities,
             path: path.clone(),
@@ -115,7 +115,7 @@ impl OpenSession {
     }
 
     pub fn main(
-        entry_node: Arc<Hopr>,
+        edgli: Arc<Hopr>,
         destination: Address,
         capabilities: Capabilities,
         path: RoutingOptions,
@@ -124,7 +124,7 @@ impl OpenSession {
         max_surb_upstream: String,
     ) -> Self {
         OpenSession {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             destination,
             capabilities,
             path: path.clone(),
@@ -148,26 +148,24 @@ impl From<&OpenSession> for edgli::hopr_lib::SessionClientConfig {
 }
 
 impl CloseSession {
-    pub fn new(entry_node: &Arc<Hopr>) -> Self {
-        CloseSession {
-            entry_node: entry_node.clone(),
-        }
+    pub fn new(edgli: &Arc<Hopr>) -> Self {
+        CloseSession { edgli: edgli.clone() }
     }
 }
 
 impl ListSession {
-    pub fn new(entry_node: &Arc<Hopr>, protocol: &Protocol) -> Self {
+    pub fn new(edgli: &Arc<Hopr>, protocol: &Protocol) -> Self {
         ListSession {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             protocol: protocol.clone(),
         }
     }
 }
 
 impl UpdateSessionConfig {
-    pub fn new(entry_node: &Arc<Hopr>, response_buffer: String, max_surb_upstream: String) -> Self {
+    pub fn new(edgli: &Arc<Hopr>, response_buffer: String, max_surb_upstream: String) -> Self {
         UpdateSessionConfig {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             response_buffer,
             max_surb_upstream,
         }
@@ -177,7 +175,7 @@ impl UpdateSessionConfig {
 impl Session {
     /// TODO: implement
     pub fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
-        let r = open_session.entry_node.open_session(
+        let r = open_session.edgli.open_session(
             open_session.destination,
             open_session.target.clone(),
             open_session.into(),
@@ -188,13 +186,13 @@ impl Session {
 
     /// TODO: implement
     pub fn close(&self, close_session: &CloseSession) -> Result<(), HoprError> {
-        close_session.entry_node.close_session(0)?; // TODO: pass session id
+        close_session.edgli.close_session(0)?; // TODO: pass session id
         Ok(())
     }
 
     /// TODO: implement
     pub fn list(list_session: &ListSession) -> Result<Vec<Self>, HoprError> {
-        list_session.entry_node.list_sessions(list_session.protocol)?;
+        list_session.edgli.list_sessions(list_session.protocol)?;
         unimplemented!()
     }
 
@@ -208,7 +206,7 @@ impl Session {
 
         let active_client = "".to_string(); // TODO: fix this
 
-        config.entry_node.update_session(
+        config.edgli.update_session(
             config.max_surb_upstream.clone(),
             config.response_buffer.clone(),
             active_client.clone(),

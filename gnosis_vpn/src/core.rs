@@ -1,12 +1,13 @@
+use thiserror::Error;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
-use thiserror::Error;
-
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
+use gnosis_vpn_lib::hopr::Hopr;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::{balance, info, log_output, wg_tooling};
 
@@ -20,6 +21,8 @@ pub struct Core {
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
+    // hopr edge node
+    edgli: Arc<Hopr>,
     // connection to exit
     connection: Option<connection::Connection>,
     // connection to entry
@@ -62,8 +65,10 @@ impl Core {
         // TODO: integrate properly with edgli
         unimplemented!();
 
+        // let hopr = Hopr::new(hopr_cfg, keys, chainkey)
+
         // let node = setup_node(
-        //     std::sync::Arc::new(
+        //     std::sync::Arc::new(hopr.clone()),
         //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
         //             .map_err(|e| Error::General(e.to_string()))?,
         //     ),
@@ -252,13 +257,7 @@ impl Core {
     fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::unbounded();
         let wg = wg_tooling::WireGuard::from_config(self.config.wireguard())?;
-        let mut conn = Connection::new(
-            self.config.entry_node(),
-            destination.clone(),
-            wg,
-            s,
-            self.config.connection(),
-        );
+        let mut conn = Connection::new(self.edgli.clone(), destination.clone(), wg, s, self.config.connection());
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
