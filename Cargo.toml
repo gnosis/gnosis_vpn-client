@@ -32,7 +32,7 @@ toml = "0.9.7"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "254c1609f2fe44e1fbe0aadd21022e25cbdf6273" } # branch = "kauki/feat/add-basic-api-interfaces"
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "097ace6c5b399f416e3786ad9639b5de6c0d4935" } # branch = "kauki/feat/add-basic-api-interfaces"
 
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
