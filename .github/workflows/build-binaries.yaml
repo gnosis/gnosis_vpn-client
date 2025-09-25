@@ -41,7 +41,7 @@ concurrency:
 jobs:
   binary:
     if: >-
-      github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))) || (github.event_name == 'pull_request' && github.event.action == 'closed')
+      github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))) || (github.event_name == 'pull_request' && github.event.pull_request.merged)
     runs-on: ${{ github.event.inputs.runner || inputs.runner }}
     timeout-minutes: 60
     steps:
@@ -75,24 +75,37 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
+      - name: Get PR labels
+        id: pr-labels
+        uses: joerick/pr-labels-action@0543b277721e852d821c6738d449f2f4dea03d5f # v1.0.9
       - name: Get version
         if: inputs.version_type != ''
         id: version
         run: |
           base_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
-          if [[ ${{ inputs.version_type }} == "commit" ]]; then
-            echo "binary_version=${base_version}-commit.$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-            echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
-          elif [[ ${{ inputs.version_type }} == "pr" ]]; then
-            echo "binary_version=${base_version}-pr.${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
+            bump_version=${base_version}+commit.$(git rev-parse --short HEAD)
+            echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
+            if [ "${GITHUB_PR_LABEL_PUBLISH_COMMITS:-0}" == '1' ]; then
+              echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
+            else
+              echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
+            fi
+          elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
+            bump_version=${base_version}+pr.${{ github.event.pull_request.number }}
+            echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
-          elif [[ ${{ inputs.version_type }} == "release" ]]; then
-            echo "binary_version=${base_version}" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.version_type }}" == "release" ]]; then
+            bump_version=${base_version}
+            echo "binary_version=${bump_version}" >> $GITHUB_OUTPUT
             echo "publish_type=github" | tee -a $GITHUB_OUTPUT
           else
             echo "Invalid version type"
             exit 1
           fi
+          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" Cargo.toml
+          nix develop --command cargo generate-lockfile
+          rm Cargo.toml.bak
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
@@ -100,8 +113,9 @@ jobs:
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            mv binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
-            mv binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
+            mkdir -p binaries/upload
+            cp binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
+            cp binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
           fi
       - name: Setup GCP
         if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
@@ -136,4 +150,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ steps.vars.outputs.architecture }}
-          path: ${{ github.workspace }}/binaries/*
+          path: ${{ github.workspace }}/binaries/upload/*

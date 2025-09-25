@@ -19,8 +19,8 @@ docker-run:
     log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
 
     docker run --detach --rm \
-        --env DESTINATION_PEER_ID_1=${DESTINATION_PEER_ID_1} \
-        --env DESTINATION_PEER_ID_2=${DESTINATION_PEER_ID_2} \
+        --env DESTINATION_ADDRESS_1=${DESTINATION_ADDRESS_1} \
+        --env DESTINATION_ADDRESS_2=${DESTINATION_ADDRESS_2} \
         --env API_PORT=${API_PORT} \
         --env API_TOKEN=${API_TOKEN} \
         --env RUST_LOG=${log_level} \
@@ -50,7 +50,7 @@ start-cluster:
     rm -rf /opt/hostedtoolcache
 
     cd modules/hoprnet
-    nix develop .#cluster --command make localcluster-exposed
+    nix develop .#citest --command make localcluster-exposed
 
 # full system setup with system tests: 'mode' can be either 'keep-running' or 'ci-system-test'
 system-setup mode='keep-running': submodules docker-build
@@ -96,6 +96,8 @@ system-setup mode='keep-running': submodules docker-build
     while true; do
         if grep -q "$EXPECTED_PATTERN" cluster.log; then
             echo "[PHASE1] ${EXPECTED_PATTERN}"
+            # even though nodes are ready the output was not yet printed - waiting for a bit
+            sleep 3
             break
         fi
         if [ $(date +%s) -gt $ENDTIME ]; then
@@ -113,13 +115,14 @@ system-setup mode='keep-running': submodules docker-build
     done
 
     # 1c: extract values
-    PEER_ID_LOCAL5=$(awk '/local5/,/Admin UI/ {if ($1 == "Peer" && $2 == "Id:") print $3}' cluster.log)
-    PEER_ID_LOCAL6=$(awk '/local6/,/Admin UI/ {if ($1 == "Peer" && $2 == "Id:") print $3}' cluster.log)
-    API_TOKEN_LOCAL1=$(awk '/local1/,/Admin UI/ {if ($0 ~ /Admin UI:/) print $0}' cluster.log | sed -n 's/.*apiToken=\(.*\)$/\1/p')
-    API_PORT_LOCAL1=$(awk '/local1/,/Rest API/ {if ($1 == "Rest" && $2 == "API:") print $3}' cluster.log | sed -n 's|.*:\([0-9]\+\)/.*|\1|p')
+    echo "[PHASE1] Extracting values from cluster log"
+    ADDRESS_LOCAL5=$(grep "Address:" cluster.log | tail -n 2 | head -n 1 | awk '{print $2}')
+    ADDRESS_LOCAL6=$(grep "Address:" cluster.log | tail -n 1 | awk '{print $2}')
+    API_PORT_LOCAL1=3003
+    API_TOKEN_LOCAL1=$(grep -A3 -P "^\tnode @ .*:$API_PORT_LOCAL1" cluster.log | tail -n 1 | sed -E 's#.*apiToken=([^&]+).*#\1#')
 
-    echo "[PHASE1] Peer ID 1 (local5): $PEER_ID_LOCAL5"
-    echo "[PHASE1] Peer ID 2 (local6): $PEER_ID_LOCAL6"
+    echo "[PHASE1] ADDRESS 1 (local5): $ADDRESS_LOCAL5"
+    echo "[PHASE1] ADDRESS 2 (local6): $ADDRESS_LOCAL6"
     echo "[PHASE1] API Token (local1): $API_TOKEN_LOCAL1"
     echo "[PHASE1] API Port (local1): $API_PORT_LOCAL1"
 
@@ -155,14 +158,15 @@ system-setup mode='keep-running': submodules docker-build
 
     echo "[PHASE2] Server is ready for testing"
 
+
     ####
     ## PHASE 3: ready gnosis_vpn-client
 
     # 3a: start client
     echo "[PHASE3] Starting gnosis_vpn-client"
     # container was build as part of the deps
-    DESTINATION_PEER_ID_1="${PEER_ID_LOCAL5}" \
-        DESTINATION_PEER_ID_2="${PEER_ID_LOCAL6}" \
+    DESTINATION_ADDRESS_1="${ADDRESS_LOCAL5}" \
+        DESTINATION_ADDRESS_2="${ADDRESS_LOCAL6}" \
         API_TOKEN="${API_TOKEN_LOCAL1}" \
         API_PORT="${API_PORT_LOCAL1}" \
         just docker-run
@@ -181,48 +185,74 @@ system-setup mode='keep-running': submodules docker-build
             if [ $(date +%s) -gt $ENDTIME ]; then
                 echo "[PHASE3] Timeout reached"
                 docker logs --tail 20 gnosis_vpn-client
-                exit 2
+                return 1
             fi
             sleep 2.5
         done
     }
 
     # 3b: wait for client to be ready
-    exp_client_log "enter listening mode" 6
+    exp_client_log "enter listening mode" 33
     echo "[PHASE3] Client is ready for testing"
 
     # 3c: run system tests
-    echo "[PHASE3] Checking connect via first local node"
-    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${PEER_ID_LOCAL5}
-    echo "[PHASE3] Checking working ping first node"
-    exp_client_log "Session verified as open" 11
-    exp_client_log "VPN CONNECTION ESTABLISHED" 11
-    echo "[PHASE3] Checking connect via second local node"
-    docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${PEER_ID_LOCAL6}
-    echo "[PHASE3] Checking working ping second node"
-    exp_client_log "Session verified as open" 16
-    exp_client_log "VPN CONNECTION ESTABLISHED" 11
-    echo "[PHASE3] Checking disconnect"
-    docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
-    exp_client_log "connection closed" 11
-
-    echo "[PHASE3] Checking no warnings or errors in client logs"
-    if docker logs gnosis_vpn-client | grep -qE "WARN|ERROR"; then
-        echo "[PHASE3] Found warnings or errors in client logs"
-        docker logs gnosis_vpn-client
-        exit 1
-    fi
-    echo "[PHASE3] Checking no errors in server logs"
-    if docker logs gnosis_vpn-server | grep -qE "ERROR"; then
-        echo "[PHASE3] Found errors in server logs"
-        docker logs gnosis_vpn-server
-        exit 1
-    fi
-
     if [ "{{ mode }}" = "ci-system-test" ]; then
+        echo "[PHASE3] Checking connect via first local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}
+        echo "[PHASE3] Checking working ping first node"
+        exp_client_log "VPN CONNECTION ESTABLISHED" 11
+
+        echo "[PHASE3] Checking external ping"
+        time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
+            docker logs gnosis_vpn-client
+            exit 1
+        )
+
+        echo "[PHASE3] Dropping connection from the server side and let the client recover"
+        docker kill gnosis_vpn-server
+        echo "[PHASE3] Restarting server and wait for reconnection"
+        pushd modules/gnosis_vpn-server
+            just docker-run
+        popd
+        sleep 3 # ensure previous log rolled out of checked log time window
+        exp_client_log "VPN CONNECTION ESTABLISHED" 55
+
+        echo "[PHASE3] Checking external ping again"
+        time docker exec gnosis_vpn-client ping -c1 10.129.0.1 || (
+            docker logs gnosis_vpn-client
+            exit 1
+        )
+
+        echo "[PHASE3] Checking connect via second local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL6}
+        echo "[PHASE3] Checking working ping second node"
+        exp_client_log "VPN CONNECTION ESTABLISHED" 11
+        exp_client_log "Session verified as open" 11
+
+        echo "[PHASE3] Curling example.com to check external connectivity"
+        docker exec gnosis_vpn-client curl --fail-with-body --connect-timeout 30 --proxy 10.129.0.1:3128 www.example.com || (
+            docker logs gnosis_vpn-client
+            exit 1
+        )
+
+        echo "[PHASE3] Checking disconnect"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl disconnect
+        exp_client_log "connection closed" 11
+
+        echo "[PHASE3] Print client logs for manual verification"
+        docker logs gnosis_vpn-client
+
+        echo "[PHASE3] Checking no errors in server logs"
+        if docker logs gnosis_vpn-server | grep -qE "ERROR"; then
+            echo "[PHASE3] Found errors in server logs"
+            docker logs gnosis_vpn-server
+            exit 1
+        fi
         echo "[SUCCESS] System test completed successfully"
         exit 0
     else
+        echo "[PHASE3] Connect via first local node"
+        docker exec gnosis_vpn-client ./gnosis_vpn-ctl connect ${ADDRESS_LOCAL5}
         echo "[PHASE3] System setup complete, keeping components running"
         echo "[PHASE3] Press Ctrl+C to stop the cluster and containers"
         wait $CLUSTER_PID

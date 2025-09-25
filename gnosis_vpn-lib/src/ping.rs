@@ -20,9 +20,18 @@ impl Default for PingOptions {
     fn default() -> Self {
         PingOptions {
             address: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
-            timeout: Duration::from_secs(4),
-            ttl: 5,
+            timeout: Duration::from_secs(7),
+            ttl: 6,
             seq_count: 1,
+        }
+    }
+}
+
+impl Error {
+    pub fn would_block(&self) -> bool {
+        match self {
+            Error::PingFailed(ping::Error::IoError { error: err }) => err.kind() == std::io::ErrorKind::WouldBlock,
+            _ => false,
         }
     }
 }
