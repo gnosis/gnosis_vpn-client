@@ -1,3 +1,5 @@
+use edgli::hopr_lib::config::HoprLibConfig;
+use edgli::hopr_lib::{HoprKeys, IdentityRetrievalModes};
 use thiserror::Error;
 
 use std::path::Path;
@@ -62,32 +64,30 @@ impl Core {
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
 
-        // TODO: integrate properly with edgli
-        unimplemented!();
+        let cfg = HoprLibConfig::default();
+        let retrieval_mode = IdentityRetrievalModes::FromFile {
+            password: "my pass from config",
+            id_path: "my path from config",
+        };
+        let keys = HoprKeys::try_from(retrieval_mode).map_err(|e| Error::General(e.to_string()))?;
+        let hopr = Hopr::new(cfg, keys).map_err(|e| Error::General(e.to_string()))?;
+        let edgli = Arc::new(hopr);
 
-        // let hopr = Hopr::new(hopr_cfg, keys, chainkey)
+        let node = setup_node(edgli.clone(), sender.clone(), cancel_channel.1.clone());
 
-        // let node = setup_node(
-        //     std::sync::Arc::new(hopr.clone()),
-        //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
-        //             .map_err(|e| Error::General(e.to_string()))?,
-        //     ),
-        //     sender.clone(),
-        //     cancel_channel.1.clone(),
-        // );
-
-        // Ok(Core {
-        //     config,
-        //     sender,
-        //     shutdown_sender: None,
-        //     connection: None,
-        //     node,
-        //     session_connected: false,
-        //     target_destination: None,
-        //     balance: None,
-        //     info: None,
-        //     cancel_channel,
-        // })
+        Ok(Core {
+            config,
+            sender,
+            shutdown_sender: None,
+            connection: None,
+            node,
+            session_connected: false,
+            target_destination: None,
+            balance: None,
+            info: None,
+            cancel_channel,
+            edgli,
+        })
     }
 
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
@@ -377,12 +377,12 @@ fn read_config(config_path: &Path) -> Result<Config, Error> {
 
 // TODO: insert the node here
 fn setup_node(
-    entry_node: Arc<gnosis_vpn_lib::prelude::Hopr>,
+    edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
 ) -> Node {
     let (s, r) = crossbeam_channel::unbounded();
-    let node = Node::new(entry_node, s);
+    let node = Node::new(edgli, s);
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {

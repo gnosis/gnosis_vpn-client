@@ -1,4 +1,5 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
+use edgli::hopr_lib::errors::HoprLibError;
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -7,6 +8,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use crate::balance::Balances;
+use crate::hopr::Hopr;
 use crate::info::Info;
 use crate::log_output;
 
@@ -27,8 +29,8 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    Info(Result<Info, edgli::hopr_lib::errors::HoprLibError>),
-    Balance(Result<Balances, edgli::hopr_lib::errors::HoprLibError>),
+    Info(Result<Info, HoprLibError>),
+    Balance(Result<Balances, HoprLibError>),
     Tick,
 }
 
@@ -44,7 +46,7 @@ enum InternalError {
     #[error("Channel send error: {0}")]
     Send(#[from] crossbeam_channel::SendError<Event>),
     #[error("hopr-lib error: {0}")]
-    Hopr(#[from] edgli::hopr_lib::errors::HoprLibError),
+    Hopr(#[from] HoprLibError),
 }
 
 #[derive(Clone)]
@@ -57,12 +59,12 @@ pub struct Node {
     phase: Phase,
 
     // static input data
-    edgli: Arc<edgli::hopr_lib::Hopr>,
+    edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,
 }
 
 impl Node {
-    pub fn new(edgli: Arc<edgli::hopr_lib::Hopr>, sender: crossbeam_channel::Sender<Event>) -> Self {
+    pub fn new(edgli: Arc<Hopr>, sender: crossbeam_channel::Sender<Event>) -> Self {
         Node {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
