@@ -346,21 +346,10 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to node");
         });
-        // TODO: integrate properly with edgli
-        unimplemented!();
-        // let hopr_cfg = gnosis_vpn_lib::prelude::HoprLibConfig::default();
-
-        // let node = setup_node(
-        //     std::sync::Arc::new(
-        //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
-        //             .map_err(|e| Error::General(e.to_string()))?,
-        //     ),
-        //     self.sender.clone(),
-        //     self.cancel_channel.1.clone(),
-        // );
-        // node.run();
-        // self.node = node;
-        // Ok(())
+        let node = setup_node(self.edgli.clone(), self.sender.clone(), self.cancel_channel.1.clone());
+        node.run();
+        self.node = node;
+        Ok(())
     }
 }
 
