@@ -3,8 +3,8 @@ use serde::ser::Serialize;
 
 use std::time::SystemTime;
 
-use edgli::hopr_lib::Address;
 use crate::session;
+use edgli::hopr_lib::Address;
 
 pub fn serialize<T>(v: &T) -> String
 where
