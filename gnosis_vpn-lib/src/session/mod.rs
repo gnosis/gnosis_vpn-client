@@ -1,19 +1,20 @@
-use reqwest::{StatusCode, blocking};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::cmp;
 use std::fmt::{self, Display};
-use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
 use thiserror::Error;
 
-use crate::address::Address;
-use crate::entry_node::EntryNode;
-use crate::remote_data;
+use edgli::hopr_lib::{
+    IpProtocol, RoutingOptions, SessionCapabilities as Capabilities, SessionTarget as Target, SurbBalancerConfig,
+};
 
-pub use path::Path;
+use crate::hopr::{Hopr, HoprError};
+use crate::remote_data;
+use edgli::hopr_lib::Address;
+
 pub use protocol::Protocol;
 
-mod path;
 mod protocol;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,33 +22,17 @@ mod protocol;
 pub struct Session {
     pub active_clients: Vec<String>,
     pub destination: Address,
-    pub forward_path: Path,
-    pub ip: String,
+    pub forward_path: RoutingOptions,
+    pub bound_host: std::net::SocketAddr,
     pub hopr_mtu: u16,
-    pub port: u16,
-    pub protocol: Protocol,
-    pub return_path: Path,
+    pub protocol: IpProtocol,
+    pub return_path: RoutingOptions,
     pub surb_len: u16,
     pub target: String,
     pub max_client_sessions: u16,
     pub max_surb_upstream: String,
     pub response_buffer: String,
     pub session_pool: Option<u16>,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-pub enum Capability {
-    NoDelay,
-    NoRateControl,
-    Retransmission,
-    RetransmissionAckOnly,
-    Segmentation,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Target {
-    Plain(SocketAddr),
-    Sealed(SocketAddr),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -60,10 +45,10 @@ pub struct Config {
 }
 
 pub struct OpenSession {
-    entry_node: EntryNode,
+    edgli: Arc<Hopr>,
     destination: Address,
-    capabilities: Vec<Capability>,
-    path: Path,
+    capabilities: Capabilities,
+    path: RoutingOptions,
     target: Target,
     protocol: Protocol,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
@@ -73,16 +58,16 @@ pub struct OpenSession {
 }
 
 pub struct CloseSession {
-    entry_node: EntryNode,
+    edgli: Arc<Hopr>,
 }
 
 pub struct ListSession {
-    entry_node: EntryNode,
-    protocol: Protocol,
+    edgli: Arc<Hopr>,
+    protocol: IpProtocol,
 }
 
 pub struct UpdateSessionConfig {
-    entry_node: EntryNode,
+    edgli: Arc<Hopr>,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
     // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
@@ -107,42 +92,18 @@ pub enum Error {
     AmbiguousSessionId,
 }
 
-impl Target {
-    pub fn plain(addr: &SocketAddr) -> Self {
-        Target::Plain(*addr)
-    }
-
-    pub fn sealed(addr: &SocketAddr) -> Self {
-        Target::Sealed(*addr)
-    }
-
-    pub fn type_(&self) -> String {
-        match self {
-            Target::Plain(_) => "Plain".to_string(),
-            Target::Sealed(_) => "Sealed".to_string(),
-        }
-    }
-
-    pub fn address(&self) -> String {
-        match self {
-            Target::Plain(addr) => addr.to_string(),
-            Target::Sealed(addr) => addr.to_string(),
-        }
-    }
-}
-
 impl OpenSession {
     pub fn bridge(
-        entry_node: EntryNode,
+        edgli: Arc<Hopr>,
         destination: Address,
-        capabilities: Vec<Capability>,
-        path: Path,
+        capabilities: Capabilities,
+        path: RoutingOptions,
         target: Target,
         buffer_size: String,
         max_surb_upstream: String,
     ) -> Self {
         OpenSession {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             destination,
             capabilities,
             path: path.clone(),
@@ -154,16 +115,16 @@ impl OpenSession {
     }
 
     pub fn main(
-        entry_node: EntryNode,
+        edgli: Arc<Hopr>,
         destination: Address,
-        capabilities: Vec<Capability>,
-        path: Path,
+        capabilities: Capabilities,
+        path: RoutingOptions,
         target: Target,
         buffer_size: String,
         max_surb_upstream: String,
     ) -> Self {
         OpenSession {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             destination,
             capabilities,
             path: path.clone(),
@@ -175,27 +136,36 @@ impl OpenSession {
     }
 }
 
-impl CloseSession {
-    pub fn new(entry_node: &EntryNode) -> Self {
-        CloseSession {
-            entry_node: entry_node.clone(),
+impl From<&OpenSession> for edgli::hopr_lib::SessionClientConfig {
+    fn from(open: &OpenSession) -> Self {
+        Self {
+            capabilities: open.capabilities,
+            forward_path_options: open.path.clone(),
+            return_path_options: open.path.clone(), // TODO: check this for intermediate behavior
+            ..Default::default()
         }
     }
 }
 
+impl CloseSession {
+    pub fn new(edgli: &Arc<Hopr>) -> Self {
+        CloseSession { edgli: edgli.clone() }
+    }
+}
+
 impl ListSession {
-    pub fn new(entry_node: &EntryNode, protocol: &Protocol) -> Self {
+    pub fn new(edgli: &Arc<Hopr>, protocol: &IpProtocol) -> Self {
         ListSession {
-            entry_node: entry_node.clone(),
-            protocol: protocol.clone(),
+            edgli: edgli.clone(),
+            protocol: *protocol,
         }
     }
 }
 
 impl UpdateSessionConfig {
-    pub fn new(entry_node: &EntryNode, response_buffer: String, max_surb_upstream: String) -> Self {
+    pub fn new(edgli: &Arc<Hopr>, response_buffer: String, max_surb_upstream: String) -> Self {
         UpdateSessionConfig {
-            entry_node: entry_node.clone(),
+            edgli: edgli.clone(),
             response_buffer,
             max_surb_upstream,
         }
@@ -203,132 +173,95 @@ impl UpdateSessionConfig {
 }
 
 impl Session {
-    pub fn open(client: &blocking::Client, open_session: &OpenSession) -> Result<Self, Error> {
-        let headers = remote_data::authentication_headers(open_session.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/{}",
-            open_session.entry_node.api_version, open_session.protocol
-        );
-        let url = open_session.entry_node.endpoint.join(&path)?;
+    pub fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
+        let session_client_metadata = open_session.edgli.open_session(
+            open_session.destination,
+            open_session.target.clone(),
+            Some(10), // TODO: what value should be here?
+            Some(10), // TODO: what value should be here?
+            open_session.into(),
+        )?;
 
-        let mut json = serde_json::Map::new();
-        json.insert("destination".to_string(), json!(open_session.destination));
+        Ok(Self {
+            destination: session_client_metadata.destination,
+            forward_path: session_client_metadata.forward_path,
+            bound_host: session_client_metadata.bound_host,
+            hopr_mtu: session_client_metadata.hopr_mtu as u16,
+            protocol: session_client_metadata.protocol,
+            return_path: session_client_metadata.return_path,
+            surb_len: session_client_metadata.surb_len as u16,
+            target: session_client_metadata.target,
+            max_client_sessions: session_client_metadata.max_client_sessions as u16,
+            max_surb_upstream: session_client_metadata
+                .max_surb_upstream
+                .map(|v| human_bandwidth::format_bandwidth(v).to_string())
+                .unwrap_or_default(),
+            response_buffer: session_client_metadata
+                .response_buffer
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            session_pool: session_client_metadata.session_pool.map(|v| v as u16),
+            active_clients: session_client_metadata.active_clients,
+        })
+    }
 
-        let target = open_session.target.clone();
-        let target_json = json!({ target.type_(): target.address() });
-        json.insert("target".to_string(), target_json);
+    pub fn close(&self, close_session: &CloseSession) -> Result<(), HoprError> {
+        close_session.edgli.close_session(self.bound_host, self.protocol)
+    }
 
-        let path_json = match open_session.path.clone() {
-            Path::Hops(hop) => {
-                json!({"Hops": hop})
-            }
-            Path::IntermediatePath(addresses) => {
-                json!({ "IntermediatePath": addresses.clone() })
-            }
+    pub fn list(list_session: &ListSession) -> Result<Vec<Self>, HoprError> {
+        Ok(list_session
+            .edgli
+            .list_sessions(list_session.protocol)
+            .into_iter()
+            .map(|session_client_metadata| Self {
+                destination: session_client_metadata.destination,
+                forward_path: session_client_metadata.forward_path,
+                bound_host: session_client_metadata.bound_host,
+                hopr_mtu: session_client_metadata.hopr_mtu as u16,
+                protocol: session_client_metadata.protocol,
+                return_path: session_client_metadata.return_path,
+                surb_len: session_client_metadata.surb_len as u16,
+                target: session_client_metadata.target,
+                max_client_sessions: session_client_metadata.max_client_sessions as u16,
+                max_surb_upstream: session_client_metadata
+                    .max_surb_upstream
+                    .map(|v| human_bandwidth::format_bandwidth(v).to_string())
+                    .unwrap_or_default(),
+                response_buffer: session_client_metadata
+                    .response_buffer
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                session_pool: session_client_metadata.session_pool.map(|v| v as u16),
+                active_clients: session_client_metadata.active_clients,
+            })
+            .collect())
+    }
+
+    pub fn update(&self, config: &UpdateSessionConfig) -> Result<(), HoprError> {
+        let active_client = match self.active_clients.as_slice() {
+            [] => return Err(HoprError::SessionNotFound),
+            [client] => client.clone(),
+            _ => return Err(HoprError::SessionAmbiguousClient),
         };
-        json.insert("forwardPath".to_string(), path_json.clone());
-        json.insert("returnPath".to_string(), path_json);
-        json.insert("listenHost".to_string(), json!(&open_session.entry_node.listen_host));
 
-        json.insert("capabilities".to_string(), json!(open_session.capabilities));
-        json.insert("responseBuffer".to_string(), json!(open_session.response_buffer));
-        json.insert("maxSurbUpstream".to_string(), json!(open_session.max_surb_upstream));
-        // creates a TCP session as part of the session pool, so we immediately know if it might work
-        if open_session.protocol == Protocol::Tcp {
-            json.insert("sessionPool".to_string(), json!(1));
-        }
+        let response_buffer = bytesize::ByteSize::from_str(&config.response_buffer)
+            .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
-        tracing::debug!(?headers, body = ?json, %url, "post open session");
-        let resp = client
-            .post(url)
-            .json(&json)
-            .timeout(open_session.entry_node.session_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error can only be mapped after sending
-            .map_err(open_response_errors)?
-            .json::<Self>()?;
-        Ok(resp)
-    }
-
-    pub fn close(&self, client: &blocking::Client, close_session: &CloseSession) -> Result<(), Error> {
-        let headers = remote_data::authentication_headers(close_session.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/{}/{}/{}",
-            close_session.entry_node.api_version, self.protocol, self.ip, self.port
-        );
-        let url = close_session.entry_node.endpoint.join(&path)?;
-
-        tracing::debug!(?headers, %url, "delete session");
-        client
-            .delete(url)
-            .timeout(close_session.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error checks happen after response
-            .map_err(close_response_errors)?;
-        Ok(())
-    }
-
-    pub fn list(client: &blocking::Client, list_session: &ListSession) -> Result<Vec<Self>, Error> {
-        let headers = remote_data::authentication_headers(list_session.entry_node.api_token.as_str())?;
-        let path = format!(
-            "api/{}/session/{}",
-            list_session.entry_node.api_version, list_session.protocol
-        );
-        let url = list_session.entry_node.endpoint.join(&path)?;
-
-        tracing::debug!(?headers, %url, "list sessions");
-
-        let resp = client
-            .get(url)
-            .timeout(list_session.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error checks happen after response
-            .map_err(remote_data::response_errors)?
-            .json::<Vec<Session>>()?;
-
-        Ok(resp)
-    }
-
-    pub fn update(&self, client: &blocking::Client, config: &UpdateSessionConfig) -> Result<(), Error> {
-        let active_client = match &self.active_clients.as_slice() {
-            [] => return Err(Error::NoSessionId),
-            [client] => client,
-            _ => return Err(Error::AmbiguousSessionId),
+        let balancer_cfg = if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+            SurbBalancerConfig {
+                target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+                max_surbs_per_sec: human_bandwidth::parse_bandwidth(&config.max_surb_upstream)
+                    .ok()
+                    .map(|b| b.as_bps() as u64 / (8 * edgli::hopr_lib::SURB_SIZE) as u64)
+                    .unwrap_or_else(|| SurbBalancerConfig::default().max_surbs_per_sec as u64),
+                ..Default::default()
+            }
+        } else {
+            Default::default()
         };
-        let headers = remote_data::authentication_headers(config.entry_node.api_token.as_str())?;
-        let path = format!("api/{}/session/config/{}", config.entry_node.api_version, active_client);
-        let url = config.entry_node.endpoint.join(&path)?;
 
-        let mut json = serde_json::Map::new();
-        json.insert("maxSurbUpstream".to_string(), json!(config.max_surb_upstream));
-        json.insert("responseBuffer".to_string(), json!(config.response_buffer));
-
-        tracing::debug!(?headers, body = ?json, %url, "post config");
-
-        client
-            .post(url)
-            .json(&json)
-            .timeout(config.entry_node.http_timeout)
-            .headers(headers)
-            .send()
-            // connection error checks happen before response
-            .map_err(remote_data::connect_errors)?
-            .error_for_status()
-            // response error can only be mapped after sending
-            .map_err(remote_data::response_errors)?;
-        Ok(())
+        config.edgli.adjust_session(balancer_cfg, active_client)
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {
@@ -336,30 +269,14 @@ impl Session {
     }
 }
 
-fn open_response_errors(err: reqwest::Error) -> Error {
-    if err.status() == Some(StatusCode::CONFLICT) {
-        Error::ListenHostAlreadyUsed
-    } else {
-        remote_data::response_errors(err).into()
-    }
-}
-
-fn close_response_errors(err: reqwest::Error) -> Error {
-    if err.status() == Some(StatusCode::NOT_FOUND) {
-        Error::SessionNotFound
-    } else {
-        remote_data::response_errors(err).into()
-    }
-}
-
 impl cmp::PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
-        self.ip == other.ip && self.port == other.port && self.protocol == other.protocol && self.target == other.target
+        self.bound_host == other.bound_host && self.protocol == other.protocol && self.target == other.target
     }
 }
 
 impl Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Session[{}/{}]", self.port, self.protocol)
+        write!(f, "Session[{}/{}]", self.bound_host.port(), self.protocol)
     }
 }

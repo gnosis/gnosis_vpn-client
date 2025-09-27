@@ -1,18 +1,20 @@
-use std::path::Path;
-use std::thread;
-
+use edgli::hopr_lib::config::HoprLibConfig;
+use edgli::hopr_lib::{HoprKeys, IdentityRetrievalModes};
 use thiserror::Error;
+
+use std::path::Path;
+use std::sync::Arc;
+use std::thread;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::entry_node::EntryNode;
+use gnosis_vpn_lib::hopr::Hopr;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::{balance, info, log_output, wg_tooling};
 
 use crate::event::Event;
 
-#[derive(Debug)]
 pub struct Core {
     // configuration data
     config: Config,
@@ -21,6 +23,8 @@ pub struct Core {
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
 
+    // hopr edge node
+    edgli: Arc<Hopr>,
     // connection to exit
     connection: Option<connection::Connection>,
     // connection to entry
@@ -32,14 +36,18 @@ pub struct Core {
     cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
 
     // results from node
-    balance: Option<balance::Balance>,
+    balance: Option<balance::Balances>,
     info: Option<info::Info>,
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("general error: {0}")]
+    General(String),
+
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
+
     #[error("WireGuard error: {0}")]
     WgTooling(#[from] wg_tooling::Error),
 }
@@ -54,9 +62,18 @@ impl Core {
         let config = read_config(config_path)?;
         wg_tooling::available()?;
 
-        let cancel_channel = crossbeam_channel::unbounded();
-        let node = setup_node(config.entry_node(), sender.clone(), cancel_channel.1.clone());
-        node.run();
+        let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
+
+        let cfg = HoprLibConfig::default();
+        let retrieval_mode = IdentityRetrievalModes::FromFile {
+            password: "my pass from config",
+            id_path: "my path from config",
+        };
+        let keys = HoprKeys::try_from(retrieval_mode).map_err(|e| Error::General(e.to_string()))?;
+        let hopr = Hopr::new(cfg, keys).map_err(|e| Error::General(e.to_string()))?;
+        let edgli = Arc::new(hopr);
+
+        let node = setup_node(edgli.clone(), sender.clone(), cancel_channel.1.clone());
 
         Ok(Core {
             config,
@@ -69,6 +86,7 @@ impl Core {
             balance: None,
             info: None,
             cancel_channel,
+            edgli,
         })
     }
 
@@ -134,7 +152,7 @@ impl Core {
                 };
 
                 let destinations = self.config.destinations();
-                let funding_issues = self.balance.as_ref().map(|b| b.prioritized_funding_issues());
+                let funding_issues: Option<Vec<balance::FundingIssue>> = self.balance.as_ref().map(|b| b.into());
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     destinations
@@ -150,7 +168,7 @@ impl Core {
             }
             Command::Balance => match (&self.balance, &self.info) {
                 (Some(balance), Some(info)) => {
-                    let issues = balance.prioritized_funding_issues();
+                    let issues: Vec<balance::FundingIssue> = balance.into();
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
                         format!("{} wxHOPR", balance.safe_wxhopr),
@@ -239,13 +257,7 @@ impl Core {
     fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::unbounded();
         let wg = wg_tooling::WireGuard::from_config(self.config.wireguard())?;
-        let mut conn = Connection::new(
-            self.config.entry_node(),
-            destination.clone(),
-            wg,
-            s,
-            self.config.connection(),
-        );
+        let mut conn = Connection::new(self.edgli.clone(), destination.clone(), wg, s, self.config.connection());
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
@@ -318,7 +330,7 @@ impl Core {
         Ok(())
     }
 
-    fn on_balance(&mut self, balance: balance::Balance) -> Result<(), Error> {
+    fn on_balance(&mut self, balance: balance::Balances) -> Result<(), Error> {
         tracing::info!("on balance: {balance}");
         self.balance = Some(balance);
         Ok(())
@@ -334,14 +346,21 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to node");
         });
-        let node = setup_node(
-            self.config.entry_node(),
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-        );
-        node.run();
-        self.node = node;
-        Ok(())
+        // TODO: integrate properly with edgli
+        unimplemented!();
+        // let hopr_cfg = gnosis_vpn_lib::prelude::HoprLibConfig::default();
+
+        // let node = setup_node(
+        //     std::sync::Arc::new(
+        //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
+        //             .map_err(|e| Error::General(e.to_string()))?,
+        //     ),
+        //     self.sender.clone(),
+        //     self.cancel_channel.1.clone(),
+        // );
+        // node.run();
+        // self.node = node;
+        // Ok(())
     }
 }
 
@@ -356,13 +375,14 @@ fn read_config(config_path: &Path) -> Result<Config, Error> {
     Ok(config)
 }
 
+// TODO: insert the node here
 fn setup_node(
-    entry_node: EntryNode,
+    edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
 ) -> Node {
     let (s, r) = crossbeam_channel::unbounded();
-    let node = Node::new(entry_node, s);
+    let node = Node::new(edgli, s);
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {

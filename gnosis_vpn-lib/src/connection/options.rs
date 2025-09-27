@@ -1,7 +1,9 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use crate::{ping, session};
+use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
+
+use crate::ping;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -16,8 +18,8 @@ pub struct Options {
 
 #[derive(Clone, Debug)]
 pub struct SessionParameters {
-    pub(super) target: session::Target,
-    pub(super) capabilities: Vec<session::Capability>,
+    pub(super) target: SessionTarget,
+    pub(super) capabilities: SessionCapabilities,
 }
 
 #[derive(Clone, Debug)]
@@ -35,7 +37,7 @@ pub struct MaxSurbUpstream {
 }
 
 impl SessionParameters {
-    pub fn new(target: session::Target, capabilities: Vec<session::Capability>) -> Self {
+    pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
     }
 }
