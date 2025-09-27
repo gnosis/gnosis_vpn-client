@@ -234,10 +234,21 @@ impl Hopr {
 impl Drop for Hopr {
     fn drop(&mut self) {
         for process in &mut self.processes {
+            tracing::info!("shutting down HOPR process: {process}");
             match process {
                 EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
                 EdgliProcesses::Hopr(handle) => handle.abort(),
             }
         }
+
+        let open_listeners = self.open_listeners.clone();
+
+        self.rt.block_on(async {
+            let open_listeners = open_listeners.write_arc().await;
+            for process in open_listeners.iter() {
+                tracing::info!("shutting down session listener: {:?}", process.0);
+                process.1.abort_handle.abort();
+            }
+        })
     }
 }
