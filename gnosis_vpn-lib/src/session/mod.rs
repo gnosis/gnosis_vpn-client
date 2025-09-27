@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::fmt::{self, Display};
+use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
 
 use edgli::hopr_lib::{
-    RoutingOptions, SessionCapabilities as Capabilities, SessionCapability as Capability, SessionTarget as Target,
+    IpProtocol, RoutingOptions, SessionCapabilities as Capabilities, SessionTarget as Target, SurbBalancerConfig,
 };
 
 use crate::hopr::{Hopr, HoprError};
@@ -22,10 +23,9 @@ pub struct Session {
     pub active_clients: Vec<String>,
     pub destination: Address,
     pub forward_path: RoutingOptions,
-    pub ip: String,
+    pub bound_host: std::net::SocketAddr,
     pub hopr_mtu: u16,
-    pub port: u16,
-    pub protocol: Protocol,
+    pub protocol: IpProtocol,
     pub return_path: RoutingOptions,
     pub surb_len: u16,
     pub target: String,
@@ -63,7 +63,7 @@ pub struct CloseSession {
 
 pub struct ListSession {
     edgli: Arc<Hopr>,
-    protocol: Protocol,
+    protocol: IpProtocol,
 }
 
 pub struct UpdateSessionConfig {
@@ -154,10 +154,10 @@ impl CloseSession {
 }
 
 impl ListSession {
-    pub fn new(edgli: &Arc<Hopr>, protocol: &Protocol) -> Self {
+    pub fn new(edgli: &Arc<Hopr>, protocol: &IpProtocol) -> Self {
         ListSession {
             edgli: edgli.clone(),
-            protocol: protocol.clone(),
+            protocol: *protocol,
         }
     }
 }
@@ -173,45 +173,95 @@ impl UpdateSessionConfig {
 }
 
 impl Session {
-    /// TODO: implement
     pub fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
-        let r = open_session.edgli.open_session(
+        let session_client_metadata = open_session.edgli.open_session(
             open_session.destination,
             open_session.target.clone(),
+            Some(10), // TODO: what value should be here?
+            Some(10), // TODO: what value should be here?
             open_session.into(),
         )?;
 
-        unimplemented!(); // TODO: fill in fields from `r` --- IGNORE ---
+        Ok(Self {
+            destination: session_client_metadata.destination,
+            forward_path: session_client_metadata.forward_path,
+            bound_host: session_client_metadata.bound_host,
+            hopr_mtu: session_client_metadata.hopr_mtu as u16,
+            protocol: session_client_metadata.protocol,
+            return_path: session_client_metadata.return_path,
+            surb_len: session_client_metadata.surb_len as u16,
+            target: session_client_metadata.target,
+            max_client_sessions: session_client_metadata.max_client_sessions as u16,
+            max_surb_upstream: session_client_metadata
+                .max_surb_upstream
+                .map(|v| human_bandwidth::format_bandwidth(v).to_string())
+                .unwrap_or_default(),
+            response_buffer: session_client_metadata
+                .response_buffer
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            session_pool: session_client_metadata.session_pool.map(|v| v as u16),
+            active_clients: session_client_metadata.active_clients,
+        })
     }
 
-    /// TODO: implement
     pub fn close(&self, close_session: &CloseSession) -> Result<(), HoprError> {
-        close_session.edgli.close_session(0)?; // TODO: pass session id
-        Ok(())
+        close_session.edgli.close_session(self.bound_host, self.protocol)
     }
 
-    /// TODO: implement
     pub fn list(list_session: &ListSession) -> Result<Vec<Self>, HoprError> {
-        list_session.edgli.list_sessions(list_session.protocol)?;
-        unimplemented!()
+        Ok(list_session
+            .edgli
+            .list_sessions(list_session.protocol)
+            .into_iter()
+            .map(|session_client_metadata| Self {
+                destination: session_client_metadata.destination,
+                forward_path: session_client_metadata.forward_path,
+                bound_host: session_client_metadata.bound_host,
+                hopr_mtu: session_client_metadata.hopr_mtu as u16,
+                protocol: session_client_metadata.protocol,
+                return_path: session_client_metadata.return_path,
+                surb_len: session_client_metadata.surb_len as u16,
+                target: session_client_metadata.target,
+                max_client_sessions: session_client_metadata.max_client_sessions as u16,
+                max_surb_upstream: session_client_metadata
+                    .max_surb_upstream
+                    .map(|v| human_bandwidth::format_bandwidth(v).to_string())
+                    .unwrap_or_default(),
+                response_buffer: session_client_metadata
+                    .response_buffer
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                session_pool: session_client_metadata.session_pool.map(|v| v as u16),
+                active_clients: session_client_metadata.active_clients,
+            })
+            .collect())
     }
 
-    /// TODO: implement
     pub fn update(&self, config: &UpdateSessionConfig) -> Result<(), HoprError> {
-        // let active_client = match &self.active_clients.as_slice() {
-        //     [] => return Err(Error::NoSessionId),
-        //     [client] => client,
-        //     _ => return Err(Error::AmbiguousSessionId),
-        // };       // TODO: handle these specifically
+        let active_client = match self.active_clients.as_slice() {
+            [] => return Err(HoprError::SessionNotFound),
+            [client] => client.clone(),
+            _ => return Err(HoprError::SessionAmbiguousClient),
+        };
 
-        let active_client = "".to_string(); // TODO: fix this
+        let response_buffer = bytesize::ByteSize::from_str(&config.response_buffer)
+            .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
-        config.edgli.update_session(
-            config.max_surb_upstream.clone(),
-            config.response_buffer.clone(),
-            active_client.clone(),
-        )?;
-        Ok(())
+        let balancer_cfg = if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+            SurbBalancerConfig {
+                target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+                max_surbs_per_sec: human_bandwidth::parse_bandwidth(&config.max_surb_upstream)
+                    .ok()
+                    .map(|b| b.as_bps() as u64 / (8 * edgli::hopr_lib::SURB_SIZE) as u64)
+                    .unwrap_or_else(|| SurbBalancerConfig::default().max_surbs_per_sec as u64),
+                ..Default::default()
+            }
+        } else {
+            Default::default()
+        };
+
+        config.edgli.adjust_session(balancer_cfg, active_client)
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {
@@ -221,12 +271,12 @@ impl Session {
 
 impl cmp::PartialEq for Session {
     fn eq(&self, other: &Self) -> bool {
-        self.ip == other.ip && self.port == other.port && self.protocol == other.protocol && self.target == other.target
+        self.bound_host == other.bound_host && self.protocol == other.protocol && self.target == other.target
     }
 }
 
 impl Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Session[{}/{}]", self.port, self.protocol)
+        write!(f, "Session[{}/{}]", self.bound_host.port(), self.protocol)
     }
 }

@@ -60,7 +60,8 @@ impl Registration {
 pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration, Error> {
     let headers = remote_data::json_headers();
     let mut url = Url::parse("http://localhost/api/v1/clients/register")?;
-    url.set_port(Some(input.session.port)).map_err(|_| Error::InvalidPort)?;
+    url.set_port(Some(input.session.bound_host.port()))
+        .map_err(|_| Error::InvalidPort)?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post register client");
@@ -81,7 +82,8 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
 pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error> {
     let headers = remote_data::json_headers();
     let mut url = Url::parse("http://localhost/api/v1/clients/unregister")?;
-    url.set_port(Some(input.session.port)).map_err(|_| Error::InvalidPort)?;
+    url.set_port(Some(input.session.bound_host.port()))
+        .map_err(|_| Error::InvalidPort)?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post unregister client");

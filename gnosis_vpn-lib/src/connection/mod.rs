@@ -424,7 +424,7 @@ impl Connection {
             // handle wg registration event depending on phase
             InternalEvent::RegisterWg(res) => {
                 if let PhaseUp::WgRegistration(session) = self.phase_up.clone() {
-                    check_tcp_session(&res, session.port);
+                    check_tcp_session(&res, session.bound_host.port());
                     self.phase_up = PhaseUp::CloseBridgeSession(session, res?);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
@@ -480,7 +480,7 @@ impl Connection {
                 (Err(error), PhaseUp::CheckPingTunnel(session, _registration)) => {
                     tracing::warn!(%session, %error, "Ping during initial check failed");
                     if !error.would_block() {
-                        log_output::print_port_instructions(session.port, Protocol::Udp);
+                        log_output::print_port_instructions(session.bound_host.port(), Protocol::Udp);
                     }
                     Ok(())
                 }
@@ -592,7 +592,7 @@ impl Connection {
             }
             InternalEvent::UnregisterWg(res) => {
                 if let PhaseDown::WgUnregistration(session, _registration) = self.phase_down.clone() {
-                    check_tcp_session(&res, session.port);
+                    check_tcp_session(&res, session.bound_host.port());
                     let already_unregistered = matches!(&res, Err(gvpn_client::Error::RegistrationNotFound));
                     if !already_unregistered {
                         res?;
@@ -609,6 +609,7 @@ impl Connection {
 
                 // let open_session = sessions.iter().find(|s| self.edgli.conflicts_listen_host(s));
                 // TODO: fix conflict detection?
+
                 let open_session: Option<Session> = None;
                 match (open_session, self.phase_down.clone()) {
                     (Some(session), PhaseDown::FixBridgeSession(reg)) => {
@@ -692,7 +693,7 @@ impl Connection {
     }
 
     fn list_sessions(&mut self, protocol: &Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::ListSession::new(&self.edgli, protocol);
+        let params = session::ListSession::new(&self.edgli, &protocol.into());
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
@@ -739,18 +740,9 @@ impl Connection {
     ) -> crossbeam_channel::Receiver<InternalEvent> {
         let session = session.clone();
         let registration = registration.clone();
-        let edgli = self.edgli.clone();
         let wg = self.wg.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            // let endpoint = match edgli.endpoint_with_port(session.port) {
-            //     Ok(endpoint) => endpoint,
-            //     Err(error) => {
-            //         _ = s.send(InternalEvent::WgOpenTunnel(WgOpenResult::EntryNode(error)));
-            //         return;
-            //     }
-            // };       // TODO: replace with local port
-
             // run wg-quick down once to ensure no dangling state
             _ = wg.close_session();
 
@@ -763,7 +755,7 @@ impl Connection {
             };
             let peer_info = wg_tooling::PeerInfo {
                 public_key: registration.server_public_key(),
-                endpoint: format!("127.0.0.1:{}", session.port),
+                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
             };
 
             match wg.connect_session(&interface_info, &peer_info) {

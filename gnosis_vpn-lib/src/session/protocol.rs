@@ -8,6 +8,15 @@ pub enum Protocol {
     Tcp,
 }
 
+impl From<&Protocol> for edgli::hopr_lib::IpProtocol {
+    fn from(value: &Protocol) -> Self {
+        match value {
+            Protocol::Udp => edgli::hopr_lib::IpProtocol::UDP,
+            Protocol::Tcp => edgli::hopr_lib::IpProtocol::TCP,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Protocol {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
