@@ -4036,6 +4036,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_with",
  "thiserror 2.0.16",
  "tokio",
  "toml",

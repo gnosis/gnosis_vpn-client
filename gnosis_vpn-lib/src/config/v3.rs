@@ -1,5 +1,6 @@
 use edgli::hopr_lib::Address;
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use url::Url;
 
 use std::cmp::PartialEq;
@@ -9,12 +10,12 @@ use std::vec::Vec;
 use crate::config;
 use crate::config::v4;
 
-const MAX_HOPS: u8 = 3;
-
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
     pub(super) hoprd_node: HoprdNode,
+    #[serde_as(as = "Option<HashMap<DisplayFromStr, _>>")]
     pub(super) destinations: Option<HashMap<Address, v4::Destination>>,
     pub(super) connection: Option<v4::Connection>,
     pub(super) wireguard: Option<v4::WireGuard>,
@@ -163,12 +164,10 @@ impl TryFrom<Config> for config::Config {
     fn try_from(value: Config) -> Result<Self, Self::Error> {
         let connection = value.connection.into();
         let destinations = v4::convert_destinations(value.destinations)?;
-        let hopr = v4::convert_hopr(None)?;
         let wireguard = value.wireguard.into();
         Ok(config::Config {
             connection,
             destinations,
-            hopr,
             wireguard,
         })
     }

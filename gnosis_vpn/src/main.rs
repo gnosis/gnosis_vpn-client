@@ -270,8 +270,8 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(socket_path: &Path, provided_config_path: &Path) -> Result<(), exitcode::ExitCode> {
-    let config_path = match provided_config_path.canonicalize() {
+fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
             tracing::error!(error = %e, "error canonicalizing config path");
@@ -281,10 +281,10 @@ fn daemon(socket_path: &Path, provided_config_path: &Path) -> Result<(), exitcod
     let ctrlc_receiver = ctrlc_channel()?;
     // keep config watcher in scope so it does not get dropped
     let (_config_watcher, config_receiver) = config_channel(&config_path)?;
-    let socket_receiver = socket_channel(socket_path)?;
+    let socket_receiver = socket_channel(&args.socket_path)?;
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, &config_path);
-    match fs::remove_file(socket_path) {
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, &args);
+    match fs::remove_file(&args.socket_path) {
         Ok(_) => (),
         Err(e) => {
             tracing::error!(error = %e, "failed removing socket");
@@ -297,10 +297,17 @@ fn loop_daemon(
     ctrlc_receiver: &crossbeam_channel::Receiver<()>,
     config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
-    config_path: &Path,
+    args: &cli::Cli,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let mut core = match core::Core::init(config_path, sender) {
+    let hopr_params = core::HoprParams {
+        db_path: args.hopr_db_path.clone(),
+        config_path: args.hopr_config_path.clone(),
+        identity_file: args.hopr_identity_file.clone(),
+        identity_pass: args.hopr_identity_pass.clone(),
+    };
+    let config_path = args.config_path.clone();
+    let mut core = match core::Core::init(&config_path, sender, hopr_params) {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");
@@ -331,13 +338,13 @@ fn loop_daemon(
             recv(socket_receiver) -> stream => incoming_stream(&mut core, stream),
             recv(core_receiver) -> event => incoming_event(&mut core, event),
             recv(config_receiver) -> event => {
-                let resp = incoming_config_fs_event(event, config_path);
+                let resp = incoming_config_fs_event(event, &config_path);
                 if let Some(r) = resp {
                     read_config_receiver = r
                 }
             },
             recv(read_config_receiver) -> _ => {
-                match core.update_config(config_path) {
+                match core.update_config(&config_path) {
                     Ok(_) => {
                         tracing::info!("updated configuration - resetting application");
                     }
@@ -361,7 +368,7 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    match daemon(&args.socket_path, &args.config_path) {
+    match daemon(args) {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {

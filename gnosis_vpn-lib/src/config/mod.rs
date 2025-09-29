@@ -1,5 +1,4 @@
-use edgli::hopr_lib::exports::crypto::keypair::errors::KeyPairError;
-use edgli::hopr_lib::{Address, GeneralError, HoprKeys, config::HoprLibConfig};
+use edgli::hopr_lib::{Address, GeneralError};
 use thiserror::Error;
 
 use std::collections::HashMap;
@@ -9,7 +8,6 @@ use std::path::Path;
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
 use crate::wg_tooling::Config as WireGuardConfig;
 
-mod v2;
 mod v3;
 mod v4;
 
@@ -20,14 +18,7 @@ pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 pub struct Config {
     pub connection: ConnectionOptions,
     pub destinations: HashMap<Address, Destination>,
-    pub hopr: Hopr,
     pub wireguard: WireGuardConfig,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Hopr {
-    pub cfg: HoprLibConfig,
-    pub keys: HoprKeys,
 }
 
 #[derive(Debug, Error)]
@@ -44,18 +35,10 @@ pub enum Error {
     VersionMismatch(u8),
     #[error("No destinations")]
     NoDestinations,
-    #[error("General error: {0}")]
-    Hopr(#[from] GeneralError),
-    #[error("No identity password provided")]
-    NoIdentityPass,
-    #[error("No identity file provided")]
-    NoIdentityFile,
-    #[error("Key pair error: {0}")]
-    KeyPair(#[from] KeyPairError),
-    #[error("Deserialization error: {0}")]
-    JsonDeserialization(#[from] serde_json::Error),
-    #[error("Outdated config version")]
-    OutdatedConfigVersion,
+    #[error("Config version no longer supported")]
+    UnsupportedConfigVersion,
+    #[error("Error in hopr-lib: {0}")]
+    HoprGeneral(#[from] GeneralError),
 }
 
 pub fn read(path: &Path) -> Result<Config, Error> {
@@ -74,15 +57,8 @@ pub fn read(path: &Path) -> Result<Config, Error> {
         .ok_or(Error::VersionNotFound)?;
 
     match version {
-        1 => Err(Error::OutdatedConfigVersion),
-        2 => {
-            let res = toml::from_str::<v2::Config>(&content)?;
-            let wrong_keys = v2::wrong_keys(&table);
-            for key in wrong_keys.iter() {
-                tracing::warn!(%key, "ignoring unsupported key in configuration file");
-            }
-            res.try_into()
-        }
+        1 => Err(Error::UnsupportedConfigVersion),
+        2 => Err(Error::UnsupportedConfigVersion),
         3 => {
             let res = toml::from_str::<v3::Config>(&content)?;
             let wrong_keys = v3::wrong_keys(&table);

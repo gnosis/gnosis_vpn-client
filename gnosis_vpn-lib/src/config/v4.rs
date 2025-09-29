@@ -1,18 +1,12 @@
-use edgli::hopr_lib::config::HoprLibConfig;
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
-use edgli::hopr_lib::{
-    Address, HoprKeys, IdentityRetrievalModes, SessionCapabilities, SessionCapability, SessionTarget,
-};
-use serde_json::json;
-
+use edgli::hopr_lib::{Address, SessionCapabilities, SessionCapability, SessionTarget};
 use serde::{Deserialize, Deserializer, Serialize};
-use url::Url;
+use serde_with::{DisplayFromStr, serde_as};
 
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 use std::vec::Vec;
 
@@ -23,21 +17,14 @@ use crate::wg_tooling::Config as WireGuardConfig;
 
 const MAX_HOPS: u8 = 3;
 
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
+    #[serde_as(as = "Option<HashMap<DisplayFromStr, _>>")]
     pub(super) destinations: Option<HashMap<Address, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
-    pub(super) hopr: Option<Hopr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Hopr {
-    network: Option<String>,
-    rpc_provider: Option<Url>,
-    identity_pass: Option<String>,
-    identity_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -216,18 +203,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         continue;
                     }
                     wrong_keys.push(format!("destinations.{address}"));
-                }
-            }
-            continue;
-        }
-        // hopr simple struct
-        if key == "hopr" {
-            if let Some(hopr) = value.as_table() {
-                for (k, _v) in hopr.iter() {
-                    if k == "rpc_provider" || k == "identity_pass" || k == "identity_file" {
-                        continue;
-                    }
-                    wrong_keys.push(format!("hopr.{k}"));
                 }
             }
             continue;
@@ -412,12 +387,10 @@ impl TryFrom<Config> for config::Config {
     fn try_from(value: Config) -> Result<Self, Self::Error> {
         let connection = value.connection.into();
         let destinations = convert_destinations(value.destinations)?;
-        let hopr = convert_hopr(value.hopr)?;
         let wireguard = value.wireguard.into();
         Ok(config::Config {
             connection,
             destinations,
-            hopr,
             wireguard,
         })
     }
@@ -447,37 +420,6 @@ pub fn convert_destinations(
     Ok(result)
 }
 
-pub fn convert_hopr(hopr: Option<Hopr>) -> Result<config::Hopr, config::Error> {
-    let mut json_chain = serde_json::Map::new();
-    if let Some(network) = hopr.as_ref().and_then(|h| h.network.clone()) {
-        json_chain.insert("network".to_string(), json!(network));
-    }
-    if let Some(rpc) = hopr.as_ref().and_then(|h| h.rpc_provider.clone()) {
-        json_chain.insert("provider".to_string(), json!(rpc));
-    }
-    let mut json_cfg = serde_json::Map::new();
-    json_cfg.insert("chain".to_string(), json!(json_chain));
-    let cfg: HoprLibConfig = serde_json::from_value(json!(json_cfg))?;
-
-    let (id_pass, id_file) = match hopr
-        .as_ref()
-        .map(|h| (h.identity_pass.as_ref(), h.identity_file.as_ref()))
-    {
-        Some((Some(p), Some(f))) => (p, f),
-        Some((Some(_), None)) => return Err(config::Error::NoIdentityFile),
-        _ => return Err(config::Error::NoIdentityPass),
-    };
-
-    let id_path_owned = id_file.to_string_lossy().into_owned();
-    let retrieval_mode = IdentityRetrievalModes::FromFile {
-        password: id_pass.as_str(),
-        id_path: id_path_owned.as_str(),
-    };
-    let keys = HoprKeys::try_from(retrieval_mode)?;
-
-    Ok(config::Hopr { cfg, keys })
-}
-
 #[cfg(test)]
 mod tests {
     use super::Config;
@@ -485,10 +427,7 @@ mod tests {
     #[test]
     fn test_minimal_config() {
         let config = r#####"
-version = 3
-[hoprd_node]
-endpoint = "http://127.0.0.1:3001"
-api_token = "1234567890"
+version = 4
 "#####;
         toml::from_str::<Config>(config).expect("Failed to parse minimal config");
     }
@@ -496,10 +435,7 @@ api_token = "1234567890"
     #[test]
     fn test_ping_without_interval() {
         let config = r#####"
-version = 3
-[hoprd_node]
-endpoint = "http://127.0.0.1:3001"
-api_token = "1234567890"
+version = 4
 
 [connection.ping]
 address = "10.128.0.1"
@@ -509,13 +445,23 @@ address = "10.128.0.1"
     }
 
     #[test]
+    fn test_parse_destination() {
+        let config = r#####"
+version = 4
+
+[destinations]
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+meta = { location = "Germany" }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
+"#####;
+        toml::from_str::<Config>(config).expect("Failed to parse single destination");
+    }
+
+    #[test]
     fn test_full_config() {
         let config = r#####"
 version = 4
-[hopr]
-rpc_provider = "https://gnosis-rpc.publicnode.com"
-identity_file = "./identity.id"
-identity_pass = "testpass"
 
 [destinations]
 
@@ -538,12 +484,10 @@ ping_retries_timeout = "20s"
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
 target = "127.0.0.1:8000"
-target_type = "plain"
 
 [connection.wg]
 capabilities = [ "segmentation", "no_delay" ]
 target = "127.0.0.1:51820"
-target_type = "sealed"
 
 [connection.ping]
 address = "10.128.0.1"

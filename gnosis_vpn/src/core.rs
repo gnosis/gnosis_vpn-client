@@ -1,13 +1,13 @@
 use thiserror::Error;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::hopr::{Hopr, HoprError};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as HoprConfig, identity as HoprIdentity};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
@@ -42,13 +42,14 @@ pub struct Core {
 pub enum Error {
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
-
     #[error("WireGuard error: {0}")]
     WgTooling(#[from] wg_tooling::Error),
-    // #[error("HOPR error: {0}")]
-    // HoprGeneral(#[from] GeneralError),
     #[error("HOPR error: {0}")]
     Hopr(#[from] HoprError),
+    #[error("Hopr config error: {0}")]
+    HoprConfig(#[from] HoprConfig::Error),
+    #[error("Hopr identity error: {0}")]
+    HoprIdentity(#[from] HoprIdentity::Error),
 }
 
 enum Cancel {
@@ -56,16 +57,27 @@ enum Cancel {
     Connection,
 }
 
+pub struct HoprParams {
+    pub db_path: PathBuf,
+    pub config_path: PathBuf,
+    pub identity_file: PathBuf,
+    pub identity_pass: String,
+}
+
 impl Core {
-    pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
+    pub fn init(
+        config_path: &Path,
+        sender: crossbeam_channel::Sender<Event>,
+        hopr_params: HoprParams,
+    ) -> Result<Core, Error> {
         let config = config::read(config_path)?;
-        // TODO tibor, please fix, I don't know how to work around this limitation of hoprkeys
-        let config2 = config::read(config_path)?;
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
+        let cfg = HoprConfig::from_path(&hopr_params.config_path)?;
+        let keys = HoprIdentity::from_path(&hopr_params.identity_file, hopr_params.identity_pass)?;
 
-        let hopr = Hopr::new(config.hopr.cfg.clone(), config2.hopr.keys)?;
+        let hopr = Hopr::new(cfg, keys)?;
         let edgli = Arc::new(hopr);
 
         let node = setup_node(edgli.clone(), sender.clone(), cancel_channel.1.clone());
