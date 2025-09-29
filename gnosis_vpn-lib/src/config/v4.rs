@@ -463,15 +463,16 @@ mod tests {
     use super::Config;
 
     #[test]
-    fn test_minimal_config() {
+    fn test_minimal_config() -> anyhow::Result<()> {
         let config = r#####"
 version = 4
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse minimal config");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]
-    fn test_ping_without_interval() {
+    fn test_ping_without_interval() -> anyhow::Result<()> {
         let config = r#####"
 version = 4
 
@@ -479,7 +480,8 @@ version = 4
 address = "10.128.0.1"
 
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse minimal ping");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]

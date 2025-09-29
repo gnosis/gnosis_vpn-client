@@ -178,18 +178,19 @@ mod tests {
     use super::Config;
 
     #[test]
-    fn test_minimal_config() {
+    fn test_minimal_config() -> anyhow::Result<()> {
         let config = r#####"
 version = 3
 [hoprd_node]
 endpoint = "http://127.0.0.1:3001"
 api_token = "1234567890"
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse minimal config");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]
-    fn test_ping_without_interval() {
+    fn test_ping_without_interval() -> anyhow::Result<()> {
         let config = r#####"
 version = 3
 [hoprd_node]
@@ -200,11 +201,12 @@ api_token = "1234567890"
 address = "10.128.0.1"
 
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse minimal ping");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]
-    fn test_full_config() {
+    fn test_full_config() -> anyhow::Result<()> {
         let config = r#####"
 version = 3
 [hoprd_node]
@@ -267,6 +269,7 @@ allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse full config");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 }
