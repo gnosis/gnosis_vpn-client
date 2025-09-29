@@ -41,6 +41,8 @@ pub struct OpenSession {
     path: RoutingOptions,
     target: Target,
     balancer_cfg: SurbBalancerConfig,
+    session_pool: Option<u16>,
+    max_client_sessions: Option<u16>,
 }
 
 pub struct CloseSession {
@@ -58,6 +60,7 @@ pub struct UpdateSessionConfig {
 }
 
 impl OpenSession {
+    // This is the TCP session used to register our wg public key at GnosisVPN server.
     pub fn bridge(
         edgli: Arc<Hopr>,
         destination: Address,
@@ -73,9 +76,12 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             balancer_cfg,
+            session_pool: Some(1),
+            max_client_sessions: Some(1),
         }
     }
 
+    // This is the UDP session used to send/receive WireGuard traffic via HOPR network.
     pub fn main(
         edgli: Arc<Hopr>,
         destination: Address,
@@ -91,6 +97,10 @@ impl OpenSession {
             path: path.clone(),
             target: target.clone(),
             balancer_cfg,
+            // no relevance for UDP sessions
+            session_pool: None,
+            // no relevance for UDP sessions
+            max_client_sessions: None,
         }
     }
 }
@@ -136,8 +146,8 @@ impl Session {
         let session_client_metadata = open_session.edgli.open_session(
             open_session.destination,
             open_session.target.clone(),
-            Some(10), // TODO: what value should be here?
-            Some(10), // TODO: what value should be here?
+            open_session.session_pool.map(|v| v as usize),
+            open_session.max_client_sessions.map(|v| v as usize),
             open_session.into(),
         )?;
 
