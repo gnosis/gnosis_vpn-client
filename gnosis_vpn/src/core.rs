@@ -58,7 +58,6 @@ enum Cancel {
 }
 
 pub struct HoprParams {
-    pub db_path: PathBuf,
     pub config_path: PathBuf,
     pub identity_file: PathBuf,
     pub identity_pass: String,

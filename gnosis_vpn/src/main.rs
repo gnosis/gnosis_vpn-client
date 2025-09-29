@@ -301,7 +301,6 @@ fn loop_daemon(
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
     let hopr_params = core::HoprParams {
-        db_path: args.hopr_db_path.clone(),
         config_path: args.hopr_config_path.clone(),
         identity_file: args.hopr_identity_file.clone(),
         identity_pass: args.hopr_identity_pass.clone(),
