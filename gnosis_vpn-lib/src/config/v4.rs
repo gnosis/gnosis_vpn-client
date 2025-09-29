@@ -364,6 +364,10 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
         let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
+        let sessions = options::Sessions {
+            bridge: params_bridge,
+            wg: params_wg,
+        };
 
         let interval = connection
             .and_then(|c| c.ping.as_ref())
@@ -397,15 +401,18 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
 
+        let timeouts = options::Timeouts {
+            ping_retries: ping_retries_timeout,
+            http: http_timeout,
+        };
+
         options::Options::new(
-            params_bridge,
-            params_wg,
+            sessions,
             ping_range,
             ping_opts,
             buffer_sizes,
             max_surb_upstream,
-            ping_retries_timeout,
-            http_timeout,
+            timeouts,
         )
     }
 }

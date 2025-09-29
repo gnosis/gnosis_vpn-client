@@ -629,7 +629,7 @@ impl Connection {
         let ri = gvpn_client::Input::new(
             self.wg.key_pair.public_key.clone(),
             session.clone(),
-            self.options.http_timeout,
+            self.options.timeouts.http,
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -658,7 +658,7 @@ impl Connection {
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         let opts = self.options.ping_options.clone();
-        let timeout = self.options.ping_retries_timeout;
+        let timeout = self.options.timeouts.ping_retries;
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(immediate_ping_backoff(timeout));
         }
@@ -704,7 +704,7 @@ impl Connection {
         let params = gvpn_client::Input::new(
             self.wg.key_pair.public_key.clone(),
             session.clone(),
-            self.options.http_timeout,
+            self.options.timeouts.http,
         );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
@@ -807,9 +807,9 @@ impl Connection {
         session::OpenSession::bridge(
             self.edgli.clone(),
             self.destination.address,
-            self.options.bridge.capabilities.clone(),
+            self.options.sessions.bridge.capabilities,
             self.destination.routing.clone(),
-            self.options.bridge.target.clone(),
+            self.options.sessions.bridge.target.clone(),
             to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge),
         )
     }
@@ -818,9 +818,9 @@ impl Connection {
         session::OpenSession::main(
             self.edgli.clone(),
             self.destination.address,
-            self.options.wg.capabilities.clone(),
+            self.options.sessions.wg.capabilities,
             self.destination.routing.clone(),
-            self.options.wg.target.clone(),
+            self.options.sessions.wg.target.clone(),
             to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping),
         )
     }

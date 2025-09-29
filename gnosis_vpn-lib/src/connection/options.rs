@@ -9,20 +9,30 @@ use crate::ping;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
-    pub(super) bridge: SessionParameters,
-    pub(super) wg: SessionParameters,
-    pub(super) ping_interval: Range<u8>,
-    pub(super) ping_options: ping::PingOptions,
-    pub(super) buffer_sizes: BufferSizes,
-    pub(super) max_surb_upstream: MaxSurbUpstream,
-    pub(super) ping_retries_timeout: Duration,
-    pub(super) http_timeout: Duration,
+    pub timeouts: Timeouts,
+    pub sessions: Sessions,
+    pub ping_interval: Range<u8>,
+    pub ping_options: ping::PingOptions,
+    pub buffer_sizes: BufferSizes,
+    pub max_surb_upstream: MaxSurbUpstream,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sessions {
+    pub bridge: SessionParameters,
+    pub wg: SessionParameters,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Timeouts {
+    pub ping_retries: Duration,
+    pub http: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionParameters {
-    pub(super) target: SessionTarget,
-    pub(super) capabilities: SessionCapabilities,
+    pub target: SessionTarget,
+    pub capabilities: SessionCapabilities,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,24 +57,20 @@ impl SessionParameters {
 
 impl Options {
     pub fn new(
-        bridge: SessionParameters,
-        wg: SessionParameters,
+        sessions: Sessions,
         ping_interval: Range<u8>,
         ping_options: ping::PingOptions,
         buffer_sizes: BufferSizes,
         max_surb_upstream: MaxSurbUpstream,
-        ping_retries_timeout: Duration,
-        http_timeout: Duration,
+        timeouts: Timeouts,
     ) -> Self {
         Self {
-            bridge,
-            wg,
+            sessions,
             ping_interval,
             ping_options,
             buffer_sizes,
             max_surb_upstream,
-            ping_retries_timeout,
-            http_timeout,
+            timeouts,
         }
     }
 }
