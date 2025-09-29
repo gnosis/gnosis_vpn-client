@@ -1,5 +1,7 @@
+use bytesize::ByteSize;
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
 use edgli::hopr_lib::{Address, SessionCapabilities, SessionCapability, SessionTarget};
+use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
@@ -80,17 +82,17 @@ pub(super) struct PingInterval {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct BufferOptions {
     // could be improved by using bytesize crates parser
-    bridge: Option<String>,
-    ping: Option<String>,
-    main: Option<String>,
+    bridge: Option<ByteSize>,
+    ping: Option<ByteSize>,
+    main: Option<ByteSize>,
 }
 
+#[serde_with::serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct MaxSurbUpstreamOptions {
-    // could be improved by using human-bandwidth crates parser
-    bridge: Option<String>,
-    ping: Option<String>,
-    main: Option<String>,
+    bridge: Option<Bandwidth>,
+    ping: Option<Bandwidth>,
+    main: Option<Bandwidth>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -283,22 +285,22 @@ impl Connection {
 impl From<BufferOptions> for options::BufferSizes {
     fn from(buffer: BufferOptions) -> Self {
         let def = options::BufferSizes::default();
-        options::BufferSizes::new(
-            buffer.bridge.unwrap_or(def.bridge),
-            buffer.ping.unwrap_or(def.ping),
-            buffer.main.unwrap_or(def.main),
-        )
+        options::BufferSizes {
+            bridge: buffer.bridge.unwrap_or(def.bridge),
+            ping: buffer.ping.unwrap_or(def.ping),
+            main: buffer.main.unwrap_or(def.main),
+        }
     }
 }
 
 impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
     fn from(surbs: MaxSurbUpstreamOptions) -> Self {
         let def = options::MaxSurbUpstream::default();
-        options::MaxSurbUpstream::new(
-            surbs.bridge.unwrap_or(def.bridge),
-            surbs.ping.unwrap_or(def.ping),
-            surbs.main.unwrap_or(def.main),
-        )
+        options::MaxSurbUpstream {
+            bridge: surbs.bridge.unwrap_or(def.bridge),
+            ping: surbs.ping.unwrap_or(def.ping),
+            main: surbs.main.unwrap_or(def.main),
+        }
     }
 }
 

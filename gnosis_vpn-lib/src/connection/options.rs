@@ -1,7 +1,9 @@
 use std::ops::Range;
 use std::time::Duration;
 
+use bytesize::ByteSize;
 use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
+use human_bandwidth::re::bandwidth::Bandwidth;
 
 use crate::ping;
 
@@ -25,33 +27,21 @@ pub struct SessionParameters {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BufferSizes {
-    pub bridge: String,
-    pub ping: String,
-    pub main: String,
+    pub bridge: ByteSize,
+    pub ping: ByteSize,
+    pub main: ByteSize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaxSurbUpstream {
-    pub bridge: String,
-    pub ping: String,
-    pub main: String,
+    pub bridge: Bandwidth,
+    pub ping: Bandwidth,
+    pub main: Bandwidth,
 }
 
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
-    }
-}
-
-impl BufferSizes {
-    pub fn new(bridge: String, ping: String, main: String) -> Self {
-        Self { bridge, ping, main }
-    }
-}
-
-impl MaxSurbUpstream {
-    pub fn new(bridge: String, ping: String, main: String) -> Self {
-        Self { bridge, ping, main }
     }
 }
 
@@ -81,12 +71,20 @@ impl Options {
 
 impl Default for MaxSurbUpstream {
     fn default() -> Self {
-        MaxSurbUpstream::new("0 Mb/s".to_string(), "1 Mb/s".to_string(), "16 Mb/s".to_string())
+        Self {
+            bridge: Bandwidth::ZERO,
+            ping: Bandwidth::from_mbps(1),
+            main: Bandwidth::from_mbps(16),
+        }
     }
 }
 
 impl Default for BufferSizes {
     fn default() -> Self {
-        BufferSizes::new("0 B".to_string(), "32 kB".to_string(), "2 MB".to_string())
+        Self {
+            bridge: ByteSize::b(0),
+            ping: ByteSize::kb(32),
+            main: ByteSize::mb(2),
+        }
     }
 }

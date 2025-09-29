@@ -13,7 +13,7 @@ use crate::gvpn_client::{self, Registration};
 use crate::hopr::{Hopr, HoprError};
 use crate::log_output;
 use crate::ping;
-use crate::session::{self, Protocol, Session};
+use crate::session::{self, Protocol, Session, to_surb_balancer_config};
 use crate::wg_tooling;
 
 use destination::Destination;
@@ -80,7 +80,6 @@ enum InternalEvent {
 
 #[derive(Debug)]
 enum WgOpenResult {
-    EntryNode(HoprError),
     WgTooling(wg_tooling::Error),
     Ok,
 }
@@ -406,10 +405,6 @@ impl Connection {
 
             // handle wg open tunnel event depending on result and phase
             InternalEvent::WgOpenTunnel(res) => match (res, self.phase_up.clone()) {
-                (WgOpenResult::EntryNode(error), _) => {
-                    self.backoff = BackoffState::NotRecoverable(format!("{error}"));
-                    Ok(())
-                }
                 (WgOpenResult::WgTooling(error), _) => {
                     self.backoff = BackoffState::NotRecoverable(format!("{error}"));
                     Ok(())
@@ -605,12 +600,7 @@ impl Connection {
                     Err(InternalError::UnexpectedPhase)
                 }
             }
-            InternalEvent::ListSessions(res) => {
-                let sessions = res?;
-
-                // let open_session = sessions.iter().find(|s| self.edgli.conflicts_listen_host(s));
-                // TODO: fix conflict detection?
-
+            InternalEvent::ListSessions(_res) => {
                 let open_session: Option<Session> = None;
                 match (open_session, self.phase_down.clone()) {
                     (Some(session), PhaseDown::FixBridgeSession(reg)) => {
@@ -788,9 +778,9 @@ impl Connection {
 
     fn set_main_config(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
         let params = session::UpdateSessionConfig::new(
-            &self.edgli,
-            self.options.buffer_sizes.main.clone(),
-            self.options.max_surb_upstream.main.clone(),
+            self.edgli.clone(),
+            self.options.buffer_sizes.main,
+            self.options.max_surb_upstream.main,
         );
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -820,8 +810,7 @@ impl Connection {
             self.options.bridge.capabilities.clone(),
             self.destination.routing.clone(),
             self.options.bridge.target.clone(),
-            self.options.buffer_sizes.bridge.clone(),
-            self.options.max_surb_upstream.bridge.clone(),
+            to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge),
         )
     }
 
@@ -832,8 +821,7 @@ impl Connection {
             self.options.wg.capabilities.clone(),
             self.destination.routing.clone(),
             self.options.wg.target.clone(),
-            self.options.buffer_sizes.ping.clone(),
-            self.options.max_surb_upstream.ping.clone(),
+            to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping),
         )
     }
 }
