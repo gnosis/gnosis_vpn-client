@@ -40,13 +40,9 @@ pub enum Event {
 #[derive(Clone, Debug)]
 enum PhaseUp {
     Ready,
-    FixBridgeSession,
-    FixBridgeSessionClosing(Session),
     WgRegistration(Session),
     CloseBridgeSession(Session, Registration),
     PreparePingSession(Registration),
-    FixPingSession(Registration),
-    FixPingSessionClosing(Session, Registration),
     PreparePingTunnel(Session, Registration),
     CheckPingTunnel(Session, Registration),
     UpgradeToMainTunnel(Session, Registration),
@@ -59,8 +55,6 @@ enum PhaseUp {
 enum PhaseDown {
     CloseTunnel(Session, Registration),
     PrepareBridgeSession(Registration),
-    FixBridgeSession(Registration),
-    FixBridgeSessionClosing(Session, Registration),
     WgUnregistration(Session, Registration),
     CloseBridgeSession(Session),
     Retired,
@@ -71,7 +65,6 @@ enum InternalEvent {
     OpenSession(Result<Session, HoprError>),
     UpdateSession(Result<(), HoprError>),
     CloseSession(Result<(), HoprError>),
-    ListSessions(Result<Vec<Session>, HoprError>),
     RegisterWg(Result<Registration, gvpn_client::Error>),
     UnregisterWg(Result<(), gvpn_client::Error>),
     WgOpenTunnel(WgOpenResult),
@@ -342,13 +335,9 @@ impl Connection {
         tracing::debug!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
             PhaseUp::Ready => self.open_session(self.bridge_session_params()),
-            PhaseUp::FixBridgeSession => self.list_sessions(&Protocol::Tcp),
-            PhaseUp::FixBridgeSessionClosing(session) => self.close_session(&session),
             PhaseUp::WgRegistration(session) => self.register_wg(&session),
             PhaseUp::CloseBridgeSession(session, _registration) => self.close_session(&session),
             PhaseUp::PreparePingSession(_registration) => self.open_session(self.ping_session_params()),
-            PhaseUp::FixPingSession(_registration) => self.list_sessions(&Protocol::Udp),
-            PhaseUp::FixPingSessionClosing(session, _registration) => self.close_session(&session),
             PhaseUp::PreparePingTunnel(session, registration) => self.open_wg_session(&session, &registration),
             PhaseUp::CheckPingTunnel(_session, _registration) => self.immediate_ping(),
             PhaseUp::UpgradeToMainTunnel(session, _registration) => self.set_main_config(&session),
@@ -362,8 +351,6 @@ impl Connection {
         match self.phase_down.clone() {
             PhaseDown::CloseTunnel(session, _registration) => self.close_wg_session(&session),
             PhaseDown::PrepareBridgeSession(_registration) => self.open_session(self.bridge_session_params()),
-            PhaseDown::FixBridgeSession(_registration) => self.list_sessions(&Protocol::Tcp),
-            PhaseDown::FixBridgeSessionClosing(session, _registration) => self.close_session(&session),
             PhaseDown::WgUnregistration(session, _registration) => self.unregister_wg(&session),
             PhaseDown::CloseBridgeSession(session) => self.close_session(&session),
             PhaseDown::Retired => self.shutdown(),
@@ -373,35 +360,20 @@ impl Connection {
     fn act_event_up(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             // handle open session event depending on phase
-            InternalEvent::OpenSession(res) => {
-                let listen_host_used = matches!(&res, Err(HoprError::ListenHostAlreadyUsed));
-                match self.phase_up.clone() {
-                    PhaseUp::Ready => {
-                        if listen_host_used {
-                            tracing::warn!("Listen host already used - trying to close existing session");
-                            self.phase_up = PhaseUp::FixBridgeSession;
-                            self.backoff = BackoffState::Inactive;
-                            return Ok(());
-                        };
-                        self.phase_up = PhaseUp::WgRegistration(res?.clone());
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    PhaseUp::PreparePingSession(registration) => {
-                        if listen_host_used {
-                            tracing::warn!("Listen host already used - trying to close existing session");
-                            self.phase_up = PhaseUp::FixPingSession(registration.clone());
-                            self.backoff = BackoffState::Inactive;
-                            return Ok(());
-                        };
-                        let session = res?;
-                        self.phase_up = PhaseUp::PreparePingTunnel(session, registration);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    _ => Err(InternalError::UnexpectedPhase),
+            InternalEvent::OpenSession(res) => match self.phase_up.clone() {
+                PhaseUp::Ready => {
+                    self.phase_up = PhaseUp::WgRegistration(res?.clone());
+                    self.backoff = BackoffState::Inactive;
+                    Ok(())
                 }
-            }
+                PhaseUp::PreparePingSession(registration) => {
+                    let session = res?;
+                    self.phase_up = PhaseUp::PreparePingTunnel(session, registration);
+                    self.backoff = BackoffState::Inactive;
+                    Ok(())
+                }
+                _ => Err(InternalError::UnexpectedPhase),
+            },
 
             // handle wg open tunnel event depending on result and phase
             InternalEvent::WgOpenTunnel(res) => match (res, self.phase_up.clone()) {
@@ -438,16 +410,6 @@ impl Connection {
                 match self.phase_up.clone() {
                     PhaseUp::CloseBridgeSession(_session, registration) => {
                         self.phase_up = PhaseUp::PreparePingSession(registration);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    PhaseUp::FixPingSessionClosing(_session, registration) => {
-                        self.phase_up = PhaseUp::PreparePingSession(registration);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    PhaseUp::FixBridgeSessionClosing(_session) => {
-                        self.phase_up = PhaseUp::Ready;
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
@@ -495,38 +457,6 @@ impl Connection {
                 _ => Err(InternalError::UnexpectedPhase),
             },
 
-            // handle list session event depending on phase
-            InternalEvent::ListSessions(res) => {
-                let sessions = res?;
-                let open_session = sessions.first(); // TODO: find the session that conflicts
-                match (open_session, self.phase_up.clone()) {
-                    (Some(session), PhaseUp::FixBridgeSession) => {
-                        tracing::info!(%session, "Found conflicting session - closing");
-                        self.phase_up = PhaseUp::FixBridgeSessionClosing(session.clone());
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    (Some(session), PhaseUp::FixPingSession(reg)) => {
-                        tracing::info!(%session, "Found conflicting session - closing");
-                        self.phase_up = PhaseUp::FixPingSessionClosing(session.clone(), reg);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    (None, PhaseUp::FixBridgeSession) => {
-                        tracing::info!("No conflicting session found - proceed as normal");
-                        self.phase_up = PhaseUp::Ready;
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    (None, PhaseUp::FixPingSession(reg)) => {
-                        tracing::info!("No conflicting session found - proceed as normal");
-                        self.phase_up = PhaseUp::PreparePingSession(reg);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    _ => Err(InternalError::UnexpectedPhase),
-                }
-            }
             InternalEvent::UpdateSession(res) => {
                 res?;
                 match self.phase_up.clone() {
@@ -547,14 +477,7 @@ impl Connection {
     fn act_event_down(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::OpenSession(res) => {
-                let listen_host_used = matches!(&res, Err(HoprError::ListenHostAlreadyUsed));
                 if let PhaseDown::PrepareBridgeSession(registration) = self.phase_down.clone() {
-                    if listen_host_used {
-                        tracing::warn!("Listen host already used - trying to close existing session");
-                        self.phase_down = PhaseDown::FixBridgeSession(registration);
-                        self.backoff = BackoffState::Inactive;
-                        return Ok(());
-                    };
                     self.phase_down = PhaseDown::WgUnregistration(res?, registration);
                     self.backoff = BackoffState::Inactive;
                     Ok(())
@@ -578,11 +501,6 @@ impl Connection {
                         self.backoff = BackoffState::Inactive;
                         Ok(())
                     }
-                    PhaseDown::FixBridgeSessionClosing(_session, registration) => {
-                        self.phase_down = PhaseDown::PrepareBridgeSession(registration);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
                     _ => Err(InternalError::UnexpectedPhase),
                 }
             }
@@ -598,24 +516,6 @@ impl Connection {
                     Ok(())
                 } else {
                     Err(InternalError::UnexpectedPhase)
-                }
-            }
-            InternalEvent::ListSessions(_res) => {
-                let open_session: Option<Session> = None;
-                match (open_session, self.phase_down.clone()) {
-                    (Some(session), PhaseDown::FixBridgeSession(reg)) => {
-                        tracing::info!(%session, "Found conflicting session - closing");
-                        self.phase_down = PhaseDown::FixBridgeSessionClosing(session.clone(), reg);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    (None, PhaseDown::FixBridgeSession(reg)) => {
-                        tracing::info!("No conflicting session found - proceed as normal");
-                        self.phase_down = PhaseDown::PrepareBridgeSession(reg);
-                        self.backoff = BackoffState::Inactive;
-                        Ok(())
-                    }
-                    _ => Err(InternalError::UnexpectedPhase),
                 }
             }
             InternalEvent::Ping(_)
@@ -683,19 +583,6 @@ impl Connection {
                     _ = s.send(InternalEvent::Ping(res));
                 }
             }
-        });
-        r
-    }
-
-    fn list_sessions(&mut self, protocol: &Protocol) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::ListSession::new(&self.edgli, &protocol.into());
-        let (s, r) = crossbeam_channel::bounded(1);
-        if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(ExponentialBackoff::default());
-        }
-        thread::spawn(move || {
-            let res = Session::list(&params);
-            _ = s.send(InternalEvent::ListSessions(res));
         });
         r
     }
@@ -830,17 +717,11 @@ impl Display for PhaseUp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PhaseUp::Ready => write!(f, "Ready"),
-            PhaseUp::FixBridgeSession => write!(f, "FixBridgeSession"),
-            PhaseUp::FixBridgeSessionClosing(session) => write!(f, "FixBridgeSessionClosing({session})"),
             PhaseUp::WgRegistration(session) => write!(f, "WgRegistration({session})"),
             PhaseUp::CloseBridgeSession(session, registration) => {
                 write!(f, "CloseBridgeSession({session}, {registration})")
             }
             PhaseUp::PreparePingSession(registration) => write!(f, "PreparePingSession({registration})"),
-            PhaseUp::FixPingSession(registration) => write!(f, "FixPingSession({registration})"),
-            PhaseUp::FixPingSessionClosing(session, registration) => {
-                write!(f, "FixPingSessionClosing({session}, {registration})")
-            }
             PhaseUp::PreparePingTunnel(session, registration) => {
                 write!(f, "PreparePingTunnel({session}, {registration})")
             }
@@ -865,10 +746,6 @@ impl Display for PhaseDown {
         match self {
             PhaseDown::CloseTunnel(session, registration) => write!(f, "CloseTunnel({session}, {registration})"),
             PhaseDown::PrepareBridgeSession(registration) => write!(f, "PrepareBridgeSession({registration})"),
-            PhaseDown::FixBridgeSession(registration) => write!(f, "FixBridgeSession({registration})"),
-            PhaseDown::FixBridgeSessionClosing(session, registration) => {
-                write!(f, "FixBridgeSessionClosing({session}, {registration})")
-            }
             PhaseDown::WgUnregistration(session, registration) => {
                 write!(f, "WgUnregistration({session}, {registration})")
             }
@@ -882,13 +759,9 @@ impl From<PhaseUp> for PhaseDown {
     fn from(phase_up: PhaseUp) -> Self {
         match phase_up {
             PhaseUp::Ready => PhaseDown::Retired,
-            PhaseUp::FixBridgeSession => PhaseDown::Retired,
-            PhaseUp::FixBridgeSessionClosing(session) => PhaseDown::CloseBridgeSession(session),
             PhaseUp::WgRegistration(session) => PhaseDown::CloseBridgeSession(session),
             PhaseUp::CloseBridgeSession(session, registration) => PhaseDown::WgUnregistration(session, registration),
             PhaseUp::PreparePingSession(registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::FixPingSession(registration) => PhaseDown::PrepareBridgeSession(registration),
-            PhaseUp::FixPingSessionClosing(session, registration) => PhaseDown::CloseTunnel(session, registration),
             PhaseUp::PreparePingTunnel(session, registration) => PhaseDown::CloseTunnel(session, registration),
             PhaseUp::CheckPingTunnel(session, registration) => PhaseDown::CloseTunnel(session, registration),
             PhaseUp::UpgradeToMainTunnel(session, registration) => PhaseDown::CloseTunnel(session, registration),
@@ -906,7 +779,6 @@ impl Display for InternalEvent {
             InternalEvent::RegisterWg(res) => write!(f, "RegisterWg({res:?})"),
             InternalEvent::UnregisterWg(res) => write!(f, "UnregisterWg({res:?})"),
             InternalEvent::Ping(res) => write!(f, "Ping({res:?})"),
-            InternalEvent::ListSessions(res) => write!(f, "ListSessions({res:?})"),
             InternalEvent::WgOpenTunnel(res) => write!(f, "WgOpenTunnel({res:?})"),
             InternalEvent::UpdateSession(res) => write!(f, "UpdateSession({res:?})"),
         }

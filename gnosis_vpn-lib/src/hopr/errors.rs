@@ -10,9 +10,6 @@ pub enum HoprError {
     #[error("Session error: {0}")]
     Session(String),
 
-    #[error("Listen host already used")]
-    ListenHostAlreadyUsed,
-
     #[error("Session not found")]
     SessionNotFound,
 
