@@ -1,5 +1,3 @@
-use edgli::hopr_lib::config::HoprLibConfig;
-use edgli::hopr_lib::{HoprKeys, IdentityRetrievalModes};
 use thiserror::Error;
 
 use std::path::Path;
@@ -9,9 +7,9 @@ use std::thread;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::hopr::Hopr;
+use gnosis_vpn_lib::hopr::{Hopr, HoprError};
 use gnosis_vpn_lib::node::{self, Node};
-use gnosis_vpn_lib::{balance, info, log_output, wg_tooling};
+use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
 
@@ -42,14 +40,15 @@ pub struct Core {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("general error: {0}")]
-    General(String),
-
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
 
     #[error("WireGuard error: {0}")]
     WgTooling(#[from] wg_tooling::Error),
+    // #[error("HOPR error: {0}")]
+    // HoprGeneral(#[from] GeneralError),
+    #[error("HOPR error: {0}")]
+    Hopr(#[from] HoprError),
 }
 
 enum Cancel {
@@ -59,18 +58,14 @@ enum Cancel {
 
 impl Core {
     pub fn init(config_path: &Path, sender: crossbeam_channel::Sender<Event>) -> Result<Core, Error> {
-        let config = read_config(config_path)?;
+        let config = config::read(config_path)?;
+        // TODO tibor, please fix, I don't know how to work around this limitation of hoprkeys
+        let config2 = config::read(config_path)?;
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
 
-        let cfg = HoprLibConfig::default();
-        let retrieval_mode = IdentityRetrievalModes::FromFile {
-            password: "my pass from config",
-            id_path: "my path from config",
-        };
-        let keys = HoprKeys::try_from(retrieval_mode).map_err(|e| Error::General(e.to_string()))?;
-        let hopr = Hopr::new(cfg, keys).map_err(|e| Error::General(e.to_string()))?;
+        let hopr = Hopr::new(config.hopr.cfg.clone(), config2.hopr.keys)?;
         let edgli = Arc::new(hopr);
 
         let node = setup_node(edgli.clone(), sender.clone(), cancel_channel.1.clone());
@@ -117,9 +112,10 @@ impl Core {
 
     pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
         tracing::debug!(%cmd, "handling command");
+        let destinations = self.config.destinations.clone();
         match cmd {
             Command::Ping => Ok(Response::Pong),
-            Command::Connect(address) => match self.config.destinations().get(address) {
+            Command::Connect(address) => match destinations.get(address) {
                 Some(dest) => {
                     self.target_destination = Some(dest.clone());
                     self.act_on_target()?;
@@ -151,11 +147,11 @@ impl Core {
                     (None, None, _) => command::Status::disconnected(),
                 };
 
-                let destinations = self.config.destinations();
                 let funding_issues: Option<Vec<balance::FundingIssue>> = self.balance.as_ref().map(|b| b.into());
                 Ok(Response::status(command::StatusResponse::new(
                     status,
-                    destinations
+                    self.config
+                        .destinations
                         .values()
                         .map(|v| {
                             let dest = v.clone();
@@ -204,7 +200,7 @@ impl Core {
     }
 
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
-        let config = read_config(config_path)?;
+        let config = config::read(config_path)?;
         // handle existing connection
         if let Some(conn) = &mut self.connection {
             tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
@@ -212,7 +208,7 @@ impl Core {
         }
         // update target
         if let Some(dest) = self.target_destination.as_ref() {
-            if let Some(new_dest) = config.destinations().get(&dest.address) {
+            if let Some(new_dest) = config.destinations.get(&dest.address) {
                 tracing::debug!(current = %dest, new = %new_dest, "target destination updated");
                 self.target_destination = Some(new_dest.clone());
             } else {
@@ -256,8 +252,10 @@ impl Core {
 
     fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::unbounded();
-        let wg = wg_tooling::WireGuard::from_config(self.config.wireguard())?;
-        let mut conn = Connection::new(self.edgli.clone(), destination.clone(), wg, s, self.config.connection());
+        let config_wireguard = self.config.wireguard.clone();
+        let wg = wg_tooling::WireGuard::from_config(config_wireguard)?;
+        let config_connection = self.config.connection.clone();
+        let mut conn = Connection::new(self.edgli.clone(), destination.clone(), wg, s, config_connection);
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
@@ -346,36 +344,13 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to node");
         });
-        // TODO: integrate properly with edgli
-        unimplemented!();
-        // let hopr_cfg = gnosis_vpn_lib::prelude::HoprLibConfig::default();
-
-        // let node = setup_node(
-        //     std::sync::Arc::new(
-        //         gnosis_vpn_lib::prelude::Hopr::new(hopr_cfg, &hopr_keys.packet_key, &hopr_keys.chain_key)
-        //             .map_err(|e| Error::General(e.to_string()))?,
-        //     ),
-        //     self.sender.clone(),
-        //     self.cancel_channel.1.clone(),
-        // );
-        // node.run();
-        // self.node = node;
-        // Ok(())
+        let node = setup_node(self.edgli.clone(), self.sender.clone(), self.cancel_channel.1.clone());
+        node.run();
+        self.node = node;
+        Ok(())
     }
 }
 
-fn read_config(config_path: &Path) -> Result<Config, Error> {
-    let config = config::read(config_path)?;
-
-    // print destinations warning
-    if config.destinations().is_empty() {
-        log_output::print_no_destinations();
-    }
-
-    Ok(config)
-}
-
-// TODO: insert the node here
 fn setup_node(
     edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,

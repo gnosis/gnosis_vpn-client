@@ -117,6 +117,8 @@ pub struct Connection {
 
     // reuse http client
     client: blocking::Client,
+    // hopr client
+    edgli: Arc<Hopr>,
 
     // dynamic runtime data
     phase_up: PhaseUp,
@@ -124,7 +126,6 @@ pub struct Connection {
     backoff: BackoffState,
 
     // static input data
-    edgli: Arc<Hopr>,
     destination: Destination,
     wg: wg_tooling::WireGuard,
     sender: crossbeam_channel::Sender<Event>,
@@ -635,7 +636,11 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let ri = gvpn_client::Input::new(&self.wg.key_pair.public_key, session);
+        let ri = gvpn_client::Input::new(
+            self.wg.key_pair.public_key.clone(),
+            session.clone(),
+            self.options.http_timeout,
+        );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
@@ -706,7 +711,11 @@ impl Connection {
     }
 
     fn unregister_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = gvpn_client::Input::new(&self.wg.key_pair.public_key, session);
+        let params = gvpn_client::Input::new(
+            self.wg.key_pair.public_key.clone(),
+            session.clone(),
+            self.options.http_timeout,
+        );
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {

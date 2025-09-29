@@ -175,8 +175,8 @@ impl Node {
         let edgli = self.edgli.clone();
         thread::spawn(move || {
             // let res = Info::load_from(&edgli);
-            // _ = s.send(InternalEvent::Info(res));
-            todo!("implement using edgli")
+            //_ = s.send(InternalEvent::Info(res));
+            unimplemented!("TODO add API call")
         });
         r
     }
@@ -190,7 +190,7 @@ impl Node {
         thread::spawn(move || {
             // let res = Balance::load_from(&edgli).await;
             // _ = s.send(InternalEvent::Balance(res));
-            todo!("implement using edgli")
+            unimplemented!("TODO add API call")
         });
         r
     }

@@ -3,14 +3,12 @@ use std::cmp;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 use std::sync::Arc;
-use thiserror::Error;
 
 use edgli::hopr_lib::{
     IpProtocol, RoutingOptions, SessionCapabilities as Capabilities, SessionTarget as Target, SurbBalancerConfig,
 };
 
 use crate::hopr::{Hopr, HoprError};
-use crate::remote_data;
 use edgli::hopr_lib::Address;
 
 pub use protocol::Protocol;
@@ -50,7 +48,6 @@ pub struct OpenSession {
     capabilities: Capabilities,
     path: RoutingOptions,
     target: Target,
-    protocol: Protocol,
     // https://docs.rs/bytesize/2.0.1/bytesize/ string
     response_buffer: String,
     // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
@@ -74,24 +71,6 @@ pub struct UpdateSessionConfig {
     max_surb_upstream: String,
 }
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("RemoteData error: {0}")]
-    RemoteData(#[from] remote_data::Error),
-    #[error("Error making http request: {0:?}")]
-    Request(#[from] reqwest::Error),
-    #[error("Error parsing url: {0}")]
-    Url(#[from] url::ParseError),
-    #[error("Session listen host already used")]
-    ListenHostAlreadyUsed,
-    #[error("Session not found")]
-    SessionNotFound,
-    #[error("Session does not have any active clients")]
-    NoSessionId,
-    #[error("Session has more than one active client")]
-    AmbiguousSessionId,
-}
-
 impl OpenSession {
     pub fn bridge(
         edgli: Arc<Hopr>,
@@ -108,7 +87,6 @@ impl OpenSession {
             capabilities,
             path: path.clone(),
             target: target.clone(),
-            protocol: Protocol::Tcp,
             response_buffer: buffer_size,
             max_surb_upstream,
         }
@@ -129,7 +107,6 @@ impl OpenSession {
             capabilities,
             path: path.clone(),
             target: target.clone(),
-            protocol: Protocol::Udp,
             response_buffer: buffer_size,
             max_surb_upstream,
         }

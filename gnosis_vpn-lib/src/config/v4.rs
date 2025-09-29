@@ -1,19 +1,25 @@
+use edgli::hopr_lib::config::HoprLibConfig;
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
-use edgli::hopr_lib::exports::types::primitive::bounded::BoundedSize;
-use edgli::hopr_lib::{SessionCapabilities, SessionCapability, SessionTarget};
+use edgli::hopr_lib::{
+    Address, HoprKeys, IdentityRetrievalModes, SessionCapabilities, SessionCapability, SessionTarget,
+};
+use serde_json::json;
+
 use serde::{Deserialize, Deserializer, Serialize};
+use url::Url;
 
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::vec::Vec;
 
+use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
 use crate::wg_tooling::Config as WireGuardConfig;
-use edgli::hopr_lib::Address;
 
 const MAX_HOPS: u8 = 3;
 
@@ -23,6 +29,15 @@ pub struct Config {
     pub(super) destinations: Option<HashMap<Address, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
+    pub(super) hopr: Option<Hopr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Hopr {
+    network: Option<String>,
+    rpc_provider: Option<Url>,
+    identity_pass: Option<String>,
+    identity_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -41,9 +56,6 @@ enum DestinationPath {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Connection {
-    listen_host: Option<String>,
-    #[serde(default, with = "humantime_serde::option")]
-    session_timeout: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
     http_timeout: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
@@ -59,7 +71,6 @@ pub(super) struct Connection {
 struct ConnectionProtocol {
     capabilities: Option<SessionCapabilities>,
     target: Option<SocketAddr>,
-    target_type: Option<SessionTarget>, // TODO: should be `plain` or `sealed`
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -109,18 +120,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "version" {
             continue;
         }
-        // hoprnode simple struct
-        if key == "hoprd_node" {
-            if let Some(hopr_node) = value.as_table() {
-                for (k, _v) in hopr_node.iter() {
-                    if k == "endpoint" || k == "api_token" || k == "internal_connection_port" {
-                        continue;
-                    }
-                    wrong_keys.push(format!("hoprd_node.{k}"));
-                }
-            }
-            continue;
-        }
         // wireguard nested struct
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
@@ -137,13 +136,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "connection" {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
-                    if k == "listen_host" {
-                        continue;
-                    }
                     if k == "http_timeout" {
-                        continue;
-                    }
-                    if k == "session_timeout" {
                         continue;
                     }
                     if k == "ping_retries_timeout" {
@@ -152,7 +145,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k, _v) in prot.iter() {
-                                if k == "capabilities" || k == "target" || k == "target_type" {
+                                if k == "capabilities" || k == "target" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.bridge.{k}"));
@@ -227,6 +220,19 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+        // hopr simple struct
+        if key == "hopr" {
+            if let Some(hopr) = value.as_table() {
+                for (k, _v) in hopr.iter() {
+                    if k == "rpc_provider" || k == "identity_pass" || k == "identity_file" {
+                        continue;
+                    }
+                    wrong_keys.push(format!("hopr.{k}"));
+                }
+            }
+            continue;
+        }
+
         wrong_keys.push(key.clone());
     }
     wrong_keys
@@ -265,13 +271,11 @@ where
 
 impl Connection {
     pub fn default_bridge_capabilities() -> SessionCapabilities {
-        SessionCapabilities::new((SessionCapability::Segmentation | SessionCapability::RetransmissionAck).bits())
-            .expect("TODO: fix me - should work") // TODO: retransmission no_ack?
+        SessionCapability::Segmentation | SessionCapability::RetransmissionNack | SessionCapability::RetransmissionAck
     }
 
     pub fn default_wg_capabilities() -> SessionCapabilities {
-        SessionCapabilities::new((SessionCapability::Segmentation | SessionCapability::NoDelay).bits())
-            .expect("TODO: fix me - should work")
+        SessionCapability::Segmentation | SessionCapability::NoDelay
     }
 
     pub fn default_bridge_target() -> SessionTarget {
@@ -288,15 +292,7 @@ impl Connection {
         )))))
     }
 
-    pub fn default_listen_host() -> String {
-        ":1422".to_string()
-    }
-
     pub fn default_http_timeout() -> Duration {
-        Duration::from_secs(5)
-    }
-
-    pub fn default_session_timeout() -> Duration {
         Duration::from_secs(15)
     }
 
@@ -306,24 +302,6 @@ impl Connection {
 
     pub fn default_ping_interval() -> PingInterval {
         PingInterval { min: 5, max: 10 }
-    }
-}
-
-impl Default for options::Options {
-    fn default() -> Self {
-        let bridge_target = Connection::default_bridge_target();
-        let wg_target = Connection::default_wg_target();
-        let bridge_caps = Connection::default_bridge_capabilities();
-        let wg_caps = Connection::default_wg_capabilities();
-        options::Options::new(
-            options::SessionParameters::new(bridge_target, bridge_caps),
-            options::SessionParameters::new(wg_target, wg_caps),
-            Connection::default_ping_interval().min..Connection::default_ping_interval().max,
-            ping::PingOptions::default(),
-            options::BufferSizes::default(),
-            options::MaxSurbUpstream::default(),
-            Connection::default_ping_retry_timeout(),
-        )
     }
 }
 
@@ -349,82 +327,31 @@ impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
     }
 }
 
-impl Config {
-    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
-        let config_dests = self.destinations.clone().unwrap_or_default();
-        config_dests
-            .iter()
-            .map(|(k, v)| {
-                let path = match v.path.clone() {
-                    Some(DestinationPath::Intermediates(p)) => {
-                        RoutingOptions::IntermediatePath(p.try_into().expect("TODO: fix me"))
-                    }
-                    Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into().expect("TODO: fix me")),
-                    None => RoutingOptions::Hops(BoundedSize::try_from(1).expect("TODO: fix me")),
-                };
-
-                let meta = v.meta.clone().unwrap_or_default();
-
-                let dest = ConnDestination::new(*k, path, meta);
-                (*k, dest)
-            })
-            .collect()
-    }
-
-    pub fn connection(&self) -> options::Options {
-        let connection = self.connection.as_ref();
-        // TODO make customizable
-        /*
-        let bridge_caps =
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.capabilities.clone())
-            .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
-
-            .unwrap_or(Connection::default_bridge_capabilities());
-        let bridge_target_socket =
-            connection
+impl From<Option<Connection>> for options::Options {
+    fn from(conn: Option<Connection>) -> Self {
+        let connection = conn.as_ref();
+        let bridge_target = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.target)
+            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
             .unwrap_or(Connection::default_bridge_target());
-        let bridge_target_type = connection
+        let bridge_caps = connection
             .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target_type.clone())
-            .unwrap_or_default();
-        let bridge_target = match bridge_target_type {
-            SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
-            SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
-        };
+            .and_then(|b| b.capabilities.clone())
+            .unwrap_or(Connection::default_bridge_capabilities());
         let params_bridge = options::SessionParameters::new(bridge_target, bridge_caps);
-        */
-        let params_bridge = options::SessionParameters::new(
-            Connection::default_bridge_target(),
-            Connection::default_bridge_capabilities(),
-        );
 
-        // TODO make customizable
-        /*
+        let wg_target = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_wg_target());
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
-            .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
             .unwrap_or(Connection::default_wg_capabilities());
-        let wg_target_socket = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .unwrap_or(Connection::default_wg_target());
-        let wg_target_type = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target_type.clone())
-            .unwrap_or_default();
-        let wg_target = match wg_target_type {
-            SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
-            SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
-        };
         let params_wg = options::SessionParameters::new(wg_target, wg_caps);
-            */
 
-        let params_wg =
-            options::SessionParameters::new(Connection::default_wg_target(), Connection::default_wg_capabilities());
         let interval = connection
             .and_then(|c| c.ping.as_ref())
             .and_then(|p| p.interval.clone())
@@ -453,6 +380,9 @@ impl Config {
         let ping_retries_timeout = connection
             .and_then(|c| c.ping_retries_timeout)
             .unwrap_or(Connection::default_ping_retry_timeout());
+        let http_timeout = connection
+            .and_then(|c| c.http_timeout)
+            .unwrap_or(Connection::default_http_timeout());
 
         options::Options::new(
             params_bridge,
@@ -462,15 +392,90 @@ impl Config {
             buffer_sizes,
             max_surb_upstream,
             ping_retries_timeout,
+            http_timeout,
         )
     }
+}
 
-    pub fn wireguard(&self) -> WireGuardConfig {
-        let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
-        let allowed_ips = self.wireguard.as_ref().and_then(|wg| wg.allowed_ips.clone());
-        let force_private_key = self.wireguard.as_ref().and_then(|wg| wg.force_private_key.clone());
+impl From<Option<WireGuard>> for WireGuardConfig {
+    fn from(value: Option<WireGuard>) -> Self {
+        let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
+        let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
+        let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         WireGuardConfig::new(listen_port, allowed_ips, force_private_key)
     }
+}
+
+impl TryFrom<Config> for config::Config {
+    type Error = config::Error;
+
+    fn try_from(value: Config) -> Result<Self, Self::Error> {
+        let connection = value.connection.into();
+        let destinations = convert_destinations(value.destinations)?;
+        let hopr = convert_hopr(value.hopr)?;
+        let wireguard = value.wireguard.into();
+        Ok(config::Config {
+            connection,
+            destinations,
+            hopr,
+            wireguard,
+        })
+    }
+}
+
+pub fn convert_destinations(
+    value: Option<HashMap<Address, Destination>>,
+) -> Result<HashMap<Address, ConnDestination>, config::Error> {
+    let config_dests = value.ok_or(config::Error::NoDestinations)?;
+    if config_dests.is_empty() {
+        return Err(config::Error::NoDestinations);
+    }
+
+    let mut result = HashMap::new();
+    for (address, dest) in config_dests.iter() {
+        let path = match dest.path.clone() {
+            Some(DestinationPath::Intermediates(p)) => RoutingOptions::IntermediatePath(p.try_into()?),
+            Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into()?),
+            None => RoutingOptions::Hops(1.try_into()?),
+        };
+
+        let meta = dest.meta.clone().unwrap_or_default();
+
+        let dest = ConnDestination::new(*address, path, meta);
+        result.insert(*address, dest);
+    }
+    Ok(result)
+}
+
+pub fn convert_hopr(hopr: Option<Hopr>) -> Result<config::Hopr, config::Error> {
+    let mut json_chain = serde_json::Map::new();
+    if let Some(network) = hopr.as_ref().and_then(|h| h.network.clone()) {
+        json_chain.insert("network".to_string(), json!(network));
+    }
+    if let Some(rpc) = hopr.as_ref().and_then(|h| h.rpc_provider.clone()) {
+        json_chain.insert("provider".to_string(), json!(rpc));
+    }
+    let mut json_cfg = serde_json::Map::new();
+    json_cfg.insert("chain".to_string(), json!(json_chain));
+    let cfg: HoprLibConfig = serde_json::from_value(json!(json_cfg))?;
+
+    let (id_pass, id_file) = match hopr
+        .as_ref()
+        .map(|h| (h.identity_pass.as_ref(), h.identity_file.as_ref()))
+    {
+        Some((Some(p), Some(f))) => (p, f),
+        Some((Some(_), None)) => return Err(config::Error::NoIdentityFile),
+        _ => return Err(config::Error::NoIdentityPass),
+    };
+
+    let id_path_owned = id_file.to_string_lossy().into_owned();
+    let retrieval_mode = IdentityRetrievalModes::FromFile {
+        password: id_pass.as_str(),
+        id_path: id_path_owned.as_str(),
+    };
+    let keys = HoprKeys::try_from(retrieval_mode)?;
+
+    Ok(config::Hopr { cfg, keys })
 }
 
 #[cfg(test)]
@@ -506,11 +511,11 @@ address = "10.128.0.1"
     #[test]
     fn test_full_config() {
         let config = r#####"
-version = 3
-[hoprd_node]
-endpoint = "http://127.0.0.1:3001"
-api_token = "1234567890"
-internal_connection_port = 1422
+version = 4
+[hopr]
+rpc_provider = "https://gnosis-rpc.publicnode.com"
+identity_file = "./identity.id"
+identity_pass = "testpass"
 
 [destinations]
 
@@ -527,9 +532,7 @@ meta = { location = "Spain" }
 path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
-listen_host = "0.0.0.0:1422"
-http_timeout = "5s"
-session_timeout = "15s"
+http_timeout = "15s"
 ping_retries_timeout = "20s"
 
 [connection.bridge]

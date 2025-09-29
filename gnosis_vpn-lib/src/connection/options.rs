@@ -5,7 +5,7 @@ use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
 
 use crate::ping;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     pub(super) bridge: SessionParameters,
     pub(super) wg: SessionParameters,
@@ -14,22 +14,23 @@ pub struct Options {
     pub(super) buffer_sizes: BufferSizes,
     pub(super) max_surb_upstream: MaxSurbUpstream,
     pub(super) ping_retries_timeout: Duration,
+    pub(super) http_timeout: Duration,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SessionParameters {
     pub(super) target: SessionTarget,
     pub(super) capabilities: SessionCapabilities,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BufferSizes {
     pub bridge: String,
     pub ping: String,
     pub main: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MaxSurbUpstream {
     pub bridge: String,
     pub ping: String,
@@ -63,6 +64,7 @@ impl Options {
         buffer_sizes: BufferSizes,
         max_surb_upstream: MaxSurbUpstream,
         ping_retries_timeout: Duration,
+        http_timeout: Duration,
     ) -> Self {
         Self {
             bridge,
@@ -72,6 +74,7 @@ impl Options {
             buffer_sizes,
             max_surb_upstream,
             ping_retries_timeout,
+            http_timeout,
         }
     }
 }

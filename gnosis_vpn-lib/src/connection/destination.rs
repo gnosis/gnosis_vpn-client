@@ -5,7 +5,7 @@ use edgli::hopr_lib::{Address, RoutingOptions};
 
 use crate::log_output;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,

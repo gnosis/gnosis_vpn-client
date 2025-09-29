@@ -93,16 +93,6 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
     );
 }
 
-pub fn print_no_destinations() {
-    tracing::error!(
-        r#"
-
->>!!>> No destinations found in configuration file.
->>!!>> Please rerun installer from https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/heads/main/install.sh.
-"#
-    );
-}
-
 pub fn print_session_path_instructions() {
     tracing::error!(
         r#"

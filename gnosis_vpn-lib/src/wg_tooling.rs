@@ -51,7 +51,7 @@ pub struct KeyPair {
     pub public_key: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,

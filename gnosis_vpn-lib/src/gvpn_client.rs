@@ -1,10 +1,12 @@
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::fmt::{self, Display};
-use std::net::Ipv4Addr;
 use thiserror::Error;
 use url::Url;
+
+use std::fmt::{self, Display};
+use std::net::Ipv4Addr;
+use std::time::Duration;
 
 use crate::remote_data;
 use crate::session::Session;
@@ -20,6 +22,7 @@ pub struct Registration {
 pub struct Input {
     public_key: String,
     session: Session,
+    timeout: Duration,
 }
 
 #[derive(Error, Debug)]
@@ -39,10 +42,11 @@ pub enum Error {
 }
 
 impl Input {
-    pub fn new(public_key: &str, session: &Session) -> Self {
+    pub fn new(public_key: String, session: Session, timeout: Duration) -> Self {
         Input {
-            public_key: public_key.to_string(),
-            session: session.clone(),
+            public_key,
+            session,
+            timeout,
         }
     }
 }
@@ -68,7 +72,7 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
     let resp = client
         .post(url)
         .json(&json)
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(input.timeout)
         .headers(headers)
         .send()
         // connection error checks happen before response
@@ -90,7 +94,7 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
     client
         .post(url)
         .json(&json)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(input.timeout)
         .headers(headers)
         .send()
         // connection error checks happen before response

@@ -1,7 +1,8 @@
-use std::fmt::{self, Display};
-
 use edgli::hopr_lib::Address;
 use serde::{Deserialize, Serialize};
+
+use std::fmt::{self, Display};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
@@ -21,7 +22,7 @@ impl Display for Info {
 }
 
 impl Info {
-    pub fn load_from(node: &edgli::hopr_lib::Hopr) -> Result<Self, edgli::hopr_lib::errors::HoprLibError> {
+    pub fn load_from(node: &Arc<edgli::hopr_lib::Hopr>) -> Result<Self, edgli::hopr_lib::errors::HoprLibError> {
         Ok(Self {
             node_address: node.me_onchain(),
             safe_address: node.get_safe_config().safe_address,
