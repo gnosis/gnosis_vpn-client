@@ -35,10 +35,11 @@ pub(super) struct Destination {
     path: Option<DestinationPath>,
 }
 
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 enum DestinationPath {
     #[serde(alias = "intermediates")]
-    Intermediates(Vec<Address>),
+    Intermediates(#[serde_as(as = "Vec<DisplayFromStr>")] Vec<Address>),
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
 }
@@ -57,8 +58,22 @@ pub(super) struct Connection {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) enum Capability {
+    #[serde(alias = "segmentation")]
+    Segmentation,
+    #[serde(alias = "retransmission")]
+    Retransmission,
+    #[serde(alias = "retransmission_ack_only")]
+    RetransmissionAckOnly,
+    #[serde(alias = "no_delay")]
+    NoDelay,
+    #[serde(alias = "no_rate_control")]
+    NoRateControl,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ConnectionProtocol {
-    capabilities: Option<SessionCapabilities>,
+    capabilities: Option<Vec<Capability>>,
     target: Option<SocketAddr>,
 }
 
@@ -87,11 +102,13 @@ struct BufferOptions {
     main: Option<ByteSize>,
 }
 
-#[serde_with::serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct MaxSurbUpstreamOptions {
+    #[serde(with = "human_bandwidth::serde")]
     bridge: Option<Bandwidth>,
+    #[serde(with = "human_bandwidth::serde")]
     ping: Option<Bandwidth>,
+    #[serde(with = "human_bandwidth::serde")]
     main: Option<Bandwidth>,
 }
 
@@ -246,13 +263,32 @@ where
     }
 }
 
+fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
+    let mut flags = SessionCapabilities::empty();
+    for cap in caps {
+        let cap = match cap {
+            Capability::Segmentation => SessionCapability::Segmentation,
+            Capability::Retransmission => SessionCapability::RetransmissionNack,
+            Capability::RetransmissionAckOnly => SessionCapability::RetransmissionAck,
+            Capability::NoDelay => SessionCapability::NoDelay,
+            Capability::NoRateControl => SessionCapability::NoRateControl,
+        };
+        flags |= cap;
+    }
+    flags
+}
+
 impl Connection {
-    pub fn default_bridge_capabilities() -> SessionCapabilities {
-        SessionCapability::Segmentation | SessionCapability::RetransmissionNack | SessionCapability::RetransmissionAck
+    pub fn default_bridge_capabilities() -> Vec<Capability> {
+        vec![
+            Capability::Segmentation,
+            Capability::Retransmission,
+            Capability::RetransmissionAckOnly,
+        ]
     }
 
-    pub fn default_wg_capabilities() -> SessionCapabilities {
-        SessionCapability::Segmentation | SessionCapability::NoDelay
+    pub fn default_wg_capabilities() -> Vec<Capability> {
+        vec![Capability::Segmentation, Capability::NoDelay]
     }
 
     pub fn default_bridge_target() -> SessionTarget {
@@ -316,7 +352,7 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
             .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, bridge_caps);
+        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
 
         let wg_target = connection
             .and_then(|c| c.wg.as_ref())
@@ -327,7 +363,7 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, wg_caps);
+        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
 
         let interval = connection
             .and_then(|c| c.ping.as_ref())
@@ -447,7 +483,7 @@ address = "10.128.0.1"
     }
 
     #[test]
-    fn test_parse_destination() {
+    fn config_parse_single_destination_should_succeed() -> anyhow::Result<()> {
         let config = r#####"
 version = 4
 
@@ -457,11 +493,13 @@ version = 4
 meta = { location = "Germany" }
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse single destination");
+
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]
-    fn test_full_config() {
+    fn full_config_should_be_parsable() -> anyhow::Result<()> {
         let config = r#####"
 version = 4
 
@@ -496,6 +534,7 @@ address = "10.128.0.1"
 timeout = "7s"
 ttl = 6
 seq_count = 1
+
 [connection.ping.interval]
 min = 5
 max = 10
@@ -516,6 +555,8 @@ allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse full config");
+        toml::from_str::<Config>(config)?;
+
+        Ok(())
     }
 }
