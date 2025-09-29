@@ -99,7 +99,7 @@ impl Hopr {
             .surb_management
             .map(|v| ByteSize::kib(v.target_surb_buffer_size * SESSION_MTU as u64));
 
-        let listener_id = ListenerId(protocol.clone().into(), bind_host);
+        let listener_id = ListenerId(protocol, bind_host);
 
         let hopr = self.hopr.clone();
         let open_listeners = self.open_listeners.clone();
@@ -144,7 +144,7 @@ impl Hopr {
                 protocol,
                 bound_host,
                 target: session_target_spec.to_string(),
-                destination: destination,
+                destination,
                 forward_path: cfg.forward_path_options,
                 return_path: cfg.return_path_options,
                 hopr_mtu: SESSION_MTU,
@@ -153,7 +153,7 @@ impl Hopr {
                 max_client_sessions: max_clients,
                 max_surb_upstream,
                 response_buffer,
-                session_pool: session_pool,
+                session_pool,
             })
         })
     }
@@ -198,13 +198,13 @@ impl Hopr {
                 .read_arc()
                 .await
                 .iter()
-                .filter(|(id, _)| id.0 == protocol.into())
+                .filter(|(id, _)| id.0 == protocol)
                 .map(|(id, entry)| SessionClientMetadata {
                     protocol,
                     bound_host: id.1,
                     target: entry.target.to_string(),
-                    forward_path: entry.forward_path.clone().into(),
-                    return_path: entry.return_path.clone().into(),
+                    forward_path: entry.forward_path.clone(),
+                    return_path: entry.return_path.clone(),
                     destination: entry.destination,
                     hopr_mtu: SESSION_MTU,
                     surb_len: SURB_SIZE,

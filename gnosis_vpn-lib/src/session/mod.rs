@@ -101,7 +101,7 @@ impl From<&OpenSession> for edgli::hopr_lib::SessionClientConfig {
             capabilities: open.capabilities,
             forward_path_options: open.path.clone(),
             return_path_options: open.path.clone(),
-            surb_management: Some(open.balancer_cfg.clone()),
+            surb_management: Some(open.balancer_cfg),
             ..Default::default()
         }
     }

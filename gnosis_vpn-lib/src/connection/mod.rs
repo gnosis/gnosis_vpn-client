@@ -498,7 +498,7 @@ impl Connection {
             // handle list session event depending on phase
             InternalEvent::ListSessions(res) => {
                 let sessions = res?;
-                let open_session = sessions.get(0); // TODO: find the session that conflicts
+                let open_session = sessions.first(); // TODO: find the session that conflicts
                 match (open_session, self.phase_up.clone()) {
                     (Some(session), PhaseUp::FixBridgeSession) => {
                         tracing::info!(%session, "Found conflicting session - closing");
