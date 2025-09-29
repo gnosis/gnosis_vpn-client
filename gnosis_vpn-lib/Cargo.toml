@@ -14,7 +14,6 @@ bytesize = { workspace = true, features = ["serde"] }
 crossbeam-channel.workspace = true
 directories.workspace = true
 edgli.workspace = true
-hex = "0.4.3"
 human-bandwidth = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 humantime-serde.workspace = true

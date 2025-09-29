@@ -4002,20 +4002,14 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "ctrlc",
- "edgli",
  "exitcode",
  "gnosis_vpn-lib",
- "humantime",
  "notify",
- "reqwest",
- "serde",
  "serde_json",
  "thiserror 2.0.17",
  "tikv-jemallocator",
- "toml",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]
@@ -4027,9 +4021,6 @@ dependencies = [
  "gnosis_vpn-lib",
  "serde_json",
  "tikv-jemallocator",
- "tracing",
- "tracing-subscriber",
- "url",
 ]
 
 [[package]]
@@ -4043,7 +4034,6 @@ dependencies = [
  "crossbeam-channel",
  "directories",
  "edgli",
- "hex",
  "human-bandwidth",
  "humantime",
  "humantime-serde",
