@@ -45,30 +45,6 @@ impl Display for Balances {
     }
 }
 
-impl Balances {
-    pub async fn load_from(node: &edgli::hopr_lib::Hopr) -> Result<Self, edgli::hopr_lib::errors::HoprLibError> {
-        Ok(Balances {
-            node_xdai: node.get_balance().await?,
-            safe_wxhopr: node.get_safe_balance().await?,
-            channels_out_wxhopr: node
-                .channels_from(&node.me_onchain())
-                .await?
-                .into_iter()
-                .filter_map(|ch| {
-                    if matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
-                        || matches!(ch.status, edgli::hopr_lib::ChannelStatus::PendingToClose(_))
-                    {
-                        Some(ch.balance)
-                    } else {
-                        None
-                    }
-                })
-                .reduce(|acc, x| acc + x)
-                .unwrap_or(edgli::hopr_lib::Balance::<WxHOPR>::zero()),
-        })
-    }
-}
-
 impl From<&Balances> for Vec<FundingIssue> {
     fn from(balance: &Balances) -> Self {
         let mut issues = Vec::new();

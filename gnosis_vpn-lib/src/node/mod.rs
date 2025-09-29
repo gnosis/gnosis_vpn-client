@@ -1,5 +1,4 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
-use edgli::hopr_lib::errors::HoprLibError;
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -8,7 +7,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use crate::balance::Balances;
-use crate::hopr::Hopr;
+use crate::hopr::{Hopr, HoprError};
 use crate::info::Info;
 use crate::log_output;
 
@@ -29,8 +28,8 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    Info(Result<Info, HoprLibError>),
-    Balance(Result<Balances, HoprLibError>),
+    Info(Info),
+    Balance(Result<Balances, HoprError>),
     Tick,
 }
 
@@ -46,7 +45,7 @@ enum InternalError {
     #[error("Channel send error: {0}")]
     Send(#[from] crossbeam_channel::SendError<Event>),
     #[error("hopr-lib error: {0}")]
-    Hopr(#[from] HoprLibError),
+    Hopr(#[from] HoprError),
 }
 
 #[derive(Clone)]
@@ -149,7 +148,7 @@ impl Node {
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::Info(res) => {
-                self.sender.send(Event::Info(res?))?;
+                self.sender.send(Event::Info(res))?;
                 self.phase = Phase::Balance;
                 self.backoff = BackoffState::Inactive;
                 Ok(())
@@ -174,9 +173,8 @@ impl Node {
         }
         let edgli = self.edgli.clone();
         thread::spawn(move || {
-            // let res = Info::load_from(&edgli);
-            //_ = s.send(InternalEvent::Info(res));
-            unimplemented!("TODO add API call")
+            let res = edgli.info();
+            _ = s.send(InternalEvent::Info(res));
         });
         r
     }
@@ -188,9 +186,8 @@ impl Node {
         }
         let edgli = self.edgli.clone();
         thread::spawn(move || {
-            // let res = Balance::load_from(&edgli).await;
-            // _ = s.send(InternalEvent::Balance(res));
-            unimplemented!("TODO add API call")
+            let res = edgli.balances();
+            _ = s.send(InternalEvent::Balance(res));
         });
         r
     }

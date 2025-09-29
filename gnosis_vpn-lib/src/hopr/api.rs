@@ -13,7 +13,11 @@ use edgli::{
     run_hopr_edge_node,
 };
 
-use crate::hopr::{HoprError, types::SessionClientMetadata};
+use crate::{
+    balance::Balances,
+    hopr::{HoprError, types::SessionClientMetadata},
+    info::Info,
+};
 
 pub struct Hopr {
     hopr: Arc<edgli::hopr_lib::Hopr>,
@@ -227,6 +231,43 @@ impl Hopr {
                 .update_session_surb_balancer_config(&session_id, balancer_cfg)
                 .await
                 .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
+        })
+    }
+
+    pub fn as_hopr_ref(&self) -> &edgli::hopr_lib::Hopr {
+        self.hopr.as_ref()
+    }
+
+    pub fn info(&self) -> Info {
+        Info {
+            node_address: self.hopr.me_onchain(),
+            safe_address: self.hopr.get_safe_config().safe_address,
+            network: self.hopr.network(),
+        }
+    }
+
+    pub fn balances(&self) -> Result<Balances, HoprError> {
+        let node = self.hopr.clone();
+        self.rt.block_on(async move {
+            Ok(Balances {
+                node_xdai: node.get_balance().await?,
+                safe_wxhopr: node.get_safe_balance().await?,
+                channels_out_wxhopr: node
+                    .channels_from(&node.me_onchain())
+                    .await?
+                    .into_iter()
+                    .filter_map(|ch| {
+                        if matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
+                            || matches!(ch.status, edgli::hopr_lib::ChannelStatus::PendingToClose(_))
+                        {
+                            Some(ch.balance)
+                        } else {
+                            None
+                        }
+                    })
+                    .reduce(|acc, x| acc + x)
+                    .unwrap_or(edgli::hopr_lib::Balance::<edgli::hopr_lib::WxHOPR>::zero()),
+            })
         })
     }
 }

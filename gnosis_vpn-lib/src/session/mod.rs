@@ -1,3 +1,4 @@
+use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::fmt::{self, Display};
@@ -31,15 +32,6 @@ pub struct Session {
     pub max_surb_upstream: String,
     pub response_buffer: String,
     pub session_pool: Option<u16>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Config {
-    // https://docs.rs/human-bandwidth/0.1.4/human_bandwidth/ string
-    pub max_surb_upstream: String,
-    // https://docs.rs/bytesize/2.0.1/bytesize/ string
-    pub response_buffer: String,
 }
 
 pub struct OpenSession {
@@ -225,24 +217,28 @@ impl Session {
         let response_buffer = bytesize::ByteSize::from_str(&config.response_buffer)
             .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
-        let balancer_cfg = if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
-            SurbBalancerConfig {
-                target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-                max_surbs_per_sec: human_bandwidth::parse_bandwidth(&config.max_surb_upstream)
-                    .ok()
-                    .map(|b| b.as_bps() as u64 / (8 * edgli::hopr_lib::SURB_SIZE) as u64)
-                    .unwrap_or_else(|| SurbBalancerConfig::default().max_surbs_per_sec as u64),
-                ..Default::default()
-            }
-        } else {
-            Default::default()
-        };
+        let balancer_cfg = to_surb_balancer_config(response_buffer, config.max_surb_upstream.as_ref());
 
         config.edgli.adjust_session(balancer_cfg, active_client)
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {
         sessions.iter().any(|entry| entry == self)
+    }
+}
+
+fn to_surb_balancer_config(response_buffer: ByteSize, max_surb_upstream: &str) -> SurbBalancerConfig {
+    if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+        SurbBalancerConfig {
+            target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+            max_surbs_per_sec: human_bandwidth::parse_bandwidth(&max_surb_upstream)
+                .ok()
+                .map(|b| b.as_bps() as u64 / (8 * edgli::hopr_lib::SURB_SIZE) as u64)
+                .unwrap_or_else(|| SurbBalancerConfig::default().max_surbs_per_sec as u64),
+            ..Default::default()
+        }
+    } else {
+        Default::default()
     }
 }
 
