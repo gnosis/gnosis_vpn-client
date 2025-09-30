@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -23,9 +24,10 @@ pub struct Core {
 
     // hopr edge node
     edgli: Arc<Hopr>,
-    // connection to exit
+
+    // connection to exit node
     connection: Option<connection::Connection>,
-    // connection to entry
+    // entry node
     node: Node,
     session_connected: bool,
     target_destination: Option<Destination>,
@@ -50,17 +52,19 @@ pub enum Error {
     HoprConfig(#[from] HoprConfig::Error),
     #[error("Hopr identity error: {0}")]
     HoprIdentity(#[from] HoprIdentity::Error),
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
+}
+
+pub struct HoprParams {
+    pub config_path: PathBuf,
+    pub identity_file: Option<PathBuf>,
+    pub identity_pass: Option<String>,
 }
 
 enum Cancel {
     Node,
     Connection,
-}
-
-pub struct HoprParams {
-    pub config_path: PathBuf,
-    pub identity_file: PathBuf,
-    pub identity_pass: String,
 }
 
 impl Core {
@@ -73,16 +77,13 @@ impl Core {
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-        let cfg = HoprConfig::from_path(&hopr_params.config_path)?;
-        let keys = HoprIdentity::from_path(&hopr_params.identity_file, hopr_params.identity_pass)?;
-
-        let hopr = Hopr::new(cfg, keys)?;
+        let hopr = init_hopr(&hopr_params)?;
         let edgli = Arc::new(hopr);
-
         let node = setup_node(edgli.clone(), sender.clone(), cancel_channel.1.clone());
 
         Ok(Core {
             config,
+            edgli,
             sender,
             shutdown_sender: None,
             connection: None,
@@ -92,7 +93,6 @@ impl Core {
             balance: None,
             info: None,
             cancel_channel,
-            edgli,
         })
     }
 
@@ -402,4 +402,42 @@ fn setup_node(
         }
     });
     node
+}
+
+fn init_hopr(hopr_params: &HoprParams) -> Result<Hopr, Error> {
+    let identity_file = match &hopr_params.identity_file {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let path = HoprIdentity::identity_file()?;
+            tracing::info!(?path, "No HOPR identity file path provided - using default");
+            path
+        }
+    };
+    let identity_pass = match &hopr_params.identity_pass {
+        Some(pass) => pass.to_string(),
+        None => {
+            let path = HoprIdentity::identity_pass()?;
+            match fs::read_to_string(&path) {
+                Ok(p) => {
+                    tracing::warn!(?path, "No HOPR identity pass provided - read from file instead");
+                    Ok(p)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::warn!(
+                        ?path,
+                        "No HOPR identity pass provided - generating new one and storing alongside identity file"
+                    );
+                    let pw = HoprIdentity::generate_pass();
+                    fs::write(&path, pw.as_bytes())?;
+                    Ok(pw)
+                }
+                Err(e) => Err(e),
+            }?
+        }
+    };
+
+    let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
+    let cfg = HoprConfig::from_path(&hopr_params.config_path)?;
+    let hopr = Hopr::new(cfg, keys)?;
+    Ok(hopr)
 }

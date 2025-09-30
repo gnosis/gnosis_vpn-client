@@ -35,15 +35,17 @@ pub struct Cli {
     #[arg(
         long,
         env = hopr::ID_FILE_ENV,
+        default_value = None,
     )]
-    pub hopr_identity_file: PathBuf,
+    pub hopr_identity_file: Option<PathBuf>,
 
     /// Hopr edge client identity pass
     #[arg(
         long,
         env = hopr::ID_PASS_ENV,
+        default_value = None,
     )]
-    pub hopr_identity_pass: String,
+    pub hopr_identity_pass: Option<String>,
 
     /// Specify hopr edge client db path
     #[arg(

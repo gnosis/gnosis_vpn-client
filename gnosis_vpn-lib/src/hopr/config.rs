@@ -1,4 +1,5 @@
 use edgli::hopr_lib::config::HoprLibConfig;
+use serde_yaml;
 use thiserror::Error;
 
 use std::fs;
@@ -11,7 +12,7 @@ pub enum Error {
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("Deserialization error: {0}")]
-    TomlDeserialization(#[from] toml::de::Error),
+    YamlDeserialization(#[from] serde_yaml::Error),
 }
 
 pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
@@ -23,5 +24,5 @@ pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
         }
     })?;
 
-    toml::from_str::<HoprLibConfig>(&content).map_err(Error::TomlDeserialization)
+    serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
