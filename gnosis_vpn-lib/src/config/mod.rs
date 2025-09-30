@@ -35,8 +35,6 @@ pub enum Error {
     VersionMismatch(u8),
     #[error("No destinations")]
     NoDestinations,
-    #[error("Config version no longer supported")]
-    UnsupportedConfigVersion,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
 }
@@ -57,8 +55,6 @@ pub fn read(path: &Path) -> Result<Config, Error> {
         .ok_or(Error::VersionNotFound)?;
 
     match version {
-        1 => Err(Error::UnsupportedConfigVersion),
-        2 => Err(Error::UnsupportedConfigVersion),
         3 => {
             let res = toml::from_str::<v3::Config>(&content)?;
             let wrong_keys = v3::wrong_keys(&table);
