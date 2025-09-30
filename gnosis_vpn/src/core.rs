@@ -1,3 +1,4 @@
+use edgli::EdgliProcesses;
 use thiserror::Error;
 
 use std::fs;
@@ -31,6 +32,8 @@ pub struct Core {
     node: Node,
     session_connected: bool,
     target_destination: Option<Destination>,
+
+    hopr_params: HoprParams,
 
     // internal cancellation sender
     cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
@@ -77,13 +80,19 @@ impl Core {
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-        let hopr = init_hopr(&hopr_params)?;
-        let edgli = Arc::new(hopr);
-        let node = setup_node(edgli.clone(), sender.clone(), cancel_channel.1.clone());
+
+        let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
+        let hopr = Arc::new(init_hopr(&hopr_params, hopr_startup_notifier_tx)?);
+
+        let node = setup_node(
+            hopr.clone(),
+            sender.clone(),
+            cancel_channel.1.clone(),
+            hopr_startup_notifier_rx,
+        );
 
         Ok(Core {
             config,
-            edgli,
             sender,
             shutdown_sender: None,
             connection: None,
@@ -93,6 +102,8 @@ impl Core {
             balance: None,
             info: None,
             cancel_channel,
+            hopr_params,
+            edgli: hopr,
         })
     }
 
@@ -355,7 +366,20 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to node");
         });
-        let node = setup_node(self.edgli.clone(), self.sender.clone(), self.cancel_channel.1.clone());
+
+        // WARNING: the HOPR node must be fully restarted here to ensure a clean state
+
+        let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
+
+        let hopr = Arc::new(init_hopr(&self.hopr_params, hopr_startup_notifier_tx)?);
+
+        let node = setup_node(
+            hopr.clone(),
+            self.sender.clone(),
+            self.cancel_channel.1.clone(),
+            hopr_startup_notifier_rx,
+        );
+
         node.run();
         self.node = node;
         Ok(())
@@ -366,16 +390,28 @@ fn setup_node(
     edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    hopr_startup_notifier: crossbeam_channel::Receiver<
+        std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
+    >,
 ) -> Node {
     let (s, r) = crossbeam_channel::unbounded();
     let node = Node::new(edgli, s);
     thread::spawn(move || {
+        let mut hopr_processes = Vec::new();
+
         loop {
             crossbeam_channel::select! {
                 recv(cancel_receiver) -> msg => {
                     match msg {
                         Ok(Cancel::Node) => {
                             tracing::info!("shutting down node event handler");
+                            for process in &mut hopr_processes {
+                                tracing::info!("shutting down HOPR process: {process}");
+                                match process {
+                                    EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
+                                    EdgliProcesses::Hopr(handle) => handle.abort(),
+                                }
+                            }
                             break;
                         }
                         Ok(Cancel::Connection) => {
@@ -397,6 +433,20 @@ fn setup_node(
                             tracing::warn!(error = ?e, "failed to receive event");
                         }
                     }
+                },
+                recv(hopr_startup_notifier) -> startup_result => {
+                    match startup_result {
+                        Ok(Ok(processes)) => {
+                            tracing::info!("HOPR processes started: {:?}", processes);
+                            hopr_processes = processes;
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!(%e, "failed to start HOPR processes");
+                        }
+                        Err(e) => {
+                            tracing::error!(%e, "failed to receive HOPR startup notification");
+                        }
+                    }
                 }
             }
         }
@@ -404,7 +454,12 @@ fn setup_node(
     node
 }
 
-fn init_hopr(hopr_params: &HoprParams) -> Result<Hopr, Error> {
+fn init_hopr(
+    hopr_params: &HoprParams,
+    notifier: crossbeam_channel::Sender<
+        std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
+    >,
+) -> Result<Hopr, Error> {
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
         None => {
@@ -438,6 +493,6 @@ fn init_hopr(hopr_params: &HoprParams) -> Result<Hopr, Error> {
 
     let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
     let cfg = HoprConfig::from_path(&hopr_params.config_path)?;
-    let hopr = Hopr::new(cfg, keys)?;
+    let hopr = Hopr::new(cfg, keys, notifier)?;
     Ok(hopr)
 }

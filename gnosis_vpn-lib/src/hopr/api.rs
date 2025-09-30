@@ -22,7 +22,7 @@ use crate::{
 pub struct Hopr {
     hopr: Arc<edgli::hopr_lib::Hopr>,
     rt: tokio::runtime::Runtime,
-    processes: Vec<EdgliProcesses>,
+    // processes: Vec<EdgliProcesses>,      // TODO: add processes once the app is async
     open_listeners: ListenerJoinHandles,
 }
 
@@ -30,6 +30,9 @@ impl Hopr {
     pub fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
+        notifier: crossbeam_channel::Sender<
+            std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
+        >,
     ) -> std::result::Result<Self, HoprError> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -40,13 +43,19 @@ impl Hopr {
             .block_on(run_hopr_edge_node(cfg, keys))
             .map_err(|e| HoprError::Construction(e.to_string()))?;
 
-        let hopr = Arc::new(hopr);
+        rt.spawn(async move {
+            let result = processes.await;
+            if let Err(e) = notifier.send(result) {
+                panic!("failed to notify HOPR process startup: {e}")
+            }
+        });
+
         let open_listeners = Arc::new(async_lock::RwLock::new(HashMap::new()));
 
         Ok(Self {
             hopr,
             rt,
-            processes,
+            //
             open_listeners,
         })
     }
@@ -238,6 +247,10 @@ impl Hopr {
         self.hopr.as_ref()
     }
 
+    pub fn as_hopr(&self) -> Arc<edgli::hopr_lib::Hopr> {
+        self.hopr.clone()
+    }
+
     pub fn info(&self) -> Info {
         Info {
             node_address: self.hopr.me_onchain(),
@@ -274,13 +287,13 @@ impl Hopr {
 
 impl Drop for Hopr {
     fn drop(&mut self) {
-        for process in &mut self.processes {
-            tracing::info!("shutting down HOPR process: {process}");
-            match process {
-                EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
-                EdgliProcesses::Hopr(handle) => handle.abort(),
-            }
-        }
+        // for process in &mut self.processes {
+        //     tracing::info!("shutting down HOPR process: {process}");
+        //     match process {
+        //         EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
+        //         EdgliProcesses::Hopr(handle) => handle.abort(),
+        //     }
+        // }
 
         let open_listeners = self.open_listeners.clone();
 
