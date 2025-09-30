@@ -26,7 +26,6 @@ pub struct Cli {
 
     /// Hopr edge client configuration path
     #[arg(
-        short,
         long,
         env = hopr::CONFIG_ENV,
     )]
@@ -34,7 +33,6 @@ pub struct Cli {
 
     /// Hopr edge client identity path
     #[arg(
-        short,
         long,
         env = hopr::ID_FILE_ENV,
     )]
@@ -42,7 +40,6 @@ pub struct Cli {
 
     /// Hopr edge client identity pass
     #[arg(
-        short,
         long,
         env = hopr::ID_PASS_ENV,
     )]
@@ -50,7 +47,6 @@ pub struct Cli {
 
     /// Specify hopr edge client db path
     #[arg(
-        short,
         long,
         env = hopr::DB_ENV,
     )]
