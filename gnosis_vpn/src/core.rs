@@ -60,7 +60,7 @@ pub struct Core {
     info: Option<info::Info>,
 }
 
-pub enum RunMode {
+enum RunMode {
     PreSafe(HoprKeys),
     Full {
         // hoprd edge client
@@ -79,7 +79,7 @@ pub struct HoprParams {
     pub rpc_provider: url::Url,
 }
 
-pub(crate) enum Cancel {
+enum Cancel {
     Node,
     Connection,
 }
