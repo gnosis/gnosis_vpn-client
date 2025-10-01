@@ -180,6 +180,8 @@ impl Core {
                     None => None,
                 };
 
+                tracing::debug!(?funding_issues, "FundingIssue");
+
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     self.config

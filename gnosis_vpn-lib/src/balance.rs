@@ -61,19 +61,19 @@ impl Balances {
             return Ok(issues);
         }
 
-        if self.channels_out_wxhopr < "0.1 wxHOPR".parse()? {
+        if self.channels_out_wxhopr < "0.1 wxHOPR".parse::<Balance<WxHOPR>>()? {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if self.safe_wxhopr < "0.1 wxHOPR".parse()? {
+        if self.safe_wxhopr < "0.1 wxHOPR".parse::<Balance<WxHOPR>>()? {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < "1.0 wxHOPR".parse()? {
+        } else if self.safe_wxhopr < "1.0 wxHOPR".parse::<Balance<WxHOPR>>()? {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
-        if self.node_xdai < "0.01 wxHOPR".parse()? {
+        if self.node_xdai < "0.01 xDai".parse::<Balance<XDai>>()? {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if self.node_xdai < "0.1 wxHOPR".parse()? {
+        } else if self.node_xdai < "0.1 xDai".parse::<Balance<XDai>>()? {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
