@@ -83,7 +83,7 @@ pub struct HoprParams {
     pub rpc_provider: url::Url,
 }
 
-enum Cancel {
+pub(crate) enum Cancel {
     Node,
     Connection,
 }
@@ -298,7 +298,7 @@ impl Core {
         match &self.run_mode {
             RunMode::PreSafe(_) => {
                 tracing::error!("edge client not running - cannot connect");
-                return Err(Error::EdgeNotReady);
+                Err(Error::EdgeNotReady)
             }
             RunMode::Full { hopr, .. } => self.connect(destination, hopr.clone()),
         }
