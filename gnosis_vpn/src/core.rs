@@ -57,6 +57,8 @@ pub enum Error {
     HoprIdentity(#[from] HoprIdentity::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
+    #[error("Balance error: {0}")]
+    Balance(#[from] balance::Error),
 }
 
 pub struct HoprParams {
@@ -173,8 +175,10 @@ impl Core {
                 };
                 tracing::debug!(?status, ?self.balance, "gathering status foo");
 
-                let funding_issues: Option<Vec<balance::FundingIssue>> = self.balance.as_ref().map(|b| b.into());
-                tracing::debug!(?funding_issues, "funding issues");
+                let funding_issues: Option<Vec<balance::FundingIssue>> = match &self.balance {
+                    Some(balance) => Some(balance.to_funding_issues()?),
+                    None => None,
+                };
 
                 Ok(Response::status(command::StatusResponse::new(
                     status,
@@ -192,7 +196,7 @@ impl Core {
             }
             Command::Balance => match (&self.balance, &self.info) {
                 (Some(balance), Some(info)) => {
-                    let issues: Vec<balance::FundingIssue> = balance.into();
+                    let issues: Vec<balance::FundingIssue> = balance.to_funding_issues()?;
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
                         format!("{} wxHOPR", balance.safe_wxhopr),

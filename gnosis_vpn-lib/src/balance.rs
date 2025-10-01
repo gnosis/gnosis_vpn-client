@@ -1,7 +1,8 @@
-use std::fmt::{self, Display};
-
-use edgli::hopr_lib::{WxHOPR, XDai};
+use edgli::hopr_lib::{Balance, GeneralError, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use std::fmt::{self, Display};
 
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12,6 +13,12 @@ pub enum FundingIssue {
     SafeLowOnFunds,     // warning before SafeOutOfFunds
     NodeUnderfunded,    // keeps working until channels are drained - cannot open new or top up existing channels
     NodeLowOnFunds,     // warning before NodeUnderfunded
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Parsing issue: {0}")]
+    Parsing(#[from] GeneralError),
 }
 
 impl Display for FundingIssue {
@@ -30,46 +37,46 @@ impl Display for FundingIssue {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Balances {
-    pub node_xdai: edgli::hopr_lib::Balance<XDai>,
-    pub safe_wxhopr: edgli::hopr_lib::Balance<WxHOPR>,
-    pub channels_out_wxhopr: edgli::hopr_lib::Balance<WxHOPR>,
+    pub node_xdai: Balance<XDai>,
+    pub safe_wxhopr: Balance<WxHOPR>,
+    pub channels_out_wxhopr: Balance<WxHOPR>,
 }
 
 impl Display for Balances {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Balances(node_xdai: {:.6}, safe_wxhopr: {:.6}, channels_out_wxhopr: {:.6})",
+            "Balances(node_xdai: {}, safe_wxhopr: {}, channels_out_wxhopr: {})",
             self.node_xdai, self.safe_wxhopr, self.channels_out_wxhopr
         )
     }
 }
 
-impl From<&Balances> for Vec<FundingIssue> {
-    fn from(balance: &Balances) -> Self {
+impl Balances {
+    pub fn to_funding_issues(&self) -> Result<Vec<FundingIssue>, Error> {
         let mut issues = Vec::new();
 
-        if balance.node_xdai <= "0.0 xDai".into() && balance.safe_wxhopr <= "0.0 wxHOPR".into() {
+        if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
             issues.push(FundingIssue::Unfunded);
-            return issues;
+            return Ok(issues);
         }
 
-        if balance.channels_out_wxhopr < "0.1 wxHOPR".into() {
+        if self.channels_out_wxhopr < "0.1 wxHOPR".parse()? {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if balance.safe_wxhopr < "0.1 wxHOPR".into() {
+        if self.safe_wxhopr < "0.1 wxHOPR".parse()? {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if balance.safe_wxhopr < "1.0 wxHOPR".into() {
+        } else if self.safe_wxhopr < "1.0 wxHOPR".parse()? {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
-        if balance.node_xdai < "0.01 wxHOPR".into() {
+        if self.node_xdai < "0.01 wxHOPR".parse()? {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if balance.node_xdai < "0.1 wxHOPR".into() {
+        } else if self.node_xdai < "0.1 wxHOPR".parse()? {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
-        issues
+        Ok(issues)
     }
 }
