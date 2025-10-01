@@ -67,10 +67,6 @@ pub enum RunMode {
         hopr: Arc<Hopr>,
         // thread loop around funding and general node
         node: Node,
-        // notifier for hopr process startup
-        notifier: crossbeam_channel::Receiver<
-            std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
-        >,
         // internal cancellation sender
         cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
     },
@@ -551,7 +547,6 @@ fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sende
     Ok(RunMode::Full {
         hopr,
         node,
-        notifier: hopr_startup_notifier_rx,
         cancel_channel,
     })
 }
