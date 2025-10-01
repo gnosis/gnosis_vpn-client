@@ -4,7 +4,6 @@ use rand::Rng;
 use rand::distr::Alphanumeric;
 use thiserror::Error;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::dirs;
@@ -20,6 +19,8 @@ pub enum Error {
     ProjectDirs,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
+    #[error("Project directory error: {0}")]
+    Dirs(#[from] crate::dirs::Error),
 }
 
 pub fn from_path(file: &Path, pass: String) -> Result<HoprKeys, Error> {
@@ -31,19 +32,12 @@ pub fn from_path(file: &Path, pass: String) -> Result<HoprKeys, Error> {
     HoprKeys::try_from(retrieval_mode).map_err(Error::KeyPair)
 }
 
-pub fn identity_file() -> Result<PathBuf, Error> {
-    config_dir(ID_FILE)
+pub fn file() -> Result<PathBuf, Error> {
+    dirs::config_dir(ID_FILE).map_err(Error::Dirs)
 }
 
-pub fn identity_pass() -> Result<PathBuf, Error> {
-    config_dir(ID_PASS)
-}
-
-fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let p_dirs = dirs::project().ok_or(Error::ProjectDirs)?;
-    let config_dir = p_dirs.config_dir();
-    fs::create_dir_all(config_dir)?;
-    Ok(config_dir.join(file))
+pub fn pass_file() -> Result<PathBuf, Error> {
+    dirs::config_dir(ID_PASS).map_err(Error::Dirs)
 }
 
 pub fn generate_pass() -> String {

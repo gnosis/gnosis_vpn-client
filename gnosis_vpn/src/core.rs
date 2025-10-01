@@ -1,4 +1,5 @@
 use edgli::EdgliProcesses;
+use edgli::hopr_lib::HoprKeys;
 use thiserror::Error;
 
 use std::fs;
@@ -14,34 +15,6 @@ use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
-
-pub struct Core {
-    // configuration data
-    config: Config,
-    // global event transmitter
-    sender: crossbeam_channel::Sender<Event>,
-    // shutdown event emitter
-    shutdown_sender: Option<crossbeam_channel::Sender<()>>,
-
-    // hopr edge node
-    edgli: Arc<Hopr>,
-
-    // connection to exit node
-    connection: Option<connection::Connection>,
-    // entry node
-    node: Node,
-    session_connected: bool,
-    target_destination: Option<Destination>,
-
-    hopr_params: HoprParams,
-
-    // internal cancellation sender
-    cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
-
-    // results from node
-    balance: Option<balance::Balances>,
-    info: Option<info::Info>,
-}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -59,6 +32,48 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Balance error: {0}")]
     Balance(#[from] balance::Error),
+    #[error("Edge client not ready")]
+    EdgeNotReady,
+}
+
+pub struct Core {
+    // configuration data
+    config: Config,
+    // global event transmitter
+    sender: crossbeam_channel::Sender<Event>,
+    // shutdown event emitter
+    shutdown_sender: Option<crossbeam_channel::Sender<()>>,
+
+    // depending on safe creation state
+    run_mode: RunMode,
+
+    // connection to exit node
+    connection: Option<connection::Connection>,
+    session_connected: bool,
+    target_destination: Option<Destination>,
+
+    // provided hopr params
+    hopr_params: HoprParams,
+
+    // results from node
+    balance: Option<balance::Balances>,
+    info: Option<info::Info>,
+}
+
+pub enum RunMode {
+    PreSafe(HoprKeys),
+    Full {
+        // hoprd edge client
+        hopr: Arc<Hopr>,
+        // thread loop around funding and general node
+        node: Node,
+        // notifier for hopr process startup
+        notifier: crossbeam_channel::Receiver<
+            std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
+        >,
+        // internal cancellation sender
+        cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
+    },
 }
 
 pub struct HoprParams {
@@ -82,56 +97,49 @@ impl Core {
         let config = config::read(config_path)?;
         wg_tooling::available()?;
 
-        let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-
-        let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
-        let hopr = Arc::new(init_hopr(&hopr_params, hopr_startup_notifier_tx)?);
-
-        let node = setup_node(
-            hopr.clone(),
-            sender.clone(),
-            cancel_channel.1.clone(),
-            hopr_startup_notifier_rx,
-        );
-
-        node.run();
+        let run_mode = determine_run_mode(&hopr_params, sender.clone())?;
 
         Ok(Core {
             config,
             sender,
             shutdown_sender: None,
             connection: None,
-            node,
+            run_mode,
             session_connected: false,
             target_destination: None,
             balance: None,
             info: None,
-            cancel_channel,
             hopr_params,
-            edgli: hopr,
         })
     }
 
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
-        _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-            tracing::error!(%e, "failed to send cancel to node");
-        });
-        match &mut self.connection {
-            Some(conn) => {
-                tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
-                self.target_destination = None;
-                conn.dismantle();
+        match &self.run_mode {
+            RunMode::PreSafe(_) => {
+                tracing::debug!("shutting down from presafe mode");
             }
-            None => {
-                tracing::debug!("direct shutdown - no connection to disconnect");
-                _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to connection");
+            RunMode::Full { cancel_channel, .. } => {
+                _ = cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to node");
                 });
-                if let Some(s) = self.shutdown_sender.as_ref() {
-                    _ = s.send(());
-                };
+                match &mut self.connection {
+                    Some(conn) => {
+                        tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
+                        self.target_destination = None;
+                        conn.dismantle();
+                    }
+                    None => {
+                        tracing::debug!("direct shutdown - no connection to disconnect");
+                        _ = cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                            tracing::error!(%e, "failed to send cancel to connection");
+                        });
+                        if let Some(s) = self.shutdown_sender.as_ref() {
+                            _ = s.send(());
+                        };
+                    }
+                }
             }
         }
         receiver
@@ -215,7 +223,7 @@ impl Core {
                 _ => Ok(Response::Balance(None)),
             },
             Command::RefreshNode => {
-                self.refresh_node()?;
+                self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone())?;
                 Ok(Response::RefreshNode)
             }
         }
@@ -257,8 +265,9 @@ impl Core {
         self.info = None;
         self.config = config;
 
-        // setup new node
-        self.refresh_node()
+        // recheck run mode
+        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone())?;
+        Ok(())
     }
 
     fn act_on_target(&mut self) -> Result<(), Error> {
@@ -279,18 +288,28 @@ impl Core {
             }
             (Some(dest), None) => {
                 tracing::info!(destination = %dest, "establishing new connection");
-                self.connect(&dest)
+                self.check_connect(&dest)
             }
             (None, None) => Ok(()),
         }
     }
 
-    fn connect(&mut self, destination: &Destination) -> Result<(), Error> {
+    fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
+        match &self.run_mode {
+            RunMode::PreSafe(_) => {
+                tracing::error!("edge client not running - cannot connect");
+                return Err(Error::EdgeNotReady);
+            }
+            RunMode::Full { hopr, .. } => self.connect(destination, hopr.clone()),
+        }
+    }
+
+    fn connect(&mut self, destination: &Destination, hopr: Arc<Hopr>) -> Result<(), Error> {
         let (s, r) = crossbeam_channel::unbounded();
         let config_wireguard = self.config.wireguard.clone();
         let wg = wg_tooling::WireGuard::from_config(config_wireguard)?;
         let config_connection = self.config.connection.clone();
-        let mut conn = Connection::new(self.edgli.clone(), destination.clone(), wg, s, config_connection);
+        let mut conn = Connection::new(hopr.clone(), destination.clone(), wg, s, config_connection);
         conn.establish();
         self.connection = Some(conn);
         let sender = self.sender.clone();
@@ -345,9 +364,11 @@ impl Core {
         tracing::info!("connection closed");
         self.session_connected = false;
         self.connection = None;
-        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
-            tracing::error!(%e, "failed to send cancel to connection");
-        });
+        if let RunMode::Full { cancel_channel, .. } = &self.run_mode {
+            _ = cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                tracing::error!(%e, "failed to send cancel to connection");
+            });
+        }
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
             _ = sender.send(());
@@ -371,30 +392,7 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
-        self.refresh_node()
-    }
-
-    fn refresh_node(&mut self) -> Result<(), Error> {
-        self.node.cancel();
-        _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-            tracing::error!(%e, "failed to send cancel to node");
-        });
-
-        // WARNING: the HOPR node must be fully restarted here to ensure a clean state
-
-        let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
-
-        let hopr = Arc::new(init_hopr(&self.hopr_params, hopr_startup_notifier_tx)?);
-
-        let node = setup_node(
-            hopr.clone(),
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-            hopr_startup_notifier_rx,
-        );
-
-        node.run();
-        self.node = node;
+        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone())?;
         Ok(())
     }
 }
@@ -489,24 +487,20 @@ fn setup_node(
     node
 }
 
-fn init_hopr(
-    hopr_params: &HoprParams,
-    notifier: crossbeam_channel::Sender<
-        std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
-    >,
-) -> Result<Hopr, Error> {
+fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sender<Event>) -> Result<RunMode, Error> {
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
         None => {
-            let path = HoprIdentity::identity_file()?;
+            let path = HoprIdentity::file()?;
             tracing::info!(?path, "No HOPR identity file path provided - using default");
             path
         }
     };
+
     let identity_pass = match &hopr_params.identity_pass {
         Some(pass) => pass.to_string(),
         None => {
-            let path = HoprIdentity::identity_pass()?;
+            let path = HoprIdentity::pass_file()?;
             match fs::read_to_string(&path) {
                 Ok(p) => {
                     tracing::warn!(?path, "No HOPR identity pass provided - read from file instead");
@@ -526,8 +520,38 @@ fn init_hopr(
         }
     };
 
+    let cfg = match &hopr_params.config_path {
+        Some(path) => HoprConfig::from_path(path)?,
+        None => {
+            let conf_file = HoprConfig::config_file()?;
+            if conf_file.exists() {
+                HoprConfig::from_path(&conf_file)?
+            } else {
+                let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
+                return Ok(RunMode::PreSafe(keys));
+            }
+        }
+    };
+
+    let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
+    let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
     let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
-    let cfg = HoprConfig::from_path(&hopr_params.config_path)?;
-    let hopr = Hopr::new(cfg, keys, notifier)?;
-    Ok(hopr)
+    let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
+    let hopr = Arc::new(hoprd);
+
+    let node = setup_node(
+        hopr.clone(),
+        sender.clone(),
+        cancel_channel.1.clone(),
+        hopr_startup_notifier_rx.clone(),
+    );
+
+    node.run();
+
+    Ok(RunMode::Full {
+        hopr,
+        node,
+        notifier: hopr_startup_notifier_rx,
+        cancel_channel,
+    })
 }
