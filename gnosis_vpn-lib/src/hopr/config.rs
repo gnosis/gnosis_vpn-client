@@ -3,7 +3,11 @@ use serde_yaml;
 use thiserror::Error;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::dirs;
+
+const CONFIG_FILE: &str = "gnosisvpn-hopr.yaml";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -13,6 +17,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Deserialization error: {0}")]
     YamlDeserialization(#[from] serde_yaml::Error),
+    #[error("Project directory error: {0}")]
+    Dirs(#[from] crate::dirs::Error),
 }
 
 pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
@@ -25,4 +31,8 @@ pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     })?;
 
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+}
+
+pub fn config_file() -> Result<PathBuf, Error> {
+    dirs::config_dir(CONFIG_FILE).map_err(Error::Dirs)
 }
