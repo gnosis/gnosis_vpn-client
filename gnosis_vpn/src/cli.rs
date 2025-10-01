@@ -46,13 +46,6 @@ pub struct Cli {
         default_value = None,
     )]
     pub hopr_identity_pass: Option<String>,
-
-    /// Specify hopr edge client db path
-    #[arg(
-        long,
-        env = hopr::DB_ENV,
-    )]
-    pub hopr_db_path: PathBuf,
 }
 
 pub fn parse() -> Cli {
