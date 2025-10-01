@@ -62,9 +62,10 @@ pub enum Error {
 }
 
 pub struct HoprParams {
-    pub config_path: PathBuf,
+    pub config_path: Option<PathBuf>,
     pub identity_file: Option<PathBuf>,
     pub identity_pass: Option<String>,
+    pub rpc_provider: url::Url,
 }
 
 enum Cancel {
