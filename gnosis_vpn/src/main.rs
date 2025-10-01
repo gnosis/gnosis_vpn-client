@@ -304,6 +304,7 @@ fn loop_daemon(
         config_path: args.hopr_config_path.clone(),
         identity_file: args.hopr_identity_file.clone(),
         identity_pass: args.hopr_identity_pass.clone(),
+        rpc_provider: args.hopr_rpc_provider.clone(),
     };
     let config_path = args.config_path.clone();
     let mut core = match core::Core::init(&config_path, sender, hopr_params) {
