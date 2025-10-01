@@ -84,14 +84,22 @@ impl Hopr {
         };
 
         let session_target_spec = match target {
-            SessionTarget::TcpStream(addr) => SessionTargetSpec::Sealed(Vec::from(
-                addr.try_as_sealed()
-                    .ok_or_else(|| HoprError::Construction("invalid sealed address for TCP session".into()))?,
-            )),
-            SessionTarget::UdpStream(addr) => SessionTargetSpec::Sealed(Vec::from(
-                addr.try_as_sealed()
-                    .ok_or_else(|| HoprError::Construction("invalid sealed address for TCP session".into()))?,
-            )),
+            SessionTarget::TcpStream(addr) => match addr {
+                edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {
+                    SessionTargetSpec::Plain(ip_or_host.to_string())
+                }
+                edgli::hopr_lib::exports::transport::session::SealedHost::Sealed(items) => {
+                    SessionTargetSpec::Sealed(items.into())
+                }
+            },
+            SessionTarget::UdpStream(addr) => match addr {
+                edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {
+                    SessionTargetSpec::Plain(ip_or_host.to_string())
+                }
+                edgli::hopr_lib::exports::transport::session::SealedHost::Sealed(items) => {
+                    SessionTargetSpec::Sealed(items.into())
+                }
+            },
             SessionTarget::ExitNode(_) => {
                 return Err(HoprError::Construction(
                     "cannot open session for exit node target".into(),
