@@ -411,6 +411,42 @@ fn setup_node(
                     match msg {
                         Ok(Cancel::Node) => {
                             tracing::info!("shutting down node event handler");
+                            break;
+                        }
+                        Ok(Cancel::Connection) => {
+                            // ignoring connection cancel in node handler
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive cancel event");
+                        }
+                    }
+                },
+                recv(hopr_startup_notifier) -> startup_result => {
+                    match startup_result {
+                        Ok(Ok(processes)) => {
+                            tracing::info!("HOPR processes started: {:?}", processes);
+                            hopr_processes = processes;
+                            break
+                        }
+                        Ok(Err(e)) => {
+                            tracing::error!(%e, "failed to start HOPR processes");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(%e, "failed to receive HOPR startup notification");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        loop {
+            crossbeam_channel::select! {
+                recv(cancel_receiver) -> msg => {
+                    match msg {
+                        Ok(Cancel::Node) => {
+                            tracing::info!("shutting down node event handler");
                             for process in &mut hopr_processes {
                                 tracing::info!("shutting down HOPR process: {process}");
                                 match process {
@@ -440,20 +476,6 @@ fn setup_node(
                         }
                     }
                 },
-                recv(hopr_startup_notifier) -> startup_result => {
-                    match startup_result {
-                        Ok(Ok(processes)) => {
-                            tracing::info!("HOPR processes started: {:?}", processes);
-                            hopr_processes = processes;
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!(%e, "failed to start HOPR processes");
-                        }
-                        Err(e) => {
-                            tracing::error!(%e, "failed to receive HOPR startup notification");
-                        }
-                    }
-                }
             }
         }
     });
