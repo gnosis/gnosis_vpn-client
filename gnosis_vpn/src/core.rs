@@ -91,6 +91,8 @@ impl Core {
             hopr_startup_notifier_rx,
         );
 
+        node.run();
+
         Ok(Core {
             config,
             sender,
@@ -158,6 +160,7 @@ impl Core {
                 }
             }
             Command::Status => {
+                tracing::debug!("gathering status");
                 let status = match (
                     self.target_destination.clone(),
                     self.connection.clone().map(|c| c.destination()),
@@ -168,8 +171,11 @@ impl Core {
                     (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
                     (None, None, _) => command::Status::disconnected(),
                 };
+                tracing::debug!(?status, ?self.balance, "gathering status foo");
 
                 let funding_issues: Option<Vec<balance::FundingIssue>> = self.balance.as_ref().map(|b| b.into());
+                tracing::debug!(?funding_issues, "funding issues");
+
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     self.config
