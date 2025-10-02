@@ -8,6 +8,7 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
+use std::fmt::{self, Display};
 use std::time::Duration;
 
 use crate::remote_data;
@@ -83,7 +84,7 @@ impl Chain {
             "jsonrpc": "2.0",
         });
 
-        tracing::debug!(?headers, body = ?json, %self.rpc_provider, "post node address balance request");
+        tracing::debug!(%self, ?headers, body = ?json, "post node address balance request");
         let resp = client
             .post(self.rpc_provider.clone())
             .json(&json)
@@ -108,5 +109,15 @@ impl Chain {
         let wxhopr = Balance::<WxHOPR>::from(third_last_u256);
 
         Ok(AccountBalance::new(xdai, wxhopr))
+    }
+}
+
+impl Display for Chain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Chain(rpc_provider: {}, node_address: {})",
+            self.rpc_provider, self.node_address
+        )
     }
 }
