@@ -6,6 +6,10 @@ pub enum HoprError {
     #[error("HoprLib error: {0}")]
     HoprLib(#[from] edgli::hopr_lib::errors::HoprLibError),
 
+    // --- channel errors ---
+    #[error("Channel error: {0}")]
+    Channel(String),
+
     // --- session errors ---
     #[error("Session error: {0}")]
     Session(String),

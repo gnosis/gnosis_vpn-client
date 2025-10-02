@@ -6,7 +6,6 @@ set -euo pipefail
 NON_INTERACTIVE=""
 INSTALL_FOLDER="./gnosis_vpn"
 WG_PRIVATE_KEY=""
-EXPERT_CHANNELS=""
 VERSION_TAG=""
 
 # internals
@@ -49,7 +48,6 @@ parse_arguments() {
         case $1 in
         --help) usage ;;
         --non-interactive) NON_INTERACTIVE="yes" ;;
-        --expert-channels) EXPERT_CHANNELS="yes" ;;
         -i | --install-folder)
             if [[ -n ${2:-} ]]; then
                 INSTALL_FOLDER="$2"

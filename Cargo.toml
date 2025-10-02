@@ -18,7 +18,7 @@ alloy = { version = "=1.0.37", default-features = false, features = [
   "contract",
   "k256",
   "std",
-]}
+] }
 anyhow = { version = "1.0.100" }
 async-lock = { version = "3.4.1" }
 backoff = "0.4.0"

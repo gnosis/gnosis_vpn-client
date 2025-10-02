@@ -98,19 +98,19 @@
             inherit src;
             strictDeps = true;
 
-            nativeBuildInputs =
-              [ pkgs.pkg-config ]
-              ++ lib.optionals pkgs.stdenv.isLinux [
-                pkgs.mold
-              ];
-            buildInputs =
-              [
-                pkgs.pkgsStatic.openssl
-              ]
-              ++ lib.optionals pkgs.stdenv.isDarwin [
-                # Additional darwin specific inputs can be set here
-                pkgs.libiconv
-              ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+            ]
+            ++ lib.optionals pkgs.stdenv.isLinux [
+              pkgs.mold
+            ];
+            buildInputs = [
+              pkgs.pkgsStatic.openssl
+            ]
+            ++ lib.optionals pkgs.stdenv.isDarwin [
+              # Additional darwin specific inputs can be set here
+              pkgs.libiconv
+            ];
 
             # Additional environment variables can be set directly
             # MY_CUSTOM_VAR = "some value";

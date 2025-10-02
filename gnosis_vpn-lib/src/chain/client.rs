@@ -64,10 +64,7 @@ impl GnosisRpcClient {
 
     /// Get the chain ID
     pub async fn get_chain_id(&self) -> Result<u64, ChainError> {
-        self.provider
-            .get_chain_id()
-            .await
-            .map_err(ChainError::AlloyRpcError)
+        self.provider.get_chain_id().await.map_err(ChainError::AlloyRpcError)
     }
 
     /// Check if the client is connected by attempting to get the chain ID

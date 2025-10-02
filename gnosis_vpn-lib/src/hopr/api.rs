@@ -12,6 +12,7 @@ use edgli::{
     },
     run_hopr_edge_node,
 };
+use tracing::instrument;
 
 use crate::{
     balance::Balances,
@@ -57,6 +58,46 @@ impl Hopr {
             rt,
             //
             open_listeners,
+        })
+    }
+
+    // --- channel management ---
+    /// Ensure a channel to the specified target is open and funded with the specified amount.
+    ///
+    /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
+    /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
+    /// 2. AutoFunding making sure that once a channel is open, it will stay funded
+    #[instrument(skip(self), level = "info", ret(level = "debug"), err)]
+    pub fn ensure_channel_open_and_funded(
+        &self,
+        target: Address,
+        amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
+    ) -> std::result::Result<(), HoprError> {
+        let hopr = self.hopr.clone();
+        self.rt.block_on(async move {
+            let open_channels_from_me = hopr
+                .channels_from(&hopr.me_onchain())
+                .await
+                .map_err(|e| HoprError::Channel(e.to_string()))?;
+
+            if let Some(channel) = open_channels_from_me
+                .iter()
+                .find(|ch| ch.destination == target && matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open))
+            {
+                // This leaves a gray area, where the channel exists but is in a PendingToClose state at which point we nothing
+                // can be done here, but to wait for the channel closure, e.g. through a set strategy.
+                tracing::info!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
+                hopr.fund_channel(&channel.get_id(), amount)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| HoprError::Channel(e.to_string()))
+            } else {
+                tracing::info!(destination = %target, %amount, "opening a new channel");
+                hopr.open_channel(&target, amount)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| HoprError::Channel(e.to_string()))
+            }
         })
     }
 
