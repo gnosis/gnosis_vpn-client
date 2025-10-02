@@ -265,7 +265,7 @@ impl Display for Phase {
         match self {
             Phase::CheckAccountBalance => write!(f, "CheckAccountBalance"),
             Phase::WaitAccountBalance => write!(f, "WaitAccountBalance"),
-            Phase::DeploySafe(balance) => write!(f, "DeploySafe({})", balance),
+            Phase::DeploySafe(balance) => write!(f, "DeploySafe({balance})"),
             Phase::Done => write!(f, "Done"),
         }
     }
@@ -285,8 +285,8 @@ impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
-            Event::Balance(balance) => write!(f, "Balance({})", balance),
-            Event::SafeModule(safe_module) => write!(f, "SafeModule({:?})", safe_module),
+            Event::Balance(balance) => write!(f, "Balance({balance})"),
+            Event::SafeModule(safe_module) => write!(f, "SafeModule({safe_module:?})"),
         }
     }
 }

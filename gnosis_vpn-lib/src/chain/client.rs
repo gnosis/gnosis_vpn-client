@@ -59,7 +59,7 @@ impl GnosisRpcClient {
         self.provider
             .get_block_number()
             .await
-            .map_err(|e| ChainError::AlloyRpcError(e))
+            .map_err(ChainError::AlloyRpcError)
     }
 
     /// Get the chain ID
@@ -67,7 +67,7 @@ impl GnosisRpcClient {
         self.provider
             .get_chain_id()
             .await
-            .map_err(|e| ChainError::AlloyRpcError(e))
+            .map_err(ChainError::AlloyRpcError)
     }
 
     /// Check if the client is connected by attempting to get the chain ID
