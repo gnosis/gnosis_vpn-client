@@ -1,12 +1,12 @@
+use alloy::primitives::U256;
 use backoff::{ExponentialBackoff, backoff::Backoff};
 use crossbeam_channel;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
-use reqwest::blocking;
+use rand::Rng;
 use thiserror::Error;
 use tokio::runtime::Runtime;
 use url::Url;
-use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::thread;
@@ -14,13 +14,16 @@ use std::time::Duration;
 
 use crate::balance;
 use crate::chain::client::GnosisRpcClient;
-use crate::chain::contracts::{CheckBalanceInputs, CheckBalanceResult};
+use crate::chain::contracts::{
+    CheckBalanceInputs, CheckBalanceResult, SafeModuleDeploymentInputs, SafeModuleDeploymentResult,
+};
 use crate::chain::errors::ChainError;
-use crate::hopr::chain::{self};
+use crate::hopr::config;
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Balance(balance::PreSafe),
+    SafeModule(config::SafeModule),
     BackoffExhausted,
 }
 
@@ -29,16 +32,15 @@ pub enum Event {
 enum Phase {
     CheckAccountBalance,
     WaitAccountBalance,
-    DeploySafe,
-    FetchSafeModule,
+    DeploySafe(balance::PreSafe),
+    Done,
 }
 
 #[derive(Debug)]
 enum InternalEvent {
     NodeAddressBalance(Result<CheckBalanceResult, ChainError>),
     TickAccountBalance,
-    DeploySafe(Result<Uuid, chain::Error>),
-    FetchSafeModule(Result<String, chain::Error>),
+    SafeDeployment(Result<SafeModuleDeploymentResult, ChainError>),
 }
 
 #[derive(Clone, Debug)]
@@ -63,14 +65,14 @@ pub struct Onboarding {
     backoff: BackoffState,
     phase: Phase,
 
-    // reuse http client
-    client: blocking::Client,
-
     // static input data
     sender: crossbeam_channel::Sender<Event>,
     private_key: ChainKeypair,
     rpc_provider: Url,
     node_address: Address,
+
+    // dynamic runtime data
+    nonce: U256,
 }
 
 impl Onboarding {
@@ -84,11 +86,11 @@ impl Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             phase: Phase::CheckAccountBalance,
-            client: blocking::Client::new(),
             sender,
             private_key,
             rpc_provider,
             node_address,
+            nonce: U256::from(rand::rng().random_range(1..1_000)),
         }
     }
 
@@ -164,11 +166,11 @@ impl Onboarding {
 
     fn act(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
-        match self.phase {
+        match &self.phase {
             Phase::CheckAccountBalance => self.fetch_node_address_balance(runtime),
             Phase::WaitAccountBalance => self.wait_account_balance(),
-            Phase::DeploySafe => self.deploy_safe(),
-            Phase::FetchSafeModule => self.fetch_safe_module(),
+            Phase::DeploySafe(balance) => self.deploy_safe(runtime, balance.clone()),
+            Phase::Done => crossbeam_channel::never(),
         }
     }
 
@@ -180,7 +182,7 @@ impl Onboarding {
                 if balance.node_xdai.is_zero() || balance.node_wxhopr.is_zero() {
                     self.phase = Phase::WaitAccountBalance;
                 } else {
-                    self.phase = Phase::DeploySafe;
+                    self.phase = Phase::DeploySafe(balance.clone());
                 }
                 _ = self.sender.send(Event::Balance(balance)).map_err(|error| {
                     tracing::error!(%error, "Failed sending balance event");
@@ -191,37 +193,13 @@ impl Onboarding {
                 self.phase = Phase::CheckAccountBalance;
                 Ok(())
             }
-            InternalEvent::DeploySafe(res) => {
-                //match res {
-                //        Ok(safe_id) => {
-                //            tracing::info!(phase = %self.phase, safe_id = %safe_id, "Safe deployed successfully");
-                //            // Proceed to next phase
-                //            self.phase = Phase::FetchSafeModule;
-                //            // Reset backoff on success
-                //            self.backoff = BackoffState::Inactive;
-                //        }
-                //        Err(error) => {
-                //            tracing::error!(phase = %self.phase, %error, "Failed to deploy safe");
-                //            // Backoff will be handled in the main loop
-                //        }
-                //}
-                Ok(())
-            }
-            InternalEvent::FetchSafeModule(res) => {
-                //match res {
-                //       Ok(module_address) => {
-                //           tracing::info!(phase = %self.phase, module_address = %module_address, "Safe module fetched successfully");
-                //           // Onboarding complete, could transition to an Idle phase or similar
-                //           // For now, we just log completion
-                //           tracing::info!(phase = %self.phase, "Onboarding process completed successfully");
-                //           // Reset backoff on success
-                //           self.backoff = BackoffState::Inactive;
-                //       }
-                //       Err(error) => {
-                //           tracing::error!(phase = %self.phase, %error, "Failed to fetch safe module");
-                //           // Backoff will be handled in the main loop
-                //       }
-                //}
+            InternalEvent::SafeDeployment(res) => {
+                let safe_module: config::SafeModule = res?.into();
+                self.backoff = BackoffState::Inactive;
+                self.phase = Phase::Done;
+                _ = self.sender.send(Event::SafeModule(safe_module)).map_err(|error| {
+                    tracing::error!(%error, "Failed sending safe module event");
+                });
                 Ok(())
             }
         }
@@ -242,29 +220,32 @@ impl Onboarding {
         r
     }
 
-    fn deploy_safe(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
+    fn deploy_safe(
+        &mut self,
+        runtime: Runtime,
+        balance: balance::PreSafe,
+    ) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
+        let priv_key = self.private_key.clone();
+        let node_address = self.node_address;
+        let rpc_provider = self.rpc_provider.clone();
+        self.nonce += U256::from(1);
+        let nonce = self.nonce;
+        let token_u256 = balance.node_wxhopr.amount();
+        let token_bytes: [u8; 32] = token_u256.to_big_endian();
+        let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
         thread::spawn(move || {
-            // let res = chain.deploy_safe(&client);
-            // _ = s.send(InternalEvent::DeploySafe(res));
-        });
-        r
-    }
-
-    fn fetch_safe_module(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
-        let (s, r) = crossbeam_channel::bounded(1);
-        if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(ExponentialBackoff::default());
-        }
-        // let chain = self.chain.clone();
-        thread::spawn(move || {
-            // let res = chain.fetch_safe_module(&client);
-            // _ = s.send(InternalEvent::FetchSafeModule(res));
+            let res = runtime.block_on(safe_module_deployment(
+                priv_key,
+                rpc_provider.to_string(),
+                node_address,
+                nonce,
+                token_amount,
+            ));
+            _ = s.send(InternalEvent::SafeDeployment(res));
         });
         r
     }
@@ -284,8 +265,8 @@ impl Display for Phase {
         match self {
             Phase::CheckAccountBalance => write!(f, "CheckAccountBalance"),
             Phase::WaitAccountBalance => write!(f, "WaitAccountBalance"),
-            Phase::DeploySafe => write!(f, "DeploySafe"),
-            Phase::FetchSafeModule => write!(f, "FetchSafeModule"),
+            Phase::DeploySafe(balance) => write!(f, "DeploySafe({})", balance),
+            Phase::Done => write!(f, "Done"),
         }
     }
 }
@@ -295,8 +276,7 @@ impl Display for InternalEvent {
         match self {
             InternalEvent::NodeAddressBalance(res) => write!(f, "NodeAddressBalance({res:?})"),
             InternalEvent::TickAccountBalance => write!(f, "TickAccountBalance"),
-            InternalEvent::DeploySafe(res) => write!(f, "DeploySafe({res:?})"),
-            InternalEvent::FetchSafeModule(res) => write!(f, "FetchSafeModule({res:?})"),
+            InternalEvent::SafeDeployment(res) => write!(f, "SafeDeployment({res:?})"),
         }
     }
 }
@@ -306,6 +286,7 @@ impl Display for Event {
         match self {
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
             Event::Balance(balance) => write!(f, "Balance({})", balance),
+            Event::SafeModule(safe_module) => write!(f, "SafeModule({:?})", safe_module),
         }
     }
 }
@@ -318,4 +299,16 @@ async fn check_balance(
     let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
     let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
     check_balance_inputs.check(&client.provider).await
+}
+
+async fn safe_module_deployment(
+    priv_key: ChainKeypair,
+    rpc_provider: String,
+    node_address: Address,
+    nonce: U256,
+    token_amount: U256,
+) -> Result<SafeModuleDeploymentResult, ChainError> {
+    let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+    let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
+    safe_module_deployment_inputs.deploy(&client.provider).await
 }

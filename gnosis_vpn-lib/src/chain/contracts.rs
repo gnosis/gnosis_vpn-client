@@ -48,12 +48,14 @@ pub fn build_default_target() -> B256 {
     B256::from(target_bytes)
 }
 
+#[derive(Clone, Debug)]
 pub struct SafeModuleDeploymentInputs {
     pub token_amount: U256,
     pub nonce: U256,
     pub admins: Vec<Address>,
 }
 
+#[derive(Clone, Debug)]
 pub struct SafeModuleDeploymentResult {
     pub tx_hash: B256,
     pub safe_address: Address,
