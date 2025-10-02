@@ -1,14 +1,21 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
 use crossbeam_channel;
+use edgli::hopr_lib::Address;
+use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use reqwest::blocking;
 use thiserror::Error;
+use tokio::runtime::Runtime;
+use url::Url;
 use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::thread;
 use std::time::Duration;
 
-use crate::hopr::chain::{self, Chain};
+use crate::chain::client::GnosisRpcClient;
+use crate::chain::contracts::{CheckBalanceInputs, CheckBalanceResult};
+use crate::chain::errors::ChainError;
+use crate::hopr::chain::{self};
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -26,7 +33,7 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    NodeAddressBalance(Result<chain::AccountBalance, chain::Error>),
+    NodeAddressBalance(Result<CheckBalanceResult, ChainError>),
     TickAccountBalance,
     DeploySafe(Result<Uuid, chain::Error>),
     FetchSafeModule(Result<String, chain::Error>),
@@ -41,8 +48,8 @@ enum BackoffState {
 
 #[derive(Debug, Error)]
 enum InternalError {
-    #[error("chain error: {0}")]
-    Chain(#[from] chain::Error),
+    #[error(transparent)]
+    Chain(#[from] ChainError),
 }
 
 #[derive(Clone)]
@@ -59,18 +66,27 @@ pub struct Onboarding {
 
     // static input data
     sender: crossbeam_channel::Sender<Event>,
-    chain: Chain,
+    private_key: ChainKeypair,
+    rpc_provider: Url,
+    node_address: Address,
 }
 
 impl Onboarding {
-    pub fn new(sender: crossbeam_channel::Sender<Event>, chain: Chain) -> Self {
+    pub fn new(
+        sender: crossbeam_channel::Sender<Event>,
+        private_key: ChainKeypair,
+        rpc_provider: Url,
+        node_address: Address,
+    ) -> Self {
         Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             phase: Phase::CheckAccountBalance,
             client: blocking::Client::new(),
             sender,
-            chain,
+            private_key,
+            rpc_provider,
+            node_address,
         }
     }
 
@@ -79,12 +95,19 @@ impl Onboarding {
         let mut me = self.clone();
         thread::spawn(move || {
             loop {
+                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        tracing::error!(%error, "Failed creating tokio runtime");
+                        continue;
+                    }
+                };
                 // Backoff handling
                 // Inactive - no backoff was set, act up
                 // Active - backoff was set and can trigger, don't act until backoff delay
                 // Triggered - backoff was triggered, time to act up again keeping backoff active
                 let (recv_event, recv_backoff) = match me.backoff.clone() {
-                    BackoffState::Inactive => (me.act(), crossbeam_channel::never()),
+                    BackoffState::Inactive => (me.act(rt), crossbeam_channel::never()),
                     BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                         Some(delay) => {
                             tracing::debug!(phase = %me.phase, ?backoff, delay = ?delay, "Triggering backoff delay");
@@ -103,7 +126,7 @@ impl Onboarding {
                     BackoffState::Triggered(backoff) => {
                         tracing::debug!(phase = %me.phase, ?backoff, "Activating backoff");
                         me.backoff = BackoffState::Active(backoff);
-                        (me.act(), crossbeam_channel::never())
+                        (me.act(rt), crossbeam_channel::never())
                     }
                 };
 
@@ -137,10 +160,10 @@ impl Onboarding {
         });
     }
 
-    fn act(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn act(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match self.phase {
-            Phase::CheckAccountBalance => self.fetch_node_address_balance(),
+            Phase::CheckAccountBalance => self.fetch_node_address_balance(runtime),
             Phase::WaitAccountBalance => self.wait_account_balance(),
             Phase::DeploySafe => self.deploy_safe(),
             Phase::FetchSafeModule => self.fetch_safe_module(),
@@ -152,11 +175,11 @@ impl Onboarding {
             InternalEvent::NodeAddressBalance(res) => {
                 let balance = res?;
                 self.backoff = BackoffState::Inactive;
-                if balance.node_xdai.is_zero() || balance.safe_wxhopr.is_zero() {
-                    self.phase = Phase::WaitAccountBalance;
-                } else {
-                    self.phase = Phase::DeploySafe;
-                }
+                // if balance.node_xdai.is_zero() || balance.safe_wxhopr.is_zero() {
+                self.phase = Phase::WaitAccountBalance;
+                // } else {
+                // self.phase = Phase::DeploySafe;
+                // }
                 Ok(())
             }
             InternalEvent::TickAccountBalance => {
@@ -199,15 +222,26 @@ impl Onboarding {
         }
     }
 
-    fn fetch_node_address_balance(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn fetch_node_address_balance(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let chain = self.chain.clone();
+        let priv_key = self.private_key.clone();
+        let node_address = self.node_address.clone();
+        let rpc_provider = self.rpc_provider.clone();
         thread::spawn(move || {
-            let res = chain.account_balance(&client);
+            let res = runtime.block_on(async {
+                let client = match GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await {
+                    Ok(c) => c,
+                    Err(err) => return Err(err),
+                };
+                let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
+                let res = check_balance_inputs.check(&client.provider).await;
+                tracing::debug!(?res, "check_balance_output");
+                return res;
+            });
             _ = s.send(InternalEvent::NodeAddressBalance(res));
         });
         r
@@ -219,7 +253,6 @@ impl Onboarding {
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let chain = self.chain.clone();
         thread::spawn(move || {
             // let res = chain.deploy_safe(&client);
             // _ = s.send(InternalEvent::DeploySafe(res));
@@ -233,7 +266,7 @@ impl Onboarding {
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let chain = self.chain.clone();
+        // let chain = self.chain.clone();
         thread::spawn(move || {
             // let res = chain.fetch_safe_module(&client);
             // _ = s.send(InternalEvent::FetchSafeModule(res));

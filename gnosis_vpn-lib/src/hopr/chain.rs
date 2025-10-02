@@ -5,6 +5,7 @@ use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
+use tokio::runtime::Runtime;
 use url::Url;
 use uuid::Uuid;
 
@@ -60,7 +61,7 @@ impl Chain {
         }
     }
 
-    pub fn account_balance(&self, client: &blocking::Client) -> Result<AccountBalance, Error> {
+    pub fn account_balance(&self, client: &blocking::Client, runtime: &Runtime) -> Result<AccountBalance, Error> {
         let headers = remote_data::json_headers();
 
         let data =[
