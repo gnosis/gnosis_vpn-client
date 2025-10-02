@@ -1,6 +1,9 @@
 use edgli::EdgliProcesses;
+use edgli::hopr_lib::Address;
+use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use thiserror::Error;
+use url::Url;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +13,7 @@ use std::thread;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, chain, config as HoprConfig, identity as HoprIdentity};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as HoprConfig, identity as HoprIdentity};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::Onboarding;
 use gnosis_vpn_lib::{balance, info, wg_tooling};
@@ -414,10 +417,12 @@ impl Core {
 fn setup_onboarding(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
-    chain: chain::Chain,
+    private_key: ChainKeypair,
+    rpc_provider: Url,
+    node_address: Address,
 ) -> Onboarding {
     let (s, r) = crossbeam_channel::unbounded();
-    let onboarding = Onboarding::new(s, chain);
+    let onboarding = Onboarding::new(s, private_key, rpc_provider, node_address);
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -588,8 +593,13 @@ fn determine_run_mode(
             } else {
                 let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
                 let node_address = keys.chain_key.public().to_address();
-                let chain = chain::Chain::new(hopr_params.rpc_provider.clone(), node_address);
-                let onboarding = setup_onboarding(sender.clone(), cancel_receiver.clone(), chain);
+                let onboarding = setup_onboarding(
+                    sender.clone(),
+                    cancel_receiver.clone(),
+                    keys.chain_key,
+                    hopr_params.rpc_provider.clone(),
+                    node_address,
+                );
                 onboarding.run();
                 return Ok(RunMode::PreSafe(onboarding));
             }
