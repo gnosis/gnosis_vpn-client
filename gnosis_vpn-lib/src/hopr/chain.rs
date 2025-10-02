@@ -106,6 +106,6 @@ impl Chain {
         let xdai = Balance::<XDai>::from(last_u256);
         let wxhopr = Balance::<WxHOPR>::from(third_last_u256);
 
-        Ok(NodeBalance::new(xdai, wxhopr));
+        Ok(NodeBalance::new(xdai, wxhopr))
     }
 }
