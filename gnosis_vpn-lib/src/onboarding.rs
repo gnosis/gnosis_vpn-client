@@ -143,6 +143,8 @@ impl Onboarding {
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::NodeAddressBalance(res) => {
+                self.phase = Phase::DeploySafe;
+                self.backoff = BackoffState::Inactive;
                 //    match res {
                 //        Ok(balance) => {
                 //            tracing::info!(phase = %self.phase, balance, "Node address balance fetched successfully");

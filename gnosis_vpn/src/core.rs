@@ -1,5 +1,5 @@
 use edgli::EdgliProcesses;
-use edgli::hopr_lib::HoprKeys;
+use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use thiserror::Error;
 
 use std::fs;
@@ -10,8 +10,9 @@ use std::thread;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as HoprConfig, identity as HoprIdentity};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, chain, config as HoprConfig, identity as HoprIdentity};
 use gnosis_vpn_lib::node::{self, Node};
+use gnosis_vpn_lib::onboarding::Onboarding;
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -61,7 +62,7 @@ pub struct Core {
 }
 
 enum RunMode {
-    PreSafe(HoprKeys),
+    PreSafe(Onboarding),
     Full {
         // hoprd edge client
         hopr: Arc<Hopr>,
@@ -82,6 +83,7 @@ pub struct HoprParams {
 enum Cancel {
     Node,
     Connection,
+    Onboarding,
 }
 
 impl Core {
@@ -228,13 +230,17 @@ impl Core {
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         tracing::debug!(%event, "handling event");
         match event {
-            Event::ConnectionEvent(connection::Event::Connected) => self.on_connected(),
-            Event::ConnectionEvent(connection::Event::Disconnected) => self.on_disconnected(),
-            Event::ConnectionEvent(connection::Event::Broken) => self.on_broken(),
-            Event::ConnectionEvent(connection::Event::Dismantled) => self.on_dismantled(),
-            Event::NodeEvent(node::Event::Info(info)) => self.on_info(info),
-            Event::NodeEvent(node::Event::Balance(balance)) => self.on_balance(balance),
-            Event::NodeEvent(node::Event::BackoffExhausted) => self.on_inoperable_node(),
+            Event::Connection(connection::Event::Connected) => self.on_connected(),
+            Event::Connection(connection::Event::Disconnected) => self.on_disconnected(),
+            Event::Connection(connection::Event::Broken) => self.on_broken(),
+            Event::Connection(connection::Event::Dismantled) => self.on_dismantled(),
+            Event::Node(node::Event::Info(info)) => self.on_info(info),
+            Event::Node(node::Event::Balance(balance)) => self.on_balance(balance),
+            Event::Node(node::Event::BackoffExhausted) => self.on_inoperable_node(),
+            Event::Onboarding(_) => {
+                tracing::debug!("ignoring onboarding event in core");
+                Ok(())
+            }
         }
     }
 
@@ -315,7 +321,7 @@ impl Core {
                     recv(r) -> conn_event => {
                         match conn_event {
                             Ok(event) => {
-                                _ = sender.send(Event::ConnectionEvent(event)).map_err(|error| {
+                                _ = sender.send(Event::Connection(event)).map_err(|error| {
                                     tracing::error!(%event, %error, "failed to send ConnectionEvent event");
                                 });
                             }
@@ -393,16 +399,57 @@ impl Core {
     }
 }
 
-fn setup_node(
-    edgli: Arc<Hopr>,
+fn setup_onboarding(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    chain: chain::Chain,
+) -> Onboarding {
+    let (s, r) = crossbeam_channel::unbounded();
+    let onboarding = Onboarding::new(s, chain);
+    thread::spawn(move || {
+        loop {
+            crossbeam_channel::select! {
+                recv(cancel_receiver) -> msg => {
+                    match msg {
+                        Ok(Cancel::Onboarding) => {
+                            tracing::info!("shutting down onboarding event handler");
+                            break;
+                        }
+                        Ok(_) => {
+                            // ignoring cancel event in onboarding handler
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive cancel event");
+                        }
+                    }
+                },
+                recv(r) -> onboarding_event => {
+                    match onboarding_event {
+                        Ok(ref event) => {
+                                _ = sender.send(Event::Onboarding(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send onboarding event");
+                                });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                },
+            }
+        }
+    });
+    onboarding
+}
+fn setup_node(
+    sender: crossbeam_channel::Sender<Event>,
+    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    edgli: Arc<Hopr>,
     hopr_startup_notifier: crossbeam_channel::Receiver<
         std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
     >,
 ) -> Node {
     let (s, r) = crossbeam_channel::unbounded();
-    let node = Node::new(edgli, s);
+    let node = Node::new(s, edgli);
     thread::spawn(move || {
         let mut hopr_processes = Vec::new();
 
@@ -414,8 +461,8 @@ fn setup_node(
                             tracing::info!("shutting down node event handler");
                             break;
                         }
-                        Ok(Cancel::Connection) => {
-                            // ignoring connection cancel in node handler
+                        Ok(_) => {
+                            // ignoring cancel event in node handler
                         }
                         Err(e) => {
                             tracing::warn!(error = ?e, "failed to receive cancel event");
@@ -457,8 +504,8 @@ fn setup_node(
                             }
                             break;
                         }
-                        Ok(Cancel::Connection) => {
-                            // ignoring connection cancel in node handler
+                        Ok(_) => {
+                            // ignoring cancel event in node handler
                         }
                         Err(e) => {
                             tracing::warn!(error = ?e, "failed to receive cancel event");
@@ -468,7 +515,7 @@ fn setup_node(
                 recv(r) -> node_event => {
                     match node_event {
                         Ok(ref event) => {
-                                _ = sender.send(Event::NodeEvent(event.clone())).map_err(|error| {
+                                _ = sender.send(Event::Node(event.clone())).map_err(|error| {
                                     tracing::error!(%event, %error, "failed to send NodeEvent event");
                                 });
                         }
@@ -516,6 +563,8 @@ fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sende
         }
     };
 
+    let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
+
     let cfg = match &hopr_params.config_path {
         Some(path) => HoprConfig::from_path(path)?,
         None => {
@@ -524,21 +573,23 @@ fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sende
                 HoprConfig::from_path(&conf_file)?
             } else {
                 let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
-                return Ok(RunMode::PreSafe(keys));
+                let node_address = keys.chain_key.public().to_address();
+                let chain = chain::Chain::new(hopr_params.rpc_provider.clone(), node_address);
+                let onboarding = setup_onboarding(sender.clone(), cancel_channel.1.clone(), chain);
+                return Ok(RunMode::PreSafe(onboarding));
             }
         }
     };
 
-    let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
     let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
     let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
     let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
     let hopr = Arc::new(hoprd);
 
     let node = setup_node(
-        hopr.clone(),
         sender.clone(),
         cancel_channel.1.clone(),
+        hopr.clone(),
         hopr_startup_notifier_rx.clone(),
     );
 

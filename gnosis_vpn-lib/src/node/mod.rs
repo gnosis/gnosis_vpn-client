@@ -63,7 +63,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(edgli: Arc<Hopr>, sender: crossbeam_channel::Sender<Event>) -> Self {
+    pub fn new(sender: crossbeam_channel::Sender<Event>, edgli: Arc<Hopr>) -> Self {
         Node {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
