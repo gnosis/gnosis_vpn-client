@@ -12,6 +12,7 @@ use std::fmt::{self, Display};
 use std::thread;
 use std::time::Duration;
 
+use crate::balance;
 use crate::chain::client::GnosisRpcClient;
 use crate::chain::contracts::{CheckBalanceInputs, CheckBalanceResult};
 use crate::chain::errors::ChainError;
@@ -19,6 +20,7 @@ use crate::hopr::chain::{self};
 
 #[derive(Clone, Debug)]
 pub enum Event {
+    Balance(balance::PreSafe),
     BackoffExhausted,
 }
 
@@ -173,13 +175,16 @@ impl Onboarding {
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::NodeAddressBalance(res) => {
-                let balance = res?;
+                let balance: balance::PreSafe = res?.into();
                 self.backoff = BackoffState::Inactive;
-                // if balance.node_xdai.is_zero() || balance.safe_wxhopr.is_zero() {
-                self.phase = Phase::WaitAccountBalance;
-                // } else {
-                // self.phase = Phase::DeploySafe;
-                // }
+                if balance.node_xdai.is_zero() || balance.node_wxhopr.is_zero() {
+                    self.phase = Phase::WaitAccountBalance;
+                } else {
+                    self.phase = Phase::DeploySafe;
+                }
+                _ = self.sender.send(Event::Balance(balance)).map_err(|error| {
+                    tracing::error!(%error, "Failed sending balance event");
+                });
                 Ok(())
             }
             InternalEvent::TickAccountBalance => {
@@ -223,25 +228,15 @@ impl Onboarding {
     }
 
     fn fetch_node_address_balance(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
         let priv_key = self.private_key.clone();
-        let node_address = self.node_address.clone();
+        let node_address = self.node_address;
         let rpc_provider = self.rpc_provider.clone();
         thread::spawn(move || {
-            let res = runtime.block_on(async {
-                let client = match GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await {
-                    Ok(c) => c,
-                    Err(err) => return Err(err),
-                };
-                let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
-                let res = check_balance_inputs.check(&client.provider).await;
-                tracing::debug!(?res, "check_balance_output");
-                return res;
-            });
+            let res = runtime.block_on(check_balance(priv_key, rpc_provider.to_string(), node_address));
             _ = s.send(InternalEvent::NodeAddressBalance(res));
         });
         r
@@ -310,6 +305,17 @@ impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
+            Event::Balance(balance) => write!(f, "Balance({})", balance),
         }
     }
+}
+
+async fn check_balance(
+    priv_key: ChainKeypair,
+    rpc_provider: String,
+    node_address: Address,
+) -> Result<CheckBalanceResult, ChainError> {
+    let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+    let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
+    check_balance_inputs.check(&client.provider).await
 }

@@ -1,8 +1,11 @@
 use edgli::hopr_lib::{Balance, GeneralError, WxHOPR, XDai};
+use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
+
+use crate::chain::contracts::CheckBalanceResult;
 
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,6 +35,35 @@ impl Display for FundingIssue {
             FundingIssue::NodeLowOnFunds => "low on funds - soon cannot open new connection or keep existing ones",
         };
         write!(f, "{s}")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PreSafe {
+    pub node_xdai: Balance<XDai>,
+    pub node_wxhopr: Balance<WxHOPR>,
+}
+
+impl Display for PreSafe {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "PreSafe(node_xdai: {}, node_wxhopr: {})",
+            self.node_xdai, self.node_wxhopr
+        )
+    }
+}
+
+impl From<CheckBalanceResult> for PreSafe {
+    fn from(result: CheckBalanceResult) -> Self {
+        let xdai_bytes: [u8; 32] = result.native_token_balance.to_be_bytes::<32>();
+        let xdai_u256 = U256::from_big_endian(&xdai_bytes);
+        let wxhopr_bytes: [u8; 32] = result.hopr_token_balance.to_be_bytes::<32>();
+        let wxhopr_u256 = U256::from_big_endian(&wxhopr_bytes);
+        Self {
+            node_xdai: Balance::<XDai>::from(xdai_u256),
+            node_wxhopr: Balance::<WxHOPR>::from(wxhopr_u256),
+        }
     }
 }
 

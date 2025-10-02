@@ -15,7 +15,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as HoprConfig, identity as HoprIdentity};
 use gnosis_vpn_lib::node::{self, Node};
-use gnosis_vpn_lib::onboarding::Onboarding;
+use gnosis_vpn_lib::onboarding::{self, Onboarding};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -64,6 +64,9 @@ pub struct Core {
     // results from node
     balance: Option<balance::Balances>,
     info: Option<info::Info>,
+
+    // presafe results
+    presafe_balance: Option<balance::PreSafe>,
 }
 
 enum RunMode {
@@ -113,6 +116,7 @@ impl Core {
             info: None,
             hopr_params,
             cancel_channel,
+            presafe_balance: None,
         })
     }
 
@@ -252,10 +256,8 @@ impl Core {
             Event::Node(node::Event::Info(info)) => self.on_info(info),
             Event::Node(node::Event::Balance(balance)) => self.on_balance(balance),
             Event::Node(node::Event::BackoffExhausted) => self.on_inoperable_node(),
-            Event::Onboarding(_) => {
-                tracing::debug!("ignoring onboarding event in core");
-                Ok(())
-            }
+            Event::Onboarding(onboarding::Event::Balance(balance)) => self.on_onboarding_balance(balance),
+            Event::Onboarding(onboarding::Event::BackoffExhausted) => self.on_failed_onboarding(),
         }
     }
 
@@ -409,6 +411,18 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
+        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+        Ok(())
+    }
+
+    fn on_onboarding_balance(&mut self, presafe: balance::PreSafe) -> Result<(), Error> {
+        tracing::info!("on presafe balance: {presafe}");
+        self.presafe_balance = Some(presafe);
+        Ok(())
+    }
+
+    fn on_failed_onboarding(&mut self) -> Result<(), Error> {
+        tracing::error!("onboarding failed - please check your configuration and network connectivity");
         self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
         Ok(())
     }

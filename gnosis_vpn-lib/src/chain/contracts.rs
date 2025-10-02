@@ -118,13 +118,13 @@ impl SafeModuleDeploymentInputs {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CheckBalanceInputs {
     pub hopr_token_holder: Address,
     pub native_token_holder: Address,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CheckBalanceResult {
     pub hopr_token_balance: U256,
     pub native_token_balance: U256,
