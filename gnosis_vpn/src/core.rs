@@ -13,7 +13,7 @@ use std::thread;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as HoprConfig, identity as HoprIdentity};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
@@ -29,9 +29,9 @@ pub enum Error {
     #[error("HOPR error: {0}")]
     Hopr(#[from] HoprError),
     #[error("Hopr config error: {0}")]
-    HoprConfig(#[from] HoprConfig::Error),
+    HoprConfig(#[from] hopr_config::Error),
     #[error("Hopr identity error: {0}")]
-    HoprIdentity(#[from] HoprIdentity::Error),
+    HoprIdentity(#[from] identity::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("Balance error: {0}")]
@@ -257,6 +257,9 @@ impl Core {
             Event::Node(node::Event::Balance(balance)) => self.on_balance(balance),
             Event::Node(node::Event::BackoffExhausted) => self.on_inoperable_node(),
             Event::Onboarding(onboarding::Event::Balance(balance)) => self.on_onboarding_balance(balance),
+            Event::Onboarding(onboarding::Event::SafeModule(safe_module)) => {
+                self.on_onboarding_safe_module(safe_module)
+            }
             Event::Onboarding(onboarding::Event::BackoffExhausted) => self.on_failed_onboarding(),
         }
     }
@@ -421,6 +424,15 @@ impl Core {
         Ok(())
     }
 
+    fn on_onboarding_safe_module(&mut self, safe_module: hopr_config::SafeModule) -> Result<(), Error> {
+        tracing::info!(?safe_module, "on safe module - generating hoprd configuration");
+        _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+            tracing::error!(%e, "failed to send cancel to finished onboarding");
+        });
+        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+        Ok(())
+    }
+
     fn on_failed_onboarding(&mut self) -> Result<(), Error> {
         tracing::error!("onboarding failed - please check your configuration and network connectivity");
         self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
@@ -569,7 +581,7 @@ fn determine_run_mode(
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
         None => {
-            let path = HoprIdentity::file()?;
+            let path = identity::file()?;
             tracing::info!(?path, "No HOPR identity file path provided - using default");
             path
         }
@@ -578,7 +590,7 @@ fn determine_run_mode(
     let identity_pass = match &hopr_params.identity_pass {
         Some(pass) => pass.to_string(),
         None => {
-            let path = HoprIdentity::pass_file()?;
+            let path = identity::pass_file()?;
             match fs::read_to_string(&path) {
                 Ok(p) => {
                     tracing::warn!(?path, "No HOPR identity pass provided - read from file instead");
@@ -589,7 +601,7 @@ fn determine_run_mode(
                         ?path,
                         "No HOPR identity pass provided - generating new one and storing alongside identity file"
                     );
-                    let pw = HoprIdentity::generate_pass();
+                    let pw = identity::generate_pass();
                     fs::write(&path, pw.as_bytes())?;
                     Ok(pw)
                 }
@@ -599,13 +611,13 @@ fn determine_run_mode(
     };
 
     let cfg = match &hopr_params.config_path {
-        Some(path) => HoprConfig::from_path(path)?,
+        Some(path) => hopr_config::from_path(path)?,
         None => {
-            let conf_file = HoprConfig::config_file()?;
+            let conf_file = hopr_config::config_file()?;
             if conf_file.exists() {
-                HoprConfig::from_path(&conf_file)?
+                hopr_config::from_path(&conf_file)?
             } else {
-                let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
+                let keys = identity::from_path(identity_file.as_path(), identity_pass)?;
                 let node_address = keys.chain_key.public().to_address();
                 let onboarding = setup_onboarding(
                     sender.clone(),
@@ -621,7 +633,7 @@ fn determine_run_mode(
     };
 
     let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
-    let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
+    let keys = identity::from_path(identity_file.as_path(), identity_pass)?;
     let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
     let hopr = Arc::new(hoprd);
 
