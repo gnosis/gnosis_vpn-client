@@ -57,3 +57,13 @@ safe_module:
 ```shell
 sudo RUST_BACKTRACE=1 RUST_LOG=info gnosis_vpn -c <PATH_TO_VPN_FILES>/gvpn-staging.toml --hopr-config-path <PATH_TO_CONFIG_DIR_STRUCTURE>/conf/hopr.cfg.yaml
 ```
+
+5. check the status:
+```shell
+gnosis_vpn-ctl status
+```
+
+6. connect to e.g. London:
+```shell
+gnosis_vpn-ctl connect 0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA
+```
