@@ -1,4 +1,5 @@
 use edgli::hopr_lib::Address;
+use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use primitive_types::U256;
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
@@ -31,11 +32,22 @@ pub struct Chain {
     node_address: Address,
 }
 
+pub struct NodeBalance {
+    pub node_xdai: Balance<XDai>,
+    pub safe_wxhopr: Balance<WxHOPR>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct BalanceResponse {
     jsonrpc: String,
     result: String,
     id: String,
+}
+
+impl NodeBalance {
+    pub fn new(node_xdai: Balance<XDai>, safe_wxhopr: Balance<WxHOPR>) -> Self {
+        NodeBalance { node_xdai, safe_wxhopr }
+    }
 }
 
 impl Chain {
@@ -46,7 +58,7 @@ impl Chain {
         }
     }
 
-    pub fn node_address_balance(&self, client: &blocking::Client) -> Result<(), Error> {
+    pub fn node_address_balance(&self, client: &blocking::Client) -> Result<NodeBalance, Error> {
         let headers = remote_data::json_headers();
 
         let data =[
@@ -79,20 +91,21 @@ impl Chain {
             .send()?
             .json::<BalanceResponse>()?;
 
+        if resp.id != json["id"] {
+            return Err(Error::JsonRPCIdMismatch);
+        }
         let bytes = hex::decode(resp.result.strip_prefix("0x").ok_or(Error::InvalidHexString)?)?;
-        tracing::debug!(?bytes, "node address balance response");
 
         let len = bytes.len();
         let last = &bytes[len - 32..len];
         let third_last = &bytes[len - 32 * 3..len - 32 * 2];
 
-        tracing::debug!(?last, ?third_last, "node address balance response");
-
         let last_u256 = U256::from_big_endian(last);
         let third_last_u256 = U256::from_big_endian(third_last);
 
-        tracing::debug!(?last_u256, ?third_last_u256, "u256");
+        let xdai = Balance::<XDai>::from(last_u256);
+        let wxhopr = Balance::<WxHOPR>::from(third_last_u256);
 
-        Ok(())
+        Ok(NodeBalance::new(xdai, wxhopr));
     }
 }
