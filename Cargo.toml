@@ -11,6 +11,14 @@ license = "LGPL-3.0"
 name = "gnosis_vpn"
 
 [workspace.dependencies]
+alloy = { version = "=1.0.37", default-features = false, features = [
+  "essentials",
+  "json-rpc",
+  "node-bindings",
+  "contract",
+  "k256",
+  "std",
+]}
 anyhow = { version = "1.0.100" }
 async-lock = { version = "3.4.1" }
 backoff = "0.4.0"

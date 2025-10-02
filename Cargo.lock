@@ -4030,6 +4030,7 @@ dependencies = [
 name = "gnosis_vpn-lib"
 version = "1.0.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-lock 3.4.1",
  "backoff",
