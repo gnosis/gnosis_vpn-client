@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::thread;
+use std::time::Duration;
 
 use crate::hopr::chain::{self, Chain};
 
@@ -17,14 +18,16 @@ pub enum Event {
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum Phase {
-    CheckNodeBalance,
+    CheckAccountBalance,
+    WaitAccountBalance,
     DeploySafe,
     FetchSafeModule,
 }
 
 #[derive(Debug)]
 enum InternalEvent {
-    NodeAddressBalance(Result<(), chain::Error>),
+    NodeAddressBalance(Result<chain::AccountBalance, chain::Error>),
+    TickAccountBalance,
     DeploySafe(Result<Uuid, chain::Error>),
     FetchSafeModule(Result<String, chain::Error>),
 }
@@ -37,7 +40,10 @@ enum BackoffState {
 }
 
 #[derive(Debug, Error)]
-enum InternalError {}
+enum InternalError {
+    #[error("chain error: {0}")]
+    Chain(#[from] chain::Error),
+}
 
 #[derive(Clone)]
 pub struct Onboarding {
@@ -61,7 +67,7 @@ impl Onboarding {
         Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
-            phase: Phase::CheckNodeBalance,
+            phase: Phase::CheckAccountBalance,
             client: blocking::Client::new(),
             sender,
             chain,
@@ -134,7 +140,8 @@ impl Onboarding {
     fn act(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match self.phase {
-            Phase::CheckNodeBalance => self.fetch_node_address_balance(),
+            Phase::CheckAccountBalance => self.fetch_node_address_balance(),
+            Phase::WaitAccountBalance => self.wait_account_balance(),
             Phase::DeploySafe => self.deploy_safe(),
             Phase::FetchSafeModule => self.fetch_safe_module(),
         }
@@ -143,21 +150,17 @@ impl Onboarding {
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::NodeAddressBalance(res) => {
-                self.phase = Phase::DeploySafe;
+                let balance = res?;
                 self.backoff = BackoffState::Inactive;
-                //    match res {
-                //        Ok(balance) => {
-                //            tracing::info!(phase = %self.phase, balance, "Node address balance fetched successfully");
-                //            // Proceed to next phase
-                //            self.phase = Phase::DeploySafe;
-                //            // Reset backoff on success
-                //            self.backoff = BackoffState::Inactive;
-                //        }
-                //        Err(error) => {
-                //            tracing::error!(phase = %self.phase, %error, "Failed to fetch node address balance");
-                //            // Backoff will be handled in the main loop
-                //        }
-                // }
+                if balance.node_xdai.is_zero() || balance.safe_wxhopr.is_zero() {
+                    self.phase = Phase::WaitAccountBalance;
+                } else {
+                    self.phase = Phase::DeploySafe;
+                }
+                Ok(())
+            }
+            InternalEvent::TickAccountBalance => {
+                self.phase = Phase::CheckAccountBalance;
                 Ok(())
             }
             InternalEvent::DeploySafe(res) => {
@@ -204,7 +207,7 @@ impl Onboarding {
         }
         let chain = self.chain.clone();
         thread::spawn(move || {
-            let res = chain.node_address_balance(&client);
+            let res = chain.account_balance(&client);
             _ = s.send(InternalEvent::NodeAddressBalance(res));
         });
         r
@@ -237,12 +240,22 @@ impl Onboarding {
         });
         r
     }
+
+    fn wait_account_balance(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let (s, r) = crossbeam_channel::bounded(1);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(10));
+            _ = s.send(InternalEvent::TickAccountBalance);
+        });
+        r
+    }
 }
 
 impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Phase::CheckNodeBalance => write!(f, "CheckNodeBalance"),
+            Phase::CheckAccountBalance => write!(f, "CheckAccountBalance"),
+            Phase::WaitAccountBalance => write!(f, "WaitAccountBalance"),
             Phase::DeploySafe => write!(f, "DeploySafe"),
             Phase::FetchSafeModule => write!(f, "FetchSafeModule"),
         }
@@ -253,6 +266,7 @@ impl Display for InternalEvent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             InternalEvent::NodeAddressBalance(res) => write!(f, "NodeAddressBalance({res:?})"),
+            InternalEvent::TickAccountBalance => write!(f, "TickAccountBalance"),
             InternalEvent::DeploySafe(res) => write!(f, "DeploySafe({res:?})"),
             InternalEvent::FetchSafeModule(res) => write!(f, "FetchSafeModule({res:?})"),
         }

@@ -32,7 +32,8 @@ pub struct Chain {
     node_address: Address,
 }
 
-pub struct NodeBalance {
+#[derive(Clone, Debug)]
+pub struct AccountBalance {
     pub node_xdai: Balance<XDai>,
     pub safe_wxhopr: Balance<WxHOPR>,
 }
@@ -44,9 +45,9 @@ struct BalanceResponse {
     id: String,
 }
 
-impl NodeBalance {
+impl AccountBalance {
     pub fn new(node_xdai: Balance<XDai>, safe_wxhopr: Balance<WxHOPR>) -> Self {
-        NodeBalance { node_xdai, safe_wxhopr }
+        AccountBalance { node_xdai, safe_wxhopr }
     }
 }
 
@@ -58,7 +59,7 @@ impl Chain {
         }
     }
 
-    pub fn node_address_balance(&self, client: &blocking::Client) -> Result<NodeBalance, Error> {
+    pub fn account_balance(&self, client: &blocking::Client) -> Result<AccountBalance, Error> {
         let headers = remote_data::json_headers();
 
         let data =[
@@ -106,6 +107,6 @@ impl Chain {
         let xdai = Balance::<XDai>::from(last_u256);
         let wxhopr = Balance::<WxHOPR>::from(third_last_u256);
 
-        Ok(NodeBalance::new(xdai, wxhopr))
+        Ok(AccountBalance::new(xdai, wxhopr))
     }
 }
