@@ -1,28 +1,18 @@
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use backoff::{ExponentialBackoff, backoff::Backoff};
 use crossbeam_channel;
-use rand::Rng;
 use reqwest::blocking;
 use thiserror::Error;
+use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::thread;
-use std::time::Duration;
 
-use crate::entry_node::{self, EntryNode};
-use crate::gvpn_client::{self, Registration};
-use crate::log_output;
-use crate::ping;
-use crate::remote_data;
-use crate::session::{self, Protocol, Session};
-use crate::wg_tooling;
-
-use destination::Destination;
-use monitor::Monitor;
-use options::Options;
+use crate::hopr::chain::{self, Chain};
 
 #[derive(Clone, Debug)]
-pub enum Event {}
+pub enum Event {
+    BackoffExhausted,
+}
 
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
@@ -33,7 +23,11 @@ enum Phase {
 }
 
 #[derive(Debug)]
-enum InternalEvent {}
+enum InternalEvent {
+    NodeAddressBalance(Result<(), chain::Error>),
+    DeploySafe(Result<Uuid, chain::Error>),
+    FetchSafeModule(Result<String, chain::Error>),
+}
 
 #[derive(Clone, Debug)]
 enum BackoffState {
@@ -59,16 +53,18 @@ pub struct Onboarding {
 
     // static input data
     sender: crossbeam_channel::Sender<Event>,
+    chain: Chain,
 }
 
 impl Onboarding {
-    pub fn new(sender: crossbeam_channel::Sender<Event>) -> Self {
+    pub fn new(sender: crossbeam_channel::Sender<Event>, chain: Chain) -> Self {
         Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             phase: Phase::CheckNodeBalance,
             client: blocking::Client::new(),
             sender,
+            chain,
         }
     }
 
@@ -138,64 +134,104 @@ impl Onboarding {
     fn act(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match self.phase {
-            Phase::Info => self.fetch_info(),
-            Phase::Balance => self.fetch_balance(),
-            Phase::Idle(_system_time) => self.idle(),
+            Phase::CheckNodeBalance => self.fetch_node_address_balance(),
+            Phase::DeploySafe => self.deploy_safe(),
+            Phase::FetchSafeModule => self.fetch_safe_module(),
         }
     }
 
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
-            InternalEvent::Info(res) => {
-                self.sender.send(Event::Info(res))?;
-                self.phase = Phase::Balance;
-                self.backoff = BackoffState::Inactive;
+            InternalEvent::NodeAddressBalance(res) => {
+                //    match res {
+                //        Ok(balance) => {
+                //            tracing::info!(phase = %self.phase, balance, "Node address balance fetched successfully");
+                //            // Proceed to next phase
+                //            self.phase = Phase::DeploySafe;
+                //            // Reset backoff on success
+                //            self.backoff = BackoffState::Inactive;
+                //        }
+                //        Err(error) => {
+                //            tracing::error!(phase = %self.phase, %error, "Failed to fetch node address balance");
+                //            // Backoff will be handled in the main loop
+                //        }
+                // }
                 Ok(())
             }
-            InternalEvent::Balance(res) => {
-                self.sender.send(Event::Balance(res?))?;
-                self.phase = Phase::Idle(SystemTime::now());
-                self.backoff = BackoffState::Inactive;
+            InternalEvent::DeploySafe(res) => {
+                //match res {
+                //        Ok(safe_id) => {
+                //            tracing::info!(phase = %self.phase, safe_id = %safe_id, "Safe deployed successfully");
+                //            // Proceed to next phase
+                //            self.phase = Phase::FetchSafeModule;
+                //            // Reset backoff on success
+                //            self.backoff = BackoffState::Inactive;
+                //        }
+                //        Err(error) => {
+                //            tracing::error!(phase = %self.phase, %error, "Failed to deploy safe");
+                //            // Backoff will be handled in the main loop
+                //        }
+                //}
                 Ok(())
             }
-            InternalEvent::Tick => {
-                self.phase = Phase::Balance;
+            InternalEvent::FetchSafeModule(res) => {
+                //match res {
+                //       Ok(module_address) => {
+                //           tracing::info!(phase = %self.phase, module_address = %module_address, "Safe module fetched successfully");
+                //           // Onboarding complete, could transition to an Idle phase or similar
+                //           // For now, we just log completion
+                //           tracing::info!(phase = %self.phase, "Onboarding process completed successfully");
+                //           // Reset backoff on success
+                //           self.backoff = BackoffState::Inactive;
+                //       }
+                //       Err(error) => {
+                //           tracing::error!(phase = %self.phase, %error, "Failed to fetch safe module");
+                //           // Backoff will be handled in the main loop
+                //       }
+                //}
                 Ok(())
             }
         }
     }
 
-    fn fetch_info(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn fetch_node_address_balance(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let edgli = self.edgli.clone();
+        let chain = self.chain.clone();
         thread::spawn(move || {
-            let res = edgli.info();
-            _ = s.send(InternalEvent::Info(res));
+            let res = chain.node_address_balance(&client);
+            _ = s.send(InternalEvent::NodeAddressBalance(res));
         });
         r
     }
 
-    fn fetch_balance(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn deploy_safe(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());
         }
-        let edgli = self.edgli.clone();
+        let chain = self.chain.clone();
         thread::spawn(move || {
-            let res = edgli.balances();
-            _ = s.send(InternalEvent::Balance(res));
+            // let res = chain.deploy_safe(&client);
+            // _ = s.send(InternalEvent::DeploySafe(res));
         });
         r
     }
 
-    fn idle(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn fetch_safe_module(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let client = self.client.clone();
         let (s, r) = crossbeam_channel::bounded(1);
+        if let BackoffState::Inactive = self.backoff {
+            self.backoff = BackoffState::Active(ExponentialBackoff::default());
+        }
+        let chain = self.chain.clone();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(60));
-            _ = s.send(InternalEvent::Tick);
+            // let res = chain.fetch_safe_module(&client);
+            // _ = s.send(InternalEvent::FetchSafeModule(res));
         });
         r
     }
@@ -204,9 +240,9 @@ impl Onboarding {
 impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Phase::Info => write!(f, "Info"),
-            Phase::Balance => write!(f, "Balance"),
-            Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
+            Phase::CheckNodeBalance => write!(f, "CheckNodeBalance"),
+            Phase::DeploySafe => write!(f, "DeploySafe"),
+            Phase::FetchSafeModule => write!(f, "FetchSafeModule"),
         }
     }
 }
@@ -214,9 +250,9 @@ impl Display for Phase {
 impl Display for InternalEvent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            InternalEvent::Info(res) => write!(f, "Info({res:?})"),
-            InternalEvent::Balance(res) => write!(f, "Balance({res:?})"),
-            InternalEvent::Tick => write!(f, "Tick"),
+            InternalEvent::NodeAddressBalance(res) => write!(f, "NodeAddressBalance({res:?})"),
+            InternalEvent::DeploySafe(res) => write!(f, "DeploySafe({res:?})"),
+            InternalEvent::FetchSafeModule(res) => write!(f, "FetchSafeModule({res:?})"),
         }
     }
 }
@@ -224,8 +260,6 @@ impl Display for InternalEvent {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::Info(info) => write!(f, "Info: {info}"),
-            Event::Balance(balance) => write!(f, "Balance: {balance}"),
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
         }
     }

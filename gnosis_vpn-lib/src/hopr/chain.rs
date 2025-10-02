@@ -18,6 +18,7 @@ pub enum Error {
     Utf8(#[from] std::str::Utf8Error),
 }
 
+#[derive(Clone, Debug)]
 pub struct Chain {
     rpc_provider: Url,
     node_address: Address,
@@ -31,7 +32,7 @@ impl Chain {
         }
     }
 
-    pub fn node_address_balance(&self, client: &blocking::Client, id: &Uuid) -> Result<(), Error> {
+    pub fn node_address_balance(&self, client: &blocking::Client) -> Result<(), Error> {
         let headers = remote_data::json_headers();
 
         let data = vec![
@@ -48,9 +49,9 @@ impl Chain {
             "data": data,
         }, "latest"]);
 
-        let mut json = json!({
+        let json = json!({
             "method": "eth_call",
-            "id": id,
+            "id": Uuid::new_v4(),
             "params": params,
             "jsonrpc": "2.0",
         });
