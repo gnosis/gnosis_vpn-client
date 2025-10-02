@@ -15,10 +15,12 @@ bytesize = { workspace = true, features = ["serde"] }
 crossbeam-channel.workspace = true
 directories.workspace = true
 edgli.workspace = true
+hex.workspace = true
 human-bandwidth = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 humantime-serde.workspace = true
 ping.workspace = true
+primitive-types.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
