@@ -10,6 +10,7 @@ use crate::chain::contracts::SafeModuleDeploymentResult;
 use crate::dirs;
 
 const CONFIG_FILE: &str = "gnosisvpn-hopr.yaml";
+const DB_FILE: &str = "gnosisvpn-hopr.db";
 
 #[derive(Debug, Error)]
 pub enum Error {
