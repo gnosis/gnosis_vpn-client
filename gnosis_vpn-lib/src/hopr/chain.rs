@@ -1,4 +1,5 @@
 use edgli::hopr_lib::Address;
+use primitive_types::U256;
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,12 +17,25 @@ pub enum Error {
     Reqwest(#[from] reqwest::Error),
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
+    #[error("JSON RPC id mismatch")]
+    JsonRPCIdMismatch,
+    #[error("Hex decode error: {0}")]
+    HexDecode(#[from] hex::FromHexError),
+    #[error("Invalid hex string")]
+    InvalidHexString,
 }
 
 #[derive(Clone, Debug)]
 pub struct Chain {
     rpc_provider: Url,
     node_address: Address,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BalanceResponse {
+    jsonrpc: String,
+    result: String,
+    id: String,
 }
 
 impl Chain {
@@ -35,7 +49,7 @@ impl Chain {
     pub fn node_address_balance(&self, client: &blocking::Client) -> Result<(), Error> {
         let headers = remote_data::json_headers();
 
-        let data = vec![
+        let data =[
 "0x252dba4200000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000d4fdec44db9d44b8f2b6d529620f9c0c7066a2c10000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000002470a08231000000000000000000000000",
         self.node_address.to_string().trim_start_matches("0x"),
 "00000000000000000000000000000000000000000000000000000000000000000000000000000000ca11bde05977b3631167028862be2a173976ca11000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000244d2301cc000000000000000000000000",
@@ -62,18 +76,23 @@ impl Chain {
             .json(&json)
             .timeout(Duration::from_secs(10))
             .headers(headers)
-            .send()?;
-        // connection error checks happen before response
-        // .map_err(remote_data::connect_errors)?
-        // .error_for_status()
-        // response error can only be mapped after sending
-        // .map_err(open_response_errors)?
-        //.json::<Self>()?;
+            .send()?
+            .json::<BalanceResponse>()?;
 
-        let bytes = resp.bytes()?;
-        let text = std::str::from_utf8(&bytes)?;
+        let bytes = hex::decode(resp.result.strip_prefix("0x").ok_or(Error::InvalidHexString)?)?;
+        tracing::debug!(?bytes, "node address balance response");
 
-        tracing::debug!(%self.rpc_provider, ?text, "node address balance response");
+        let len = bytes.len();
+        let last = &bytes[len - 32..len];
+        let third_last = &bytes[len - 32 * 3..len - 32 * 2];
+
+        tracing::debug!(?last, ?third_last, "node address balance response");
+
+        let last_u256 = U256::from_big_endian(last);
+        let third_last_u256 = U256::from_big_endian(third_last);
+
+        tracing::debug!(?last_u256, ?third_last_u256, "u256");
+
         Ok(())
     }
 }
