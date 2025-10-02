@@ -21,11 +21,12 @@ pub(crate) type GnosisProvider = FillProvider<
     >,
     RootProvider,
 >;
+
 /// RPC client for interacting with Gnosis chain
 #[derive(Debug)]
 pub struct GnosisRpcClient {
-    provider: GnosisProvider,
-    rpc_url: String,
+    pub provider: GnosisProvider,
+    pub rpc_url: String,
 }
 
 impl GnosisRpcClient {
