@@ -39,7 +39,7 @@ url = { version = "2.5.7", features = ["serde"] }
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "3cdc45977ef07787b33caff2e78316edc30ce920" } # branch = "kauki/feat/add-basic-api-interfaces"
 serde_with = "3.14"
 serde_yaml = "0.9.34"
-
+uuid = { version = "1.18.1", features = ["v4"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 
