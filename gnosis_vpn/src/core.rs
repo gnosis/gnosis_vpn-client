@@ -44,6 +44,8 @@ pub struct Core {
     sender: crossbeam_channel::Sender<Event>,
     // shutdown event emitter
     shutdown_sender: Option<crossbeam_channel::Sender<()>>,
+    // internal cancellation sender
+    cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
 
     // depending on safe creation state
     run_mode: RunMode,
@@ -68,8 +70,6 @@ enum RunMode {
         hopr: Arc<Hopr>,
         // thread loop around funding and general node
         node: Node,
-        // internal cancellation sender
-        cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
     },
 }
 
@@ -95,7 +95,8 @@ impl Core {
         let config = config::read(config_path)?;
         wg_tooling::available()?;
 
-        let run_mode = determine_run_mode(&hopr_params, sender.clone())?;
+        let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
+        let run_mode = determine_run_mode(&hopr_params, sender.clone(), cancel_channel.1.clone())?;
 
         Ok(Core {
             config,
@@ -108,6 +109,7 @@ impl Core {
             balance: None,
             info: None,
             hopr_params,
+            cancel_channel,
         })
     }
 
@@ -116,10 +118,19 @@ impl Core {
         self.shutdown_sender = Some(sender);
         match &self.run_mode {
             RunMode::PreSafe(_) => {
+                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to onboarding");
+                });
                 tracing::debug!("shutting down from presafe mode");
+                if let Some(s) = self.shutdown_sender.as_ref() {
+                    _ = s.send(());
+                };
             }
-            RunMode::Full { cancel_channel, .. } => {
-                _ = cancel_channel.0.send(Cancel::Node).map_err(|e| {
+            RunMode::Full { .. } => {
+                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to onboarding");
+                });
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to node");
                 });
                 match &mut self.connection {
@@ -130,7 +141,7 @@ impl Core {
                     }
                     None => {
                         tracing::debug!("direct shutdown - no connection to disconnect");
-                        _ = cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
                             tracing::error!(%e, "failed to send cancel to connection");
                         });
                         if let Some(s) = self.shutdown_sender.as_ref() {
@@ -221,7 +232,8 @@ impl Core {
                 _ => Ok(Response::Balance(None)),
             },
             Command::RefreshNode => {
-                self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone())?;
+                self.run_mode =
+                    determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
                 Ok(Response::RefreshNode)
             }
         }
@@ -268,7 +280,7 @@ impl Core {
         self.config = config;
 
         // recheck run mode
-        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone())?;
+        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
         Ok(())
     }
 
@@ -366,8 +378,8 @@ impl Core {
         tracing::info!("connection closed");
         self.session_connected = false;
         self.connection = None;
-        if let RunMode::Full { cancel_channel, .. } = &self.run_mode {
-            _ = cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+        if let RunMode::Full { .. } = &self.run_mode {
+            _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
                 tracing::error!(%e, "failed to send cancel to connection");
             });
         }
@@ -394,7 +406,7 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
-        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone())?;
+        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
         Ok(())
     }
 }
@@ -419,7 +431,7 @@ fn setup_onboarding(
                             // ignoring cancel event in onboarding handler
                         }
                         Err(e) => {
-                            tracing::warn!(error = ?e, "failed to receive cancel event");
+                            tracing::warn!(error = ?e, "onboarding failed to receive cancel event");
                         }
                     }
                 },
@@ -465,7 +477,7 @@ fn setup_node(
                             // ignoring cancel event in node handler
                         }
                         Err(e) => {
-                            tracing::warn!(error = ?e, "failed to receive cancel event");
+                            tracing::warn!(error = ?e, "node init failed to receive cancel event");
                         }
                     }
                 },
@@ -508,7 +520,7 @@ fn setup_node(
                             // ignoring cancel event in node handler
                         }
                         Err(e) => {
-                            tracing::warn!(error = ?e, "failed to receive cancel event");
+                            tracing::warn!(error = ?e, "node loop failed to receive cancel event");
                         }
                     }
                 },
@@ -530,7 +542,11 @@ fn setup_node(
     node
 }
 
-fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sender<Event>) -> Result<RunMode, Error> {
+fn determine_run_mode(
+    hopr_params: &HoprParams,
+    sender: crossbeam_channel::Sender<Event>,
+    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+) -> Result<RunMode, Error> {
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
         None => {
@@ -563,8 +579,6 @@ fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sende
         }
     };
 
-    let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-
     let cfg = match &hopr_params.config_path {
         Some(path) => HoprConfig::from_path(path)?,
         None => {
@@ -575,7 +589,7 @@ fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sende
                 let keys = HoprIdentity::from_path(identity_file.as_path(), identity_pass)?;
                 let node_address = keys.chain_key.public().to_address();
                 let chain = chain::Chain::new(hopr_params.rpc_provider.clone(), node_address);
-                let onboarding = setup_onboarding(sender.clone(), cancel_channel.1.clone(), chain);
+                let onboarding = setup_onboarding(sender.clone(), cancel_receiver.clone(), chain);
                 return Ok(RunMode::PreSafe(onboarding));
             }
         }
@@ -588,16 +602,12 @@ fn determine_run_mode(hopr_params: &HoprParams, sender: crossbeam_channel::Sende
 
     let node = setup_node(
         sender.clone(),
-        cancel_channel.1.clone(),
+        cancel_receiver.clone(),
         hopr.clone(),
         hopr_startup_notifier_rx.clone(),
     );
 
     node.run();
 
-    Ok(RunMode::Full {
-        hopr,
-        node,
-        cancel_channel,
-    })
+    Ok(RunMode::Full { hopr, node })
 }
