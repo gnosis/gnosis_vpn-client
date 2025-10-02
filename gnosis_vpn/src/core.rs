@@ -590,6 +590,7 @@ fn determine_run_mode(
                 let node_address = keys.chain_key.public().to_address();
                 let chain = chain::Chain::new(hopr_params.rpc_provider.clone(), node_address);
                 let onboarding = setup_onboarding(sender.clone(), cancel_receiver.clone(), chain);
+                onboarding.run();
                 return Ok(RunMode::PreSafe(onboarding));
             }
         }
