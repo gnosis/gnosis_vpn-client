@@ -49,6 +49,12 @@ pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
+pub fn write_default(cfg: &HoprLibConfig) -> Result<(), Error> {
+    let conf_file = config_file()?;
+    let content = serde_yaml::to_string(&cfg)?;
+    fs::write(&conf_file, &content).map_err(Error::IO)
+}
+
 pub fn generate(network: String, rpc_provider: Url, safe_module: SafeModule) -> Result<HoprLibConfig, Error> {
     let content = format!(
         r#"

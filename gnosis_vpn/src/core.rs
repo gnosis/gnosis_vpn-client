@@ -429,6 +429,8 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to finished onboarding");
         });
+        let cfg = hopr_config::generate("rotsee".to_string(), self.hopr_params.rpc_provider.clone(), safe_module)?;
+        hopr_config::write_default(&cfg)?;
         self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
         Ok(())
     }
