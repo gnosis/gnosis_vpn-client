@@ -240,15 +240,21 @@ impl Core {
                 }
                 _ => Ok(Response::Balance(None)),
             },
-            Command::RefreshNode => {
-                self.run_mode = determine_run_mode(
-                    self.sender.clone(),
-                    self.cancel_channel.1.clone(),
-                    &self.hopr_params,
-                    self.config.channel_targets(),
-                )?;
-                Ok(Response::RefreshNode)
-            }
+            Command::RefreshNode => match &self.run_mode {
+                RunMode::PreSafe(_) => {
+                    tracing::info!("edge client not running - cannot refresh node");
+                    return Err(Error::EdgeNotReady);
+                }
+                RunMode::Full { .. } => {
+                    self.run_mode = determine_run_mode(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        &self.hopr_params,
+                        self.config.channel_targets(),
+                    )?;
+                    Ok(Response::RefreshNode)
+                }
+            },
         }
     }
 
