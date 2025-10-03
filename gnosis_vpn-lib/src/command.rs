@@ -43,7 +43,10 @@ pub enum Status {
     Disconnecting(Destination),
     Connected(Destination),
     Disconnected,
-    PreparingSafe(balance::PreSafe),
+    PreparingSafe {
+        node_address: Address,
+        balance: balance::PreSafe,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,8 +100,11 @@ impl Status {
         Status::Disconnected
     }
 
-    pub fn preparing_safe(pre_safe: balance::PreSafe) -> Self {
-        Status::PreparingSafe(pre_safe)
+    pub fn preparing_safe(node_address: Address, pre_safe: balance::PreSafe) -> Self {
+        Status::PreparingSafe {
+            node_address,
+            balance: pre_safe,
+        }
     }
 }
 
@@ -216,7 +222,9 @@ impl fmt::Display for Status {
             Status::Disconnecting(dest) => write!(f, "Disconnecting from {dest}"),
             Status::Connected(dest) => write!(f, "Connected to {dest}"),
             Status::Disconnected => write!(f, "Disconnected"),
-            Status::PreparingSafe(pre_safe) => write!(f, "Waiting on initial funds: {pre_safe}"),
+            Status::PreparingSafe { node_address, balance } => {
+                write!(f, "Waiting for funding on {node_address}: {balance}")
+            }
         }
     }
 }

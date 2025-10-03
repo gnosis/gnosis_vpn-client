@@ -71,8 +71,11 @@ pub struct Core {
 }
 
 enum RunMode {
-    #[allow(dead_code)]
-    PreSafe(Box<Onboarding>),
+    PreSafe {
+        node_address: Address,
+        #[allow(dead_code)]
+        onboarding: Box<Onboarding>,
+    },
     Full {
         // hoprd edge client
         hopr: Arc<Hopr>,
@@ -125,7 +128,7 @@ impl Core {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
         match &self.run_mode {
-            RunMode::PreSafe(_) => {
+            RunMode::PreSafe { .. } => {
                 _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to onboarding");
                 });
@@ -190,9 +193,9 @@ impl Core {
             Command::Status => {
                 tracing::debug!("gathering status");
                 let status = match self.run_mode {
-                    RunMode::PreSafe(..) => {
+                    RunMode::PreSafe { node_address, .. } => {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
-                        command::Status::preparing_safe(balance)
+                        command::Status::preparing_safe(node_address, balance)
                     }
                     RunMode::Full { .. } => {
                         match (
@@ -245,7 +248,7 @@ impl Core {
                 _ => Ok(Response::Balance(None)),
             },
             Command::RefreshNode => match &self.run_mode {
-                RunMode::PreSafe(_) => {
+                RunMode::PreSafe { .. } => {
                     tracing::info!("edge client not running - cannot refresh node");
                     Err(Error::EdgeNotReady)
                 }
@@ -339,7 +342,7 @@ impl Core {
 
     fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
         match &self.run_mode {
-            RunMode::PreSafe(_) => {
+            RunMode::PreSafe { .. } => {
                 tracing::error!("edge client not running - cannot connect");
                 Err(Error::EdgeNotReady)
             }
@@ -678,7 +681,10 @@ fn determine_run_mode(
                     node_address,
                 );
                 onboarding.run();
-                return Ok(RunMode::PreSafe(Box::new(onboarding)));
+                return Ok(RunMode::PreSafe {
+                    node_address,
+                    onboarding: Box::new(onboarding),
+                });
             }
         }
     };
