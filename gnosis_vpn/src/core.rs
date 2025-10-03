@@ -189,24 +189,29 @@ impl Core {
             }
             Command::Status => {
                 tracing::debug!("gathering status");
-                let status = match (
-                    self.target_destination.clone(),
-                    self.connection.clone().map(|c| c.destination()),
-                    self.session_connected,
-                ) {
-                    (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
-                    (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
-                    (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
-                    (None, None, _) => command::Status::disconnected(),
+                let status = match self.run_mode {
+                    RunMode::PreSafe(..) => {
+                        let balance = self.presafe_balance.clone().unwrap_or_default();
+                        command::Status::preparing_safe(balance)
+                    }
+                    RunMode::Full { .. } => {
+                        match (
+                            self.target_destination.clone(),
+                            self.connection.clone().map(|c| c.destination()),
+                            self.session_connected,
+                        ) {
+                            (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
+                            (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
+                            (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
+                            (None, None, _) => command::Status::disconnected(),
+                        }
+                    }
                 };
-                tracing::debug!(?status, ?self.balance, "gathering status foo");
 
-                let funding_issues: Option<Vec<balance::FundingIssue>> = match &self.balance {
-                    Some(balance) => Some(balance.to_funding_issues(self.config.channel_targets().len())?),
-                    None => None,
+                let network = match self.hopr_params.config_mode.clone() {
+                    hopr_params::ConfigMode::Manual(_) => None,
+                    hopr_params::ConfigMode::Generated { network, .. } => Some(network),
                 };
-
-                tracing::debug!(?funding_issues, "FundingIssue");
 
                 Ok(Response::status(command::StatusResponse::new(
                     status,
@@ -218,8 +223,7 @@ impl Core {
                             dest.into()
                         })
                         .collect(),
-                    funding_issues.into(),
-                    self.info.as_ref().map(|i| i.network.to_string()),
+                    network,
                 )))
             }
             Command::Balance => match (&self.balance, &self.info) {

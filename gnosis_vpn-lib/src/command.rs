@@ -1,14 +1,14 @@
-use edgli::hopr_lib::RoutingOptions;
+use edgli::hopr_lib::{Address, RoutingOptions};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::balance::FundingIssue;
+use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
-use edgli::hopr_lib::Address;
+use crate::network::Network;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
@@ -34,8 +34,7 @@ pub enum Response {
 pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
-    pub funding: FundingState,
-    pub network: Option<String>,
+    pub network: Option<Network>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,14 +43,7 @@ pub enum Status {
     Disconnecting(Destination),
     Connected(Destination),
     Disconnected,
-}
-
-// in order of priority
-#[derive(Debug, Serialize, Deserialize)]
-pub enum FundingState {
-    Unknown, // state not queried yet
-    TopIssue(FundingIssue),
-    WellFunded,
+    PreparingSafe(balance::PreSafe),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,6 +96,10 @@ impl Status {
     pub fn disconnected() -> Self {
         Status::Disconnected
     }
+
+    pub fn preparing_safe(pre_safe: balance::PreSafe) -> Self {
+        Status::PreparingSafe(pre_safe)
+    }
 }
 
 impl ConnectResponse {
@@ -127,16 +123,10 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(
-        status: Status,
-        available_destinations: Vec<Destination>,
-        funding: FundingState,
-        network: Option<String>,
-    ) -> Self {
+    pub fn new(status: Status, available_destinations: Vec<Destination>, network: Option<Network>) -> Self {
         StatusResponse {
             status,
             available_destinations,
-            funding,
             network,
         }
     }
@@ -226,20 +216,7 @@ impl fmt::Display for Status {
             Status::Disconnecting(dest) => write!(f, "Disconnecting from {dest}"),
             Status::Connected(dest) => write!(f, "Connected to {dest}"),
             Status::Disconnected => write!(f, "Disconnected"),
+            Status::PreparingSafe(pre_safe) => write!(f, "Waiting on initial funds: {pre_safe}"),
         }
-    }
-}
-
-impl From<Option<Vec<FundingIssue>>> for FundingState {
-    fn from(issues: Option<Vec<FundingIssue>>) -> Self {
-        let issues = match issues {
-            Some(issues) => issues,
-            None => return FundingState::Unknown,
-        };
-        if issues.is_empty() {
-            return FundingState::WellFunded;
-        }
-        let top_issue = &issues[0];
-        FundingState::TopIssue(top_issue.clone())
     }
 }

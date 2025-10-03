@@ -38,10 +38,19 @@ impl Display for FundingIssue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PreSafe {
     pub node_xdai: Balance<XDai>,
     pub node_wxhopr: Balance<WxHOPR>,
+}
+
+impl Default for PreSafe {
+    fn default() -> Self {
+        Self {
+            node_xdai: Balance::<XDai>::zero(),
+            node_wxhopr: Balance::<WxHOPR>::zero(),
+        }
+    }
 }
 
 impl Display for PreSafe {

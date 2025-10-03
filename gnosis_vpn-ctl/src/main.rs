@@ -58,15 +58,11 @@ fn pretty_print(resp: &Response) {
         Response::Status(command::StatusResponse {
             status,
             available_destinations,
-            funding,
             network,
         }) => {
             let mut str_resp = format!("Status: {status}\n");
             if let Some(network) = network {
                 str_resp.push_str(&format!("Network: {network}\n"));
-            }
-            if let command::FundingState::TopIssue(issue) = funding {
-                str_resp.push_str(&format!("---\nWARNING: {issue}\n---\n"));
             }
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
