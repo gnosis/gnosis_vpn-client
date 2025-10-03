@@ -16,6 +16,7 @@ use gnosis_vpn_lib::socket;
 mod cli;
 mod core;
 mod event;
+mod hopr_params;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -305,6 +306,7 @@ fn loop_daemon(
         identity_file: args.hopr_identity_file.clone(),
         identity_pass: args.hopr_identity_pass.clone(),
         rpc_provider: args.hopr_rpc_provider.clone(),
+        network: args.hopr_network.clone(),
     };
     let config_path = args.config_path.clone();
     let mut core = match core::Core::init(&config_path, sender, hopr_params) {

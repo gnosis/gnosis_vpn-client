@@ -6,7 +6,7 @@ use thiserror::Error;
 use url::Url;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
@@ -19,6 +19,7 @@ use gnosis_vpn_lib::onboarding::{self, Onboarding};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
+use crate::hopr_params::{self, HoprParams};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -77,14 +78,6 @@ enum RunMode {
         // thread loop around funding and general node
         node: Node,
     },
-}
-
-pub struct HoprParams {
-    pub config_path: Option<PathBuf>,
-    pub identity_file: Option<PathBuf>,
-    pub identity_pass: Option<String>,
-    pub rpc_provider: url::Url,
-    pub network: Option<String>,
 }
 
 enum Cancel {
@@ -430,8 +423,16 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to finished onboarding");
         });
-        let cfg = hopr_config::generate("rotsee".to_string(), self.hopr_params.rpc_provider.clone(), safe_module)?;
-        hopr_config::write_default(&cfg)?;
+        match self.hopr_params.config_mode {
+            hopr_params::ConfigMode::Manual(_) => {
+                tracing::warn!("manual configuration mode - not overwriting existing configuration");
+                return Ok(());
+            }
+            hopr_params::ConfigMode::Generated { rpc_provider, network } => {
+                let cfg = hopr_config::generate(network, rpc_provider, safe_module)?;
+                hopr_config::write_default(&cfg)?;
+            }
+        };
         self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
         Ok(())
     }
@@ -613,9 +614,9 @@ fn determine_run_mode(
         }
     };
 
-    let cfg = match &hopr_params.config_path {
-        Some(path) => hopr_config::from_path(path)?,
-        None => {
+    let cfg = match &hopr_params.config_mode {
+        hopr_params::ConfigMode::Manual(path) => hopr_config::from_path(path)?,
+        hopr_params::ConfigMode::Generated { rpc_provider, network } => {
             let conf_file = hopr_config::config_file()?;
             if conf_file.exists() {
                 hopr_config::from_path(&conf_file)?
@@ -626,7 +627,7 @@ fn determine_run_mode(
                     sender.clone(),
                     cancel_receiver.clone(),
                     keys.chain_key,
-                    hopr_params.rpc_provider.clone(),
+                    rpc_provider,
                     node_address,
                 );
                 onboarding.run();
