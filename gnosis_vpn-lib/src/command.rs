@@ -1,4 +1,5 @@
 use edgli::hopr_lib::{Address, RoutingOptions};
+use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -45,7 +46,8 @@ pub enum Status {
     Disconnected,
     PreparingSafe {
         node_address: Address,
-        balance: balance::PreSafe,
+        node_xdai: Balance<XDai>,
+        node_wxhopr: Balance<WxHOPR>,
     },
 }
 
@@ -103,7 +105,8 @@ impl Status {
     pub fn preparing_safe(node_address: Address, pre_safe: balance::PreSafe) -> Self {
         Status::PreparingSafe {
             node_address,
-            balance: pre_safe,
+            node_xdai: pre_safe.node_xdai,
+            node_wxhopr: pre_safe.node_wxhopr,
         }
     }
 }
@@ -222,8 +225,12 @@ impl fmt::Display for Status {
             Status::Disconnecting(dest) => write!(f, "Disconnecting from {dest}"),
             Status::Connected(dest) => write!(f, "Connected to {dest}"),
             Status::Disconnected => write!(f, "Disconnected"),
-            Status::PreparingSafe { node_address, balance } => {
-                write!(f, "Waiting for funding on {node_address}: {balance}")
+            Status::PreparingSafe {
+                node_address,
+                node_xdai,
+                node_wxhopr,
+            } => {
+                write!(f, "Waiting for funding on {node_address}: {node_xdai}, {node_wxhopr}")
             }
         }
     }
