@@ -71,11 +71,13 @@ pub struct Core {
 }
 
 enum RunMode {
+    #[allow(dead_code)]
     PreSafe(Onboarding),
     Full {
         // hoprd edge client
         hopr: Arc<Hopr>,
         // thread loop around funding and general node
+        #[allow(dead_code)]
         node: Node,
     },
 }
@@ -423,7 +425,7 @@ impl Core {
         _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
             tracing::error!(%e, "failed to send cancel to finished onboarding");
         });
-        match self.hopr_params.config_mode {
+        match self.hopr_params.config_mode.clone() {
             hopr_params::ConfigMode::Manual(_) => {
                 tracing::warn!("manual configuration mode - not overwriting existing configuration");
                 return Ok(());
@@ -614,9 +616,9 @@ fn determine_run_mode(
         }
     };
 
-    let cfg = match &hopr_params.config_mode {
-        hopr_params::ConfigMode::Manual(path) => hopr_config::from_path(path)?,
-        hopr_params::ConfigMode::Generated { rpc_provider, network } => {
+    let cfg = match hopr_params.config_mode.clone() {
+        hopr_params::ConfigMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
+        hopr_params::ConfigMode::Generated { rpc_provider, .. } => {
             let conf_file = hopr_config::config_file()?;
             if conf_file.exists() {
                 hopr_config::from_path(&conf_file)?

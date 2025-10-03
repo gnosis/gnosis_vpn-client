@@ -284,8 +284,9 @@ fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (_config_watcher, config_receiver) = config_channel(&config_path)?;
     let socket_receiver = socket_channel(&args.socket_path)?;
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, &args);
-    match fs::remove_file(&args.socket_path) {
+    let socket_path = args.socket_path.clone();
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args);
+    match fs::remove_file(&socket_path) {
         Ok(_) => (),
         Err(e) => {
             tracing::error!(error = %e, "failed removing socket");
@@ -298,15 +299,15 @@ fn loop_daemon(
     ctrlc_receiver: &crossbeam_channel::Receiver<()>,
     config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
-    args: &cli::Cli,
+    args: cli::Cli,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let hopr_params = core::HoprParams {
-        config_path: args.hopr_config_path.clone(),
-        identity_file: args.hopr_identity_file.clone(),
-        identity_pass: args.hopr_identity_pass.clone(),
-        rpc_provider: args.hopr_rpc_provider.clone(),
-        network: args.hopr_network.clone(),
+    let hopr_params = match hopr_params::HoprParams::try_from(args.clone()) {
+        Ok(params) => params,
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to parse hopr parameters");
+            return exitcode::USAGE;
+        }
     };
     let config_path = args.config_path.clone();
     let mut core = match core::Core::init(&config_path, sender, hopr_params) {

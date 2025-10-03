@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use gnosis_vpn_lib::{config, hopr, socket};
 
 /// Gnosis VPN system service - client application for Gnosis VPN connections
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(version)]
 pub struct Cli {
     /// Socket path for communication with this servive
