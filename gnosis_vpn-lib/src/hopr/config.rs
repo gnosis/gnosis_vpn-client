@@ -1,7 +1,9 @@
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::config::HoprLibConfig;
+pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
+use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
+use url::Url;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +13,7 @@ use crate::dirs;
 
 const CONFIG_FILE: &str = "gnosisvpn-hopr.yaml";
 const DB_FILE: &str = "gnosisvpn-hopr.db";
+pub const DEFAULT_NETWORK: &str = "dufour";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -24,33 +27,15 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-#[derive(Clone, Debug)]
-pub struct SafeModule {
-    pub safe_address: Address,
-    pub module_address: Address,
-}
-
 impl From<SafeModuleDeploymentResult> for SafeModule {
     fn from(result: SafeModuleDeploymentResult) -> Self {
         Self {
             safe_address: result.safe_address.into(),
             module_address: result.module_address.into(),
+            ..Default::default()
         }
     }
 }
-
-// db:
-//   data: default
-// chain:
-//   network: default
-//   provider:  https://gnosis-rpc.publicnode.com - from parameter
-//   announce: true - static
-// host:
-//   port: 23334 - random until working one found
-//   address: !Domain edge.example.com - static
-// safe_module:
-//   safe_address: from safecreation
-//   module_address: from safecreation
 
 pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     let content = fs::read_to_string(path).map_err(|e| {
@@ -64,6 +49,44 @@ pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
+pub fn generate(network: String, rpc_provider: Url, safe_module: SafeModule) -> Result<HoprLibConfig, Error> {
+    let content = format!(
+        r#"
+db:
+    data: {db_file}
+host:
+    port: {port}
+    address: !Domain edge.example.com
+chain:
+    network: {network}
+    provider: {rpc_provider}
+    announce: false
+safe_module:
+    safe_address: {safe_address}
+    module_address: {module_address}
+strategy:
+    on_fail_continue: true
+    strategies:
+        - !AutoFunding
+          funding_amount: "10 wxHOPR"
+          min_stake_threshold: "1 wxHOPR"
+        - !ClosureFinalizer
+          max_closure_overdue: 300
+"#,
+        db_file = db_file()?.to_string_lossy(),
+        port = rand::rng().random_range(20000..65000),
+        network = network,
+        rpc_provider = rpc_provider,
+        safe_address = safe_module.safe_address,
+        module_address = safe_module.module_address,
+    );
+    serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+}
+
 pub fn config_file() -> Result<PathBuf, Error> {
     dirs::config_dir(CONFIG_FILE).map_err(Error::Dirs)
+}
+
+fn db_file() -> Result<PathBuf, Error> {
+    dirs::config_dir(DB_FILE).map_err(Error::Dirs)
 }
