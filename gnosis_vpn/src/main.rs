@@ -305,7 +305,7 @@ fn loop_daemon(
     let hopr_params = match hopr_params::HoprParams::try_from(args.clone()) {
         Ok(params) => params,
         Err(e) => {
-            tracing::error!(error = ?e, "failed to parse hopr parameters");
+            tracing::error!(error = ?e, msg = %e, "failed to parse hopr parameters");
             return exitcode::USAGE;
         }
     };

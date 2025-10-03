@@ -9,8 +9,8 @@ use crate::cli::Cli;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Conflicting launch parameters")]
-    ConflictingParams,
+    #[error("Need (hopr-rpc-provider AND hopr-network) OR hopr-config-path")]
+    RequiredParameterMissing,
 }
 
 #[derive(Clone, Debug)]
@@ -33,8 +33,8 @@ impl TryFrom<Cli> for HoprParams {
         let config_mode = match cli.hopr_config_path {
             Some(path) => ConfigMode::Manual(path),
             None => {
-                let rpc_provider = cli.hopr_rpc_provider.ok_or(Error::ConflictingParams)?;
-                let network = cli.hopr_network.ok_or(Error::ConflictingParams)?;
+                let rpc_provider = cli.hopr_rpc_provider.ok_or(Error::RequiredParameterMissing)?;
+                let network = cli.hopr_network.ok_or(Error::RequiredParameterMissing)?;
                 ConfigMode::Generated { rpc_provider, network }
             }
         };

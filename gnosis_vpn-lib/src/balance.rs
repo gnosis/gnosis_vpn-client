@@ -55,11 +55,7 @@ impl Default for PreSafe {
 
 impl Display for PreSafe {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "PreSafe(node_xdai: {}, node_wxhopr: {})",
-            self.node_xdai, self.node_wxhopr
-        )
+        write!(f, "(node_xdai: {}, node_wxhopr: {})", self.node_xdai, self.node_wxhopr)
     }
 }
 
