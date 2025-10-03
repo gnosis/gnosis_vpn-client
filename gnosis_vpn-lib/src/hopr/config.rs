@@ -1,4 +1,3 @@
-use edgli::hopr_lib::Address;
 pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
 use rand::Rng;
 use serde_yaml;

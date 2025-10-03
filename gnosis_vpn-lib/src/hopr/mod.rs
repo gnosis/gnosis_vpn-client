@@ -3,7 +3,6 @@ mod errors;
 mod types;
 pub use {api::Hopr, errors::HoprError};
 
-pub mod chain;
 pub mod config;
 pub mod identity;
 
