@@ -84,6 +84,7 @@ pub struct HoprParams {
     pub identity_file: Option<PathBuf>,
     pub identity_pass: Option<String>,
     pub rpc_provider: url::Url,
+    pub network: Option<String>,
 }
 
 enum Cancel {

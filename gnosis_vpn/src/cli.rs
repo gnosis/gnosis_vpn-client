@@ -28,8 +28,8 @@ pub struct Cli {
     pub config_path: PathBuf,
 
     /// RPC provider URL needed for fat Hopr edge client
-    #[arg(long, env = hopr::RPC_PROVIDER_ENV, conflicts_with = "hopr_config_path")]
-    pub hopr_rpc_provider: Url,
+    #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = None, conflicts_with = "hopr_config_path")]
+    pub hopr_rpc_provider: Option<Url>,
 
     /// Hopr edge client RPC provider
     #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = Some("dufour"), conflicts_with = "hopr_config_path")]
