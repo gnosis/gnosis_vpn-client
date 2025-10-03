@@ -243,7 +243,7 @@ impl Core {
             Command::RefreshNode => match &self.run_mode {
                 RunMode::PreSafe(_) => {
                     tracing::info!("edge client not running - cannot refresh node");
-                    return Err(Error::EdgeNotReady);
+                    Err(Error::EdgeNotReady)
                 }
                 RunMode::Full { .. } => {
                     self.run_mode = determine_run_mode(
