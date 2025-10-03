@@ -28,31 +28,23 @@ pub struct Cli {
     pub config_path: PathBuf,
 
     /// RPC provider URL needed for fat Hopr edge client
-    #[arg(long, env = hopr::RPC_PROVIDER_ENV)]
+    #[arg(long, env = hopr::RPC_PROVIDER_ENV, conflicts_with = "hopr_config_path")]
     pub hopr_rpc_provider: Url,
 
+    /// Hopr edge client RPC provider
+    #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = Some("dufour"), conflicts_with = "hopr_config_path")]
+    pub hopr_network: Option<String>,
+
     /// Hopr edge client configuration path
-    #[arg(
-        long,
-        env = hopr::CONFIG_ENV,
-        default_value = None,
-    )]
+    #[arg( long, env = hopr::CONFIG_ENV, default_value = None, conflicts_with_all = ["hopr_rpc_provider", "hopr_network"])]
     pub hopr_config_path: Option<PathBuf>,
 
     /// Hopr edge client identity path
-    #[arg(
-        long,
-        env = hopr::ID_FILE_ENV,
-        default_value = None,
-    )]
+    #[arg( long, env = hopr::ID_FILE_ENV, default_value = None)]
     pub hopr_identity_file: Option<PathBuf>,
 
     /// Hopr edge client identity pass
-    #[arg(
-        long,
-        env = hopr::ID_PASS_ENV,
-        default_value = None,
-    )]
+    #[arg( long, env = hopr::ID_PASS_ENV, default_value = None)]
     pub hopr_identity_pass: Option<String>,
 }
 
