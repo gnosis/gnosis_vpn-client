@@ -11,11 +11,11 @@ use crate::chain::contracts::CheckBalanceResult;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FundingIssue {
     Unfunded,           // cannot work at all - initial state
-    ChannelsOutOfFunds, // does not work - no traffic possible
-    SafeOutOfFunds,     // keeps working - cannot top up channels
-    SafeLowOnFunds,     // warning before SafeOutOfFunds
-    NodeUnderfunded,    // keeps working until channels are drained - cannot open new or top up existing channels
-    NodeLowOnFunds,     // warning before NodeUnderfunded
+    ChannelsOutOfFunds, // less than 1 ticket (10 wxHOPR)
+    SafeOutOfFunds,     // less than 1 ticket (10 wxHOPR) - cannot top up channels
+    SafeLowOnFunds,     // lower than min_stake_threshold * channels
+    NodeUnderfunded,    // lower than 0.0075 xDai
+    NodeLowOnFunds,     // lower than 0.0075 xDai * channels
 }
 
 #[derive(Debug, Error)]
@@ -85,29 +85,27 @@ impl Display for Balances {
 }
 
 impl Balances {
-    pub fn to_funding_issues(&self) -> Result<Vec<FundingIssue>, Error> {
+    pub fn to_funding_issues(&self, channel_targets_len: usize) -> Result<Vec<FundingIssue>, Error> {
         let mut issues = Vec::new();
-
-        // TODO use channel funding amounts dependend on network
 
         if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
             issues.push(FundingIssue::Unfunded);
             return Ok(issues);
         }
 
-        if self.channels_out_wxhopr < "0.1 wxHOPR".parse::<Balance<WxHOPR>>()? {
+        if self.channels_out_wxhopr < min_stake_threshold() {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if self.safe_wxhopr < "0.1 wxHOPR".parse::<Balance<WxHOPR>>()? {
+        if self.safe_wxhopr < min_stake_threshold() {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < "1.0 wxHOPR".parse::<Balance<WxHOPR>>()? {
+        } else if self.safe_wxhopr < (min_stake_threshold() * channel_targets_len) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
-        if self.node_xdai < "0.01 xDai".parse::<Balance<XDai>>()? {
+        if self.node_xdai < min_funds_threshold()? {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if self.node_xdai < "0.1 xDai".parse::<Balance<XDai>>()? {
+        } else if self.node_xdai < (min_funds_threshold()? + channel_targets_len) {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
@@ -118,4 +116,24 @@ impl Balances {
 pub fn min_channel_funding() -> Result<Balance<WxHOPR>, Error> {
     // TODO use channel funding amounts dependend on network
     "1 wxHOPR".parse::<Balance<WxHOPR>>().map_err(Error::Parsing)
+}
+
+/// 40 wxHOPR: worth 1 more ticket than min_stake_threshold
+pub fn funding_amount() -> Balance<WxHOPR> {
+    min_stake_threshold() + ticket()
+}
+
+/// 30 wxHOPR: imposed by 3hops. 30wxHOPR at least are needed in a channel in case the 1st relayer wants to redeem a winning ticket
+pub fn min_stake_threshold() -> Balance<WxHOPR> {
+    ticket() * 3
+}
+
+/// 10 wxHOPR: ticket price
+pub fn ticket() -> Balance<WxHOPR> {
+    Balance::<WxHOPR>::from(10)
+}
+
+/// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)
+pub fn min_funds_threshold() -> Result<Balance<XDai>, Error> {
+    "0.0075 xDai".parse::<Balance<XDai>>().map_err(Error::Parsing)
 }

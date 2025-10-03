@@ -6,6 +6,7 @@ pub mod connection;
 pub mod hopr;
 pub mod info;
 pub mod log_output;
+pub mod network;
 pub mod node;
 pub mod onboarding;
 pub mod session;

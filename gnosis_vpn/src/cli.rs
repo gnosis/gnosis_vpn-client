@@ -3,6 +3,7 @@ use url::Url;
 
 use std::path::PathBuf;
 
+use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::{config, hopr, socket};
 
 /// Gnosis VPN system service - client application for Gnosis VPN connections
@@ -31,9 +32,9 @@ pub struct Cli {
     #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = None, conflicts_with = "hopr_config_path")]
     pub hopr_rpc_provider: Option<Url>,
 
-    /// Hopr edge client RPC provider
-    #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = Some("dufour"), conflicts_with = "hopr_config_path")]
-    pub hopr_network: Option<String>,
+    /// Hopr network
+    #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = "dufour", conflicts_with = "hopr_config_path")]
+    pub hopr_network: Option<Network>,
 
     /// Hopr edge client configuration path
     #[arg( long, env = hopr::CONFIG_ENV, default_value = None, conflicts_with_all = ["hopr_rpc_provider", "hopr_network"])]

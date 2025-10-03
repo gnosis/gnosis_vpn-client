@@ -1,4 +1,5 @@
 pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
+
 use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
@@ -7,12 +8,13 @@ use url::Url;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::balance;
 use crate::chain::contracts::SafeModuleDeploymentResult;
 use crate::dirs;
+use crate::network::Network;
 
 const CONFIG_FILE: &str = "gnosisvpn-hopr.yaml";
 const DB_FILE: &str = "gnosisvpn-hopr.db";
-pub const DEFAULT_NETWORK: &str = "dufour";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -54,9 +56,8 @@ pub fn write_default(cfg: &HoprLibConfig) -> Result<(), Error> {
     fs::write(&conf_file, &content).map_err(Error::IO)
 }
 
-pub fn generate(network: String, rpc_provider: Url, safe_module: SafeModule) -> Result<HoprLibConfig, Error> {
+pub fn generate(network: Network, rpc_provider: Url, safe_module: SafeModule) -> Result<HoprLibConfig, Error> {
     // TODO use typed HoprLibConfig
-    // TODO use channel funding amounts dependend on network
     let content = format!(
         r#"
 db:
@@ -75,8 +76,8 @@ strategy:
     on_fail_continue: true
     strategies:
         - !AutoFunding
-          funding_amount: "10 wxHOPR"
-          min_stake_threshold: "1 wxHOPR"
+          funding_amount: {funding_amount}
+          min_stake_threshold: {min_stake_threshold}
         - !ClosureFinalizer
           max_closure_overdue: 300
 "#,
@@ -86,6 +87,8 @@ strategy:
         rpc_provider = rpc_provider,
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
+        funding_amount = balance::funding_amount(),
+        min_stake_threshold = balance::min_stake_threshold()
     );
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }

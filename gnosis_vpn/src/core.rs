@@ -202,7 +202,7 @@ impl Core {
                 tracing::debug!(?status, ?self.balance, "gathering status foo");
 
                 let funding_issues: Option<Vec<balance::FundingIssue>> = match &self.balance {
-                    Some(balance) => Some(balance.to_funding_issues()?),
+                    Some(balance) => Some(balance.to_funding_issues(self.config.channel_targets().len())?),
                     None => None,
                 };
 
@@ -224,7 +224,8 @@ impl Core {
             }
             Command::Balance => match (&self.balance, &self.info) {
                 (Some(balance), Some(info)) => {
-                    let issues: Vec<balance::FundingIssue> = balance.to_funding_issues()?;
+                    let issues: Vec<balance::FundingIssue> =
+                        balance.to_funding_issues(self.config.channel_targets().len())?;
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
                         format!("{} wxHOPR", balance.safe_wxhopr),

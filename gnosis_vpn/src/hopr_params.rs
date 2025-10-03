@@ -3,6 +3,8 @@ use url::Url;
 
 use std::path::PathBuf;
 
+use gnosis_vpn_lib::network::Network;
+
 use crate::cli::Cli;
 
 #[derive(Debug, Error)]
@@ -21,7 +23,7 @@ pub struct HoprParams {
 #[derive(Clone, Debug)]
 pub enum ConfigMode {
     Manual(PathBuf),
-    Generated { rpc_provider: Url, network: String },
+    Generated { rpc_provider: Url, network: Network },
 }
 
 impl TryFrom<Cli> for HoprParams {
