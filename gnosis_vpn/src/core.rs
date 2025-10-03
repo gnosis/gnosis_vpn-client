@@ -72,13 +72,13 @@ pub struct Core {
 
 enum RunMode {
     #[allow(dead_code)]
-    PreSafe(Onboarding),
+    PreSafe(Box<Onboarding>),
     Full {
         // hoprd edge client
         hopr: Arc<Hopr>,
         // thread loop around funding and general node
         #[allow(dead_code)]
-        node: Node,
+        node: Box<Node>,
     },
 }
 
@@ -633,7 +633,7 @@ fn determine_run_mode(
                     node_address,
                 );
                 onboarding.run();
-                return Ok(RunMode::PreSafe(onboarding));
+                return Ok(RunMode::PreSafe(Box::new(onboarding)));
             }
         }
     };
@@ -652,5 +652,8 @@ fn determine_run_mode(
 
     node.run();
 
-    Ok(RunMode::Full { hopr, node })
+    Ok(RunMode::Full {
+        hopr,
+        node: Box::new(node),
+    })
 }
