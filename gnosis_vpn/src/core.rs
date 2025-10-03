@@ -532,7 +532,7 @@ fn setup_node(
     let (s, r) = crossbeam_channel::unbounded();
     // gather channel relays
 
-    let node = Node::new(s, edgli, channel_targets, balance::min_channel_funding()?);
+    let node = Node::new(s, edgli, channel_targets);
     thread::spawn(move || {
         let mut hopr_processes = Vec::new();
 

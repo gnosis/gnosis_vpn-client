@@ -113,11 +113,6 @@ impl Balances {
     }
 }
 
-pub fn min_channel_funding() -> Result<Balance<WxHOPR>, Error> {
-    // TODO use channel funding amounts dependend on network
-    "1 wxHOPR".parse::<Balance<WxHOPR>>().map_err(Error::Parsing)
-}
-
 /// 40 wxHOPR: worth 1 more ticket than min_stake_threshold
 pub fn funding_amount() -> Balance<WxHOPR> {
     min_stake_threshold() + ticket()

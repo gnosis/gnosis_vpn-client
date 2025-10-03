@@ -1,6 +1,5 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -8,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::Balances;
+use crate::balance::{self, Balances};
 use crate::hopr::{Hopr, HoprError};
 use crate::info::Info;
 use crate::log_output;
@@ -66,16 +65,10 @@ pub struct Node {
     edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,
     channel_addresses: Vec<Address>,
-    min_balance: Balance<WxHOPR>,
 }
 
 impl Node {
-    pub fn new(
-        sender: crossbeam_channel::Sender<Event>,
-        edgli: Arc<Hopr>,
-        channel_addresses: Vec<Address>,
-        min_balance: Balance<WxHOPR>,
-    ) -> Self {
+    pub fn new(sender: crossbeam_channel::Sender<Event>, edgli: Arc<Hopr>, channel_addresses: Vec<Address>) -> Self {
         Node {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
@@ -83,7 +76,6 @@ impl Node {
             edgli,
             sender,
             channel_addresses,
-            min_balance,
         }
     }
 
@@ -206,12 +198,13 @@ impl Node {
         let (s, r) = crossbeam_channel::bounded(1);
         let edgli = self.edgli.clone();
         let channel_addresses = self.channel_addresses.clone();
-        let min_balance = self.min_balance;
         thread::spawn(move || {
             for address in channel_addresses {
-                _ = edgli.ensure_channel_open_and_funded(address, min_balance).map_err(|e| {
-                    tracing::error!(%e, %address, "Failed to ensure channel open and funded");
-                });
+                _ = edgli
+                    .ensure_channel_open_and_funded(address, balance::min_stake_threshold())
+                    .map_err(|e| {
+                        tracing::error!(%e, %address, "Failed to ensure channel open and funded");
+                    });
             }
             _ = s.send(InternalEvent::ChannelFundingDone);
         });
