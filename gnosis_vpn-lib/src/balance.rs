@@ -114,3 +114,8 @@ impl Balances {
         Ok(issues)
     }
 }
+
+pub fn min_channel_funding() -> Result<Balance<WxHOPR>, Error> {
+    // TODO use channel funding amounts dependend on network
+    "1 wxHOPR".parse::<Balance<WxHOPR>>().map_err(Error::Parsing)
+}

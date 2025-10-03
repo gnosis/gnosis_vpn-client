@@ -98,7 +98,12 @@ impl Core {
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-        let run_mode = determine_run_mode(&hopr_params, sender.clone(), cancel_channel.1.clone())?;
+        let run_mode = determine_run_mode(
+            sender.clone(),
+            cancel_channel.1.clone(),
+            &hopr_params,
+            config.channel_targets(),
+        )?;
 
         Ok(Core {
             config,
@@ -235,8 +240,12 @@ impl Core {
                 _ => Ok(Response::Balance(None)),
             },
             Command::RefreshNode => {
-                self.run_mode =
-                    determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+                self.run_mode = determine_run_mode(
+                    self.sender.clone(),
+                    self.cancel_channel.1.clone(),
+                    &self.hopr_params,
+                    self.config.channel_targets(),
+                )?;
                 Ok(Response::RefreshNode)
             }
         }
@@ -284,7 +293,12 @@ impl Core {
         self.config = config;
 
         // recheck run mode
-        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+        self.run_mode = determine_run_mode(
+            self.sender.clone(),
+            self.cancel_channel.1.clone(),
+            &self.hopr_params,
+            self.config.channel_targets(),
+        )?;
         Ok(())
     }
 
@@ -410,7 +424,12 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
-        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+        self.run_mode = determine_run_mode(
+            self.sender.clone(),
+            self.cancel_channel.1.clone(),
+            &self.hopr_params,
+            self.config.channel_targets(),
+        )?;
         Ok(())
     }
 
@@ -435,13 +454,23 @@ impl Core {
                 hopr_config::write_default(&cfg)?;
             }
         };
-        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+        self.run_mode = determine_run_mode(
+            self.sender.clone(),
+            self.cancel_channel.1.clone(),
+            &self.hopr_params,
+            self.config.channel_targets(),
+        )?;
         Ok(())
     }
 
     fn on_failed_onboarding(&mut self) -> Result<(), Error> {
         tracing::error!("onboarding failed - please check your configuration and network connectivity");
-        self.run_mode = determine_run_mode(&self.hopr_params, self.sender.clone(), self.cancel_channel.1.clone())?;
+        self.run_mode = determine_run_mode(
+            self.sender.clone(),
+            self.cancel_channel.1.clone(),
+            &self.hopr_params,
+            self.config.channel_targets(),
+        )?;
         Ok(())
     }
 }
@@ -489,6 +518,7 @@ fn setup_onboarding(
     });
     onboarding
 }
+
 fn setup_node(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
@@ -496,9 +526,12 @@ fn setup_node(
     hopr_startup_notifier: crossbeam_channel::Receiver<
         std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
     >,
-) -> Node {
+    channel_targets: Vec<Address>,
+) -> Result<Node, Error> {
     let (s, r) = crossbeam_channel::unbounded();
-    let node = Node::new(s, edgli);
+    // gather channel relays
+
+    let node = Node::new(s, edgli, channel_targets, balance::min_channel_funding()?);
     thread::spawn(move || {
         let mut hopr_processes = Vec::new();
 
@@ -576,13 +609,14 @@ fn setup_node(
             }
         }
     });
-    node
+    Ok(node)
 }
 
 fn determine_run_mode(
-    hopr_params: &HoprParams,
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    hopr_params: &HoprParams,
+    channel_targets: Vec<Address>,
 ) -> Result<RunMode, Error> {
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
@@ -648,7 +682,8 @@ fn determine_run_mode(
         cancel_receiver.clone(),
         hopr.clone(),
         hopr_startup_notifier_rx.clone(),
-    );
+        channel_targets,
+    )?;
 
     node.run();
 
