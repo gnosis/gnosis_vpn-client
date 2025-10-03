@@ -55,6 +55,8 @@ pub fn write_default(cfg: &HoprLibConfig) -> Result<(), Error> {
 }
 
 pub fn generate(network: String, rpc_provider: Url, safe_module: SafeModule) -> Result<HoprLibConfig, Error> {
+    // TODO use typed HoprLibConfig
+    // TODO use channel funding amounts dependend on network
     let content = format!(
         r#"
 db:

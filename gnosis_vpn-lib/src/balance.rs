@@ -88,6 +88,8 @@ impl Balances {
     pub fn to_funding_issues(&self) -> Result<Vec<FundingIssue>, Error> {
         let mut issues = Vec::new();
 
+        // TODO use channel funding amounts dependend on network
+
         if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
             issues.push(FundingIssue::Unfunded);
             return Ok(issues);
