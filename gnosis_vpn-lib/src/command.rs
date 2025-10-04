@@ -16,9 +16,10 @@ pub enum Command {
     Status,
     Connect(Address),
     Disconnect,
-    Ping,
     Balance,
+    Ping,
     RefreshNode,
+    FundingTool(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,8 +28,8 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
-    RefreshNode,
     Pong,
+    Empty,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

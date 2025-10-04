@@ -39,6 +39,8 @@ pub enum Error {
     Balance(#[from] balance::Error),
     #[error("Edge client not ready")]
     EdgeNotReady,
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
 }
 
 pub struct Core {
@@ -68,6 +70,14 @@ pub struct Core {
 
     // presafe results
     presafe_balance: Option<balance::PreSafe>,
+    funding_tool: FundingTool,
+}
+
+pub enum FundingTool {
+    NotStarted,
+    InProgress,
+    CompletedSuccess,
+    CompletedError,
 }
 
 enum RunMode {
@@ -121,6 +131,7 @@ impl Core {
             hopr_params,
             cancel_channel,
             presafe_balance: None,
+            funding_tool: FundingTool::NotStarted,
         })
     }
 
@@ -259,7 +270,21 @@ impl Core {
                         &self.hopr_params,
                         self.config.channel_targets(),
                     )?;
-                    Ok(Response::RefreshNode)
+                    Ok(Response::Empty)
+                }
+            },
+            Command::FundingTool(secret) => match &self.run_mode {
+                RunMode::PreSafe {
+                    onboarding,
+                    node_address,
+                } => {
+                    self.funding_tool = FundingTool::InProgress;
+                    onboarding.fund_address(node_address, secret)?;
+                    Ok(Response::Empty)
+                }
+                RunMode::Full { .. } => {
+                    tracing::warn!("funding tool not available in full mode");
+                    Ok(Response::Empty)
                 }
             },
         }
@@ -280,6 +305,7 @@ impl Core {
                 self.on_onboarding_safe_module(safe_module)
             }
             Event::Onboarding(onboarding::Event::BackoffExhausted) => self.on_failed_onboarding(),
+            Event::Onboarding(onboarding::Event::FundingTool(res)) => self.on_funding_tool(res),
         }
     }
 
@@ -487,6 +513,20 @@ impl Core {
         )?;
         Ok(())
     }
+
+    fn on_funding_tool(&mut self, res: Result<(), String>) -> Result<(), Error> {
+        match res {
+            Ok(_) => {
+                tracing::info!("funding tool completed successfully");
+                self.funding_tool = FundingTool::CompletedSuccess;
+            }
+            Err(e) => {
+                tracing::error!(%e, "funding tool encountered an error");
+                self.funding_tool = FundingTool::CompletedError;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn setup_onboarding(
@@ -517,7 +557,7 @@ fn setup_onboarding(
                 },
                 recv(r) -> onboarding_event => {
                     match onboarding_event {
-                        Ok(ref event) => {
+                        Ok(event) => {
                                 _ = sender.send(Event::Onboarding(event.clone())).map_err(|error| {
                                     tracing::error!(%event, %error, "failed to send onboarding event");
                                 });

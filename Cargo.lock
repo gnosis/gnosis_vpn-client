@@ -4006,6 +4006,7 @@ dependencies = [
  "exitcode",
  "gnosis_vpn-lib",
  "notify",
+ "reqwest",
  "serde_json",
  "thiserror 2.0.17",
  "tikv-jemallocator",

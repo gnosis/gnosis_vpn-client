@@ -99,8 +99,8 @@ fn pretty_print(resp: &Response) {
         Response::Pong => {
             println!("Pong");
         }
-        Response::RefreshNode => {
-            println!("Requested node information update");
+        Response::Empty => {
+            println!();
         }
     }
 }
@@ -114,6 +114,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Status(..) => exitcode::OK,
         Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
-        Response::RefreshNode => exitcode::OK,
+        Response::Empty => exitcode::OK,
     }
 }

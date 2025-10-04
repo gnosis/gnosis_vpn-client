@@ -4,6 +4,7 @@ use crossbeam_channel;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use rand::Rng;
+use serde_json::json;
 use thiserror::Error;
 use tokio::runtime::Runtime;
 use url::Url;
@@ -19,11 +20,13 @@ use crate::chain::contracts::{
 };
 use crate::chain::errors::ChainError;
 use crate::hopr::config;
+use crate::remote_data;
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Balance(balance::PreSafe),
     SafeModule(config::SafeModule),
+    FundingTool(Result<(), String>),
     BackoffExhausted,
 }
 
@@ -164,6 +167,34 @@ impl Onboarding {
         });
     }
 
+    pub fn fund_address(&self, node_address: &Address, secret_hash: &str) -> Result<(), url::ParseError> {
+        let sender = self.sender.clone();
+        let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
+        let address = node_address.to_string();
+        let code = secret_hash.to_string();
+        thread::spawn(move || {
+            let client = reqwest::blocking::Client::new();
+            let headers = remote_data::json_headers();
+            let body = json!({
+                "address": address,
+                "code": code,
+            });
+
+            let res = client
+                .post(url)
+                .json(&body)
+                .timeout(Duration::from_secs(10))
+                .headers(headers)
+                .send()
+                .map(|_r| ())
+                .map_err(|e| e.to_string());
+            _ = sender.send(Event::FundingTool(res)).map_err(|error| {
+                tracing::error!(%error, "Failed sending funding tool event");
+            });
+        });
+        Ok(())
+    }
+
     fn act(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match &self.phase {
@@ -287,6 +318,7 @@ impl Display for Event {
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
             Event::Balance(balance) => write!(f, "Balance({balance})"),
             Event::SafeModule(safe_module) => write!(f, "SafeModule({safe_module:?})"),
+            Event::FundingTool(res) => write!(f, "FundingTool({res:?})"),
         }
     }
 }

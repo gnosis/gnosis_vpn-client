@@ -14,6 +14,7 @@ edgli.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
 notify.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
