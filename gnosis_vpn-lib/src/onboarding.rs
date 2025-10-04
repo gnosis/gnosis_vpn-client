@@ -167,6 +167,8 @@ impl Onboarding {
         });
     }
 
+    /// TODO: there is virtually no error handling and this happens outside of the usual thread
+    /// loop
     pub fn fund_address(&self, node_address: &Address, secret_hash: &str) -> Result<(), url::ParseError> {
         let sender = self.sender.clone();
         let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;

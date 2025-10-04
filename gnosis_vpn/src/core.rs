@@ -70,14 +70,7 @@ pub struct Core {
 
     // presafe results
     presafe_balance: Option<balance::PreSafe>,
-    funding_tool: FundingTool,
-}
-
-pub enum FundingTool {
-    NotStarted,
-    InProgress,
-    CompletedSuccess,
-    CompletedError,
+    funding_tool: balance::FundingTool,
 }
 
 enum RunMode {
@@ -131,7 +124,7 @@ impl Core {
             hopr_params,
             cancel_channel,
             presafe_balance: None,
-            funding_tool: FundingTool::NotStarted,
+            funding_tool: balance::FundingTool::NotStarted,
         })
     }
 
@@ -206,7 +199,7 @@ impl Core {
                 let status = match self.run_mode {
                     RunMode::PreSafe { node_address, .. } => {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
-                        command::Status::preparing_safe(node_address, balance)
+                        command::Status::preparing_safe(node_address, balance, self.funding_tool.clone())
                     }
                     RunMode::Full { .. } => {
                         match (
@@ -278,7 +271,7 @@ impl Core {
                     onboarding,
                     node_address,
                 } => {
-                    self.funding_tool = FundingTool::InProgress;
+                    self.funding_tool = balance::FundingTool::InProgress;
                     onboarding.fund_address(node_address, secret)?;
                     Ok(Response::Empty)
                 }
@@ -518,11 +511,11 @@ impl Core {
         match res {
             Ok(_) => {
                 tracing::info!("funding tool completed successfully");
-                self.funding_tool = FundingTool::CompletedSuccess;
+                self.funding_tool = balance::FundingTool::CompletedSuccess;
             }
             Err(e) => {
                 tracing::error!(%e, "funding tool encountered an error");
-                self.funding_tool = FundingTool::CompletedError;
+                self.funding_tool = balance::FundingTool::CompletedError;
             }
         }
         Ok(())

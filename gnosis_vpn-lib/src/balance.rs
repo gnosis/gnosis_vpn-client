@@ -18,6 +18,14 @@ pub enum FundingIssue {
     NodeLowOnFunds,     // lower than 0.0075 xDai * channels
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FundingTool {
+    NotStarted,
+    InProgress,
+    CompletedSuccess,
+    CompletedError,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Parsing issue: {0}")]
@@ -33,6 +41,18 @@ impl Display for FundingIssue {
             FundingIssue::SafeLowOnFunds => "safe is low on funds - connections will soon stop working",
             FundingIssue::NodeUnderfunded => "underfunded - cannot open new connection or keep existing ones",
             FundingIssue::NodeLowOnFunds => "low on funds - soon cannot open new connection or keep existing ones",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl Display for FundingTool {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            FundingTool::NotStarted => "funding tool not used",
+            FundingTool::InProgress => "funding tool in progress",
+            FundingTool::CompletedSuccess => "funding tool completed",
+            FundingTool::CompletedError => "funding tool errored",
         };
         write!(f, "{s}")
     }

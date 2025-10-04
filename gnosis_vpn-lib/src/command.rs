@@ -49,6 +49,7 @@ pub enum Status {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
+        funding_tool: balance::FundingTool,
     },
 }
 
@@ -103,11 +104,16 @@ impl Status {
         Status::Disconnected
     }
 
-    pub fn preparing_safe(node_address: Address, pre_safe: balance::PreSafe) -> Self {
+    pub fn preparing_safe(
+        node_address: Address,
+        pre_safe: balance::PreSafe,
+        funding_tool: balance::FundingTool,
+    ) -> Self {
         Status::PreparingSafe {
             node_address,
             node_xdai: pre_safe.node_xdai,
             node_wxhopr: pre_safe.node_wxhopr,
+            funding_tool,
         }
     }
 }
@@ -230,8 +236,12 @@ impl fmt::Display for Status {
                 node_address,
                 node_xdai,
                 node_wxhopr,
+                funding_tool,
             } => {
-                write!(f, "Waiting for funding on {node_address}: {node_xdai}, {node_wxhopr}")
+                write!(
+                    f,
+                    "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
+                )
             }
         }
     }
