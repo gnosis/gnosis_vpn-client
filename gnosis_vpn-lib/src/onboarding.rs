@@ -182,15 +182,48 @@ impl Onboarding {
                 "code": code,
             });
 
+            tracing::debug!(%url, %body, "Posting funding tool");
+
             let res = client
                 .post(url)
                 .json(&body)
                 .timeout(Duration::from_secs(10))
                 .headers(headers)
-                .send()
-                .map(|_r| ())
-                .map_err(|e| e.to_string());
-            _ = sender.send(Event::FundingTool(res)).map_err(|error| {
+                .send();
+
+            let resp = match res {
+                Err(error) => {
+                    let err = format!("Funding tool request error: {error}");
+                    tracing::error!(%err, "Funding tool request failed");
+                    _ = sender.send(Event::FundingTool(Err(err))).map_err(|error| {
+                        tracing::error!(%error, "Failed sending funding tool event");
+                    });
+                    return;
+                }
+                Ok(res) => res,
+            };
+            let status = resp.status();
+            let text = match resp.text() {
+                Err(error) => {
+                    let err = format!("Funding tool response error: {error}");
+                    tracing::error!(%err, "Funding tool request failed");
+                    _ = sender.send(Event::FundingTool(Err(err))).map_err(|error| {
+                        tracing::error!(%error, "Failed sending funding tool event");
+                    });
+                    return;
+                }
+                Ok(text) => text,
+            };
+
+            tracing::debug!(%text, "Funding tool response");
+
+            let evt = if status.is_success() {
+                Ok(())
+            } else {
+                Err(format!("Funding tool request failed: {text}"))
+            };
+
+            _ = sender.send(Event::FundingTool(evt)).map_err(|error| {
                 tracing::error!(%error, "Failed sending funding tool event");
             });
         });
