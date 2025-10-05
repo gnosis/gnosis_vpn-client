@@ -10,6 +10,9 @@
       url = "github:ipetkov/crane";
     };
 
+    pre-commit.url = "github:cachix/git-hooks.nix";
+    pre-commit.inputs.nixpkgs.follows = "nixpkgs";
+
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -35,6 +38,7 @@
       crane,
       advisory-db,
       treefmt-nix,
+      pre-commit,
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
@@ -177,6 +181,25 @@
             }
           );
 
+          pre-commit-check = pre-commit.lib.${system}.run {
+            src = ./.;
+            hooks = {
+              # https://github.com/cachix/git-hooks.nix
+              treefmt.enable = false;
+              treefmt.package = config.treefmt.build.wrapper;
+              check-executables-have-shebangs.enable = true;
+              check-shebang-scripts-are-executable.enable = true;
+              check-case-conflicts.enable = true;
+              check-symlinks.enable = true;
+              check-merge-conflicts.enable = true;
+              check-added-large-files.enable = true;
+              commitizen.enable = true;
+            };
+            tools = pkgs;
+            excludes = [
+            ];
+          };
+
           treefmt = {
             projectRootFile = "LICENSE";
 
@@ -281,6 +304,7 @@
 
           devShells.default = craneLib.devShell {
             # Inherit inputs from checks.
+            inherit pre-commit-check;
             checks = self.checks.${system};
             # Additional dev-shell environment variables can be set directly
             # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
