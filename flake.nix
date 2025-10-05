@@ -299,6 +299,7 @@
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
             inherit gvpn;
+            inherit pre-commit-check;
             default = gvpn;
           };
 
@@ -311,6 +312,8 @@
 
             # Extra inputs can be added here; cargo and rustc are provided by default.
             packages = [ ];
+
+            VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
           };
 
           treefmt = treefmt;
