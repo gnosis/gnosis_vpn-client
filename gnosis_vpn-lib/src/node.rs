@@ -1,5 +1,4 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
-use edgli::hopr_lib::Address;
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -7,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::{self, Balances};
+use crate::balance::Balances;
 use crate::hopr::{Hopr, HoprError};
 use crate::info::Info;
 use crate::log_output;
@@ -23,17 +22,14 @@ pub enum Event {
 #[derive(Clone, Debug)]
 enum Phase {
     Info,
-    BalanceInitial,
-    EnsureChannelFunding,
+    Balance,
     Idle(SystemTime),
-    BalanceRepeated,
 }
 
 #[derive(Debug)]
 enum InternalEvent {
     Info(Info),
     Balance(Result<Balances, HoprError>),
-    ChannelFundingDone,
     Tick,
 }
 
@@ -64,18 +60,16 @@ pub struct Node {
     // static input data
     edgli: Arc<Hopr>,
     sender: crossbeam_channel::Sender<Event>,
-    channel_addresses: Vec<Address>,
 }
 
 impl Node {
-    pub fn new(sender: crossbeam_channel::Sender<Event>, edgli: Arc<Hopr>, channel_addresses: Vec<Address>) -> Self {
+    pub fn new(sender: crossbeam_channel::Sender<Event>, edgli: Arc<Hopr>) -> Self {
         Node {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             phase: Phase::Info,
             edgli,
             sender,
-            channel_addresses,
         }
     }
 
@@ -146,8 +140,7 @@ impl Node {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match self.phase {
             Phase::Info => self.fetch_info(),
-            Phase::BalanceInitial | Phase::BalanceRepeated => self.fetch_balance(),
-            Phase::EnsureChannelFunding => self.ensure_channel_funding(),
+            Phase::Balance => self.fetch_balance(),
             Phase::Idle(_system_time) => self.idle(),
         }
     }
@@ -156,26 +149,18 @@ impl Node {
         match event {
             InternalEvent::Info(res) => {
                 self.sender.send(Event::Info(res))?;
-                self.phase = Phase::BalanceInitial;
+                self.phase = Phase::Balance;
                 self.backoff = BackoffState::Inactive;
                 Ok(())
             }
             InternalEvent::Balance(res) => {
                 self.sender.send(Event::Balance(res?))?;
-                match self.phase {
-                    Phase::BalanceInitial => self.phase = Phase::EnsureChannelFunding,
-                    Phase::BalanceRepeated => self.phase = Phase::Idle(SystemTime::now()),
-                    _ => {}
-                }
+                self.phase = Phase::Idle(SystemTime::now());
                 self.backoff = BackoffState::Inactive;
                 Ok(())
             }
-            InternalEvent::ChannelFundingDone => {
-                self.phase = Phase::Idle(SystemTime::now());
-                Ok(())
-            }
             InternalEvent::Tick => {
-                self.phase = Phase::BalanceRepeated;
+                self.phase = Phase::Balance;
                 Ok(())
             }
         }
@@ -190,23 +175,6 @@ impl Node {
         thread::spawn(move || {
             let res = edgli.info();
             _ = s.send(InternalEvent::Info(res));
-        });
-        r
-    }
-
-    fn ensure_channel_funding(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let (s, r) = crossbeam_channel::bounded(1);
-        let edgli = self.edgli.clone();
-        let channel_addresses = self.channel_addresses.clone();
-        thread::spawn(move || {
-            for address in channel_addresses {
-                _ = edgli
-                    .ensure_channel_open_and_funded(address, balance::min_stake_threshold())
-                    .map_err(|e| {
-                        tracing::error!(%e, %address, "Failed to ensure channel open and funded");
-                    });
-            }
-            _ = s.send(InternalEvent::ChannelFundingDone);
         });
         r
     }
@@ -238,9 +206,7 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Phase::Info => write!(f, "Info"),
-            Phase::BalanceInitial => write!(f, "BalanceInitial"),
-            Phase::EnsureChannelFunding => write!(f, "EnsureChannelFunding"),
-            Phase::BalanceRepeated => write!(f, "BalanceRepeated"),
+            Phase::Balance => write!(f, "Balance"),
             Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
         }
     }
@@ -251,7 +217,6 @@ impl Display for InternalEvent {
         match self {
             InternalEvent::Info(res) => write!(f, "Info({res:?})"),
             InternalEvent::Balance(res) => write!(f, "Balance({res:?})"),
-            InternalEvent::ChannelFundingDone => write!(f, "ChannelFundingDone"),
             InternalEvent::Tick => write!(f, "Tick"),
         }
     }

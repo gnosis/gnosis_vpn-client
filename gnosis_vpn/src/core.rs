@@ -98,7 +98,6 @@ enum Cancel {
     Node,
     Connection,
     Onboarding,
-    ChannelFunding,
 }
 
 impl Core {
@@ -155,9 +154,6 @@ impl Core {
                 });
                 _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to node");
-                });
-                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to channel funding");
                 });
                 match &mut self.connection {
                     Some(conn) => {
@@ -610,11 +606,11 @@ fn setup_node(
         std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
     >,
     channel_targets: Vec<Address>,
-) -> Result<Node, Error> {
-    let (s, r) = crossbeam_channel::unbounded();
-    // gather channel relays
-
-    let node = Node::new(s, edgli, channel_targets);
+) -> Result<(Node, ChannelFunding), Error> {
+    let (s_node, r_node) = crossbeam_channel::unbounded();
+    let (s_cf, r_cf) = crossbeam_channel::unbounded();
+    let node = Node::new(s_node, edgli.clone());
+    let channel_funding = ChannelFunding::new(s_cf.clone(), edgli.clone(), channel_targets);
     thread::spawn(move || {
         let mut hopr_processes = Vec::new();
 
@@ -670,14 +666,26 @@ fn setup_node(
                             break;
                         }
                         Ok(_) => {
-                            // ignoring cancel event in node handler
+                            // ignoring other cancel event handlers
                         }
                         Err(e) => {
                             tracing::warn!(error = ?e, "node loop failed to receive cancel event");
                         }
                     }
                 },
-                recv(r) -> node_event => {
+                recv(r_cf) -> channel_event => {
+                    match channel_event {
+                        Ok(ref event) => {
+                                _ = sender.send(Event::ChannelFunding(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send ChannelFunding event");
+                                });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                },
+                recv(r_node) -> node_event => {
                     match node_event {
                         Ok(ref event) => {
                                 _ = sender.send(Event::Node(event.clone())).map_err(|error| {
@@ -692,7 +700,7 @@ fn setup_node(
             }
         }
     });
-    Ok(node)
+    Ok((node, channel_funding))
 }
 
 fn determine_run_mode(
@@ -763,7 +771,7 @@ fn determine_run_mode(
     let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
     let hopr = Arc::new(hoprd);
 
-    let node = setup_node(
+    let (node, channel_funding) = setup_node(
         sender.clone(),
         cancel_receiver.clone(),
         hopr.clone(),
@@ -772,9 +780,11 @@ fn determine_run_mode(
     )?;
 
     node.run();
+    channel_funding.run();
 
     Ok(RunMode::Full {
         hopr,
+        channel_funding: Box::new(channel_funding),
         node: Box::new(node),
     })
 }
