@@ -126,40 +126,15 @@
           # cache misses when building individual top-level-crates
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-          individualCrateArgs = commonArgs // {
-            inherit cargoArtifacts;
+          # Import package builder function
+          mkPackage = import ./nix/mkPackage.nix {
+            inherit
+              craneLib
+              lib
+              targetForSystem
+              cargoArtifacts
+              ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-            # NB: we disable tests since we'll run them all via cargo-nextest
-            doCheck = false;
-          };
-
-          srcFiles = lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./Cargo.toml
-              ./Cargo.lock
-              (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
-              (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
-              (craneLib.fileset.commonCargoSources ./gnosis_vpn)
-            ];
-          };
-
-          targetCrateArgs = {
-            "x86_64-unknown-linux-musl" = {
-              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
-            };
-            "aarch64-unknown-linux-musl" = {
-              CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
-            };
-            "x86_64-apple-darwin" = {
-              CARGO_PROFILE = "intelmac";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-            };
-            "aarch64-apple-darwin" = {
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-            };
           };
 
           # Build the top-level crates of the workspace as individual derivations.
@@ -171,28 +146,15 @@
           # otherwise, omitting a crate (like we do below) will result in errors since
           # cargo won't be able to find the sources for all members.
 
-          gvpn = craneLib.buildPackage (
-            individualCrateArgs
-            // {
-              pname = "gnosis_vpn";
-              cargoExtraArgs = "--all";
-              src = srcFiles;
-              CARGO_PROFILE = "release";
-            }
-            // (builtins.getAttr targetForSystem targetCrateArgs)
-          );
+          gvpn = mkPackage {
+            pname = "gnosis_vpn";
+            profile = "release";
+          };
 
-          gvpn-dev = craneLib.buildPackage (
-            individualCrateArgs
-            // {
-              pname = "gnosis_vpn-dev";
-              cargoExtraArgs = "--all";
-              src = srcFiles;
-              CARGO_PROFILE = "dev";
-            }
-            // (builtins.getAttr targetForSystem targetCrateArgs)
-          );
-
+          gvpn-dev = mkPackage {
+            pname = "gnosis_vpn-dev";
+            profile = "dev";
+          };
 
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
