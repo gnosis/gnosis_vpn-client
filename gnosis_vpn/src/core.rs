@@ -330,7 +330,7 @@ impl Core {
                 self.on_channel_not_funded(address)
             }
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
-            Event::Metrics(metrics::Event::Syncing(val)) => {
+            Event::Metrics(metrics::Event::Metrics(val)) => {
                 tracing::info!(%val, "node syncing status updated");
                 Ok(())
             }
@@ -356,12 +356,14 @@ impl Core {
         if let Some(conn) = &mut self.connection {
             tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
             conn.dismantle();
+            Ok(())
         } else {
             // recheck run mode
             self.cancel(Cancel::Onboarding);
             self.cancel(Cancel::Node);
             self.cancel(Cancel::Metrics);
             self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+            Ok(())
         }
     }
 

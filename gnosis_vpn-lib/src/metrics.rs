@@ -5,14 +5,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::Balances;
+use crate::hopr::api::HoprTelemetry;
 use crate::hopr::{Hopr, HoprError};
-use crate::info::Info;
-use crate::log_output;
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Syncing(f32),
+    Metrics(HoprTelemetry),
 }
 
 /// Represents the different phases of establishing a connection.
@@ -24,12 +22,15 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    Metrics(Result<String, HoprError>),
+    Metrics(Result<HoprTelemetry, HoprError>),
     Tick,
 }
 
 #[derive(Debug, Error)]
-enum InternalError {}
+enum InternalError {
+    #[error("hopr-lib error: {0}")]
+    Hopr(#[from] HoprError),
+}
 
 #[derive(Clone)]
 pub struct Metrics {
@@ -98,9 +99,9 @@ impl Metrics {
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
             InternalEvent::Metrics(res) => {
+                let r = res?;
                 self.phase = Phase::Idle(SystemTime::now());
-                unimplemented!(" todo ");
-                // self.sender.send(Event::Info(res))?;
+                self.sender.send(Event::Metrics(r));
                 Ok(())
             }
             InternalEvent::Tick => {
@@ -114,7 +115,7 @@ impl Metrics {
         let edgli = self.edgli.clone();
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            let res = edgli.metrics().map_err(HoprError::from);
+            let res = edgli.get_telemetry();
             _ = s.send(InternalEvent::Metrics(res));
         });
         r
@@ -154,7 +155,7 @@ impl Display for InternalEvent {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::Syncing(p) => write!(f, "Syncing({p:.2}%)"),
+            Event::Metrics(p) => write!(f, "Syncing({p:.2}%)"),
         }
     }
 }

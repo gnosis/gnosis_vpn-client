@@ -236,13 +236,13 @@ impl Onboarding {
             let res = client
                 .post(url)
                 .json(&body)
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(5 * 60)) // 5 minutes
                 .headers(headers)
                 .send();
 
             let resp = match res {
                 Err(error) => {
-                    tracing::error!(%error, "Funding tool request failed");
+                    tracing::error!(?error, "Funding tool connect request failed");
                     _ = sender
                         .send(Event::FundingTool(Err(error.to_string())))
                         .map_err(|error| {
@@ -255,7 +255,7 @@ impl Onboarding {
             let status = resp.status();
             let text = match resp.text() {
                 Err(error) => {
-                    tracing::error!(%error, "Funding tool request failed");
+                    tracing::error!(%status, ?error, "Funding tool request failed");
                     _ = sender
                         .send(Event::FundingTool(Err(error.to_string())))
                         .map_err(|error| {
@@ -266,7 +266,7 @@ impl Onboarding {
                 Ok(text) => text,
             };
 
-            tracing::debug!(%text, "Funding tool response");
+            tracing::debug!(%status, ?text, "Funding tool response");
 
             let evt = if status.is_success() {
                 Ok(())

@@ -1,3 +1,4 @@
+use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
 use bytesize::ByteSize;
@@ -357,8 +358,19 @@ impl Hopr {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HoprTelemetry {
     pub sync_percentage: f32,
+}
+
+impl Display for HoprTelemetry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "HoprTelemetry(sync_percentage: {:.2}%)",
+            self.sync_percentage * 100.0
+        )
+    }
 }
 
 impl Drop for Hopr {
