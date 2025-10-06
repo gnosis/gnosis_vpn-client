@@ -242,6 +242,7 @@
 
         in
         {
+          inherit treefmt;
           # Per-system attributes can be defined here. The self' and inputs'
           # module parameters provide easy access to attributes of the same
           # system.
@@ -316,7 +317,6 @@
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
           };
 
-          treefmt = treefmt;
           formatter = config.treefmt.build.wrapper;
         };
       flake = {
