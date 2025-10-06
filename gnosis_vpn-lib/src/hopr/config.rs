@@ -68,7 +68,9 @@ host:
 chain:
     network: {network}
     provider: {rpc_provider}
-    announce: false
+    announce: true
+    enable_logs_snapshot: true
+    logs_snapshot_url: {logs_snapshot_url}
 safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
@@ -85,6 +87,7 @@ strategy:
         port = rand::rng().random_range(20000..65000),
         network = network,
         rpc_provider = rpc_provider,
+        logs_snapshot_url = snapshot_url(network.clone()),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
         funding_amount = balance::funding_amount(),
@@ -99,4 +102,11 @@ pub fn config_file() -> Result<PathBuf, Error> {
 
 fn db_file() -> Result<PathBuf, Error> {
     dirs::config_dir(DB_FILE).map_err(Error::Dirs)
+}
+
+fn snapshot_url(network: Network) -> &'static str {
+    match network {
+        Network::Dufour => "https://logs-snapshots.hoprnet.org/dufour-v3.0-latest.tar.xz",
+        Network::Rotsee => "https://logs-snapshots-rotsee.hoprnet.org/rotsee-v3.0-latest.tar.xz",
+    }
 }
