@@ -77,33 +77,35 @@ impl GnosisRpcClient {
 mod tests {
     use super::*;
     use alloy::node_bindings::Anvil;
+    use anyhow::Ok;
 
     #[tokio::test]
-    async fn test_client_creation_with_default_url() {
+    async fn test_client_creation_with_default_url() -> anyhow::Result<()> {
         let default_signer = ChainKeypair::random();
         let client = GnosisRpcClient::new(default_signer).await;
         assert!(client.is_ok());
 
-        let client = client.unwrap();
+        let client = client?;
         assert_eq!(client.rpc_url(), DEFAULT_GNOSIS_RPC_URL);
+        Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "broken - needs fix"]
-    async fn test_client_creation_with_custom_url() {
+    async fn test_client_creation_with_custom_url() -> anyhow::Result<()> {
         let anvil = Anvil::new().spawn();
         let default_signer = ChainKeypair::random();
         let custom_url = anvil.endpoint();
         let client = GnosisRpcClient::with_url(default_signer, custom_url.as_str()).await;
         assert!(client.is_ok());
 
-        let client = client.unwrap();
+        let client = client?;
         assert_eq!(client.rpc_url(), custom_url);
 
         let chain_id = client.get_chain_id().await;
 
         // Gnosis chain ID is 31337
         assert!(chain_id.is_ok());
-        assert_eq!(chain_id.unwrap(), 31337);
+        assert_eq!(chain_id?, 31337);
+        Ok(())
     }
 }
