@@ -53,6 +53,14 @@ uuid = { version = "1.18.1", features = ["v4"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 
+# this profile focuses on the best runtime performance and the smallest binary size
+[profile.release]
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = true
+opt-level = 3
+
 [profile.intelmac]
 inherits = "release"
 opt-level = 1

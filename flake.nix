@@ -173,13 +173,26 @@
 
           gvpn = craneLib.buildPackage (
             individualCrateArgs
-            // (builtins.getAttr targetForSystem targetCrateArgs)
             // {
               pname = "gnosis_vpn";
               cargoExtraArgs = "--all";
               src = srcFiles;
+              CARGO_PROFILE = "release";
             }
+            // (builtins.getAttr targetForSystem targetCrateArgs)
           );
+
+          gvpn-dev = craneLib.buildPackage (
+            individualCrateArgs
+            // {
+              pname = "gnosis_vpn-dev";
+              cargoExtraArgs = "--all";
+              src = srcFiles;
+              CARGO_PROFILE = "dev";
+            }
+            // (builtins.getAttr targetForSystem targetCrateArgs)
+          );
+
 
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
@@ -300,8 +313,9 @@
           # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
             inherit gvpn;
+            inherit gvpn-dev;
             inherit pre-commit-check;
-            default = gvpn;
+            default = gvpn-dev;
           };
 
           devShells.default = craneLib.devShell {
