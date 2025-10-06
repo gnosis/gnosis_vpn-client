@@ -160,7 +160,7 @@ impl CheckBalanceInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{address, hex, uint};
+    use alloy::primitives::{U256, address, hex};
 
     #[test]
     fn test_build_default_target() {
@@ -171,8 +171,8 @@ mod tests {
 
     #[test]
     fn test_safe_module_deployment_user_data_encoding() {
-        let nonce = uint!(999_U256);
-        let token_amount = uint!(500000000000000000_U256); // 0.5 tokens
+        let nonce = U256::from(999);
+        let token_amount = U256::from(500000000000000000u64); // 0.5 tokens
         let admins = vec![
             address!("0x1111111111111111111111111111111111111111"),
             address!("0x2222222222222222222222222222222222222222"),
