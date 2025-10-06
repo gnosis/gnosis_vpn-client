@@ -1,6 +1,6 @@
 use std::fmt;
 
-use gnosis_vpn_lib::{channel_funding, connection, node, onboarding};
+use gnosis_vpn_lib::{channel_funding, connection, metrics, node, onboarding};
 
 #[derive(Debug)]
 pub enum Event {
@@ -8,6 +8,7 @@ pub enum Event {
     Node(node::Event),
     Onboarding(onboarding::Event),
     ChannelFunding(channel_funding::Event),
+    Metrics(metrics::Event),
 }
 
 impl fmt::Display for Event {
@@ -17,6 +18,7 @@ impl fmt::Display for Event {
             Event::Node(event) => write!(f, "NodeEvent: {event}"),
             Event::Onboarding(event) => write!(f, "OnboardingEvent: {event}"),
             Event::ChannelFunding(event) => write!(f, "ChannelFundingEvent: {event}"),
+            Event::Metrics(event) => write!(f, "MetricsEvent: {event}"),
         }
     }
 }

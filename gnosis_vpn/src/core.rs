@@ -17,7 +17,7 @@ use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
-use gnosis_vpn_lib::{balance, info, wg_tooling};
+use gnosis_vpn_lib::{balance, channel_funding, info, metrics, wg_tooling};
 
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
@@ -89,6 +89,8 @@ enum RunMode {
         // thread loop around funding and general node
         #[allow(dead_code)]
         node: Box<Node>,
+        #[allow(dead_code)]
+        metrics: Box<Metrics>,
     },
     Full {
         // hoprd edge client
@@ -721,6 +723,48 @@ fn setup_channel_funding(
         }
     });
     Ok(channel_funding)
+}
+
+fn setup_metrics(
+    sender: crossbeam_channel::Sender<Event>,
+    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    edgli: Arc<Hopr>,
+) -> Result<ChannelFunding, Error> {
+    let (s, r) = crossbeam_channel::unbounded();
+    let metrics = Metrics::new(s, edgli.clone());
+    thread::spawn(move || {
+        loop {
+            crossbeam_channel::select! {
+                recv(cancel_receiver) -> msg => {
+                    match msg {
+                        Ok(Cancel::Metrics) => {
+                            tracing::info!("shutting down metrics event handler");
+                            break;
+                        }
+                        Ok(_) => {
+                            // ignoring other cancel event handlers
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "metrics loop failed to receive cancel event");
+                        }
+                    }
+                },
+                recv(r) -> channel_event => {
+                    match channel_event {
+                        Ok(ref event) => {
+                                _ = sender.send(Event::Metrics(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send ChannelFunding event");
+                                });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                },
+            }
+        }
+    });
+    Ok(metrics)
 }
 
 fn determine_run_mode(

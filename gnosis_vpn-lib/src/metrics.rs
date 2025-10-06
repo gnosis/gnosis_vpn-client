@@ -12,7 +12,7 @@ use crate::log_output;
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Syncing(float),
+    Syncing(f32),
 }
 
 /// Represents the different phases of establishing a connection.
@@ -24,6 +24,7 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
+    Metrics(Result<String, HoprError>),
     Tick,
 }
 
@@ -47,7 +48,7 @@ impl Metrics {
     pub fn new(sender: crossbeam_channel::Sender<Event>, edgli: Arc<Hopr>) -> Self {
         Metrics {
             cancel_channel: crossbeam_channel::bounded(1),
-            phase: Phase::Info,
+            phase: Phase::Metrics,
             edgli,
             sender,
         }
@@ -132,9 +133,8 @@ impl Metrics {
 impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Phase::Info => write!(f, "Info"),
-            Phase::Balance => write!(f, "Balance"),
-            Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
+            Phase::Metrics => write!(f, "Metrics"),
+            Phase::Idle(t) => write!(f, "Idle(since {:?})", t),
         }
     }
 }
@@ -142,8 +142,10 @@ impl Display for Phase {
 impl Display for InternalEvent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            InternalEvent::Info(res) => write!(f, "Info({res:?})"),
-            InternalEvent::Balance(res) => write!(f, "Balance({res:?})"),
+            InternalEvent::Metrics(res) => match res {
+                Ok(s) => write!(f, "Metrics({})", s),
+                Err(e) => write!(f, "Metrics(Error: {})", e),
+            },
             InternalEvent::Tick => write!(f, "Tick"),
         }
     }
@@ -152,9 +154,7 @@ impl Display for InternalEvent {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::Info(info) => write!(f, "Info: {info}"),
-            Event::Balance(balance) => write!(f, "Balance: {balance}"),
-            Event::BackoffExhausted => write!(f, "BackoffExhausted"),
+            Event::Syncing(p) => write!(f, "Syncing({p:.2}%)"),
         }
     }
 }
