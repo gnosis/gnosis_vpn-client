@@ -15,9 +15,10 @@ use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
+use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
-use gnosis_vpn_lib::{balance, channel_funding, info, metrics, wg_tooling};
+use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
@@ -75,6 +76,9 @@ pub struct Core {
 
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
+
+    // syncing progress
+    sync_progress: Option<f32>,
 }
 
 enum RunMode {
@@ -108,6 +112,7 @@ enum Cancel {
     Connection,
     Onboarding,
     ChannelFunding,
+    Metrics,
 }
 
 impl Core {
@@ -137,6 +142,7 @@ impl Core {
             presafe_balance: None,
             funding_tool: balance::FundingTool::NotStarted,
             funded_channels: Vec::new(),
+            sync_progress: None,
         })
     }
 
@@ -145,10 +151,10 @@ impl Core {
         self.shutdown_sender = Some(sender);
         match &self.run_mode {
             RunMode::PreSafe { .. } => {
+                tracing::debug!("shutting down from presafe mode");
                 _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to onboarding");
                 });
-                tracing::debug!("shutting down from presafe mode");
                 if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(());
                 };
@@ -323,6 +329,10 @@ impl Core {
                 self.on_channel_not_funded(address)
             }
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
+            Event::Metrics(metrics::Event::Syncing(val)) => {
+                tracing::info!(%val, "node syncing status updated");
+                Ok(())
+            }
         }
     }
 
@@ -546,6 +556,48 @@ impl Core {
         self.funded_channels = Vec::new();
         Ok(())
     }
+
+    fn cancel(&mut self, what: Cancel) {
+        match what {
+            Cancel::Node => {
+                tracing::debug!("cancelling node");
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to node");
+                });
+                self.balance = None;
+                self.info = None;
+            }
+            Cancel::Connection => {
+                tracing::debug!("cancelling connection");
+                _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to connection");
+                });
+                self.connection = None;
+                self.session_connected = false;
+            }
+            Cancel::Onboarding => {
+                tracing::debug!("cancelling onboarding");
+                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to onboarding");
+                });
+                self.presafe_balance = None;
+            }
+            Cancel::ChannelFunding => {
+                tracing::debug!("cancelling channel funding");
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to channel funding");
+                });
+                self.funded_channels = Vec::new();
+            }
+            Cancel::Metrics => {
+                tracing::debug!("cancelling metrics");
+                _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to metrics");
+                });
+                self.sync_progress = None;
+            }
+        }
+    }
 }
 
 fn setup_onboarding(
@@ -729,7 +781,7 @@ fn setup_metrics(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     edgli: Arc<Hopr>,
-) -> Result<ChannelFunding, Error> {
+) -> Result<Metrics, Error> {
     let (s, r) = crossbeam_channel::unbounded();
     let metrics = Metrics::new(s, edgli.clone());
     thread::spawn(move || {
@@ -841,10 +893,14 @@ fn determine_run_mode(
         hopr_startup_notifier_rx.clone(),
     )?;
 
+    let metrics = setup_metrics(sender.clone(), cancel_receiver.clone(), hopr.clone())?;
+
     node.run();
+    metrics.run();
 
     Ok(RunMode::Syncing {
         hopr,
         node: Box::new(node),
+        metrics: Box::new(metrics),
     })
 }
