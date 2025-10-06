@@ -37,6 +37,7 @@ notify = { version = "8.2.0", features = ["crossbeam-channel"] }
 ping = "0.6.1"
 primitive-types = "0.14.0"
 rand = "0.9.2"
+regex = "1.10"
 reqwest = { version = "0.12.23", features = ["json", "blocking"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
@@ -46,7 +47,9 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 tokio = { version = "1.47.1", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "dc71088fc79abf8f7ee57a504ab3dcc59b5d859f" } # branch = "kauki/feat/add-basic-api-interfaces"
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "dc71088fc79abf8f7ee57a504ab3dcc59b5d859f", features = [
+  "prometheus",
+] } # branch = "kauki/feat/add-basic-api-interfaces"
 serde_with = "3.15"
 serde_yaml = "0.9.34"
 uuid = { version = "1.18.1", features = ["v4"] }

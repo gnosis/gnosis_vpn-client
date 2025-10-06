@@ -12,6 +12,7 @@ use edgli::{
     },
     run_hopr_edge_node,
 };
+use regex::Regex;
 use tracing::instrument;
 
 use crate::{
@@ -332,6 +333,32 @@ impl Hopr {
             })
         })
     }
+
+    pub fn get_telemetry(&self) -> Result<HoprTelemetry, HoprError> {
+        // Regex to match: hopr_indexer_sync_progress followed by optional labels and a float value
+        // Handles cases like:
+        // hopr_indexer_sync_progress 0.85
+        // hopr_indexer_sync_progress{label="value"} 0.85
+        // hopr_indexer_sync_progress{label1="value1",label2="value2"} 0.85
+        let re = Regex::new(r"hopr_indexer_sync_progress(?:\{[^}]*\})?\s+([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
+            .expect("the sync extraction regex is constructible");
+
+        edgli::hopr_lib::Hopr::collect_hopr_metrics()
+            .map(move |prometheus_values| {
+                let sync_percentage = re
+                    .captures(prometheus_values.as_ref())
+                    .and_then(|caps| caps.get(1))
+                    .and_then(|m| m.as_str().parse::<f32>().ok())
+                    .unwrap_or_default();
+
+                HoprTelemetry { sync_percentage }
+            })
+            .map_err(|e| HoprError::Telemetry(e.to_string()))
+    }
+}
+
+pub struct HoprTelemetry {
+    pub sync_percentage: f32,
 }
 
 impl Drop for Hopr {

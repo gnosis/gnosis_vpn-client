@@ -22,4 +22,7 @@ pub enum HoprError {
 
     #[error("Ambiguous client for session")]
     SessionAmbiguousClient,
+
+    #[error("Faile to extract telemetry: {0}")]
+    Telemetry(String),
 }
