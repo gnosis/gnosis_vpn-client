@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
+use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
@@ -71,6 +72,9 @@ pub struct Core {
     // presafe results
     presafe_balance: Option<balance::PreSafe>,
     funding_tool: balance::FundingTool,
+
+    // supposedly working channels (funding was ok)
+    funded_channels: Vec<Address>,
 }
 
 enum RunMode {
@@ -85,6 +89,8 @@ enum RunMode {
         // thread loop around funding and general node
         #[allow(dead_code)]
         node: Box<Node>,
+        #[allow(dead_code)]
+        channel_funding: Box<ChannelFunding>,
     },
 }
 
@@ -92,6 +98,7 @@ enum Cancel {
     Node,
     Connection,
     Onboarding,
+    ChannelFunding,
 }
 
 impl Core {
@@ -125,6 +132,7 @@ impl Core {
             cancel_channel,
             presafe_balance: None,
             funding_tool: balance::FundingTool::NotStarted,
+            funded_channels: Vec::new(),
         })
     }
 
@@ -147,6 +155,9 @@ impl Core {
                 });
                 _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to node");
+                });
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to channel funding");
                 });
                 match &mut self.connection {
                     Some(conn) => {
@@ -299,6 +310,13 @@ impl Core {
             }
             Event::Onboarding(onboarding::Event::BackoffExhausted) => self.on_failed_onboarding(),
             Event::Onboarding(onboarding::Event::FundingTool(res)) => self.on_funding_tool(res),
+            Event::ChannelFunding(channel_funding::Event::ChannelFundedOk(address)) => {
+                self.on_channel_funded_ok(address)
+            }
+            Event::ChannelFunding(channel_funding::Event::ChannelNotFunded(address)) => {
+                self.on_channel_not_funded(address)
+            }
+            Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
         }
     }
 
@@ -518,6 +536,24 @@ impl Core {
                 self.funding_tool = balance::FundingTool::CompletedError;
             }
         }
+        Ok(())
+    }
+
+    fn on_channel_funded_ok(&mut self, address: Address) -> Result<(), Error> {
+        tracing::debug!(address = %address, "channel funded successfully");
+        self.funded_channels.push(address);
+        Ok(())
+    }
+
+    fn on_channel_not_funded(&mut self, address: Address) -> Result<(), Error> {
+        tracing::warn!(address = %address, "channel funding failed");
+        self.funded_channels.retain(|&x| x != address);
+        Ok(())
+    }
+
+    fn on_failed_channel_funding(&mut self) -> Result<(), Error> {
+        tracing::error!("channel funding failed - please check your RPC provider setting");
+        self.funded_channels = Vec::new();
         Ok(())
     }
 }
