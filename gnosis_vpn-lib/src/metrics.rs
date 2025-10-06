@@ -101,7 +101,10 @@ impl Metrics {
             InternalEvent::Metrics(res) => {
                 let r = res?;
                 self.phase = Phase::Idle(SystemTime::now());
-                self.sender.send(Event::Metrics(r));
+                _ = self
+                    .sender
+                    .send(Event::Metrics(r))
+                    .map_err(|error| tracing::error!(%error, "Failed to process event"));
                 Ok(())
             }
             InternalEvent::Tick => {
@@ -116,7 +119,9 @@ impl Metrics {
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
             let res = edgli.get_telemetry();
-            _ = s.send(InternalEvent::Metrics(res));
+            _ = s.send(InternalEvent::Metrics(res)).map_err(|error| {
+                tracing::error!(%error, "Failed to send metrics event");
+            });
         });
         r
     }
@@ -125,7 +130,9 @@ impl Metrics {
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(60));
-            _ = s.send(InternalEvent::Tick);
+            _ = s.send(InternalEvent::Tick).map_err(|error| {
+                tracing::error!(%error, "Failed to send tick event");
+            });
         });
         r
     }

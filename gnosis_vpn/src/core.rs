@@ -14,7 +14,7 @@ use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
 use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
@@ -77,8 +77,8 @@ pub struct Core {
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
 
-    // syncing progress
-    sync_progress: Option<f32>,
+    // metrics
+    metrics: Option<HoprTelemetry>,
 }
 
 enum RunMode {
@@ -142,7 +142,7 @@ impl Core {
             presafe_balance: None,
             funding_tool: balance::FundingTool::NotStarted,
             funded_channels: Vec::new(),
-            sync_progress: None,
+            metrics: None,
         })
     }
 
@@ -330,10 +330,7 @@ impl Core {
                 self.on_channel_not_funded(address)
             }
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
-            Event::Metrics(metrics::Event::Metrics(val)) => {
-                tracing::info!(%val, "node syncing status updated");
-                Ok(())
-            }
+            Event::Metrics(metrics::Event::Metrics(val)) => self.on_metrics(val),
         }
     }
 
@@ -558,6 +555,12 @@ impl Core {
         Ok(())
     }
 
+    fn on_metrics(&mut self, metrics: HoprTelemetry) -> Result<(), Error> {
+        tracing::debug!(?metrics, "received metrics");
+        self.metrics = Some(metrics);
+        Ok(())
+    }
+
     fn cancel(&mut self, what: Cancel) {
         match what {
             Cancel::Node => {
@@ -595,7 +598,7 @@ impl Core {
                 _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to metrics");
                 });
-                self.sync_progress = None;
+                self.metrics = None;
             }
         }
     }
