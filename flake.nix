@@ -214,8 +214,8 @@
               enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt-rfc-style.compiler;
               package = pkgs.nixfmt-rfc-style;
             };
-            programs.prettier.enable = true;
-            settings.formatter.prettier.excludes = [
+            programs.deno.enable = true;
+            settings.formatter.deno.excludes = [
               "*.toml"
               "*.yml"
               "*.yaml"
