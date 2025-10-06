@@ -1,16 +1,21 @@
 # Testing
 
-In order to test the binary, some functionality can be overriden. Typically, this is done by injecting a custom `hopr` configuration or overriding environment variables.
+In order to test the binary, some functionality can be overriden. Typically,
+this is done by injecting a custom `hopr` configuration or overriding
+environment variables.
 
 ## Environment overrides
 
-The following variables can be used to override the default gnosis_vpn-client behavior:
+The following variables can be used to override the default gnosis_vpn-client
+behavior:
 
-- `GNOSISVPN_HOPR_CONFIG_PATH` - path to a YAML file with the contents of the `hopr` configuration
+- `GNOSISVPN_HOPR_CONFIG_PATH` - path to a YAML file with the contents of the
+  `hopr` configuration
   - the configuration must hold the `HoprLibConfig` format
 
 - `GNOSISVPN_HOPR_IDENTITY_FILE` - path to an explicit identity file to be used
-- `GNOSISVPN_HOPR_IDENTITY_PASS` - string of a password used to unlock the identity file
+- `GNOSISVPN_HOPR_IDENTITY_PASS` - string of a password used to unlock the
+  identity file
 
 ## Procedure
 
@@ -26,7 +31,8 @@ The following variables can be used to override the default gnosis_vpn-client be
 └── hopr.id.pass
 ```
 
-2. Modify the configuration inside the `hopr.cfg.yaml` based on your requirements:
+2. Modify the configuration inside the `hopr.cfg.yaml` based on your
+   requirements:
 
 ```yaml
 host:
