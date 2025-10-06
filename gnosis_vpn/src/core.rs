@@ -83,6 +83,13 @@ enum RunMode {
         #[allow(dead_code)]
         onboarding: Box<Onboarding>,
     },
+    Syncing {
+        // hoprd edge client
+        hopr: Arc<Hopr>,
+        // thread loop around funding and general node
+        #[allow(dead_code)]
+        node: Box<Node>,
+    },
     Full {
         // hoprd edge client
         hopr: Arc<Hopr>,
@@ -98,6 +105,7 @@ enum Cancel {
     Node,
     Connection,
     Onboarding,
+    ChannelFunding,
 }
 
 impl Core {
@@ -110,12 +118,7 @@ impl Core {
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-        let run_mode = determine_run_mode(
-            sender.clone(),
-            cancel_channel.1.clone(),
-            &hopr_params,
-            config.channel_targets(),
-        )?;
+        let run_mode = determine_run_mode(sender.clone(), cancel_channel.1.clone(), &hopr_params)?;
 
         Ok(Core {
             config,
@@ -148,12 +151,21 @@ impl Core {
                     _ = s.send(());
                 };
             }
-            RunMode::Full { .. } => {
-                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to onboarding");
-                });
+            RunMode::Syncing { .. } => {
                 _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to node");
+                });
+                tracing::debug!("shutting down from syncing mode");
+                if let Some(s) = self.shutdown_sender.as_ref() {
+                    _ = s.send(());
+                };
+            }
+            RunMode::Full { .. } => {
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to node");
+                });
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to channel funding");
                 });
                 match &mut self.connection {
                     Some(conn) => {
@@ -202,12 +214,12 @@ impl Core {
                 }
             }
             Command::Status => {
-                tracing::debug!("gathering status");
                 let status = match self.run_mode {
                     RunMode::PreSafe { node_address, .. } => {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
                         command::Status::preparing_safe(node_address, balance, self.funding_tool.clone())
                     }
+                    RunMode::Syncing { .. } => unimplemented!("syncing mode not implemented yet"),
                     RunMode::Full { .. } => {
                         match (
                             self.target_destination.clone(),
@@ -263,13 +275,9 @@ impl Core {
                     tracing::info!("edge client not running - cannot refresh node");
                     Err(Error::EdgeNotReady)
                 }
-                RunMode::Full { .. } => {
-                    self.run_mode = determine_run_mode(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        &self.hopr_params,
-                        self.config.channel_targets(),
-                    )?;
+                _ => {
+                    self.run_mode =
+                        determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
                     Ok(Response::Empty)
                 }
             },
@@ -282,8 +290,8 @@ impl Core {
                     onboarding.fund_address(node_address, secret)?;
                     Ok(Response::Empty)
                 }
-                RunMode::Full { .. } => {
-                    tracing::warn!("funding tool not available in full mode");
+                _ => {
+                    tracing::warn!("funding tool only available during onboarding");
                     Ok(Response::Empty)
                 }
             },
@@ -340,12 +348,7 @@ impl Core {
         self.config = config;
 
         // recheck run mode
-        self.run_mode = determine_run_mode(
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-            &self.hopr_params,
-            self.config.channel_targets(),
-        )?;
+        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
 
@@ -376,6 +379,10 @@ impl Core {
     fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
         match &self.run_mode {
             RunMode::PreSafe { .. } => {
+                tracing::error!("edge client not running - cannot connect");
+                Err(Error::EdgeNotReady)
+            }
+            RunMode::Syncing { .. } => {
                 tracing::error!("edge client not running - cannot connect");
                 Err(Error::EdgeNotReady)
             }
@@ -471,12 +478,7 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
-        self.run_mode = determine_run_mode(
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-            &self.hopr_params,
-            self.config.channel_targets(),
-        )?;
+        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
 
@@ -501,23 +503,13 @@ impl Core {
                 hopr_config::write_default(&cfg)?;
             }
         };
-        self.run_mode = determine_run_mode(
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-            &self.hopr_params,
-            self.config.channel_targets(),
-        )?;
+        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
 
     fn on_failed_onboarding(&mut self) -> Result<(), Error> {
         tracing::error!("onboarding failed - please check your configuration and network connectivity");
-        self.run_mode = determine_run_mode(
-            self.sender.clone(),
-            self.cancel_channel.1.clone(),
-            &self.hopr_params,
-            self.config.channel_targets(),
-        )?;
+        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
 
@@ -605,12 +597,9 @@ fn setup_node(
     hopr_startup_notifier: crossbeam_channel::Receiver<
         std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
     >,
-    channel_targets: Vec<Address>,
-) -> Result<(Node, ChannelFunding), Error> {
-    let (s_node, r_node) = crossbeam_channel::unbounded();
-    let (s_cf, r_cf) = crossbeam_channel::unbounded();
-    let node = Node::new(s_node, edgli.clone());
-    let channel_funding = ChannelFunding::new(s_cf.clone(), edgli.clone(), channel_targets);
+) -> Result<Node, Error> {
+    let (s, r) = crossbeam_channel::unbounded();
+    let node = Node::new(s, edgli.clone());
     thread::spawn(move || {
         let mut hopr_processes = Vec::new();
 
@@ -673,19 +662,7 @@ fn setup_node(
                         }
                     }
                 },
-                recv(r_cf) -> channel_event => {
-                    match channel_event {
-                        Ok(ref event) => {
-                                _ = sender.send(Event::ChannelFunding(event.clone())).map_err(|error| {
-                                    tracing::error!(%event, %error, "failed to send ChannelFunding event");
-                                });
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = ?e, "failed to receive event");
-                        }
-                    }
-                },
-                recv(r_node) -> node_event => {
+                recv(r) -> node_event => {
                     match node_event {
                         Ok(ref event) => {
                                 _ = sender.send(Event::Node(event.clone())).map_err(|error| {
@@ -700,14 +677,56 @@ fn setup_node(
             }
         }
     });
-    Ok((node, channel_funding))
+    Ok(node)
+}
+
+fn setup_channel_funding(
+    sender: crossbeam_channel::Sender<Event>,
+    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    edgli: Arc<Hopr>,
+    channel_targets: Vec<Address>,
+) -> Result<ChannelFunding, Error> {
+    let (s, r) = crossbeam_channel::unbounded();
+    let channel_funding = ChannelFunding::new(s, edgli.clone(), channel_targets);
+    thread::spawn(move || {
+        loop {
+            crossbeam_channel::select! {
+                recv(cancel_receiver) -> msg => {
+                    match msg {
+                        Ok(Cancel::ChannelFunding) => {
+                            tracing::info!("shutting down channel funding event handler");
+                            break;
+                        }
+                        Ok(_) => {
+                            // ignoring other cancel event handlers
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "channel funding loop failed to receive cancel event");
+                        }
+                    }
+                },
+                recv(r) -> channel_event => {
+                    match channel_event {
+                        Ok(ref event) => {
+                                _ = sender.send(Event::ChannelFunding(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send ChannelFunding event");
+                                });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                },
+            }
+        }
+    });
+    Ok(channel_funding)
 }
 
 fn determine_run_mode(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     hopr_params: &HoprParams,
-    channel_targets: Vec<Address>,
 ) -> Result<RunMode, Error> {
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
@@ -771,20 +790,17 @@ fn determine_run_mode(
     let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
     let hopr = Arc::new(hoprd);
 
-    let (node, channel_funding) = setup_node(
+    let node = setup_node(
         sender.clone(),
         cancel_receiver.clone(),
         hopr.clone(),
         hopr_startup_notifier_rx.clone(),
-        channel_targets,
     )?;
 
     node.run();
-    channel_funding.run();
 
-    Ok(RunMode::Full {
+    Ok(RunMode::Syncing {
         hopr,
-        channel_funding: Box::new(channel_funding),
         node: Box::new(node),
     })
 }
