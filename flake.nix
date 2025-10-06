@@ -43,11 +43,6 @@
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
-        # To import a flake module
-        # 1. Add foo to inputs
-        # 2. Add foo as a parameter to the outputs function
-        # 3. Add here: foo.flakeModule
-
         treefmt-nix.flakeModule
       ];
       systems = [
@@ -74,6 +69,8 @@
             }
           );
 
+          # Map Nix system names to Rust target triples
+          # Linux targets use musl for static linking, Darwin uses standard targets
           systemTargets = {
             "x86_64-linux" = "x86_64-unknown-linux-musl";
             "aarch64-linux" = "aarch64-unknown-linux-musl";
@@ -81,13 +78,15 @@
             "aarch64-darwin" = "aarch64-apple-darwin";
           };
 
+          # Map current system to its corresponding Rust target triple
+          # This ensures we build for the correct architecture and platform
           targetForSystem = builtins.getAttr system systemTargets;
 
-          # NB: we don't need to overlay our custom toolchain for the *entire*
-          # pkgs (which would require rebuidling anything else which uses rust).
-          # Instead, we just want to update the scope that crane will use by appending
-          # our specific toolchain there.
-          # cross = pkgs.pkgsCross.musl64;
+          # Configure crane with custom Rust toolchain
+          # We don't overlay the custom toolchain for the *entire* pkgs (which
+          # would require rebuilding anything else that uses rust). Instead, we
+          # just update the scope that crane will use by appending our specific
+          # toolchain there.
           craneLib = (crane.mkLib pkgs).overrideToolchain (
             p:
             (p.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
@@ -95,38 +94,41 @@
             }
           );
 
+          # Clean cargo source to exclude build artifacts and unnecessary files
           src = craneLib.cleanCargoSource ./.;
 
-          # Common arguments can be set here to avoid repeating them later
+          # Common build arguments shared across all crane operations
+          # These are used for dependency building, clippy, docs, tests, etc.
           commonArgs = {
             inherit src;
-            strictDeps = true;
+            strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
+            # Build-time dependencies (available during compilation)
             nativeBuildInputs = [
-              pkgs.pkg-config
+              pkgs.pkg-config # For finding OpenSSL and other system libraries
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
-              pkgs.mold
+              pkgs.mold # Faster linker for Linux builds
             ];
+
+            # Runtime dependencies (linked into the final binary)
             buildInputs = [
-              pkgs.pkgsStatic.openssl
+              pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
             ]
             ++ lib.optionals pkgs.stdenv.isDarwin [
-              # Additional darwin specific inputs can be set here
-              pkgs.libiconv
+              pkgs.libiconv # Required for Darwin builds
             ];
-
-            # Additional environment variables can be set directly
-            # MY_CUSTOM_VAR = "some value";
           };
 
-          # Build *just* the cargo dependencies (of the entire workspace),
-          # so we can reuse all of that work (e.g. via cachix) when running in CI
-          # It is *highly* recommended to use something like cargo-hakari to avoid
-          # cache misses when building individual top-level-crates
+          # Build *just* the cargo dependencies (of the entire workspace)
+          # This creates a separate derivation containing only compiled dependencies,
+          # allowing us to cache and reuse them across all packages (via cachix in CI).
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-          # Import package builder function
+          # Import the package builder function from nix/mkPackage.nix
+          # This function encapsulates all the logic for building gnosis_vpn packages
+          # with consistent source files, target configurations, and build settings.
+          # See nix/mkPackage.nix for detailed documentation on the builder function.
           mkPackage = import ./nix/mkPackage.nix {
             inherit
               craneLib
@@ -137,20 +139,17 @@
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
           };
 
-          # Build the top-level crates of the workspace as individual derivations.
-          # This allows consumers to only depend on (and build) only what they need.
-          # Though it is possible to build the entire workspace as a single derivation,
-          # so this is left up to you on how to organize things
-          #
-          # Note that the cargo workspace must define `workspace.members` using wildcards,
-          # otherwise, omitting a crate (like we do below) will result in errors since
-          # cargo won't be able to find the sources for all members.
+          # Build the top-level crates of the workspace as individual derivations
+          # This modular approach allows consumers to depend on and build only what
+          # they need, rather than building the entire workspace as a single derivation.
 
+          # Production build with release profile optimizations
           gvpn = mkPackage {
             pname = "gnosis_vpn";
             profile = "release";
           };
 
+          # Development build with faster compilation and debug symbols
           gvpn-dev = mkPackage {
             pname = "gnosis_vpn-dev";
             profile = "dev";
@@ -218,9 +217,6 @@
         in
         {
           inherit treefmt;
-          # Per-system attributes can be defined here. The self' and inputs'
-          # module parameters provide easy access to attributes of the same
-          # system.
 
           checks = {
             # Build the crates as part of `nix flake check` for convenience
@@ -272,7 +268,6 @@
 
           };
 
-          # Equivalent to  inputs'.nixpkgs.legacyPackages.hello;
           packages = {
             inherit gvpn;
             inherit gvpn-dev;
@@ -281,13 +276,9 @@
           };
 
           devShells.default = craneLib.devShell {
-            # Inherit inputs from checks.
             inherit pre-commit-check;
             checks = self.checks.${system};
-            # Additional dev-shell environment variables can be set directly
-            # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
 
-            # Extra inputs can be added here; cargo and rustc are provided by default.
             packages = [ ];
 
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
@@ -295,11 +286,6 @@
 
           formatter = config.treefmt.build.wrapper;
         };
-      flake = {
-        # The usual flake attributes can be defined here, including system-
-        # agnostic ones like nixosModule and system-enumerating ones, although
-        # those are more easily expressed in perSystem.
-
-      };
+      flake = { };
     };
 }
