@@ -242,11 +242,12 @@ impl Onboarding {
 
             let resp = match res {
                 Err(error) => {
-                    let err = format!("Funding tool request error: {error}");
-                    tracing::error!(%err, "Funding tool request failed");
-                    _ = sender.send(Event::FundingTool(Err(err))).map_err(|error| {
-                        tracing::error!(%error, "Failed sending funding tool event");
-                    });
+                    tracing::error!(%error, "Funding tool request failed");
+                    _ = sender
+                        .send(Event::FundingTool(Err(error.to_string())))
+                        .map_err(|error| {
+                            tracing::error!(%error, "Failed sending funding tool event");
+                        });
                     return;
                 }
                 Ok(res) => res,
@@ -254,11 +255,12 @@ impl Onboarding {
             let status = resp.status();
             let text = match resp.text() {
                 Err(error) => {
-                    let err = format!("Funding tool response error: {error}");
-                    tracing::error!(%err, "Funding tool request failed");
-                    _ = sender.send(Event::FundingTool(Err(err))).map_err(|error| {
-                        tracing::error!(%error, "Failed sending funding tool event");
-                    });
+                    tracing::error!(%error, "Funding tool request failed");
+                    _ = sender
+                        .send(Event::FundingTool(Err(error.to_string())))
+                        .map_err(|error| {
+                            tracing::error!(%error, "Failed sending funding tool event");
+                        });
                     return;
                 }
                 Ok(text) => text,
