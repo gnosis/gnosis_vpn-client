@@ -152,29 +152,23 @@ impl Core {
         match &self.run_mode {
             RunMode::PreSafe { .. } => {
                 tracing::debug!("shutting down from presafe mode");
-                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to onboarding");
-                });
+                self.cancel(Cancel::Onboarding);
                 if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(());
                 };
             }
             RunMode::Syncing { .. } => {
-                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to node");
-                });
                 tracing::debug!("shutting down from syncing mode");
+                self.cancel(Cancel::Node);
+                self.cancel(Cancel::Metrics);
                 if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(());
                 };
             }
             RunMode::Full { .. } => {
-                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to node");
-                });
-                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to channel funding");
-                });
+                tracing::debug!("shutting down from normal mode");
+                self.cancel(Cancel::Node);
+                self.cancel(Cancel::ChannelFunding);
                 match &mut self.connection {
                     Some(conn) => {
                         tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
@@ -183,9 +177,7 @@ impl Core {
                     }
                     None => {
                         tracing::debug!("direct shutdown - no connection to disconnect");
-                        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
-                            tracing::error!(%e, "failed to send cancel to connection");
-                        });
+                        self.cancel(Cancel::Connection);
                         if let Some(s) = self.shutdown_sender.as_ref() {
                             _ = s.send(());
                         };
@@ -283,7 +275,16 @@ impl Core {
                     tracing::info!("edge client not running - cannot refresh node");
                     Err(Error::EdgeNotReady)
                 }
-                _ => {
+                RunMode::Syncing { .. } => {
+                    self.cancel(Cancel::Node);
+                    self.cancel(Cancel::Metrics);
+                    self.run_mode =
+                        determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+                    Ok(Response::Empty)
+                }
+                RunMode::Full { .. } => {
+                    self.cancel(Cancel::Node);
+                    self.cancel(Cancel::ChannelFunding);
                     self.run_mode =
                         determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
                     Ok(Response::Empty)
@@ -338,11 +339,6 @@ impl Core {
 
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
         let config = config::read(config_path)?;
-        // handle existing connection
-        if let Some(conn) = &mut self.connection {
-            tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
-            conn.dismantle();
-        }
         // update target
         if let Some(dest) = self.target_destination.as_ref() {
             if let Some(new_dest) = config.destinations.get(&dest.address) {
@@ -354,14 +350,19 @@ impl Core {
             }
         }
 
-        // handle existing node
-        self.balance = None;
-        self.info = None;
         self.config = config;
 
-        // recheck run mode
-        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
-        Ok(())
+        // handle existing connection
+        if let Some(conn) = &mut self.connection {
+            tracing::info!(current = %conn.destination(), "disconnecting from current destination due to configuration update");
+            conn.dismantle();
+        } else {
+            // recheck run mode
+            self.cancel(Cancel::Onboarding);
+            self.cancel(Cancel::Node);
+            self.cancel(Cancel::Metrics);
+            self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+        }
     }
 
     fn act_on_target(&mut self) -> Result<(), Error> {
@@ -460,16 +461,12 @@ impl Core {
 
     fn on_dismantled(&mut self) -> Result<(), Error> {
         tracing::info!("connection closed");
-        self.session_connected = false;
-        self.connection = None;
-        if let RunMode::Full { .. } = &self.run_mode {
-            _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
-                tracing::error!(%e, "failed to send cancel to connection");
-            });
-        }
+        self.cancel(Cancel::Connection);
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
-            _ = sender.send(());
+            _ = sender.send(()).map_err(|e| {
+                tracing::error!(%e, "failed to send shutdown complete signal");
+            });
             Ok(())
         } else {
             self.act_on_target()
@@ -490,6 +487,9 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
+        self.cancel(Cancel::Node);
+        self.cancel(Cancel::Metrics);
+        self.cancel(Cancel::ChannelFunding);
         self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
@@ -502,9 +502,7 @@ impl Core {
 
     fn on_onboarding_safe_module(&mut self, safe_module: hopr_config::SafeModule) -> Result<(), Error> {
         tracing::info!(?safe_module, "on safe module - generating hoprd configuration");
-        _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
-            tracing::error!(%e, "failed to send cancel to finished onboarding");
-        });
+        self.cancel(Cancel::Onboarding);
         match self.hopr_params.config_mode.clone() {
             hopr_params::ConfigMode::Manual(_) => {
                 tracing::warn!("manual configuration mode - not overwriting existing configuration");
@@ -521,6 +519,7 @@ impl Core {
 
     fn on_failed_onboarding(&mut self) -> Result<(), Error> {
         tracing::error!("onboarding failed - please check your configuration and network connectivity");
+        self.cancel(Cancel::Onboarding);
         self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
