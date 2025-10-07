@@ -413,7 +413,7 @@ impl Drop for Hopr {
 
 fn exists_to_ok(err: HoprLibError) -> Result<(), HoprLibError> {
     match err {
-        HoprLibError::ChainApi(HoprChainError::ActionsError(ChainActionsError::ChannelAlreadyExists)) => Ok(()),
+        HoprLibError::ChainError(ChainActionsError::ChannelAlreadyExists) => Ok(()),
         e => Err(e),
     }
 }
