@@ -119,6 +119,7 @@ enum Cancel {
     Onboarding,
     ChannelFunding,
     Metrics,
+    OneShotTasks,
 }
 
 impl Core {
@@ -615,6 +616,13 @@ impl Core {
                 });
                 self.metrics = None;
             }
+            Cancel::OneShotTasks => {
+                tracing::debug!("cancelling one shot tasks");
+                _ = self.cancel_channel.0.send(Cancel::OneShotTasks).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel to one shot tasks");
+                });
+                self.ticket_stats = None;
+            }
         }
     }
 }
@@ -836,6 +844,48 @@ fn setup_metrics(
         }
     });
     Ok(metrics)
+}
+
+fn setup_one_shot_tasks(
+    sender: crossbeam_channel::Sender<Event>,
+    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
+    edgli: Arc<Hopr>,
+) -> Result<Metrics, Error> {
+    let (s, r) = crossbeam_channel::unbounded();
+    let one_shot_tasks = OneShotTasks::new(s, edgli.clone());
+    thread::spawn(move || {
+        loop {
+            crossbeam_channel::select! {
+                recv(cancel_receiver) -> msg => {
+                    match msg {
+                        Ok(Cancel::OneShotTasks) => {
+                            tracing::info!("shutting down one shot tasks event handler");
+                            break;
+                        }
+                        Ok(_) => {
+                            // ignoring other cancel event handlers
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "one shot tasks loop failed to receive cancel event");
+                        }
+                    }
+                },
+                recv(r) -> ticket_stats => {
+                    match ticket_stats {
+                        Ok(ref event) => {
+                                _ = sender.send(Event::OneShotTasks(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send OneShotTasks event");
+                                });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "failed to receive event");
+                        }
+                    }
+                },
+            }
+        }
+    });
+    Ok(one_shot_tasks)
 }
 
 fn determine_run_mode(

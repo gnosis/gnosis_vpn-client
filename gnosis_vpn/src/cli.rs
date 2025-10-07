@@ -34,7 +34,7 @@ pub struct Cli {
 
     /// Hopr network
     #[arg(long, env = hopr::NETWORK_ENV, default_value = "dufour")]
-    pub hopr_network: Option<Network>,
+    pub hopr_network: Network,
 
     /// Hopr edge client configuration path
     #[arg( long, env = hopr::CONFIG_ENV, default_value = None) ]
