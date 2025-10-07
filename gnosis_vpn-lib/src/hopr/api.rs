@@ -19,6 +19,7 @@ use tracing::instrument;
 
 use crate::{
     balance::Balances,
+    errors::HoprLibError,
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
     ticket_stats::TicketStats,
@@ -90,15 +91,13 @@ impl Hopr {
                 tracing::info!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
                 hopr.fund_channel(&channel.get_id(), amount)
                     .await
-                    .map(|_| ())
-                    .or_else(exists_to_ok)
+                    .map_or_else(exists_to_ok, |_| ())
                     .map_err(HoprError::HoprLib)
             } else {
                 tracing::info!(destination = %target, %amount, "opening a new channel");
                 hopr.open_channel(&target, amount)
                     .await
-                    .map(|_| ())
-                    .or_else(exists_to_ok)
+                    .map_or_else(exists_to_ok, |_| ())
                     .map_err(HoprError::HoprLib)
             }
         })
@@ -408,9 +407,9 @@ impl Drop for Hopr {
     }
 }
 
-fn exists_to_ok(err: ChainActionsError) -> Result<(), ChainActionsError> {
+fn exists_to_ok(err: HoprLibError) -> Result<(), HoprLibError> {
     match err {
-        ChainActionsError::ChannelAlreadyExists => Ok(()),
+        HoprLibError(ChainActionsError::ChannelAlreadyExists) => Ok(()),
         e => Err(e),
     }
 }

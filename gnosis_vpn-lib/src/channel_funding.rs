@@ -181,13 +181,16 @@ impl ChannelFunding {
                 }
                 if failed_channels.is_empty() {
                     self.backoff = BackoffState::Inactive;
-                    self.phase = Phase::Idle(SystemTime::now());
-                    self.failed_channels.clear();
-                    self.failed_channels = vec![];
+                    self.phase = Phase::Idle {
+                        ticket_price,
+                        since: SystemTime::now(),
+                    };
                 } else {
                     self.backoff = BackoffState::Active(channel_backoff());
-                    self.phase = Phase::FailedChannelFunding;
-                    self.failed_channels = failed_channels;
+                    self.phase = Phase::FailedChannelFunding {
+                        failed_channels,
+                        ticket_price,
+                    };
                 }
                 Ok(())
             }
