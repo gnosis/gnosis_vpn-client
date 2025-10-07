@@ -20,10 +20,13 @@ use crate::chain::contracts::{
 };
 use crate::chain::errors::ChainError;
 use crate::hopr::config;
+use crate::hopr::{Hopr, HoprError};
 use crate::remote_data;
+use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug)]
 pub enum Event {
+    TicketStats(TicketStats),
     Balance(balance::PreSafe),
     SafeModule(config::SafeModule),
     FundingTool(Result<(), String>),
@@ -33,6 +36,7 @@ pub enum Event {
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum Phase {
+    TicketStats,
     CheckAccountBalance,
     WaitAccountBalance,
     DeploySafe(balance::PreSafe),
@@ -41,6 +45,7 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
+    TicketStats(Result<TicketStats, HoprError>),
     NodeAddressBalance(Result<CheckBalanceResult, ChainError>),
     TickAccountBalance,
     SafeDeployment(Result<SafeModuleDeploymentResult, ChainError>),
@@ -57,6 +62,8 @@ enum BackoffState {
 enum InternalError {
     #[error(transparent)]
     Chain(#[from] ChainError),
+    #[error(transparent)]
+    TicketStats(#[from] ticket_stats::Error),
 }
 
 #[derive(Clone)]
@@ -88,7 +95,7 @@ impl Onboarding {
         Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
-            phase: Phase::CheckAccountBalance,
+            phase: Phase::TicketStats,
             sender,
             private_key,
             rpc_provider,
@@ -285,6 +292,7 @@ impl Onboarding {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match &self.phase {
             Phase::CheckAccountBalance => self.fetch_node_address_balance(runtime),
+            Phase::TicketStats => self.ticket_stats(),
             Phase::WaitAccountBalance => self.wait_account_balance(),
             Phase::DeploySafe(balance) => self.deploy_safe(runtime, balance.clone()),
             Phase::Done => crossbeam_channel::never(),
@@ -319,6 +327,23 @@ impl Onboarding {
                 });
                 Ok(())
             }
+            InternalEvent::TicketStats(res) => match res {
+                Ok(stats) => {
+                    tracing::debug!(phase = %self.phase, %stats, "Got ticket stats");
+                    _ = self.sender.send(Event::TicketStats(stats)).map_err(|error| {
+                        tracing::error!(%error, "Failed sending ticket stats event");
+                    });
+                    let ticket_price = stats.ticket_price()?;
+                    self.phase = Phase::ChannelFunding(ticket_price);
+                    self.backoff = BackoffState::Inactive;
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::error!(phase = %self.phase, %error, "Failed getting ticket stats");
+                    self.backoff = BackoffState::Active(ExponentialBackoff::default());
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -372,6 +397,18 @@ impl Onboarding {
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(10));
             _ = s.send(InternalEvent::TickAccountBalance);
+        });
+        r
+    }
+
+    fn ticket_stats(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let (s, r) = crossbeam_channel::bounded(1);
+        let edgli = self.edgli.clone();
+        thread::spawn(move || {
+            let res = edgli.get_ticket_stats();
+            _ = s.send(InternalEvent::TicketStats(res)).map_err(|error| {
+                tracing::error!(%error, "Failed sending ticket stats");
+            })
         });
         r
     }

@@ -90,10 +90,8 @@ strategy:
         logs_snapshot_url = snapshot_url(network.clone()),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
-        funding_amount = unimplemented!("Set default funding amount"),
-        min_stake_threshold = unimplemented!("Set default funding amount"),
-        //funding_amount = balance::funding_amount(),
-        //min_stake_threshold = balance::min_stake_threshold()
+        funding_amount = balance::funding_amount(),
+        min_stake_threshold = balance::min_stake_threshold(),
     );
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
