@@ -54,7 +54,7 @@ sol!(
 type UserDataTuple = sol! { tuple(bytes32, uint256, bytes32, address[]) };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NetworkContracts {
+pub struct NetworkContracts {
     pub channels_contract_address: Address,
     pub node_stake_factory_address: Address,
     pub win_prob_oracle_address: Address,
@@ -167,7 +167,7 @@ impl SafeModuleDeploymentInputs {
     /// - DEPLOYSAFEMODULE_FUNCTION_IDENTIFIER = DEPLOY_SAFE_MODULE_AND_INCLUDE_NODES_IDENTIFIER
     /// - DEFAULT_TARGET = CHANNELS_CONTRACT_ADDRESS + DEFAULT_TARGET_SUFFIX as bytes32
     pub fn build_user_data(&self, network: &Network) -> Bytes {
-        let default_target = NetworkSpecifications::get_network_contracts(&network).build_default_target();
+        let default_target = NetworkSpecifications::get_network_contracts(network).build_default_target();
 
         let user_data_with_offset = UserDataTuple::abi_encode(&(
             DEPLOY_SAFE_MODULE_AND_INCLUDE_NODES_IDENTIFIER,

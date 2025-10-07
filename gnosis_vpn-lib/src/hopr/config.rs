@@ -1,5 +1,6 @@
 pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
 
+use edgli::hopr_lib::{Balance, WxHOPR};
 use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
@@ -56,7 +57,12 @@ pub fn write_default(cfg: &HoprLibConfig) -> Result<(), Error> {
     fs::write(&conf_file, &content).map_err(Error::IO)
 }
 
-pub fn generate(network: Network, rpc_provider: Url, safe_module: SafeModule) -> Result<HoprLibConfig, Error> {
+pub fn generate(
+    network: Network,
+    rpc_provider: Url,
+    safe_module: SafeModule,
+    ticket_value: Balance<WxHOPR>,
+) -> Result<HoprLibConfig, Error> {
     // TODO use typed HoprLibConfig
     let content = format!(
         r#"
@@ -90,8 +96,8 @@ strategy:
         logs_snapshot_url = snapshot_url(network.clone()),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
-        funding_amount = balance::funding_amount(),
-        min_stake_threshold = balance::min_stake_threshold(),
+        funding_amount = balance::funding_amount(ticket_value),
+        min_stake_threshold = balance::min_stake_threshold(ticket_value),
     );
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
