@@ -302,13 +302,7 @@ fn loop_daemon(
     args: cli::Cli,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let hopr_params = match hopr_params::HoprParams::try_from(args.clone()) {
-        Ok(params) => params,
-        Err(e) => {
-            tracing::error!(error = ?e, msg = %e, "failed to parse hopr parameters");
-            return exitcode::USAGE;
-        }
-    };
+    let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
     let mut core = match core::Core::init(&config_path, sender, hopr_params) {
         Ok(core) => core,
