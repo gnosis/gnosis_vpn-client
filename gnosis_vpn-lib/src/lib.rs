@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod network;
 pub mod node;
 pub mod onboarding;
+pub mod one_shot_tasks;
 pub mod session;
 pub mod socket;
 pub mod wg_tooling;

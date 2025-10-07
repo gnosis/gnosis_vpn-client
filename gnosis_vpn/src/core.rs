@@ -18,6 +18,7 @@ use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_c
 use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
+use gnosis_vpn_lib::one_shot_tasks::{self, OneShotTasks};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -79,6 +80,9 @@ pub struct Core {
 
     // metrics
     metrics: Option<HoprTelemetry>,
+
+    // one shot tasks
+    ticket_stats: Option<ticket_stats::TicketStats>,
 }
 
 enum RunMode {
@@ -95,6 +99,8 @@ enum RunMode {
         node: Box<Node>,
         #[allow(dead_code)]
         metrics: Box<Metrics>,
+        #[allow(dead_code)]
+        one_shot_tasks: Box<OneShotTasks>,
     },
     Full {
         // hoprd edge client
@@ -143,6 +149,7 @@ impl Core {
             funding_tool: balance::FundingTool::NotStarted,
             funded_channels: Vec::new(),
             metrics: None,
+            ticket_stats: None,
         })
     }
 
@@ -323,6 +330,7 @@ impl Core {
             }
             Event::Onboarding(onboarding::Event::BackoffExhausted) => self.on_failed_onboarding(),
             Event::Onboarding(onboarding::Event::FundingTool(res)) => self.on_funding_tool(res),
+            Event::Onboarding(onboarding::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
             Event::ChannelFunding(channel_funding::Event::ChannelFundedOk(address)) => {
                 self.on_channel_funded_ok(address)
             }
@@ -537,6 +545,12 @@ impl Core {
         Ok(())
     }
 
+    fn on_ticket_stats(&mut self, stats: balance::TicketStats) -> Result<(), Error> {
+        tracing::debug!(?stats, "received ticket stats");
+        self.ticket_stats = Some(stats);
+        Ok(())
+    }
+
     fn on_channel_funded_ok(&mut self, address: Address) -> Result<(), Error> {
         tracing::debug!(address = %address, "channel funded successfully");
         self.funded_channels.push(address);
@@ -585,6 +599,7 @@ impl Core {
                     tracing::error!(%e, "failed to send cancel to onboarding");
                 });
                 self.presafe_balance = None;
+                self.ticket_stats = None;
             }
             Cancel::ChannelFunding => {
                 tracing::debug!("cancelling channel funding");
