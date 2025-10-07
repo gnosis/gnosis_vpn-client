@@ -1,16 +1,14 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
+use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use crate::balance;
 use crate::hopr::{Hopr, HoprError};
-use crate::log_output;
 use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug)]
@@ -19,6 +17,7 @@ pub enum Event {
     ChannelFundedOk(Address),
     ChannelNotFunded(Address),
     BackoffExhausted,
+    Done,
 }
 
 /// Represents the different phases of establishing a connection.
@@ -30,17 +29,12 @@ enum Phase {
         ticket_price: Balance<WxHOPR>,
         failed_channels: Vec<Address>,
     },
-    Idle {
-        ticket_price: Balance<WxHOPR>,
-        since: SystemTime,
-    },
 }
 
 #[derive(Debug)]
 enum InternalEvent {
     TicketStats(Result<TicketStats, HoprError>),
     ChannelFunding(Vec<ChannelResult>),
-    Tick,
 }
 
 #[derive(Debug)]
@@ -57,7 +51,12 @@ enum BackoffState {
 }
 
 #[derive(Debug, Error)]
-enum InternalError {}
+enum InternalError {
+    #[error("Invalid phase for action")]
+    UnexpectedPhase,
+    #[error("Ticket stats error: {0}")]
+    TicketStats(#[from] ticket_stats::Error),
+}
 
 #[derive(Clone)]
 pub struct ChannelFunding {
@@ -158,46 +157,63 @@ impl ChannelFunding {
                 ticket_price,
                 failed_channels,
             } => self.channel_funding(failed_channels, ticket_price),
-            Phase::Idle { .. } => self.idle(),
         }
     }
 
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
-            InternalEvent::ChannelFunding(results) => {
-                let mut failed_channels = vec![];
-                for ChannelResult { address, res } in results {
-                    match res {
-                        Ok(()) => {
-                            _ = self.sender.send(Event::ChannelFundedOk(address));
-                        }
+            InternalEvent::ChannelFunding(results) => match self.phase.clone() {
+                Phase::ChannelFunding(ticket_price) | Phase::FailedChannelFunding { ticket_price, .. } => {
+                    let mut failed_channels = vec![];
+                    for ChannelResult { address, res } in results {
+                        match res {
+                            Ok(()) => {
+                                _ = self.sender.send(Event::ChannelFundedOk(address));
+                            }
 
-                        Err(error) => {
-                            tracing::error!(phase = %self.phase, address = %address, %error, "Channel funding failed");
-                            failed_channels.push(address);
-                            _ = self.sender.send(Event::ChannelNotFunded(address));
+                            Err(error) => {
+                                tracing::error!(phase = %self.phase, address = %address, %error, "Channel funding failed");
+                                failed_channels.push(address);
+                                _ = self.sender.send(Event::ChannelNotFunded(address));
+                            }
                         }
                     }
+                    if failed_channels.is_empty() {
+                        self.backoff = BackoffState::Inactive;
+                        _ = self.sender.send(Event::Done).map_err(|error| {
+                            tracing::error!(%error, "Failed sending done event");
+                        });
+                    } else {
+                        self.backoff = BackoffState::Active(channel_backoff());
+                        self.phase = Phase::FailedChannelFunding {
+                            failed_channels,
+                            ticket_price,
+                        };
+                    }
+                    Ok(())
                 }
-                if failed_channels.is_empty() {
-                    self.backoff = BackoffState::Inactive;
-                    self.phase = Phase::Idle {
-                        ticket_price,
-                        since: SystemTime::now(),
-                    };
-                } else {
-                    self.backoff = BackoffState::Active(channel_backoff());
-                    self.phase = Phase::FailedChannelFunding {
-                        failed_channels,
-                        ticket_price,
-                    };
-                }
-                Ok(())
-            }
-            InternalEvent::Tick => {
-                self.phase = Phase::ChannelFunding;
-                Ok(())
-            }
+                _ => Err(InternalError::UnexpectedPhase),
+            },
+            InternalEvent::TicketStats(res) => match self.phase.clone() {
+                Phase::TicketStats => match res {
+                    Ok(stats) => {
+                        tracing::debug!(phase = %self.phase, %stats, "Got ticket stats");
+                        _ = self.sender.send(Event::TicketStats(stats)).map_err(|error| {
+                            tracing::error!(%error, "Failed sending ticket stats event");
+                        });
+                        let ticket_price = stats.ticket_price()?;
+                        self.phase = Phase::ChannelFunding(ticket_price);
+                        self.backoff = BackoffState::Inactive;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::error!(phase = %self.phase, %error, "Failed getting ticket stats");
+                        self.backoff = BackoffState::Active(ExponentialBackoff::default());
+                        Ok(())
+                    }
+                },
+                _ => Err(InternalError::UnexpectedPhase),
+            },
         }
     }
 
@@ -232,24 +248,26 @@ impl ChannelFunding {
         });
         r
     }
-
-    fn idle(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let (s, r) = crossbeam_channel::bounded(1);
-        thread::spawn(move || {
-            thread::sleep(Duration::from_secs(60));
-            _ = s.send(InternalEvent::Tick);
-        });
-        r
-    }
 }
 
 impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
             Phase::TicketStats => write!(f, "TicketStats"),
-            Phase::ChannelFunding(ticket_stats) => write!(f, "ChannelFunding({})", ticket_stats),
-            Phase::FailedChannelFunding(ticket_stats) => write!(f, "FailedChannelFunding({})", ticket_stats),
+            Phase::ChannelFunding(ticket_price) => write!(f, "ChannelFunding({})", ticket_price),
+            Phase::FailedChannelFunding {
+                ticket_price,
+                failed_channels,
+            } => write!(
+                f,
+                "FailedChannelFunding({}, failed: {})",
+                ticket_price,
+                failed_channels
+                    .iter()
+                    .map(|addr| addr.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -274,7 +292,6 @@ impl Display for InternalEvent {
                 Ok(stats) => write!(f, "TicketStats({})", stats),
                 Err(error) => write!(f, "TicketStats(Err({}))", error),
             },
-            InternalEvent::Tick => write!(f, "Tick"),
         }
     }
 }
@@ -282,10 +299,11 @@ impl Display for InternalEvent {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::BackoffExhausted => write!(f, "BackoffExhausted"),
+            Event::TicketStats(stats) => write!(f, "TicketStats({})", stats),
             Event::ChannelFundedOk(address) => write!(f, "ChannelFundedOk({})", address),
             Event::ChannelNotFunded(address) => write!(f, "ChannelNotFunded({})", address),
-            Event::TicketStats(stats) => write!(f, "TicketStats({})", stats),
+            Event::BackoffExhausted => write!(f, "BackoffExhausted"),
+            Event::Done => write!(f, "Done"),
         }
     }
 }
