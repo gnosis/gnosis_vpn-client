@@ -73,17 +73,18 @@ pub struct Core {
     balance: Option<balance::Balances>,
     info: Option<info::Info>,
 
-    // presafe results
+    // results from onboarding
     presafe_balance: Option<balance::PreSafe>,
     funding_tool: balance::FundingTool,
+    safe_module: Option<hopr_config::SafeModule>,
 
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
 
-    // metrics
+    // results from metrics
     metrics: Option<HoprTelemetry>,
 
-    // one shot tasks
+    // results from one shot tasks
     ticket_stats: Option<TicketStats>,
 }
 
@@ -283,13 +284,18 @@ impl Core {
                     Err(Error::EdgeNotReady)
                 }
                 RunMode::Syncing { .. } => {
+                    self.balance = None;
+                    self.info = None;
                     self.cancel(Cancel::Node);
                     self.cancel(Cancel::Metrics);
+                    self.cancel(Cancel::OneShotTasks);
                     self.run_mode =
                         determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
                     Ok(Response::Empty)
                 }
                 RunMode::Full { .. } => {
+                    self.balance = None;
+                    self.info = None;
                     self.cancel(Cancel::Node);
                     self.cancel(Cancel::ChannelFunding);
                     self.run_mode =
@@ -364,6 +370,8 @@ impl Core {
             Ok(())
         } else {
             // recheck run mode
+            self.balance = None;
+            self.info = None;
             self.cancel(Cancel::Onboarding);
             self.cancel(Cancel::Node);
             self.cancel(Cancel::Metrics);
@@ -468,6 +476,8 @@ impl Core {
 
     fn on_dismantled(&mut self) -> Result<(), Error> {
         tracing::info!("connection closed");
+        self.connection = None;
+        self.session_connected = false;
         self.cancel(Cancel::Connection);
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
@@ -494,6 +504,8 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
+        self.balance = None;
+        self.info = None;
         self.cancel(Cancel::Node);
         self.cancel(Cancel::Metrics);
         self.cancel(Cancel::ChannelFunding);
@@ -508,15 +520,15 @@ impl Core {
     }
 
     fn on_onboarding_safe_module(&mut self, safe_module: hopr_config::SafeModule) -> Result<(), Error> {
-        tracing::info!(?safe_module, "on safe module - generating hoprd configuration");
+        tracing::info!(?safe_module, "on safe module");
         self.cancel(Cancel::Onboarding);
         match self.hopr_params.config_mode.clone() {
-            hopr_params::ConfigMode::Manual(_) => {
+            hopr_params::ConfigFileMode::Manual(_) => {
                 tracing::warn!("manual configuration mode - not overwriting existing configuration");
                 return Ok(());
             }
-            hopr_params::ConfigMode::Generated { rpc_provider, network } => {
-                let cfg = hopr_config::generate(network, rpc_provider, safe_module)?;
+            hopr_params::ConfigFileMode::Generated {} => {
+                let cfg = hopr_config::generate(self.hopr_params.network, self.hopr_params.rpc_provider, safe_module)?;
                 hopr_config::write_default(&cfg)?;
             }
         };
@@ -582,24 +594,18 @@ impl Core {
                 _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to node");
                 });
-                self.balance = None;
-                self.info = None;
             }
             Cancel::Connection => {
                 tracing::debug!("cancelling connection");
                 _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to connection");
                 });
-                self.connection = None;
-                self.session_connected = false;
             }
             Cancel::Onboarding => {
                 tracing::debug!("cancelling onboarding");
                 _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to onboarding");
                 });
-                self.presafe_balance = None;
-                self.ticket_stats = None;
             }
             Cancel::ChannelFunding => {
                 tracing::debug!("cancelling channel funding");
@@ -944,14 +950,23 @@ fn determine_run_mode(
                 let onboarding = setup_onboarding(
                     sender.clone(),
                     cancel_receiver.clone(),
-                    keys.chain_key,
+                    keys.chain_key.clone(),
                     hopr_params,
                     node_address,
                 );
+                let one_shot_tasks = setup_one_shot_tasks(
+                    sender.clone(),
+                    cancel_receiver.clone(),
+                    keys.chain_key,
+                    hopr_params.rpc_provider.clone(),
+                    hopr_params.network.clone(),
+                )?;
                 onboarding.run();
+                one_shot_tasks.run();
                 return Ok(RunMode::PreSafe {
                     node_address,
                     onboarding: Box::new(onboarding),
+                    one_shot_tasks: Box::new(one_shot_tasks),
                 });
             }
         }
