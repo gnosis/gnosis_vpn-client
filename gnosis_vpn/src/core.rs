@@ -1,11 +1,12 @@
 use edgli::EdgliProcesses;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
-use edgli::hopr_lib::{Balance, WxHOPR};
 use edgli::hopr_lib::state::HoprState;
+use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use url::Url;
 
+use std::fmt::{self, Display};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -92,6 +93,7 @@ pub struct Core {
     ticket_stats: Option<TicketStats>,
 }
 
+#[derive(Clone)]
 enum RunMode {
     PreSafe {
         node_address: Address,
@@ -244,8 +246,13 @@ impl Core {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
                         command::Status::preparing_safe(node_address, balance, self.funding_tool.clone())
                     }
-                    RunMode::Syncing { metrics } => {
-                        command::Status::syncing(metrics.sync_percentage);
+                    RunMode::Syncing { .. } => {
+                        if let Some(metrics) = self.metrics.clone() {
+                            command::Status::syncing(metrics.sync_percentage)
+                        } else {
+                            tracing::debug!("no metrics yet - assuming 0% sync");
+                            command::Status::syncing(0.0)
+                        }
                     }
                     RunMode::Full { .. } => {
                         match (
@@ -547,7 +554,7 @@ impl Core {
                 tracing::warn!("manual configuration mode - not overwriting existing configuration");
                 return Ok(());
             }
-            hopr_params::ConfigFileMode::Generated {} => {
+            hopr_params::ConfigFileMode::Generated => {
                 let ticket_price = self
                     .ticket_stats
                     .ok_or(Error::Sequence("missing ticket price after created safe".to_string()))?
@@ -623,41 +630,32 @@ impl Core {
                 tracing::info!("waiting for ticket price");
                 return Ok(());
             }
-        }
-        // check hopr readyness state
-        if self.edgli.get_status() == HoprState::Running {
-            match &self.run_mode {
+        };
+        if let RunMode::Syncing { hopr, node, .. } = self.run_mode.clone() {
+            if hopr.status() == HoprState::Running {
+                tracing::info!("edge client synced - switching to full mode");
+                self.cancel(Cancel::Metrics);
+                self.cancel(Cancel::OneShotTasks);
 
-            RunMode::Syncing { hopr, node, .. } => {
-                    tracing::info!("edge client synced - switching to full mode");
-                    self.cancel(Cancel::Metrics);
-                    self.cancel(Cancel::OneShotTasks);
+                let channel_funding = setup_channel_funding(
+                    self.sender.clone(),
+                    self.cancel_channel.1.clone(),
+                    hopr.clone(),
+                    self.config.channel_targets(),
+                    ticket_price,
+                )?;
 
-                    let channel_funding = setup_channel_funding(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        hopr.clone(),
-                        self.config.channel_targets(),
-                        ticket_price,
-                    )?;
+                channel_funding.run();
 
-                    channel_funding.run();
-
-                    self.run_mode = RunMode::Full {
-                        hopr: self.edgli.clone(),
-                        node,
-                        channel_funding,
-                    };
-                    // check if we need to connect
-                    if let Some(dest) = self.target_destination.clone() {
-                        self.check_connect(&dest)?;
-                    }
-
+                self.run_mode = RunMode::Full {
+                    hopr: hopr.clone(),
+                    node: node.clone(),
+                    channel_funding: Box::new(channel_funding),
+                };
+                // check if we need to connect
+                if let Some(dest) = self.target_destination.clone() {
+                    self.check_connect(&dest)?;
                 }
-            run_mode => {
-                    tracing::debug!(?run_mode, "metrics received in non-syncing mode - ignoring");
-                }
-
             }
         }
         Ok(())
@@ -1083,4 +1081,14 @@ fn determine_run_mode(
         metrics: Box::new(metrics),
         one_shot_tasks: Box::new(one_shot_tasks),
     })
+}
+
+impl Display for RunMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunMode::PreSafe { .. } => write!(f, "PreSafe"),
+            RunMode::Syncing { .. } => write!(f, "Syncing"),
+            RunMode::Full { .. } => write!(f, "Full"),
+        }
+    }
 }

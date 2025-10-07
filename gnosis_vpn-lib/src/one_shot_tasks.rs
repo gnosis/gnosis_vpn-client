@@ -47,7 +47,7 @@ enum InternalError {
     TicketStats(#[from] ticket_stats::Error),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OneShotTasks {
     // message passing helper
     cancel_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),

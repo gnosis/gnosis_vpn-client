@@ -61,7 +61,7 @@ enum InternalError {
     Chain(#[from] ChainError),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Onboarding {
     // message passing helper
     cancel_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
