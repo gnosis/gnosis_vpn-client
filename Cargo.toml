@@ -47,9 +47,9 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 tokio = { version = "1.47.1", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "dc71088fc79abf8f7ee57a504ab3dcc59b5d859f", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "3030be0d0f022a78c2b69ea233e42e3d4841edcc", features = [
   "prometheus",
-] } # branch = "kauki/feat/add-basic-api-interfaces"
+] }
 serde_with = "3.15"
 serde_yaml = "0.9.34"
 uuid = { version = "1.18.1", features = ["v4"] }
