@@ -2,12 +2,14 @@ use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
 use bytesize::ByteSize;
+use edgli::hopr_lib::ChainActionsError;
 use edgli::{
     EdgliProcesses,
     hopr_lib::{
         Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
         SurbBalancerConfig,
-        errors::{ChainActionsError, HoprChainError, HoprLibError},
+        errors::HoprLibError,
+,
         utils::session::{
             ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
         },
