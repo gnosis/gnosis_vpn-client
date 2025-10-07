@@ -23,11 +23,9 @@ use crate::chain::errors::ChainError;
 use crate::hopr::config;
 use crate::network::Network;
 use crate::remote_data;
-use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    TicketStats(TicketStats),
     Balance(balance::PreSafe),
     SafeModule(config::SafeModule),
     FundingTool(Result<(), String>),
@@ -37,7 +35,6 @@ pub enum Event {
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum Phase {
-    TicketStats,
     CheckAccountBalance,
     WaitAccountBalance,
     DeploySafe(balance::PreSafe),
@@ -46,7 +43,6 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    TicketStats(Result<TicketStats, ChainError>),
     NodeAddressBalance(Result<CheckBalanceResult, ChainError>),
     TickAccountBalance,
     SafeDeployment(Result<SafeModuleDeploymentResult, ChainError>),
@@ -63,8 +59,6 @@ enum BackoffState {
 enum InternalError {
     #[error(transparent)]
     Chain(#[from] ChainError),
-    #[error(transparent)]
-    TicketStats(#[from] ticket_stats::Error),
 }
 
 #[derive(Clone)]
@@ -98,7 +92,7 @@ impl Onboarding {
         Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
-            phase: Phase::TicketStats,
+            phase: Phase::CheckAccountBalance,
             sender,
             private_key,
             rpc_provider,
@@ -296,7 +290,6 @@ impl Onboarding {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match &self.phase {
             Phase::CheckAccountBalance => self.fetch_node_address_balance(runtime),
-            Phase::TicketStats => self.ticket_stats(runtime),
             Phase::WaitAccountBalance => self.wait_account_balance(),
             Phase::DeploySafe(balance) => self.deploy_safe(runtime, balance.clone()),
             Phase::Done => crossbeam_channel::never(),
@@ -331,22 +324,6 @@ impl Onboarding {
                 });
                 Ok(())
             }
-            InternalEvent::TicketStats(res) => match res {
-                Ok(stats) => {
-                    tracing::debug!(phase = %self.phase, %stats, "Got ticket stats");
-                    _ = self.sender.send(Event::TicketStats(stats)).map_err(|error| {
-                        tracing::error!(%error, "Failed sending ticket stats event");
-                    });
-                    self.phase = Phase::CheckAccountBalance;
-                    self.backoff = BackoffState::Inactive;
-                    Ok(())
-                }
-                Err(error) => {
-                    tracing::error!(phase = %self.phase, %error, "Failed getting ticket stats");
-                    self.backoff = BackoffState::Active(ExponentialBackoff::default());
-                    Ok(())
-                }
-            },
         }
     }
 
@@ -405,18 +382,6 @@ impl Onboarding {
         });
         r
     }
-
-    fn ticket_stats(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
-        let (s, r) = crossbeam_channel::bounded(1);
-        let network_specs = self.network_specs.clone();
-        let priv_key = self.private_key.clone();
-        let rpc_provider = self.rpc_provider.clone();
-        thread::spawn(move || {
-            let res = runtime.block_on(ticket_stats(priv_key, rpc_provider.to_string(), network_specs));
-            _ = s.send(InternalEvent::TicketStats(res));
-        });
-        r
-    }
 }
 
 impl Display for Phase {
@@ -426,7 +391,6 @@ impl Display for Phase {
             Phase::WaitAccountBalance => write!(f, "WaitAccountBalance"),
             Phase::DeploySafe(balance) => write!(f, "DeploySafe({balance})"),
             Phase::Done => write!(f, "Done"),
-            Phase::TicketStats => write!(f, "TicketStats"),
         }
     }
 }
@@ -437,7 +401,6 @@ impl Display for InternalEvent {
             InternalEvent::NodeAddressBalance(res) => write!(f, "NodeAddressBalance({res:?})"),
             InternalEvent::TickAccountBalance => write!(f, "TickAccountBalance"),
             InternalEvent::SafeDeployment(res) => write!(f, "SafeDeployment({res:?})"),
-            InternalEvent::TicketStats(res) => write!(f, "TicketStats({res:?})"),
         }
     }
 }
@@ -449,7 +412,6 @@ impl Display for Event {
             Event::Balance(balance) => write!(f, "Balance({balance})"),
             Event::SafeModule(safe_module) => write!(f, "SafeModule({safe_module:?})"),
             Event::FundingTool(res) => write!(f, "FundingTool({res:?})"),
-            Event::TicketStats(stats) => write!(f, "TicketStats({stats})"),
         }
     }
 }
@@ -476,17 +438,5 @@ async fn safe_module_deployment(
     let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
     safe_module_deployment_inputs
         .deploy(&client.provider, network_specs.network)
-        .await
-}
-
-async fn ticket_stats(
-    priv_key: ChainKeypair,
-    rpc_provider: String,
-    network_specs: NetworkSpecifications,
-) -> Result<TicketStats, ChainError> {
-    let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
-    network_specs
-        .contracts
-        .get_win_prob_ticket_price(&client.provider)
         .await
 }
