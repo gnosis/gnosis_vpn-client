@@ -2,6 +2,7 @@ use edgli::EdgliProcesses;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
 use edgli::hopr_lib::{Balance, WxHOPR};
+use edgli::hopr_lib::state::HoprState;
 use thiserror::Error;
 use url::Url;
 
@@ -616,6 +617,49 @@ impl Core {
     fn on_metrics(&mut self, metrics: HoprTelemetry) -> Result<(), Error> {
         tracing::debug!(?metrics, "received metrics");
         self.metrics = Some(metrics);
+        let ticket_price = match self.ticket_stats {
+            Some(stats) => stats.ticket_price()?,
+            None => {
+                tracing::info!("waiting for ticket price");
+                return Ok(());
+            }
+        }
+        // check hopr readyness state
+        if self.edgli.get_status() == HoprState::Running {
+            match &self.run_mode {
+
+            RunMode::Syncing { hopr, node, .. } => {
+                    tracing::info!("edge client synced - switching to full mode");
+                    self.cancel(Cancel::Metrics);
+                    self.cancel(Cancel::OneShotTasks);
+
+                    let channel_funding = setup_channel_funding(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        hopr.clone(),
+                        self.config.channel_targets(),
+                        ticket_price,
+                    )?;
+
+                    channel_funding.run();
+
+                    self.run_mode = RunMode::Full {
+                        hopr: self.edgli.clone(),
+                        node,
+                        channel_funding,
+                    };
+                    // check if we need to connect
+                    if let Some(dest) = self.target_destination.clone() {
+                        self.check_connect(&dest)?;
+                    }
+
+                }
+            run_mode => {
+                    tracing::debug!(?run_mode, "metrics received in non-syncing mode - ignoring");
+                }
+
+            }
+        }
         Ok(())
     }
 

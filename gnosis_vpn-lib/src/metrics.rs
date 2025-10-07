@@ -129,7 +129,7 @@ impl Metrics {
     fn idle(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(60));
+            thread::sleep(Duration::from_secs(3));
             _ = s.send(InternalEvent::Tick).map_err(|error| {
                 tracing::error!(%error, "Failed to send tick event");
             });
