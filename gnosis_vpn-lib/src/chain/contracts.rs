@@ -1,17 +1,18 @@
 use alloy::{
-    primitives::{Address, B256, Bytes, U256},
+    primitives::{Address, B256, Bytes, U256, address},
     providers::Provider,
     sol,
     sol_types::SolType,
 };
+use edgli::hopr_lib::{EncodedWinProb, WinningProbability};
 
-use crate::chain::{
-    client::GnosisProvider,
-    constants::{
-        CHANNELS_CONTRACT_ADDRESS, DEFAULT_TARGET_SUFFIX, DEPLOY_SAFE_MODULE_AND_INCLUDE_NODES_IDENTIFIER,
-        NODE_STAKE_FACTORY_ADDRESS, WXHOPR_TOKEN_ADDRESS,
+use crate::{
+    chain::{
+        client::GnosisProvider,
+        constants::{DEFAULT_TARGET_SUFFIX, DEPLOY_SAFE_MODULE_AND_INCLUDE_NODES_IDENTIFIER, WXHOPR_TOKEN_ADDRESS},
+        errors::ChainError,
     },
-    errors::ChainError,
+    network::Network,
 };
 
 // Interface for send() function of wxHOPR token contract
@@ -33,19 +34,115 @@ sol!(
     }
 );
 
+sol!(
+    #[sol(rpc)]
+    contract HoprWinningProbabilityOracle {
+        function currentWinProb() external view returns (uint56);
+    }
+);
+
+sol!(
+    #[sol(rpc)]
+    contract HoprTicketPriceOracle {
+        function currentTicketPrice() external view returns (uint256);
+    }
+);
+
 type UserDataTuple = sol! { tuple(bytes32, uint256, bytes32, address[]) };
 
-/// Build the default target as bytes32 by concatenating CHANNELS_CONTRACT_ADDRESS with DEFAULT_TARGET_SUFFIX
-pub fn build_default_target() -> B256 {
-    let mut target_bytes = [0u8; 32];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NetworkContracts {
+    pub channels_contract_address: Address,
+    pub node_stake_factory_address: Address,
+    pub win_prob_oracle_address: Address,
+    pub token_price_oracle_address: Address,
+}
 
-    // Copy the 20 bytes of the address
-    target_bytes[0..20].copy_from_slice(CHANNELS_CONTRACT_ADDRESS.as_slice());
+impl NetworkContracts {
+    /// Build the default target as bytes32 by concatenating channel contract address with DEFAULT_TARGET_SUFFIX
+    pub fn build_default_target(&self) -> B256 {
+        let channels_address = self.channels_contract_address;
 
-    // Copy the 12 bytes of the suffix (DEFAULT_TARGET_SUFFIX is exactly 12 bytes)
-    target_bytes[20..32].copy_from_slice(&DEFAULT_TARGET_SUFFIX);
+        let mut target_bytes = [0u8; 32];
 
-    B256::from(target_bytes)
+        // Copy the 20 bytes of the address
+        target_bytes[0..20].copy_from_slice(channels_address.as_slice());
+
+        // Copy the 12 bytes of the suffix (DEFAULT_TARGET_SUFFIX is exactly 12 bytes)
+        target_bytes[20..32].copy_from_slice(&DEFAULT_TARGET_SUFFIX);
+
+        B256::from(target_bytes)
+    }
+
+    pub async fn get_win_prob_ticket_price(
+        &self,
+        provider: &GnosisProvider,
+    ) -> Result<WinProbTicketPriceResult, ChainError> {
+        let win_prob_oracle_instance =
+            HoprWinningProbabilityOracle::new(self.win_prob_oracle_address, provider.clone());
+        let ticket_price_oracle_instance =
+            HoprTicketPriceOracle::new(self.token_price_oracle_address, provider.clone());
+
+        let multicall = provider
+            .multicall()
+            .add(win_prob_oracle_instance.currentWinProb())
+            .add(ticket_price_oracle_instance.currentTicketPrice());
+
+        let (win_prob_raw, ticket_price_raw) = multicall.aggregate().await?;
+
+        // convert win_prob from u56 to f64
+        let mut encoded: EncodedWinProb = Default::default();
+        encoded.copy_from_slice(&win_prob_raw.to_be_bytes_vec());
+        let current_win_prob = WinningProbability::from(encoded).as_f64();
+
+        Ok(WinProbTicketPriceResult {
+            win_prob: current_win_prob,
+            ticket_price: ticket_price_raw,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetworkSpecifications {
+    pub network: Network,
+    pub contracts: NetworkContracts,
+}
+
+#[derive(Clone, Debug)]
+pub struct WinProbTicketPriceResult {
+    pub win_prob: f64,
+    pub ticket_price: U256,
+}
+
+impl NetworkSpecifications {
+    pub fn from_network(network: &Network) -> Self {
+        let contracts = match network {
+            Network::Dufour => NetworkContracts {
+                channels_contract_address: address!("0x693Bac5ce61c720dDC68533991Ceb41199D8F8ae"),
+                node_stake_factory_address: address!("0x048D04C9f5F74d65e76626B943779DEC6EdCEFeC"),
+                win_prob_oracle_address: address!("0x7Eb8d762fe794A108e568aD2097562cc5D3A1359"),
+                token_price_oracle_address: address!("0xcA5656Fe6F2d847ACA32cf5f38E51D2054cA1273"),
+            },
+            Network::Rotsee => NetworkContracts {
+                channels_contract_address: address!("0x77C9414043d27fdC98A6A2d73fc77b9b383092a7"),
+                node_stake_factory_address: address!("0x439f5457FF58CEE941F7d946CB919c52EA30cfB3"),
+                win_prob_oracle_address: address!("0xC15675d4CCa538D91a91a8D3EcFBB8499C3B0471"),
+                token_price_oracle_address: address!("0x624af123A0149670848FA95e972b35FFeE6A48Fb"),
+            },
+        };
+        Self {
+            network: network.clone(),
+            contracts,
+        }
+    }
+
+    pub fn get_network_specification(network: &Network) -> NetworkSpecifications {
+        NetworkSpecifications::from_network(network)
+    }
+
+    pub fn get_network_contracts(network: &Network) -> NetworkContracts {
+        Self::from_network(network).contracts
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -76,8 +173,8 @@ impl SafeModuleDeploymentInputs {
     /// Where:
     /// - DEPLOYSAFEMODULE_FUNCTION_IDENTIFIER = DEPLOY_SAFE_MODULE_AND_INCLUDE_NODES_IDENTIFIER
     /// - DEFAULT_TARGET = CHANNELS_CONTRACT_ADDRESS + DEFAULT_TARGET_SUFFIX as bytes32
-    pub fn build_user_data(&self) -> Bytes {
-        let default_target = build_default_target();
+    pub fn build_user_data(&self, network: &Network) -> Bytes {
+        let default_target = NetworkSpecifications::get_network_contracts(&network).build_default_target();
 
         let user_data_with_offset = UserDataTuple::abi_encode(&(
             DEPLOY_SAFE_MODULE_AND_INCLUDE_NODES_IDENTIFIER,
@@ -91,14 +188,22 @@ impl SafeModuleDeploymentInputs {
         Bytes::from(user_data)
     }
 
-    pub async fn deploy(&self, provider: &GnosisProvider) -> Result<SafeModuleDeploymentResult, ChainError> {
+    pub async fn deploy(
+        &self,
+        provider: &GnosisProvider,
+        network: Network,
+    ) -> Result<SafeModuleDeploymentResult, ChainError> {
         let token_instance = Token::new(WXHOPR_TOKEN_ADDRESS, provider.clone());
         // Implementation for deploying the safe module using the client
-        let user_data = self.build_user_data();
+        let user_data = self.build_user_data(&network);
 
         // deploy the safe module by calling send on the wxHOPR token contract
         let pending_tx = token_instance
-            .send(NODE_STAKE_FACTORY_ADDRESS, self.token_amount, user_data)
+            .send(
+                NetworkSpecifications::get_network_contracts(&network).node_stake_factory_address,
+                self.token_amount,
+                user_data,
+            )
             .send()
             .await?;
 
@@ -163,13 +268,6 @@ mod tests {
     use alloy::primitives::{U256, address, hex};
 
     #[test]
-    fn test_build_default_target() {
-        let default_target = build_default_target();
-        let used_default_target = hex!("77c9414043d27fdc98a6a2d73fc77b9b383092a7010103020202020202020202");
-        assert_eq!(default_target, used_default_target);
-    }
-
-    #[test]
     fn test_safe_module_deployment_user_data_encoding() {
         let nonce = U256::from(999);
         let token_amount = U256::from(500000000000000000u64); // 0.5 tokens
@@ -177,9 +275,10 @@ mod tests {
             address!("0x1111111111111111111111111111111111111111"),
             address!("0x2222222222222222222222222222222222222222"),
         ];
+        let network = Network::Rotsee;
 
         let inputs = SafeModuleDeploymentInputs::new(nonce, token_amount, admins);
-        let user_data = inputs.build_user_data();
+        let user_data = inputs.build_user_data(&network);
 
         // Verify the data is not empty
         assert_eq!(
@@ -188,5 +287,18 @@ mod tests {
                 "0105b97dcdf19d454ebe36f91ed516c2b90ee79f4a46af96a0138c1f5403c1cc00000000000000000000000000000000000000000000000000000000000003e777c9414043d27fdc98a6a2d73fc77b9b383092a70101030202020202020202020000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000200000000000000000000000011111111111111111111111111111111111111110000000000000000000000002222222222222222222222222222222222222222"
             )
         );
+    }
+
+    #[test]
+    fn test_network_config() {
+        let dufour_spec = NetworkSpecifications::get_network_specification(&Network::Dufour);
+        assert_eq!(dufour_spec.network, Network::Dufour);
+    }
+
+    #[test]
+    fn test_build_default_target() {
+        let default_target = NetworkSpecifications::get_network_contracts(&Network::Rotsee).build_default_target();
+        let used_default_target = hex!("77c9414043d27fdc98a6a2d73fc77b9b383092a7010103020202020202020202");
+        assert_eq!(default_target, used_default_target);
     }
 }
