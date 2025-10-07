@@ -118,13 +118,13 @@ impl Balances {
             return issues;
         }
 
-        if self.channels_out_wxhopr < min_stake_threshold() {
+        if self.channels_out_wxhopr < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if self.safe_wxhopr < min_stake_threshold() {
+        if self.safe_wxhopr < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < (min_stake_threshold() * channel_targets_len) {
+        } else if self.safe_wxhopr < (min_stake_threshold(ticket_value) * channel_targets_len) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
@@ -140,16 +140,14 @@ impl Balances {
 
 /// worth 1 more ticket than min_stake_threshold
 //pub fn funding_amount(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
-pub fn funding_amount() -> Balance<WxHOPR> {
-    // TODO fix with real ticket price
-    min_stake_threshold() + ticket_value()
+pub fn funding_amount(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+    min_stake_threshold(ticket_value) + ticket_value
 }
 
 /// imposed by 3hops. 3 times ticket_value at least are needed in a channel in case the 1st relayer wants to redeem a winning ticket
 // pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
-pub fn min_stake_threshold() -> Balance<WxHOPR> {
-    // TODO fix with real ticket price
-    ticket_value() * 3
+pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+    ticket_value * 3
 }
 
 /// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)
