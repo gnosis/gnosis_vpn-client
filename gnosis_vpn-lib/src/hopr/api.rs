@@ -7,6 +7,7 @@ use edgli::{
     hopr_lib::{
         Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
         SurbBalancerConfig,
+        errors::ChainActionsError,
         utils::session::{
             ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
         },
@@ -84,18 +85,20 @@ impl Hopr {
                 .iter()
                 .find(|ch| ch.destination == target && matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open))
             {
-                // This leaves a gray area, where the channel exists but is in a PendingToClose state at which point we nothing
+                // This leaves a gray area, where the channel exists but is in a PendingToClose state at which point nothing
                 // can be done here, but to wait for the channel closure, e.g. through a set strategy.
                 tracing::info!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
                 hopr.fund_channel(&channel.get_id(), amount)
                     .await
                     .map(|_| ())
+                    .or_else(exists_to_ok)
                     .map_err(HoprError::HoprLib)
             } else {
                 tracing::info!(destination = %target, %amount, "opening a new channel");
                 hopr.open_channel(&target, amount)
                     .await
                     .map(|_| ())
+                    .or_else(exists_to_ok)
                     .map_err(HoprError::HoprLib)
             }
         })
@@ -402,5 +405,12 @@ impl Drop for Hopr {
                 process.1.abort_handle.abort();
             }
         })
+    }
+}
+
+fn exists_to_ok(err: ChainActionsError) -> Result<(), ChainActionsError> {
+    match err {
+        ChainActionsError::ChannelAlreadyExists => Ok(()),
+        e => Err(e),
     }
 }

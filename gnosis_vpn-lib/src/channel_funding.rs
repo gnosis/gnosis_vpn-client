@@ -1,5 +1,6 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use edgli::hopr_lib::Address;
+use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -24,9 +25,15 @@ pub enum Event {
 #[derive(Clone, Debug)]
 enum Phase {
     TicketStats,
-    ChannelFunding(TicketStats),
-    FailedChannelFunding(TicketStats),
-    Idle(TicketStats, SystemTime),
+    ChannelFunding(Balance<WxHOPR>),
+    FailedChannelFunding {
+        ticket_price: Balance<WxHOPR>,
+        failed_channels: Vec<Address>,
+    },
+    Idle {
+        ticket_price: Balance<WxHOPR>,
+        since: SystemTime,
+    },
 }
 
 #[derive(Debug)]
@@ -60,7 +67,6 @@ pub struct ChannelFunding {
     // dynamic runtime data
     backoff: BackoffState,
     phase: Phase,
-    failed_channels: Vec<Address>,
 
     // static input data
     edgli: Arc<Hopr>,
@@ -73,11 +79,10 @@ impl ChannelFunding {
         ChannelFunding {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
-            phase: Phase::ChannelFunding,
+            phase: Phase::TicketStats,
             edgli,
             sender,
             channel_addresses,
-            failed_channels: Vec::new(),
         }
     }
 
@@ -146,10 +151,14 @@ impl ChannelFunding {
 
     fn act(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
-        match self.phase {
-            Phase::ChannelFunding => self.channel_funding(self.channel_addresses.clone()),
-            Phase::FailedChannelFunding => self.channel_funding(self.failed_channels.clone()),
-            Phase::Idle(_system_time) => self.idle(),
+        match self.phase.clone() {
+            Phase::TicketStats => self.ticket_stats(),
+            Phase::ChannelFunding(ticket_price) => self.channel_funding(self.channel_addresses.clone(), ticket_price),
+            Phase::FailedChannelFunding {
+                ticket_price,
+                failed_channels,
+            } => self.channel_funding(failed_channels, ticket_price),
+            Phase::Idle { .. } => self.idle(),
         }
     }
 
@@ -162,6 +171,7 @@ impl ChannelFunding {
                         Ok(()) => {
                             _ = self.sender.send(Event::ChannelFundedOk(address));
                         }
+
                         Err(error) => {
                             tracing::error!(phase = %self.phase, address = %address, %error, "Channel funding failed");
                             failed_channels.push(address);
@@ -188,13 +198,29 @@ impl ChannelFunding {
         }
     }
 
-    fn channel_funding(&mut self, channel_addresses: Vec<Address>) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn ticket_stats(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let (s, r) = crossbeam_channel::bounded(1);
+        let edgli = self.edgli.clone();
+        thread::spawn(move || {
+            let res = edgli.get_ticket_stats();
+            _ = s.send(InternalEvent::TicketStats(res)).map_err(|error| {
+                tracing::error!(%error, "Failed sending ticket stats");
+            })
+        });
+        r
+    }
+
+    fn channel_funding(
+        &mut self,
+        channel_addresses: Vec<Address>,
+        ticket_price: Balance<WxHOPR>,
+    ) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         let edgli = self.edgli.clone();
         thread::spawn(move || {
             let mut results = Vec::with_capacity(channel_addresses.len());
             for address in channel_addresses {
-                let res = edgli.ensure_channel_open_and_funded(address, balance::funding_amount());
+                let res = edgli.ensure_channel_open_and_funded(address, ticket_price);
                 results.push(ChannelResult { address, res });
             }
             _ = s.send(InternalEvent::ChannelFunding(results)).map_err(|error| {
@@ -218,8 +244,9 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
-            Phase::ChannelFunding => write!(f, "ChannelFunding"),
-            Phase::FailedChannelFunding => write!(f, "FailedChannelFunding"),
+            Phase::TicketStats => write!(f, "TicketStats"),
+            Phase::ChannelFunding(ticket_stats) => write!(f, "ChannelFunding({})", ticket_stats),
+            Phase::FailedChannelFunding(ticket_stats) => write!(f, "FailedChannelFunding({})", ticket_stats),
         }
     }
 }
@@ -240,6 +267,10 @@ impl Display for InternalEvent {
                 }
                 write!(f, ")")
             }
+            InternalEvent::TicketStats(res) => match res {
+                Ok(stats) => write!(f, "TicketStats({})", stats),
+                Err(error) => write!(f, "TicketStats(Err({}))", error),
+            },
             InternalEvent::Tick => write!(f, "Tick"),
         }
     }
@@ -251,6 +282,7 @@ impl Display for Event {
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
             Event::ChannelFundedOk(address) => write!(f, "ChannelFundedOk({})", address),
             Event::ChannelNotFunded(address) => write!(f, "ChannelNotFunded({})", address),
+            Event::TicketStats(stats) => write!(f, "TicketStats({})", stats),
         }
     }
 }
