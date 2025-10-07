@@ -119,6 +119,10 @@ impl Status {
             funding_tool,
         }
     }
+
+    pub fn syncing(progress: f32) -> Self {
+        Status::Syncing { progress }
+    }
 }
 
 impl ConnectResponse {

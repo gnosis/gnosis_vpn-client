@@ -243,7 +243,9 @@ impl Core {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
                         command::Status::preparing_safe(node_address, balance, self.funding_tool.clone())
                     }
-                    RunMode::Syncing { .. } => unimplemented!("syncing mode not implemented yet"),
+                    RunMode::Syncing { metrics } => {
+                        command::Status::syncing(metrics.sync_percentage);
+                    }
                     RunMode::Full { .. } => {
                         match (
                             self.target_destination.clone(),
