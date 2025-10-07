@@ -110,50 +110,45 @@ impl Display for Balances {
 }
 
 impl Balances {
-    pub fn to_funding_issues(&self, channel_targets_len: usize) -> Result<Vec<FundingIssue>, Error> {
+    pub fn to_funding_issues(&self, channel_targets_len: usize, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
         let mut issues = Vec::new();
 
         if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
             issues.push(FundingIssue::Unfunded);
-            return Ok(issues);
+            return issues;
         }
 
-        if self.channels_out_wxhopr < min_stake_threshold() {
+        if self.channels_out_wxhopr < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if self.safe_wxhopr < min_stake_threshold() {
+        if self.safe_wxhopr < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < (min_stake_threshold() * channel_targets_len) {
+        } else if self.safe_wxhopr < (min_stake_threshold(ticket_value) * channel_targets_len) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
-        if self.node_xdai < min_funds_threshold()? {
+        if self.node_xdai < min_funds_threshold() {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if self.node_xdai < (min_funds_threshold()? + channel_targets_len) {
+        } else if self.node_xdai < (min_funds_threshold() + channel_targets_len) {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
-        Ok(issues)
+        issues
     }
 }
 
-/// 40 wxHOPR: worth 1 more ticket than min_stake_threshold
-pub fn funding_amount() -> Balance<WxHOPR> {
-    min_stake_threshold() + ticket()
+/// worth 1 more ticket than min_stake_threshold
+pub fn funding_amount(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+    min_stake_threshold(ticket_value) + ticket_value
 }
 
-/// 30 wxHOPR: imposed by 3hops. 30wxHOPR at least are needed in a channel in case the 1st relayer wants to redeem a winning ticket
-pub fn min_stake_threshold() -> Balance<WxHOPR> {
-    ticket() * 3
-}
-
-/// 10 wxHOPR: ticket price
-pub fn ticket() -> Balance<WxHOPR> {
-    Balance::<WxHOPR>::from(10)
+/// imposed by 3hops. 3 times ticket_value at least are needed in a channel in case the 1st relayer wants to redeem a winning ticket
+pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+    ticket_value * 3
 }
 
 /// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)
-pub fn min_funds_threshold() -> Result<Balance<XDai>, Error> {
-    "0.0075 xDai".parse::<Balance<XDai>>().map_err(Error::Parsing)
+pub fn min_funds_threshold() -> Balance<XDai> {
+    Balance::<XDai>::from(750000000000000) // 0.00075 xDai = 3 gwei * 250'000 gas
 }

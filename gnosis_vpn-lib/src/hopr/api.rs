@@ -20,6 +20,7 @@ use crate::{
     balance::Balances,
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
+    ticket_stats::TicketStats,
 };
 
 pub struct Hopr {
@@ -355,6 +356,18 @@ impl Hopr {
                 HoprTelemetry { sync_percentage }
             })
             .map_err(|e| HoprError::Telemetry(e.to_string()))
+    }
+
+    pub fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
+        self.rt.block_on(async move {
+            let ticket_price = self.hopr.get_ticket_price().await?;
+            let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
+            Ok(TicketStats::new(ticket_price, winning_probability.into()))
+        })
+    }
+
+    pub fn status(&self) -> edgli::hopr_lib::state::HoprState {
+        self.hopr.status()
     }
 }
 
