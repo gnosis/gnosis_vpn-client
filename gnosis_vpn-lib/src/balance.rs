@@ -150,5 +150,5 @@ pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
 
 /// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)
 pub fn min_funds_threshold() -> Balance<XDai> {
-    Balance::<XDai>::from(750000000000000) // 0.00075 xDai = 3 gwei * 250'000 gas
+    Balance::<XDai>::from(750000000000000_u64) // 0.00075 xDai = 3 gwei * 250'000 gas
 }
