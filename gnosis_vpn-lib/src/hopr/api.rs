@@ -78,10 +78,7 @@ impl Hopr {
     ) -> std::result::Result<(), HoprError> {
         let hopr = self.hopr.clone();
         self.rt.block_on(async move {
-            let open_channels_from_me = hopr
-                .channels_from(&hopr.me_onchain())
-                .await
-                .map_err(|e| HoprError::Channel(e.to_string()))?;
+            let open_channels_from_me = hopr.channels_from(&hopr.me_onchain()).await?;
 
             if let Some(channel) = open_channels_from_me
                 .iter()
@@ -93,13 +90,13 @@ impl Hopr {
                 hopr.fund_channel(&channel.get_id(), amount)
                     .await
                     .map(|_| ())
-                    .map_err(|e| HoprError::Channel(e.to_string()))
+                    .map_err(HoprError::HoprLib)
             } else {
                 tracing::info!(destination = %target, %amount, "opening a new channel");
                 hopr.open_channel(&target, amount)
                     .await
                     .map(|_| ())
-                    .map_err(|e| HoprError::Channel(e.to_string()))
+                    .map_err(HoprError::HoprLib)
             }
         })
     }
