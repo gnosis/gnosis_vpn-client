@@ -159,7 +159,6 @@ impl Core {
             funded_channels: Vec::new(),
             metrics: None,
             ticket_stats: None,
-            safe_module: None,
         })
     }
 
@@ -269,13 +268,15 @@ impl Core {
                             dest.into()
                         })
                         .collect(),
-                    self.hopr_params.network,
+                    self.hopr_params.network.clone(),
                 )))
             }
-            Command::Balance => match (&self.balance, &self.info) {
-                (Some(balance), Some(info)) => {
+            Command::Balance => match (&self.balance, &self.info, &self.ticket_stats) {
+                (Some(balance), Some(info), Some(ticket_stats)) => {
+                    let ticket_price = ticket_stats.ticket_price()?;
                     let issues: Vec<balance::FundingIssue> =
-                        balance.to_funding_issues(self.config.channel_targets().len(), balance::ticket_value());
+                        balance.to_funding_issues(self.config.channel_targets().len(), ticket_price);
+
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
                         format!("{} wxHOPR", balance.safe_wxhopr),
@@ -319,6 +320,7 @@ impl Core {
                 RunMode::PreSafe {
                     onboarding,
                     node_address,
+                    ..
                 } => {
                     self.funding_tool = balance::FundingTool::InProgress;
                     onboarding.fund_address(node_address, secret)?;
@@ -348,7 +350,6 @@ impl Core {
             }
             Event::Onboarding(onboarding::Event::BackoffExhausted) => self.on_failed_onboarding(),
             Event::Onboarding(onboarding::Event::FundingTool(res)) => self.on_funding_tool(res),
-            Event::Onboarding(onboarding::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
             Event::ChannelFunding(channel_funding::Event::ChannelFundedOk(address)) => {
                 self.on_channel_funded_ok(address)
             }
@@ -356,6 +357,7 @@ impl Core {
                 self.on_channel_not_funded(address)
             }
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
+            Event::ChannelFunding(channel_funding::Event::Done) => self.on_channels_funded(),
             Event::Metrics(metrics::Event::Metrics(val)) => self.on_metrics(val),
             Event::OneShotTasks(one_shot_tasks::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
             Event::OneShotTasks(one_shot_tasks::Event::BackoffExhausted) => self.on_failed_one_shot_tasks(),
@@ -600,14 +602,23 @@ impl Core {
     }
 
     fn on_failed_channel_funding(&mut self) -> Result<(), Error> {
-        tracing::error!("channel funding failed - please check your RPC provider setting");
-        self.funded_channels = Vec::new();
+        tracing::warn!("channel funding failed - please check your RPC provider setting");
+        Ok(())
+    }
+
+    fn on_channels_funded(&mut self) -> Result<(), Error> {
+        tracing::info!("channel funding completed successfully");
         Ok(())
     }
 
     fn on_metrics(&mut self, metrics: HoprTelemetry) -> Result<(), Error> {
         tracing::debug!(?metrics, "received metrics");
         self.metrics = Some(metrics);
+        Ok(())
+    }
+
+    fn on_failed_one_shot_tasks(&mut self) -> Result<(), Error> {
+        tracing::warn!("one shot tasks failed - please check your RPC provider setting");
         Ok(())
     }
 
