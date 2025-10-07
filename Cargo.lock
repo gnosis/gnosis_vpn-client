@@ -3997,7 +3997,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn"
-version = "1.0.0"
+version = "0.17.0"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -4018,7 +4018,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "1.0.0"
+version = "0.17.0"
 dependencies = [
  "clap",
  "exitcode",
@@ -4029,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "1.0.0"
+version = "0.17.0"
 dependencies = [
  "alloy",
  "anyhow",
