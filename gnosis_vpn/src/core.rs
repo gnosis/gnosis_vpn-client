@@ -1,7 +1,7 @@
 use edgli::EdgliProcesses;
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
+use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use url::Url;
 
@@ -46,6 +46,10 @@ pub enum Error {
     EdgeNotReady,
     #[error(transparent)]
     Url(#[from] url::ParseError),
+    #[error("Unexpected event sequence: {0}")]
+    Sequence(String),
+    #[error(transparent)]
+    TicketStats(#[from] ticket_stats::Error),
 }
 
 pub struct Core {
@@ -76,7 +80,6 @@ pub struct Core {
     // results from onboarding
     presafe_balance: Option<balance::PreSafe>,
     funding_tool: balance::FundingTool,
-    safe_module: Option<hopr_config::SafeModule>,
 
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
@@ -355,6 +358,7 @@ impl Core {
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
             Event::Metrics(metrics::Event::Metrics(val)) => self.on_metrics(val),
             Event::OneShotTasks(one_shot_tasks::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
+            Event::OneShotTasks(one_shot_tasks::Event::BackoffExhausted) => self.on_failed_one_shot_tasks(),
         }
     }
 
@@ -459,7 +463,7 @@ impl Core {
     }
 
     fn on_connected(&mut self) -> Result<(), Error> {
-        tracing::debug!("connection ready");
+        tracing::debug!("on connected");
         self.session_connected = true;
         Ok(())
     }
@@ -519,6 +523,7 @@ impl Core {
         self.cancel(Cancel::Node);
         self.cancel(Cancel::Metrics);
         self.cancel(Cancel::ChannelFunding);
+        self.cancel(Cancel::OneShotTasks);
         self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
@@ -538,7 +543,16 @@ impl Core {
                 return Ok(());
             }
             hopr_params::ConfigFileMode::Generated {} => {
-                let cfg = hopr_config::generate(self.hopr_params.network, self.hopr_params.rpc_provider, safe_module)?;
+                let ticket_price = self
+                    .ticket_stats
+                    .ok_or(Error::Sequence("missing ticket price after created safe".to_string()))?
+                    .ticket_price()?;
+                let cfg = hopr_config::generate(
+                    self.hopr_params.network.clone(),
+                    self.hopr_params.rpc_provider.clone(),
+                    safe_module,
+                    ticket_price,
+                )?;
                 hopr_config::write_default(&cfg)?;
             }
         };
@@ -784,9 +798,10 @@ fn setup_channel_funding(
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     edgli: Arc<Hopr>,
     channel_targets: Vec<Address>,
+    ticket_price: Balance<WxHOPR>,
 ) -> Result<ChannelFunding, Error> {
     let (s, r) = crossbeam_channel::unbounded();
-    let channel_funding = ChannelFunding::new(s, edgli.clone(), channel_targets);
+    let channel_funding = ChannelFunding::new(s, edgli.clone(), channel_targets, ticket_price);
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
