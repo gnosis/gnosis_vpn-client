@@ -7,7 +7,7 @@ use edgli::{
     hopr_lib::{
         Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
         SurbBalancerConfig,
-        errors::ChainActionsError,
+        errors::{ChainActionsError, HoprChainError, HoprLibError},
         utils::session::{
             ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
         },
@@ -19,7 +19,6 @@ use tracing::instrument;
 
 use crate::{
     balance::Balances,
-    errors::HoprLibError,
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
     ticket_stats::TicketStats,
@@ -36,9 +35,7 @@ impl Hopr {
     pub fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
-        notifier: crossbeam_channel::Sender<
-            std::result::Result<Vec<EdgliProcesses>, edgli::hopr_lib::errors::HoprLibError>,
-        >,
+        notifier: crossbeam_channel::Sender<std::result::Result<Vec<EdgliProcesses>, HoprLibError>>,
     ) -> std::result::Result<Self, HoprError> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -91,13 +88,13 @@ impl Hopr {
                 tracing::info!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
                 hopr.fund_channel(&channel.get_id(), amount)
                     .await
-                    .map_or_else(exists_to_ok, |_| ())
+                    .map_or_else(exists_to_ok, |_| Ok(()))
                     .map_err(HoprError::HoprLib)
             } else {
                 tracing::info!(destination = %target, %amount, "opening a new channel");
                 hopr.open_channel(&target, amount)
                     .await
-                    .map_or_else(exists_to_ok, |_| ())
+                    .map_or_else(exists_to_ok, |_| Ok(()))
                     .map_err(HoprError::HoprLib)
             }
         })
@@ -409,7 +406,7 @@ impl Drop for Hopr {
 
 fn exists_to_ok(err: HoprLibError) -> Result<(), HoprLibError> {
     match err {
-        HoprLibError(ChainActionsError::ChannelAlreadyExists) => Ok(()),
+        HoprLibError::ChainApi(HoprChainError::ActionsError(ChainActionsError::ChannelAlreadyExists)) => Ok(()),
         e => Err(e),
     }
 }
