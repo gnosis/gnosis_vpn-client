@@ -4,7 +4,9 @@ use alloy::{
     sol,
     sol_types::SolType,
 };
+use edgli::hopr_lib::{Balance, WxHOPR};
 use edgli::hopr_lib::{EncodedWinProb, WinningProbability};
+use primitive_types::U256 as PrimitiveU256;
 
 use crate::{
     chain::{
@@ -13,6 +15,7 @@ use crate::{
         errors::ChainError,
     },
     network::Network,
+    ticket_stats::TicketStats,
 };
 
 // Interface for send() function of wxHOPR token contract
@@ -74,10 +77,7 @@ impl NetworkContracts {
         B256::from(target_bytes)
     }
 
-    pub async fn get_win_prob_ticket_price(
-        &self,
-        provider: &GnosisProvider,
-    ) -> Result<WinProbTicketPriceResult, ChainError> {
+    pub async fn get_win_prob_ticket_price(&self, provider: &GnosisProvider) -> Result<TicketStats, ChainError> {
         let win_prob_oracle_instance =
             HoprWinningProbabilityOracle::new(self.win_prob_oracle_address, provider.clone());
         let ticket_price_oracle_instance =
@@ -94,11 +94,10 @@ impl NetworkContracts {
         let mut encoded: EncodedWinProb = Default::default();
         encoded.copy_from_slice(&win_prob_raw.to_be_bytes_vec());
         let current_win_prob = WinningProbability::from(encoded).as_f64();
-
-        Ok(WinProbTicketPriceResult {
-            win_prob: current_win_prob,
-            ticket_price: ticket_price_raw,
-        })
+        let ticket_price_bytes = ticket_price_raw.to_be_bytes::<32>();
+        let ticket_price_u256 = PrimitiveU256::from_big_endian(&ticket_price_bytes);
+        let ticket_price = Balance::<WxHOPR>::from(ticket_price_u256);
+        Ok(TicketStats::new(ticket_price, current_win_prob))
     }
 }
 
@@ -106,12 +105,6 @@ impl NetworkContracts {
 pub struct NetworkSpecifications {
     pub network: Network,
     pub contracts: NetworkContracts,
-}
-
-#[derive(Clone, Debug)]
-pub struct WinProbTicketPriceResult {
-    pub win_prob: f64,
-    pub ticket_price: U256,
 }
 
 impl NetworkSpecifications {

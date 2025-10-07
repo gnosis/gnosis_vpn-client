@@ -16,11 +16,12 @@ use std::time::Duration;
 use crate::balance;
 use crate::chain::client::GnosisRpcClient;
 use crate::chain::contracts::{
-    CheckBalanceInputs, CheckBalanceResult, SafeModuleDeploymentInputs, SafeModuleDeploymentResult,
+    CheckBalanceInputs, CheckBalanceResult, NetworkSpecifications, SafeModuleDeploymentInputs,
+    SafeModuleDeploymentResult,
 };
 use crate::chain::errors::ChainError;
 use crate::hopr::config;
-use crate::hopr::{Hopr, HoprError};
+use crate::network::Network;
 use crate::remote_data;
 use crate::ticket_stats::{self, TicketStats};
 
@@ -45,7 +46,7 @@ enum Phase {
 
 #[derive(Debug)]
 enum InternalEvent {
-    TicketStats(Result<TicketStats, HoprError>),
+    TicketStats(Result<TicketStats, ChainError>),
     NodeAddressBalance(Result<CheckBalanceResult, ChainError>),
     TickAccountBalance,
     SafeDeployment(Result<SafeModuleDeploymentResult, ChainError>),
@@ -80,6 +81,7 @@ pub struct Onboarding {
     private_key: ChainKeypair,
     rpc_provider: Url,
     node_address: Address,
+    network_specs: NetworkSpecifications,
 
     // dynamic runtime data
     nonce: U256,
@@ -91,6 +93,7 @@ impl Onboarding {
         private_key: ChainKeypair,
         rpc_provider: Url,
         node_address: Address,
+        network: Network,
     ) -> Self {
         Onboarding {
             cancel_channel: crossbeam_channel::bounded(1),
@@ -101,6 +104,7 @@ impl Onboarding {
             rpc_provider,
             node_address,
             nonce: U256::from(rand::rng().random_range(1..1_000)),
+            network_specs: NetworkSpecifications::from_network(&network),
         }
     }
 
@@ -292,7 +296,7 @@ impl Onboarding {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match &self.phase {
             Phase::CheckAccountBalance => self.fetch_node_address_balance(runtime),
-            Phase::TicketStats => self.ticket_stats(),
+            Phase::TicketStats => self.ticket_stats(runtime),
             Phase::WaitAccountBalance => self.wait_account_balance(),
             Phase::DeploySafe(balance) => self.deploy_safe(runtime, balance.clone()),
             Phase::Done => crossbeam_channel::never(),
@@ -333,8 +337,7 @@ impl Onboarding {
                     _ = self.sender.send(Event::TicketStats(stats)).map_err(|error| {
                         tracing::error!(%error, "Failed sending ticket stats event");
                     });
-                    let ticket_price = stats.ticket_price()?;
-                    self.phase = Phase::ChannelFunding(ticket_price);
+                    self.phase = Phase::CheckAccountBalance;
                     self.backoff = BackoffState::Inactive;
                     Ok(())
                 }
@@ -379,8 +382,10 @@ impl Onboarding {
         let token_u256 = balance.node_wxhopr.amount();
         let token_bytes: [u8; 32] = token_u256.to_big_endian();
         let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
+        let network_specs = self.network_specs.clone();
         thread::spawn(move || {
             let res = runtime.block_on(safe_module_deployment(
+                network_specs,
                 priv_key,
                 rpc_provider.to_string(),
                 node_address,
@@ -401,14 +406,14 @@ impl Onboarding {
         r
     }
 
-    fn ticket_stats(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn ticket_stats(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
-        let edgli = self.edgli.clone();
+        let network_specs = self.network_specs.clone();
+        let priv_key = self.private_key.clone();
+        let rpc_provider = self.rpc_provider.clone();
         thread::spawn(move || {
-            let res = edgli.get_ticket_stats();
-            _ = s.send(InternalEvent::TicketStats(res)).map_err(|error| {
-                tracing::error!(%error, "Failed sending ticket stats");
-            })
+            let res = runtime.block_on(ticket_stats(priv_key, rpc_provider.to_string(), network_specs));
+            _ = s.send(InternalEvent::TicketStats(res));
         });
         r
     }
@@ -421,6 +426,7 @@ impl Display for Phase {
             Phase::WaitAccountBalance => write!(f, "WaitAccountBalance"),
             Phase::DeploySafe(balance) => write!(f, "DeploySafe({balance})"),
             Phase::Done => write!(f, "Done"),
+            Phase::TicketStats => write!(f, "TicketStats"),
         }
     }
 }
@@ -431,6 +437,7 @@ impl Display for InternalEvent {
             InternalEvent::NodeAddressBalance(res) => write!(f, "NodeAddressBalance({res:?})"),
             InternalEvent::TickAccountBalance => write!(f, "TickAccountBalance"),
             InternalEvent::SafeDeployment(res) => write!(f, "SafeDeployment({res:?})"),
+            InternalEvent::TicketStats(res) => write!(f, "TicketStats({res:?})"),
         }
     }
 }
@@ -442,6 +449,7 @@ impl Display for Event {
             Event::Balance(balance) => write!(f, "Balance({balance})"),
             Event::SafeModule(safe_module) => write!(f, "SafeModule({safe_module:?})"),
             Event::FundingTool(res) => write!(f, "FundingTool({res:?})"),
+            Event::TicketStats(stats) => write!(f, "TicketStats({stats})"),
         }
     }
 }
@@ -457,6 +465,7 @@ async fn check_balance(
 }
 
 async fn safe_module_deployment(
+    network_specs: NetworkSpecifications,
     priv_key: ChainKeypair,
     rpc_provider: String,
     node_address: Address,
@@ -465,5 +474,19 @@ async fn safe_module_deployment(
 ) -> Result<SafeModuleDeploymentResult, ChainError> {
     let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
     let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
-    safe_module_deployment_inputs.deploy(&client.provider).await
+    safe_module_deployment_inputs
+        .deploy(&client.provider, network_specs.network)
+        .await
+}
+
+async fn ticket_stats(
+    priv_key: ChainKeypair,
+    rpc_provider: String,
+    network_specs: NetworkSpecifications,
+) -> Result<TicketStats, ChainError> {
+    let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+    network_specs
+        .contracts
+        .get_win_prob_ticket_price(&client.provider)
+        .await
 }
