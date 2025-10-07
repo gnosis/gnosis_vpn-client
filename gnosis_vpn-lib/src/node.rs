@@ -10,12 +10,10 @@ use crate::balance::Balances;
 use crate::hopr::{Hopr, HoprError};
 use crate::info::Info;
 use crate::log_output;
-use crate::ticket_stats::TicketStats;
 
 #[derive(Clone, Debug)]
 pub enum Event {
     Info(Info),
-    TicketStats(TicketStats),
     Balance(Balances),
     BackoffExhausted,
 }
@@ -24,7 +22,6 @@ pub enum Event {
 #[derive(Clone, Debug)]
 enum Phase {
     Info,
-    TicketStats,
     Balance,
     Idle(SystemTime),
 }
@@ -143,7 +140,6 @@ impl Node {
         tracing::debug!(phase = %self.phase, "Acting on phase");
         match self.phase {
             Phase::Info => self.info(),
-            Phase::TicketStats => self.ticket_stats(),
             Phase::Balance => self.balance(),
             Phase::Idle(_system_time) => self.idle(),
         }

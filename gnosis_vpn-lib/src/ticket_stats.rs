@@ -9,7 +9,7 @@ pub enum Error {
     Hopr(#[from] GeneralError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Copy, Debug, Clone)]
 pub struct TicketStats {
     pub ticket_value: Balance<WxHOPR>,
     pub winning_probability: f64,

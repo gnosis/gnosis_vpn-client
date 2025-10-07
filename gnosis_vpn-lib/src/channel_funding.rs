@@ -10,9 +10,11 @@ use std::time::{Duration, SystemTime};
 use crate::balance;
 use crate::hopr::{Hopr, HoprError};
 use crate::log_output;
+use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug)]
 pub enum Event {
+    TicketStats(TicketStats),
     ChannelFundedOk(Address),
     ChannelNotFunded(Address),
     BackoffExhausted,
@@ -21,13 +23,15 @@ pub enum Event {
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum Phase {
-    ChannelFunding,
-    FailedChannelFunding,
-    Idle(SystemTime),
+    TicketStats,
+    ChannelFunding(TicketStats),
+    FailedChannelFunding(TicketStats),
+    Idle(TicketStats, SystemTime),
 }
 
 #[derive(Debug)]
 enum InternalEvent {
+    TicketStats(Result<TicketStats, HoprError>),
     ChannelFunding(Vec<ChannelResult>),
     Tick,
 }
