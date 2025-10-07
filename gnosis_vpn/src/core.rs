@@ -631,8 +631,8 @@ impl Core {
                 return Ok(());
             }
         };
-        if let RunMode::Syncing { hopr, node, .. } = self.run_mode.clone() {
-            if hopr.status() == HoprState::Running {
+        if let RunMode::Syncing { hopr, node, .. } = self.run_mode.clone()
+            && hopr.status() == HoprState::Running {
                 tracing::info!("edge client synced - switching to full mode");
                 self.cancel(Cancel::Metrics);
                 self.cancel(Cancel::OneShotTasks);
@@ -657,7 +657,6 @@ impl Core {
                     self.check_connect(&dest)?;
                 }
             }
-        }
         Ok(())
     }
 
