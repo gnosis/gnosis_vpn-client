@@ -51,6 +51,9 @@ pub enum Status {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
     },
+    Syncing {
+        progress: f32,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -243,6 +246,7 @@ impl fmt::Display for Status {
                     "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
                 )
             }
+            Status::Syncing { progress } => write!(f, "Syncing... {:.2}%", progress * 100.0),
         }
     }
 }
