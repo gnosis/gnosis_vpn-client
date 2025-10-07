@@ -91,6 +91,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires Anvil to be running"]
     async fn test_client_creation_with_custom_url() -> anyhow::Result<()> {
         let anvil = Anvil::new().spawn();
         let default_signer = ChainKeypair::random();
