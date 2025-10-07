@@ -36,7 +36,7 @@ pub enum Response {
 pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
-    pub network: Option<Network>,
+    pub network: Network,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -139,7 +139,7 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(status: Status, available_destinations: Vec<Destination>, network: Option<Network>) -> Self {
+    pub fn new(status: Status, available_destinations: Vec<Destination>, network: Network) -> Self {
         StatusResponse {
             status,
             available_destinations,

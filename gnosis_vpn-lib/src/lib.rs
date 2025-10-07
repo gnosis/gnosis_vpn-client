@@ -14,13 +14,13 @@ pub mod onboarding;
 pub mod one_shot_tasks;
 pub mod session;
 pub mod socket;
+pub mod ticket_stats;
 pub mod wg_tooling;
 
 mod dirs;
 mod gvpn_client;
 mod ping;
 mod remote_data;
-mod ticket_stats;
 
 pub mod prelude {
     pub use edgli::hopr_lib::{Address, Hopr, HoprKeys, config::HoprLibConfig};

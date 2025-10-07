@@ -16,9 +16,11 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
 use gnosis_vpn_lib::metrics::{self, Metrics};
+use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
 use gnosis_vpn_lib::one_shot_tasks::{self, OneShotTasks};
+use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -82,7 +84,7 @@ pub struct Core {
     metrics: Option<HoprTelemetry>,
 
     // one shot tasks
-    ticket_stats: Option<ticket_stats::TicketStats>,
+    ticket_stats: Option<TicketStats>,
 }
 
 enum RunMode {
@@ -90,6 +92,8 @@ enum RunMode {
         node_address: Address,
         #[allow(dead_code)]
         onboarding: Box<Onboarding>,
+        #[allow(dead_code)]
+        one_shot_tasks: Box<OneShotTasks>,
     },
     Syncing {
         // hoprd edge client
@@ -242,11 +246,6 @@ impl Core {
                     }
                 };
 
-                let network = match self.hopr_params.config_mode.clone() {
-                    hopr_params::ConfigMode::Manual(_) => None,
-                    hopr_params::ConfigMode::Generated { network, .. } => Some(network),
-                };
-
                 Ok(Response::status(command::StatusResponse::new(
                     status,
                     self.config
@@ -257,7 +256,7 @@ impl Core {
                             dest.into()
                         })
                         .collect(),
-                    network,
+                    self.hopr_params.network,
                 )))
             }
             Command::Balance => match (&self.balance, &self.info) {
@@ -546,7 +545,7 @@ impl Core {
         Ok(())
     }
 
-    fn on_ticket_stats(&mut self, stats: balance::TicketStats) -> Result<(), Error> {
+    fn on_ticket_stats(&mut self, stats: TicketStats) -> Result<(), Error> {
         tracing::debug!(?stats, "received ticket stats");
         self.ticket_stats = Some(stats);
         Ok(())
@@ -631,11 +630,17 @@ fn setup_onboarding(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     private_key: ChainKeypair,
-    rpc_provider: Url,
+    hopr_params: &HoprParams,
     node_address: Address,
 ) -> Onboarding {
     let (s, r) = crossbeam_channel::unbounded();
-    let onboarding = Onboarding::new(s, private_key, rpc_provider, node_address);
+    let onboarding = Onboarding::new(
+        s,
+        private_key,
+        hopr_params.rpc_provider.clone(),
+        node_address,
+        hopr_params.network.clone(),
+    );
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -849,10 +854,12 @@ fn setup_metrics(
 fn setup_one_shot_tasks(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
-    edgli: Arc<Hopr>,
-) -> Result<Metrics, Error> {
+    private_key: ChainKeypair,
+    rpc_provider: Url,
+    network: Network,
+) -> Result<OneShotTasks, Error> {
     let (s, r) = crossbeam_channel::unbounded();
-    let one_shot_tasks = OneShotTasks::new(s, edgli.clone());
+    let one_shot_tasks = OneShotTasks::new(s, private_key, rpc_provider, network);
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -926,8 +933,8 @@ fn determine_run_mode(
     };
 
     let cfg = match hopr_params.config_mode.clone() {
-        hopr_params::ConfigMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
-        hopr_params::ConfigMode::Generated { rpc_provider, .. } => {
+        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
+        hopr_params::ConfigFileMode::Generated => {
             let conf_file = hopr_config::config_file()?;
             if conf_file.exists() {
                 hopr_config::from_path(&conf_file)?
@@ -938,7 +945,7 @@ fn determine_run_mode(
                     sender.clone(),
                     cancel_receiver.clone(),
                     keys.chain_key,
-                    rpc_provider,
+                    hopr_params,
                     node_address,
                 );
                 onboarding.run();
@@ -951,7 +958,7 @@ fn determine_run_mode(
     };
 
     let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
-    let keys = identity::from_path(identity_file.as_path(), identity_pass)?;
+    let keys = identity::from_path(identity_file.as_path(), identity_pass.clone())?;
     let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
     let hopr = Arc::new(hoprd);
 
@@ -963,13 +970,23 @@ fn determine_run_mode(
     )?;
 
     let metrics = setup_metrics(sender.clone(), cancel_receiver.clone(), hopr.clone())?;
+    let keys = identity::from_path(identity_file.as_path(), identity_pass.clone())?;
+    let one_shot_tasks = setup_one_shot_tasks(
+        sender.clone(),
+        cancel_receiver.clone(),
+        keys.chain_key,
+        hopr_params.rpc_provider.clone(),
+        hopr_params.network.clone(),
+    )?;
 
     node.run();
     metrics.run();
+    one_shot_tasks.run();
 
     Ok(RunMode::Syncing {
         hopr,
         node: Box::new(node),
         metrics: Box::new(metrics),
+        one_shot_tasks: Box::new(one_shot_tasks),
     })
 }

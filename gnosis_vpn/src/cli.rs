@@ -29,8 +29,8 @@ pub struct Cli {
     pub config_path: PathBuf,
 
     /// RPC provider URL needed for fat Hopr edge client
-    #[arg(long, env = hopr::RPC_PROVIDER_ENV, default_value = None)]
-    pub hopr_rpc_provider: Option<Url>,
+    #[arg(long, env = hopr::RPC_PROVIDER_ENV)]
+    pub hopr_rpc_provider: Url,
 
     /// Hopr network
     #[arg(long, env = hopr::NETWORK_ENV, default_value = "dufour")]
