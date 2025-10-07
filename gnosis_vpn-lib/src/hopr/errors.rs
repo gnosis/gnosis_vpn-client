@@ -25,4 +25,7 @@ pub enum HoprError {
 
     #[error("Faile to extract telemetry: {0}")]
     Telemetry(String),
+
+    #[error("No ticket price available")]
+    NoTicketPrice,
 }

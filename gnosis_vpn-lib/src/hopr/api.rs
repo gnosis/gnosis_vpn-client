@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
 use bytesize::ByteSize;
-use edgli::hopr_lib::ChainActionsError;
+use edgli::hopr_lib::{ChainActionsError, HoprChainError};
 use edgli::{
     EdgliProcesses,
     hopr_lib::{
@@ -360,7 +360,12 @@ impl Hopr {
         self.rt.block_on(async move {
             let ticket_price = self.hopr.get_ticket_price().await?;
             let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
-            Ok(TicketStats::new(ticket_price, winning_probability.into()))
+            if let Some(ticket_price) = ticket_price {
+                tracing::debug!("ticket price: {ticket_price}, winning probability: {winning_probability}");
+                Ok(TicketStats::new(ticket_price, winning_probability.into()))
+            } else {
+                Err(HoprError::NoTicketPrice)
+            }
         })
     }
 
