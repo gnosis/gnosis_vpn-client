@@ -156,6 +156,7 @@ impl Core {
             funded_channels: Vec::new(),
             metrics: None,
             ticket_stats: None,
+            safe_module: None,
         })
     }
 
@@ -166,16 +167,22 @@ impl Core {
             RunMode::PreSafe { .. } => {
                 tracing::debug!("shutting down from presafe mode");
                 self.cancel(Cancel::Onboarding);
+                self.cancel(Cancel::OneShotTasks);
                 if let Some(s) = self.shutdown_sender.as_ref() {
-                    _ = s.send(());
+                    _ = s.send(()).map_err(|e| {
+                        tracing::error!(%e, "failed to send shutdown complete signal");
+                    })
                 };
             }
             RunMode::Syncing { .. } => {
                 tracing::debug!("shutting down from syncing mode");
                 self.cancel(Cancel::Node);
                 self.cancel(Cancel::Metrics);
+                self.cancel(Cancel::OneShotTasks);
                 if let Some(s) = self.shutdown_sender.as_ref() {
-                    _ = s.send(());
+                    _ = s.send(()).map_err(|e| {
+                        tracing::error!(%e, "failed to send shutdown complete signal");
+                    })
                 };
             }
             RunMode::Full { .. } => {
@@ -192,7 +199,9 @@ impl Core {
                         tracing::debug!("direct shutdown - no connection to disconnect");
                         self.cancel(Cancel::Connection);
                         if let Some(s) = self.shutdown_sender.as_ref() {
-                            _ = s.send(());
+                            _ = s.send(()).map_err(|e| {
+                                tracing::error!(%e, "failed to send shutdown complete signal");
+                            })
                         };
                     }
                 }
@@ -345,6 +354,7 @@ impl Core {
             }
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
             Event::Metrics(metrics::Event::Metrics(val)) => self.on_metrics(val),
+            Event::OneShotTasks(one_shot_tasks::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
         }
     }
 
@@ -407,12 +417,12 @@ impl Core {
     fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
         match &self.run_mode {
             RunMode::PreSafe { .. } => {
-                tracing::error!("edge client not running - cannot connect");
-                Err(Error::EdgeNotReady)
+                tracing::warn!("edge client not running - waiting to connect");
+                Ok(())
             }
             RunMode::Syncing { .. } => {
-                tracing::error!("edge client not running - cannot connect");
-                Err(Error::EdgeNotReady)
+                tracing::warn!("edge client not ready - waiting to connect");
+                Ok(())
             }
             RunMode::Full { hopr, .. } => self.connect(destination, hopr.clone()),
         }
@@ -424,9 +434,9 @@ impl Core {
         let wg = wg_tooling::WireGuard::from_config(config_wireguard)?;
         let config_connection = self.config.connection.clone();
         let mut conn = Connection::new(hopr.clone(), destination.clone(), wg, s, config_connection);
-        conn.establish();
-        self.connection = Some(conn);
+        self.connection = Some(conn.clone());
         let sender = self.sender.clone();
+        conn.establish();
         thread::spawn(move || {
             loop {
                 crossbeam_channel::select! {
@@ -612,21 +622,18 @@ impl Core {
                 _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to channel funding");
                 });
-                self.funded_channels = Vec::new();
             }
             Cancel::Metrics => {
                 tracing::debug!("cancelling metrics");
                 _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to metrics");
                 });
-                self.metrics = None;
             }
             Cancel::OneShotTasks => {
                 tracing::debug!("cancelling one shot tasks");
                 _ = self.cancel_channel.0.send(Cancel::OneShotTasks).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel to one shot tasks");
                 });
-                self.ticket_stats = None;
             }
         }
     }
