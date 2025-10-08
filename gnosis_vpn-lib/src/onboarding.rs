@@ -181,55 +181,7 @@ impl Onboarding {
         let code = secret_hash.to_string();
         thread::spawn(move || {
             let client = reqwest::blocking::Client::new();
-            let mut headers = remote_data::json_headers();
-            // circumventing Cloudflare blocks
-            headers.insert(
-                reqwest::header::HeaderName::from_static("accept-language"),
-                reqwest::header::HeaderValue::from_static("en-US,en;q=0.9,pl;q=0.8"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("origin"),
-                reqwest::header::HeaderValue::from_static("https://hub.hoprnet.org"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("priority"),
-                reqwest::header::HeaderValue::from_static("u=1, i"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("referer"),
-                reqwest::header::HeaderValue::from_static("https://hub.hoprnet.org/"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("sec-ch-ua"),
-                reqwest::header::HeaderValue::from_static(
-                    r#""Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140""#,
-                ),
-            );
-
-            headers.insert(
-                reqwest::header::HeaderName::from_static("sec-ch-ua-mobile"),
-                reqwest::header::HeaderValue::from_static("?0"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("sec-ch-ua-platform"),
-                reqwest::header::HeaderValue::from_static(r#""Windows""#),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("sec-fetch-dest"),
-                reqwest::header::HeaderValue::from_static("empty"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("sec-fetch-mode"),
-                reqwest::header::HeaderValue::from_static("cors"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("sec-fetch-site"),
-                reqwest::header::HeaderValue::from_static("same-site"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("user-agent"),
-                reqwest::header::HeaderValue::from_static("user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
-            );
+            let headers = remote_data::json_headers();
 
             let body = json!({
                 "address": address,
