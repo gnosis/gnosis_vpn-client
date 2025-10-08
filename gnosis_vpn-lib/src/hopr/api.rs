@@ -2,11 +2,14 @@ use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
 use bytesize::ByteSize;
+use edgli::hopr_lib::errors::HoprChainError;
 use edgli::{
     EdgliProcesses,
     hopr_lib::{
-        Address, ChainActionsError, HoprLibError, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE,
-        SessionClientConfig, SessionTarget, SurbBalancerConfig,
+        Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
+        SurbBalancerConfig,
+        errors::ChainActionsError,
+        errors::HoprLibError,
         utils::session::{
             ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
         },
@@ -357,12 +360,7 @@ impl Hopr {
         self.rt.block_on(async move {
             let ticket_price = self.hopr.get_ticket_price().await?;
             let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
-            if let Some(ticket_price) = ticket_price {
-                tracing::debug!("ticket price: {ticket_price}, winning probability: {winning_probability}");
-                Ok(TicketStats::new(ticket_price, winning_probability.into()))
-            } else {
-                Err(HoprError::NoTicketPrice)
-            }
+            Ok(TicketStats::new(ticket_price, winning_probability.into()))
         })
     }
 
@@ -410,7 +408,7 @@ impl Drop for Hopr {
 
 fn exists_to_ok(err: HoprLibError) -> Result<(), HoprLibError> {
     match err {
-        HoprLibError::ChainError(ChainActionsError::ChannelAlreadyExists) => Ok(()),
+        HoprLibError::ChainApi(HoprChainError::ActionsError(ChainActionsError::ChannelAlreadyExists)) => Ok(()),
         e => Err(e),
     }
 }

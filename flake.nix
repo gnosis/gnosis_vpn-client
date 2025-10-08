@@ -274,7 +274,7 @@
             inherit gvpn;
             inherit gvpn-dev;
             inherit pre-commit-check;
-            default = gvpn-dev;
+            default = gvpn;
           };
 
           devShells.default = craneLib.devShell {
