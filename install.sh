@@ -415,11 +415,6 @@ main() {
     check_wireguard
     fetch_version_tag
 
-    prompt_api_access
-    fetch_network
-    check_channels
-
-    prompt_session_port
     prompt_install_dir
 
     enter_install_dir
