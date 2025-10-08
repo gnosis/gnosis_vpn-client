@@ -161,7 +161,7 @@ impl ChannelFunding {
                 let mut failed_channels = vec![];
                 for ChannelResult { address, res } in results {
                     match res {
-                        Err(ChannelError::Fund(e)) => {
+                        Err(ChannelError::Fund(_)) => {
                             self.backoff = BackoffState::Active(short_backoff());
                             failed_channels.push(address);
                         }
@@ -169,7 +169,7 @@ impl ChannelFunding {
                             self.backoff = BackoffState::Active(pending_to_close_backoff());
                             failed_channels.push(address);
                         }
-                        Err(ChannelError::Open(e)) => {
+                        Err(ChannelError::Open(_)) => {
                             self.backoff = BackoffState::Active(short_backoff());
                             failed_channels.push(address);
                         }
@@ -270,7 +270,7 @@ fn short_backoff() -> ExponentialBackoff {
         .with_initial_interval(Duration::from_secs(2))
         .with_randomization_factor(0.2)
         .with_multiplier(1.1)
-        .with_max_elapsed_time(Some(Duration::from_secs(1 * 60))) // 1 minute
+        .with_max_elapsed_time(Some(Duration::from_secs(60))) // 1 minute
         .build()
 }
 
