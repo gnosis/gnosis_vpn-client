@@ -267,11 +267,7 @@ pub async fn send_hopr_tokens(provider: &GnosisProvider, recipient: Address, amo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::{
-        node_bindings::Anvil,
-        primitives::{U256, address, hex},
-    };
-    use anyhow::Ok;
+    use alloy::primitives::{U256, address, hex};
 
     #[test]
     fn test_safe_module_deployment_user_data_encoding() {
