@@ -37,6 +37,7 @@ pub struct StatusResponse {
     pub status: Status,
     pub available_destinations: Vec<Destination>,
     pub network: Network,
+    pub funding: FundingState,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,6 +55,14 @@ pub enum Status {
     Syncing {
         progress: f32,
     },
+}
+
+// in order of priority
+#[derive(Debug, Serialize, Deserialize)]
+pub enum FundingState {
+    Unknown,                // state not queried yet
+    TopIssue(FundingIssue), // there is at least one issue
+    WellFunded,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -146,11 +155,17 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(status: Status, available_destinations: Vec<Destination>, network: Network) -> Self {
+    pub fn new(
+        status: Status,
+        available_destinations: Vec<Destination>,
+        network: Network,
+        funding: FundingState,
+    ) -> Self {
         StatusResponse {
             status,
             available_destinations,
             network,
+            funding,
         }
     }
 }
