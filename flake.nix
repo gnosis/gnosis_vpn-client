@@ -118,6 +118,8 @@
             ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv # Required for Darwin builds
             ];
+
+            LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.pkgsBuildHost.openssl ];
           };
 
           # Build *just* the cargo dependencies (of the entire workspace)
