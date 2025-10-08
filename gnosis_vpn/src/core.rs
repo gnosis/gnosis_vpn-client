@@ -642,8 +642,12 @@ impl Core {
                 return Ok(());
             }
         };
-        let status: HoprState = hopr.status();
-        tracing::debug!(?run_mode, ?status, "checking runmode transition");
+        let run_mode = self.run_mode.clone();
+        tracing::debug!(%run_mode, "checking runmode transition");
+        if let RunMode::Syncing { hopr, .. } | RunMode::Full { hopr, .. } = self.run_mode.clone() {
+            let status: HoprState = hopr.status();
+            tracing::debug!(?status, "checking hopr status transition requirement");
+        }
         if let RunMode::Syncing { hopr, node, .. } = self.run_mode.clone()
             && hopr.status() == HoprState::Running
         {
