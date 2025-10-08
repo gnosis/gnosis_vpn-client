@@ -182,11 +182,7 @@ impl Onboarding {
         thread::spawn(move || {
             let client = reqwest::blocking::Client::new();
             let headers = remote_data::json_headers();
-
-            let body = json!({
-                "address": address,
-                "code": code,
-            });
+            let body = json!({ "address": address, "code": code, });
 
             tracing::debug!(%url, ?headers, %body, "Posting funding tool");
 

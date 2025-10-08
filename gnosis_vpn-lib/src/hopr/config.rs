@@ -16,6 +16,7 @@ use crate::network::Network;
 
 const CONFIG_FILE: &str = "gnosisvpn-hopr.yaml";
 const DB_FILE: &str = "gnosisvpn-hopr.db";
+const SAFE_FILE: &str = "gnosisvpn-hopr.safe";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -51,19 +52,23 @@ pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub fn write_default(cfg: &HoprLibConfig) -> Result<(), Error> {
+pub fn store_safe(safe_module: &SafeModule) -> Result<(), Error> {
+    let safe_file = safe_file()?;
+    let content = serde_yaml::to_string(&safe_module)?;
+    fs::write(&safe_file, &content).map_err(Error::IO)
+}
+
+pub fn write_cached(cfg: &HoprLibConfig) -> Result<(), Error> {
     let conf_file = config_file()?;
     let content = serde_yaml::to_string(&cfg)?;
     fs::write(&conf_file, &content).map_err(Error::IO)
 }
 
-pub fn generate(
-    network: Network,
-    rpc_provider: Url,
-    safe_module: SafeModule,
-    ticket_value: Balance<WxHOPR>,
-) -> Result<HoprLibConfig, Error> {
-    // TODO use typed HoprLibConfig
+pub fn generate(network: Network, rpc_provider: Url, ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
+    let safe_module: SafeModule = match fs::read_to_string(safe_file()?) {
+        Ok(content) => serde_yaml::from_str::<SafeModule>(&content)?,
+        Err(e) => return Err(Error::IO(e)),
+    };
     let content = format!(
         r#"
 db:
@@ -103,11 +108,15 @@ strategy:
 }
 
 pub fn config_file() -> Result<PathBuf, Error> {
-    dirs::config_dir(CONFIG_FILE).map_err(Error::Dirs)
+    dirs::cache_dir(CONFIG_FILE).map_err(Error::Dirs)
 }
 
 fn db_file() -> Result<PathBuf, Error> {
     dirs::config_dir(DB_FILE).map_err(Error::Dirs)
+}
+
+fn safe_file() -> Result<PathBuf, Error> {
+    dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)
 }
 
 fn snapshot_url(network: Network) -> &'static str {

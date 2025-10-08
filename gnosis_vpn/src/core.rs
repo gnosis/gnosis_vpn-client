@@ -52,6 +52,8 @@ pub enum Error {
     Sequence(String),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
+    #[error("Balance not yet available")]
+    BalanceMissing,
 }
 
 pub struct Core {
@@ -560,25 +562,7 @@ impl Core {
     fn on_onboarding_safe_module(&mut self, safe_module: hopr_config::SafeModule) -> Result<(), Error> {
         tracing::info!(?safe_module, "on safe module");
         self.cancel(Cancel::Onboarding);
-        match self.hopr_params.config_mode.clone() {
-            hopr_params::ConfigFileMode::Manual(_) => {
-                tracing::warn!("manual configuration mode - not overwriting existing configuration");
-                return Ok(());
-            }
-            hopr_params::ConfigFileMode::Generated => {
-                let ticket_price = self
-                    .ticket_stats
-                    .ok_or(Error::Sequence("missing ticket price after created safe".to_string()))?
-                    .ticket_price()?;
-                let cfg = hopr_config::generate(
-                    self.hopr_params.network.clone(),
-                    self.hopr_params.rpc_provider.clone(),
-                    safe_module,
-                    ticket_price,
-                )?;
-                hopr_config::write_default(&cfg)?;
-            }
-        };
+        hopr_config::store_safe(&safe_module)?;
         self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
         Ok(())
     }
@@ -642,6 +626,7 @@ impl Core {
                 return Ok(());
             }
         };
+        let min_stake_threshold = self.balance.map(|b| b.min_stake_threshold(ticket_price)).ok_or(Error::BalanceMissing)?;
         let run_mode = self.run_mode.clone();
         tracing::debug!(%run_mode, "checking runmode transition");
         if let RunMode::Syncing { hopr, .. } | RunMode::Full { hopr, .. } = self.run_mode.clone() {
@@ -661,6 +646,7 @@ impl Core {
                 hopr.clone(),
                 self.config.channel_targets(),
                 ticket_price,
+                min_stake_threshold
             )?;
 
             channel_funding.run();
@@ -1035,6 +1021,11 @@ fn determine_run_mode(
     let cfg = match hopr_params.config_mode.clone() {
         hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
         hopr_params::ConfigFileMode::Generated => {
+            let safe_file = hopr_config::safe_file()?;
+
+
+
+            if safe_
             let conf_file = hopr_config::config_file()?;
             if conf_file.exists() {
                 hopr_config::from_path(&conf_file)?
