@@ -56,11 +56,11 @@ fn pretty_print(resp: &Response) {
             eprintln!("Currently not connected to any destination");
         }
         Response::Status(command::StatusResponse {
-            status,
+            run_mode,
             available_destinations,
             network,
         }) => {
-            let mut str_resp = format!("Status: {status}\n");
+            let mut str_resp = format!("Status: {run_mode}\n");
             str_resp.push_str(&format!("Network: {network}\n"));
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
