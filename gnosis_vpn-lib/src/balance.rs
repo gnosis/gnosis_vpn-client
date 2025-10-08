@@ -1,4 +1,4 @@
-use edgli::hopr_lib::{Balance, GeneralError, WxHOPR, XDai};
+pub use edgli::hopr_lib::{Balance, GeneralError, WxHOPR, XDai};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
