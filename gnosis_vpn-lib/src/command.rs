@@ -34,27 +34,35 @@ pub enum Response {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub status: Status,
+    pub run_mode: RunMode,
     pub available_destinations: Vec<Destination>,
     pub network: Network,
-    pub funding: FundingState,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Status {
-    Connecting(Destination),
-    Disconnecting(Destination),
-    Connected(Destination),
-    Disconnected,
+pub enum RunMode {
+    /// Initial start, after creating safe this state will not be reached again
     PreparingSafe {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
     },
-    Syncing {
-        progress: f32,
+    /// Subsequent service start up in this state and after preparing safe
+    Warmup { sync_progress: f32 },
+    /// Normal operation where connections can be made
+    Running {
+        connection: ConnectionState,
+        funding: FundingState,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ConnectionState {
+    Connecting(Destination),
+    Disconnecting(Destination),
+    Connected(Destination),
+    Disconnected,
 }
 
 // in order of priority
@@ -99,29 +107,13 @@ pub struct Addresses {
     pub safe: Address,
 }
 
-impl Status {
-    pub fn connecting(destination: Destination) -> Self {
-        Status::Connecting(destination)
-    }
-
-    pub fn connected(destination: Destination) -> Self {
-        Status::Connected(destination)
-    }
-
-    pub fn disconnecting(destination: Destination) -> Self {
-        Status::Disconnecting(destination)
-    }
-
-    pub fn disconnected() -> Self {
-        Status::Disconnected
-    }
-
+impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
         pre_safe: balance::PreSafe,
         funding_tool: balance::FundingTool,
     ) -> Self {
-        Status::PreparingSafe {
+        RunMode::PreparingSafe {
             node_address,
             node_xdai: pre_safe.node_xdai,
             node_wxhopr: pre_safe.node_wxhopr,
@@ -129,8 +121,12 @@ impl Status {
         }
     }
 
-    pub fn syncing(progress: f32) -> Self {
-        Status::Syncing { progress }
+    pub fn warmup(sync_progress: f32) -> Self {
+        RunMode::Warmup { sync_progress }
+    }
+
+    pub fn running(connection: ConnectionState, funding: FundingState) -> Self {
+        RunMode::Running { connection, funding }
     }
 }
 
@@ -155,17 +151,11 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(
-        status: Status,
-        available_destinations: Vec<Destination>,
-        network: Network,
-        funding: FundingState,
-    ) -> Self {
+    pub fn new(run_mode: RunMode, available_destinations: Vec<Destination>, network: Network) -> Self {
         StatusResponse {
-            status,
+            run_mode,
             available_destinations,
             network,
-            funding,
         }
     }
 }
@@ -247,14 +237,10 @@ impl fmt::Display for Destination {
     }
 }
 
-impl fmt::Display for Status {
+impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Status::Connecting(dest) => write!(f, "Connecting to {dest}"),
-            Status::Disconnecting(dest) => write!(f, "Disconnecting from {dest}"),
-            Status::Connected(dest) => write!(f, "Connected to {dest}"),
-            Status::Disconnected => write!(f, "Disconnected"),
-            Status::PreparingSafe {
+            RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
                 node_wxhopr,
@@ -265,7 +251,29 @@ impl fmt::Display for Status {
                     "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
                 )
             }
-            Status::Syncing { progress } => write!(f, "Syncing... {:.2}%", progress * 100.0),
+            RunMode::Warmup { sync_progress } => write!(f, "Syncing... {:.2}%", sync_progress * 100.0),
+            RunMode::Running { connection, funding } => write!(f, "Connection: {connection}, Funding: {funding}"),
+        }
+    }
+}
+
+impl fmt::Display for ConnectionState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConnectionState::Connecting(dest) => write!(f, "Connecting to {}", dest),
+            ConnectionState::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
+            ConnectionState::Connected(dest) => write!(f, "Connected to {}", dest),
+            ConnectionState::Disconnected => write!(f, "Disconnected"),
+        }
+    }
+}
+
+impl fmt::Display for FundingState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FundingState::Unknown => write!(f, "Unknown"),
+            FundingState::TopIssue(issue) => write!(f, "Issue: {}", issue),
+            FundingState::WellFunded => write!(f, "Well Funded"),
         }
     }
 }
