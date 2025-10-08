@@ -76,15 +76,17 @@ impl Hopr {
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
+        threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
     ) -> std::result::Result<(), HoprError> {
         let hopr = self.hopr.clone();
         self.rt.block_on(async move {
             let open_channels_from_me = hopr.channels_from(&hopr.me_onchain()).await?;
 
-            if let Some(channel) = open_channels_from_me
-                .iter()
-                .find(|ch| ch.destination == target && matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open))
-            {
+            if let Some(channel) = open_channels_from_me.iter().find(|ch| {
+                ch.destination == target
+                    && matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
+                    && ch.balance < threshold
+            }) {
                 // This leaves a gray area, where the channel exists but is in a PendingToClose state at which point nothing
                 // can be done here, but to wait for the channel closure, e.g. through a set strategy.
                 tracing::info!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
