@@ -255,10 +255,23 @@ impl CheckBalanceInputs {
     }
 }
 
+/// Send HOPR tokens to a recipient address
+pub async fn send_hopr_tokens(provider: &GnosisProvider, recipient: Address, amount: U256) -> Result<B256, ChainError> {
+    let token_instance = Token::new(WXHOPR_TOKEN_ADDRESS, provider.clone());
+    let pending_tx = token_instance.send(recipient, amount, Bytes::new()).send().await?;
+    let receipt = pending_tx.get_receipt().await?;
+
+    Ok(receipt.transaction_hash)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{U256, address, hex};
+    use alloy::{
+        node_bindings::Anvil,
+        primitives::{U256, address, hex},
+    };
+    use anyhow::Ok;
 
     #[test]
     fn test_safe_module_deployment_user_data_encoding() {
