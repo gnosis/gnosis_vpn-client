@@ -107,6 +107,24 @@ pub struct Addresses {
     pub safe: Address,
 }
 
+impl ConnectionState {
+    pub fn connecting(destination: Destination) -> Self {
+        ConnectionState::Connecting(destination)
+    }
+
+    pub fn disconnecting(destination: Destination) -> Self {
+        ConnectionState::Disconnecting(destination)
+    }
+
+    pub fn connected(destination: Destination) -> Self {
+        ConnectionState::Connected(destination)
+    }
+
+    pub fn disconnected() -> Self {
+        ConnectionState::Disconnected
+    }
+}
+
 impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
@@ -213,6 +231,16 @@ impl From<ConnectionDestination> for Destination {
             address: destination.address,
             meta: destination.meta,
             path: destination.routing,
+        }
+    }
+}
+
+impl From<Vec<FundingIssue>> for FundingState {
+    fn from(issues: Vec<FundingIssue>) -> Self {
+        if issues.is_empty() {
+            FundingState::WellFunded
+        } else {
+            FundingState::TopIssue(issues[0].clone())
         }
     }
 }

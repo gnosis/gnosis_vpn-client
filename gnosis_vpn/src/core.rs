@@ -241,44 +241,55 @@ impl Core {
                 }
             }
             Command::Status => {
-                let status = match self.run_mode {
+                let run_mode = match &self.run_mode {
                     RunMode::PreSafe { node_address, .. } => {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
-                        command::Status::preparing_safe(node_address, balance, self.funding_tool.clone())
+                        let funding_tool = self.funding_tool.clone();
+                        command::RunMode::preparing_safe(*node_address, balance, funding_tool)
                     }
                     RunMode::Syncing { .. } => {
-                        if let Some(metrics) = self.metrics.clone() {
-                            command::Status::syncing(metrics.sync_percentage)
-                        } else {
-                            tracing::debug!("no metrics yet - assuming 0% sync");
-                            command::Status::syncing(0.0)
-                        }
+                        let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
+                        command::RunMode::warmup(syncing)
                     }
                     RunMode::Full { .. } => {
-                        match (
+                        let connection_state = match (
                             self.target_destination.clone(),
                             self.connection.clone().map(|c| c.destination()),
                             self.session_connected,
                         ) {
-                            (Some(dest), _, true) => command::Status::connected(dest.clone().into()),
-                            (Some(dest), _, false) => command::Status::connecting(dest.clone().into()),
-                            (None, Some(conn_dest), _) => command::Status::disconnecting(conn_dest.into()),
-                            (None, None, _) => command::Status::disconnected(),
-                        }
+                            (Some(dest), _, true) => command::ConnectionState::connected(dest.clone().into()),
+                            (Some(dest), _, false) => command::ConnectionState::connecting(dest.clone().into()),
+                            (None, Some(conn_dest), _) => command::ConnectionState::disconnecting(conn_dest.into()),
+                            (None, None, _) => command::ConnectionState::disconnected(),
+                        };
+                        let funding_state: command::FundingState =
+                            if let (Some(balance), Some(ticket_stats)) = (&self.balance, &self.ticket_stats) {
+                                let ticket_price = ticket_stats.ticket_price()?;
+                                balance
+                                    .to_funding_issues(self.config.channel_targets().len(), ticket_price)
+                                    .into()
+                            } else {
+                                command::FundingState::Unknown
+                            };
+
+                        command::RunMode::running(connection_state, funding_state)
                     }
                 };
 
+                let available_destinations = self
+                    .config
+                    .destinations
+                    .values()
+                    .map(|v| {
+                        let dest = v.clone();
+                        dest.into()
+                    })
+                    .collect();
+                let network = self.hopr_params.network.clone();
                 Ok(Response::status(command::StatusResponse::new(
-                    status,
-                    self.config
-                        .destinations
-                        .values()
-                        .map(|v| {
-                            let dest = v.clone();
-                            dest.into()
-                        })
-                        .collect(),
-                    self.hopr_params.network.clone(),
+                    run_mode,
+                    available_destinations,
+                    network,
                 )))
             }
             Command::Balance => match (&self.balance, &self.info, &self.ticket_stats) {
@@ -632,31 +643,32 @@ impl Core {
             }
         };
         if let RunMode::Syncing { hopr, node, .. } = self.run_mode.clone()
-            && hopr.status() == HoprState::Running {
-                tracing::info!("edge client synced - switching to full mode");
-                self.cancel(Cancel::Metrics);
-                self.cancel(Cancel::OneShotTasks);
+            && hopr.status() == HoprState::Running
+        {
+            tracing::info!("edge client synced - switching to full mode");
+            self.cancel(Cancel::Metrics);
+            self.cancel(Cancel::OneShotTasks);
 
-                let channel_funding = setup_channel_funding(
-                    self.sender.clone(),
-                    self.cancel_channel.1.clone(),
-                    hopr.clone(),
-                    self.config.channel_targets(),
-                    ticket_price,
-                )?;
+            let channel_funding = setup_channel_funding(
+                self.sender.clone(),
+                self.cancel_channel.1.clone(),
+                hopr.clone(),
+                self.config.channel_targets(),
+                ticket_price,
+            )?;
 
-                channel_funding.run();
+            channel_funding.run();
 
-                self.run_mode = RunMode::Full {
-                    hopr: hopr.clone(),
-                    node: node.clone(),
-                    channel_funding: Box::new(channel_funding),
-                };
-                // check if we need to connect
-                if let Some(dest) = self.target_destination.clone() {
-                    self.check_connect(&dest)?;
-                }
+            self.run_mode = RunMode::Full {
+                hopr: hopr.clone(),
+                node: node.clone(),
+                channel_funding: Box::new(channel_funding),
+            };
+            // check if we need to connect
+            if let Some(dest) = self.target_destination.clone() {
+                self.check_connect(&dest)?;
             }
+        }
         Ok(())
     }
 
