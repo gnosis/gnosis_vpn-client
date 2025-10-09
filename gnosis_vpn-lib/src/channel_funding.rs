@@ -158,22 +158,31 @@ impl ChannelFunding {
             InternalEvent::ChannelFunding(results) => {
                 let mut failed_channels = vec![];
                 for ChannelResult { address, res } in results {
+                    tracing::debug!(?res, phase = %self.phase, address = %address, "Channel funding result");
                     match res {
                         Err(ChannelError::Fund(_)) => {
-                            self.backoff = BackoffState::Active(short_backoff());
+                            if let BackoffState::Inactive = self.backoff {
+                                self.backoff = BackoffState::Active(short_backoff());
+                            }
                             failed_channels.push(address);
                         }
                         Err(ChannelError::PendingToClose) => {
-                            self.backoff = BackoffState::Active(pending_to_close_backoff());
+                            if let BackoffState::Inactive = self.backoff {
+                                self.backoff = BackoffState::Active(pending_to_close_backoff());
+                            }
                             failed_channels.push(address);
                         }
                         Err(ChannelError::Open(_)) => {
-                            self.backoff = BackoffState::Active(short_backoff());
+                            if let BackoffState::Inactive = self.backoff {
+                                self.backoff = BackoffState::Active(short_backoff());
+                            }
                             failed_channels.push(address);
                         }
                         Err(err) => {
                             tracing::error!(phase = %self.phase, address = %address, %err, "ensure channel funding error");
-                            self.backoff = BackoffState::Active(short_backoff());
+                            if let BackoffState::Inactive = self.backoff {
+                                self.backoff = BackoffState::Active(short_backoff());
+                            }
                             _ = self.sender.send(Event::ChannelNotFunded(address));
                         }
                         Ok(()) => {
