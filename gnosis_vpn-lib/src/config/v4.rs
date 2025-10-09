@@ -84,14 +84,6 @@ struct PingOptions {
     timeout: Option<Duration>,
     ttl: Option<u32>,
     seq_count: Option<u16>,
-    #[serde(default, deserialize_with = "validate_ping_interval")]
-    interval: Option<PingInterval>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct PingInterval {
-    min: u8,
-    max: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -161,19 +153,8 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     }
                     if k == "ping" {
                         if let Some(ping) = v.as_table() {
-                            for (k, v) in ping.iter() {
+                            for (k, _v) in ping.iter() {
                                 if k == "address" || k == "timeout" || k == "ttl" || k == "seq_count" {
-                                    continue;
-                                }
-                                if k == "interval" {
-                                    if let Some(interval) = v.as_table() {
-                                        for (k, _v) in interval.iter() {
-                                            if k == "min" || k == "max" {
-                                                continue;
-                                            }
-                                            wrong_keys.push(format!("connection.ping.interval.{k}"));
-                                        }
-                                    }
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.ping.{k}"));
@@ -246,23 +227,6 @@ where
     }
 }
 
-fn validate_ping_interval<'de, D>(deserializer: D) -> Result<Option<PingInterval>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<PingInterval> = Option::deserialize(deserializer)?;
-    match value {
-        Some(interval) => {
-            if interval.min < interval.max {
-                Ok(Some(interval))
-            } else {
-                Err(serde::de::Error::custom("min must be less than max"))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
 fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
     let mut flags = SessionCapabilities::empty();
     for cap in caps {
@@ -311,10 +275,6 @@ impl Connection {
 
     pub fn default_ping_retry_timeout() -> Duration {
         Duration::from_secs(10)
-    }
-
-    pub fn default_ping_interval() -> PingInterval {
-        PingInterval { min: 5, max: 10 }
     }
 }
 
@@ -369,11 +329,6 @@ impl From<Option<Connection>> for options::Options {
             wg: params_wg,
         };
 
-        let interval = connection
-            .and_then(|c| c.ping.as_ref())
-            .and_then(|p| p.interval.clone())
-            .unwrap_or(Connection::default_ping_interval());
-
         let def_opts = ping::PingOptions::default();
         let ping_opts = connection
             .and_then(|c| c.ping.as_ref())
@@ -384,7 +339,6 @@ impl From<Option<Connection>> for options::Options {
                 seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
             })
             .unwrap_or(def_opts);
-        let ping_range = interval.min..interval.max;
 
         let buffer_sizes = connection
             .and_then(|c| c.buffer.clone())
@@ -406,14 +360,7 @@ impl From<Option<Connection>> for options::Options {
             http: http_timeout,
         };
 
-        options::Options::new(
-            sessions,
-            ping_range,
-            ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
-            timeouts,
-        )
+        options::Options::new(sessions, ping_opts, buffer_sizes, max_surb_upstream, timeouts)
     }
 }
 
@@ -543,10 +490,6 @@ address = "10.128.0.1"
 timeout = "7s"
 ttl = 6
 seq_count = 1
-
-[connection.ping.interval]
-min = 5
-max = 10
 
 [connection.max_surb_upstream]
 bridge = "0 Mb/s"

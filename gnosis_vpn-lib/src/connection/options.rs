@@ -1,4 +1,3 @@
-use std::ops::Range;
 use std::time::Duration;
 
 use bytesize::ByteSize;
@@ -11,7 +10,6 @@ use crate::ping;
 pub struct Options {
     pub timeouts: Timeouts,
     pub sessions: Sessions,
-    pub ping_interval: Range<u8>,
     pub ping_options: ping::PingOptions,
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
@@ -58,7 +56,6 @@ impl SessionParameters {
 impl Options {
     pub fn new(
         sessions: Sessions,
-        ping_interval: Range<u8>,
         ping_options: ping::PingOptions,
         buffer_sizes: BufferSizes,
         max_surb_upstream: MaxSurbUpstream,
@@ -66,7 +63,6 @@ impl Options {
     ) -> Self {
         Self {
             sessions,
-            ping_interval,
             ping_options,
             buffer_sizes,
             max_surb_upstream,
