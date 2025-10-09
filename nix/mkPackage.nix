@@ -11,6 +11,7 @@
 {
   craneLib, # Crane library instance with custom Rust toolchain
   lib, # nixpkgs library utilities
+  pkgs, # package repo
   targetForSystem, # Target triple for the current system (e.g., "x86_64-unknown-linux-musl")
   cargoArtifacts, # Pre-built cargo dependencies for caching
   version, # Package version extracted from Cargo.toml
@@ -82,6 +83,7 @@ let
       inherit cargoExtraArgs;
       src = srcFiles;
       CARGO_PROFILE = profile;
+      LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.pkgsBuildHost.openssl ];
     }
     // (builtins.getAttr targetForSystem targetCrateArgs)
     // (builtins.removeAttrs args [

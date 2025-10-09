@@ -135,9 +135,9 @@
               lib
               targetForSystem
               cargoArtifacts
+              pkgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-
           };
 
           # Build the top-level crates of the workspace as individual derivations
