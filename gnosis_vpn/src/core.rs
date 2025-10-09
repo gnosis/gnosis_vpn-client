@@ -316,10 +316,7 @@ impl Core {
         self.shutdown_sender = Some(sender);
         match &self.run_mode {
             RunMode::Initializing => {}
-            RunMode::PreSafe {
-                node_address,
-                onboarding,
-            } => {
+            RunMode::PreSafe { .. } => {
                 tracing::debug!("shutting down from presafe mode");
                 self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to onboarding");
@@ -330,18 +327,13 @@ impl Core {
                     })
                 };
             }
-            RunMode::ValueingTicket { valueing_ticket } => {
+            RunMode::ValueingTicket { .. } => {
                 tracing::debug!("shutting down from ticket pricing mode");
                 self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
                 });
             }
-            RunMode::Syncing {
-                node,
-                metrics,
-                ticket_value,
-                hopr,
-            } => {
+            RunMode::Syncing { .. } => {
                 tracing::debug!("shutting down from syncing mode");
                 self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
@@ -355,12 +347,7 @@ impl Core {
                     })
                 };
             }
-            RunMode::Full {
-                hopr,
-                node,
-                ticket_value,
-                channel_funding,
-            } => {
+            RunMode::Full { .. } => {
                 tracing::debug!("shutting down from normal mode");
                 self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
@@ -418,16 +405,18 @@ impl Core {
             }
             Command::Status => {
                 let run_mode = match &self.run_mode {
+                    RunMode::Initializing => command::RunMode::initializing(),
                     RunMode::PreSafe { node_address, .. } => {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
                         let funding_tool = self.funding_tool.clone();
                         command::RunMode::preparing_safe(*node_address, balance, funding_tool)
                     }
-                    RunMode::Syncing { .. } => {
+                    RunMode::Syncing { hopr, .. } => {
                         let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
-                        command::RunMode::warmup(syncing)
+                        command::RunMode::warmup(syncing, hopr.status().to_string())
                     }
-                    RunMode::Full { .. } => {
+                    RunMode::ValueingTicket { .. } => command::RunMode::valueing_ticket(),
+                    RunMode::Full { hopr, .. } => {
                         let connection_state = match (
                             self.target_destination.clone(),
                             self.connection.clone().map(|c| c.destination()),
@@ -448,7 +437,7 @@ impl Core {
                                 command::FundingState::Unknown
                             };
 
-                        command::RunMode::running(connection_state, funding_state)
+                        command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
                     }
                 };
 
@@ -490,8 +479,8 @@ impl Core {
             },
             Command::RefreshNode => {
                 // TODO
-                    Ok(Response::Empty)
-            },
+                Ok(Response::Empty)
+            }
             Command::FundingTool(secret) => match &self.run_mode {
                 RunMode::PreSafe {
                     onboarding,
@@ -785,53 +774,45 @@ impl Core {
         Ok(())
     }
 
-    fn cancel_run_mode(&mut self) -> {
+    fn cancel_run_mode(&mut self) {
         match self.run_mode.clone() {
-            RunMode::Initializing => { }
-            RunMode::PreSafe { onboarding: _, } => {
-                    tracing::debug!("cancel onboarding");
-                    self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to onboarding");
-                    });
+            RunMode::Initializing => {}
+            RunMode::PreSafe {
+                onboarding: _,
+                node_address: _,
+            } => {
+                tracing::debug!("cancel onboarding");
+                self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to onboarding");
+                });
             }
             RunMode::ValueingTicket { valueing_ticket: _ } => {
-                    tracing::debug!("cancel valueing ticket");
-                    self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to valueing_ticket");
-                    });
+                tracing::debug!("cancel valueing ticket");
+                self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing_ticket");
+                });
             }
-            RunMode::Syncing {
-                hopr,
-                node,
-                metrics,
-                ticket_value,
-            } => {
-                    tracing::debug!("cancel metrics and node");
-                    self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to node");
-                    });
-                    self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to metrics");
-                    });
+            RunMode::Syncing { .. } => {
+                tracing::debug!("cancel metrics and node");
+                self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to node");
+                });
+                self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to metrics");
+                });
             }
-            RunMode::Full { channel_funding, node } => {
+            RunMode::Full { .. } => {
                 tracing::debug!("cancel channel funding and node");
-                    tracing::debug!("cancel metrics and node");
-                    self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to node");
-                    });
-                    self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to channel_funding");
-                    });
-
-                    if let Some(conn) = &self.connection {
-                        tracing::debug!(current = %conn.destination(), "disconnecting from current destination due to run mode cancel");
-                        conn.dismantle();
-                    }
+                tracing::debug!("cancel metrics and node");
+                self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to node");
+                });
+                self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to channel_funding");
+                });
             }
         }
     }
-
 }
 
 fn setup_onboarding(

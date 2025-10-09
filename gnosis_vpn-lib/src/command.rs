@@ -37,24 +37,28 @@ pub struct StatusResponse {
     pub run_mode: RunMode,
     pub available_destinations: Vec<Destination>,
     pub network: Network,
-    pub hopr_state: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RunMode {
-    /// Initial start, after creating safe this state will not be reached again
+    /// Initial start
+    Init,
+    /// after creating safe this state will not be reached again
     PreparingSafe {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
     },
+    /// Before config generation
+    ValueingTicket,
     /// Subsequent service start up in this state and after preparing safe
-    Warmup { sync_progress: f32 },
+    Warmup { sync_progress: f32, hopr_state: String },
     /// Normal operation where connections can be made
     Running {
         connection: ConnectionState,
         funding: FundingState,
+        hopr_state: String,
     },
 }
 
@@ -127,6 +131,9 @@ impl ConnectionState {
 }
 
 impl RunMode {
+    pub fn initializing() -> Self {
+        RunMode::Init
+    }
     pub fn preparing_safe(
         node_address: Address,
         pre_safe: balance::PreSafe,
@@ -140,12 +147,23 @@ impl RunMode {
         }
     }
 
-    pub fn warmup(sync_progress: f32) -> Self {
-        RunMode::Warmup { sync_progress }
+    pub fn warmup(sync_progress: f32, hopr_state: String) -> Self {
+        RunMode::Warmup {
+            sync_progress,
+            hopr_state,
+        }
     }
 
-    pub fn running(connection: ConnectionState, funding: FundingState) -> Self {
-        RunMode::Running { connection, funding }
+    pub fn valueing_ticket() -> Self {
+        RunMode::ValueingTicket
+    }
+
+    pub fn running(connection: ConnectionState, funding: FundingState, hopr_state: String) -> Self {
+        RunMode::Running {
+            connection,
+            funding,
+            hopr_state,
+        }
     }
 }
 
@@ -170,17 +188,11 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(
-        run_mode: RunMode,
-        available_destinations: Vec<Destination>,
-        network: Network,
-        hopr_state: String,
-    ) -> Self {
+    pub fn new(run_mode: RunMode, available_destinations: Vec<Destination>, network: Network) -> Self {
         StatusResponse {
             run_mode,
             available_destinations,
             network,
-            hopr_state,
         }
     }
 }
@@ -275,6 +287,8 @@ impl fmt::Display for Destination {
 impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            RunMode::Init => write!(f, "Initializing..."),
+            RunMode::ValueingTicket => write!(f, "Valueing Ticket..."),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
@@ -286,8 +300,15 @@ impl fmt::Display for RunMode {
                     "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
                 )
             }
-            RunMode::Warmup { sync_progress } => write!(f, "Syncing... {:.2}%", sync_progress * 100.0),
-            RunMode::Running { connection, funding } => write!(f, "Connection: {connection}, Funding: {funding}"),
+            RunMode::Warmup {
+                sync_progress,
+                hopr_state,
+            } => write!(f, "Hopr: {hopr_state}, Syncing... {:.2}%", sync_progress * 100.0),
+            RunMode::Running {
+                connection,
+                funding,
+                hopr_state,
+            } => write!(f, "Hopr: {hopr_state}, Connection: {connection}, Funding: {funding}"),
         }
     }
 }

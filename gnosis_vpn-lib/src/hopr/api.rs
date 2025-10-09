@@ -3,8 +3,8 @@ use edgli::hopr_lib::errors::HoprChainError;
 use edgli::{
     EdgliProcesses,
     hopr_lib::{
-        Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
-        SurbBalancerConfig,
+        Address, HoprLibError, HoprSessionId, IpProtocol, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig,
+        SessionTarget, SurbBalancerConfig,
         errors::ChainActionsError,
         errors::HoprLibError,
         utils::session::{
