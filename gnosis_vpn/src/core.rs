@@ -2,7 +2,7 @@ use edgli::EdgliProcesses;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
 use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Balance, WxHOPR};
+use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
 use url::Url;
 
@@ -21,8 +21,8 @@ use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
-use gnosis_vpn_lib::one_shot_tasks::{self, OneShotTasks};
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
+use gnosis_vpn_lib::valueing_ticket::{self, ValueingTicket};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -44,12 +44,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Balance error: {0}")]
     Balance(#[from] balance::Error),
-    #[error("Edge client not ready")]
-    EdgeNotReady,
     #[error(transparent)]
     Url(#[from] url::ParseError),
-    #[error("Unexpected event sequence: {0}")]
-    Sequence(String),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
 }
@@ -95,30 +91,31 @@ pub struct Core {
 
 #[derive(Clone)]
 enum RunMode {
+    Initializing,
     PreSafe {
         node_address: Address,
-        #[allow(dead_code)]
         onboarding: Box<Onboarding>,
+    },
+    ValueingTicket {
         #[allow(dead_code)]
-        one_shot_tasks: Box<OneShotTasks>,
+        valueing_ticket: Box<ValueingTicket>,
     },
     Syncing {
-        // hoprd edge client
         hopr: Arc<Hopr>,
+        ticket_value: Balance<WxHOPR>,
         // thread loop around funding and general node
-        #[allow(dead_code)]
         node: Box<Node>,
-        #[allow(dead_code)]
+        // thread loop around gathering metrics
         metrics: Box<Metrics>,
-        #[allow(dead_code)]
-        one_shot_tasks: Box<OneShotTasks>,
     },
     Full {
-        // hoprd edge client
         hopr: Arc<Hopr>,
+        #[allow(dead_code)]
+        ticket_value: Balance<WxHOPR>,
         // thread loop around funding and general node
         #[allow(dead_code)]
         node: Box<Node>,
+        // thread loop around channel funding
         #[allow(dead_code)]
         channel_funding: Box<ChannelFunding>,
     },
@@ -130,7 +127,7 @@ enum Cancel {
     Onboarding,
     ChannelFunding,
     Metrics,
-    OneShotTasks,
+    ValueingTicket,
 }
 
 impl Core {
@@ -143,14 +140,12 @@ impl Core {
         wg_tooling::available()?;
 
         let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-        let run_mode = determine_run_mode(sender.clone(), cancel_channel.1.clone(), &hopr_params)?;
-
-        Ok(Core {
+        let mut core = Core {
             config,
-            sender,
+            sender: sender.clone(),
             shutdown_sender: None,
             connection: None,
-            run_mode,
+            run_mode: RunMode::Initializing,
             session_connected: false,
             target_destination: None,
             balance: None,
@@ -162,28 +157,188 @@ impl Core {
             funded_channels: Vec::new(),
             metrics: None,
             ticket_stats: None,
-        })
+        };
+
+        let run_mode = core.determine_run_mode()?;
+        core.run_mode = run_mode;
+
+        Ok(core)
+    }
+
+    fn determine_run_mode(&mut self) -> Result<RunMode, Error> {
+        match self.run_mode.clone() {
+            RunMode::Initializing => {
+                if hopr_config::has_safe() {
+                    tracing::debug!("safe found: init -> valueing ticket");
+                    let keys = calc_keys(&self.hopr_params)?;
+                    let valueing_ticket = setup_valueing_ticket(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        keys.chain_key,
+                        self.hopr_params.rpc_provider.clone(),
+                        self.hopr_params.network.clone(),
+                    )?;
+                    valueing_ticket.run();
+                    Ok(RunMode::ValueingTicket {
+                        valueing_ticket: Box::new(valueing_ticket),
+                    })
+                } else {
+                    tracing::debug!("safe not found: init -> onboarding");
+                    let keys = calc_keys(&self.hopr_params)?;
+                    let node_address = keys.chain_key.public().to_address();
+                    let onboarding = setup_onboarding(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        keys.chain_key.clone(),
+                        &self.hopr_params,
+                        node_address,
+                    );
+                    onboarding.run();
+                    Ok(RunMode::PreSafe {
+                        node_address,
+                        onboarding: Box::new(onboarding),
+                    })
+                }
+            }
+            RunMode::PreSafe {
+                node_address: _,
+                onboarding: _,
+            } => {
+                if hopr_config::has_safe() {
+                    tracing::debug!("safe found: onboarding -> valueing ticket");
+                    _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                        tracing::error!(%e, "failed to send cancel event to onboarding");
+                    });
+                    let keys = calc_keys(&self.hopr_params)?;
+                    let valueing_ticket = setup_valueing_ticket(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        keys.chain_key,
+                        self.hopr_params.rpc_provider.clone(),
+                        self.hopr_params.network.clone(),
+                    )?;
+                    valueing_ticket.run();
+                    Ok(RunMode::ValueingTicket {
+                        valueing_ticket: Box::new(valueing_ticket),
+                    })
+                } else {
+                    tracing::debug!("safe not found: onboarding");
+                    Ok(self.run_mode.clone())
+                }
+            }
+            RunMode::ValueingTicket { valueing_ticket: _ } => {
+                if let Some(stats) = &self.ticket_stats {
+                    tracing::debug!("ticket stats: valueing ticket -> syncing");
+                    _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                        tracing::error!(%e, "failed to send cancel event to onboarding");
+                    });
+                    let ticket_value = stats.ticket_value()?;
+                    let cfg = match self.hopr_params.config_mode.clone() {
+                        // use user provided configuration path
+                        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
+                        // check status of config generation
+                        hopr_params::ConfigFileMode::Generated => hopr_config::generate(
+                            self.hopr_params.network.clone(),
+                            self.hopr_params.rpc_provider.clone(),
+                            ticket_value,
+                        )?,
+                    };
+                    let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
+                    let keys = calc_keys(&self.hopr_params)?;
+                    let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
+                    let hopr = Arc::new(hoprd);
+                    let node = setup_node(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        hopr.clone(),
+                        hopr_startup_notifier_rx.clone(),
+                    )?;
+                    let metrics = setup_metrics(self.sender.clone(), self.cancel_channel.1.clone(), hopr.clone())?;
+                    node.run();
+                    metrics.run();
+
+                    Ok(RunMode::Syncing {
+                        hopr,
+                        node: Box::new(node),
+                        metrics: Box::new(metrics),
+                        ticket_value,
+                    })
+                } else {
+                    tracing::debug!("no ticket stats: valueing ticket");
+                    Ok(self.run_mode.clone())
+                }
+            }
+            RunMode::Syncing {
+                hopr,
+                node,
+                metrics,
+                ticket_value,
+            } => {
+                if hopr.status() == HoprState::Running {
+                    tracing::debug!("hopr running: syncing -> full");
+                    metrics.cancel();
+                    _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                        tracing::error!(%e, "failed to send cancel event to onboarding");
+                    });
+
+                    let channel_funding = setup_channel_funding(
+                        self.sender.clone(),
+                        self.cancel_channel.1.clone(),
+                        hopr.clone(),
+                        self.config.channel_targets(),
+                        ticket_value,
+                    )?;
+
+                    channel_funding.run();
+
+                    Ok(RunMode::Full {
+                        hopr: hopr.clone(),
+                        node: node.clone(),
+                        channel_funding: Box::new(channel_funding),
+                        ticket_value,
+                    })
+                } else {
+                    tracing::debug!("hopr not running: syncing");
+                    Ok(self.run_mode.clone())
+                }
+            }
+            RunMode::Full { .. } => {
+                tracing::debug!("full operation");
+                Ok(self.run_mode.clone())
+            }
+        }
     }
 
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
         match &self.run_mode {
+            RunMode::Initializing => {}
             RunMode::PreSafe { .. } => {
                 tracing::debug!("shutting down from presafe mode");
-                self.cancel(Cancel::Onboarding);
-                self.cancel(Cancel::OneShotTasks);
+                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to onboarding");
+                });
                 if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(()).map_err(|e| {
                         tracing::error!(%e, "failed to send shutdown complete signal");
                     })
                 };
             }
+            RunMode::ValueingTicket { .. } => {
+                tracing::debug!("shutting down from ticket pricing mode");
+                _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing ticket");
+                });
+            }
             RunMode::Syncing { .. } => {
                 tracing::debug!("shutting down from syncing mode");
-                self.cancel(Cancel::Node);
-                self.cancel(Cancel::Metrics);
-                self.cancel(Cancel::OneShotTasks);
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing ticket");
+                });
+                _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing ticket");
+                });
                 if let Some(s) = self.shutdown_sender.as_ref() {
                     _ = s.send(()).map_err(|e| {
                         tracing::error!(%e, "failed to send shutdown complete signal");
@@ -192,8 +347,12 @@ impl Core {
             }
             RunMode::Full { .. } => {
                 tracing::debug!("shutting down from normal mode");
-                self.cancel(Cancel::Node);
-                self.cancel(Cancel::ChannelFunding);
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing ticket");
+                });
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing ticket");
+                });
                 match &mut self.connection {
                     Some(conn) => {
                         tracing::info!(current = %conn.destination(), "disconnecting from current destination due to shutdown");
@@ -202,7 +361,9 @@ impl Core {
                     }
                     None => {
                         tracing::debug!("direct shutdown - no connection to disconnect");
-                        self.cancel(Cancel::Connection);
+                        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                            tracing::error!(%e, "failed to send cancel event to connection");
+                        });
                         if let Some(s) = self.shutdown_sender.as_ref() {
                             _ = s.send(()).map_err(|e| {
                                 tracing::error!(%e, "failed to send shutdown complete signal");
@@ -242,16 +403,18 @@ impl Core {
             }
             Command::Status => {
                 let run_mode = match &self.run_mode {
+                    RunMode::Initializing => command::RunMode::initializing(),
                     RunMode::PreSafe { node_address, .. } => {
                         let balance = self.presafe_balance.clone().unwrap_or_default();
                         let funding_tool = self.funding_tool.clone();
                         command::RunMode::preparing_safe(*node_address, balance, funding_tool)
                     }
-                    RunMode::Syncing { .. } => {
+                    RunMode::Syncing { hopr, .. } => {
                         let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
-                        command::RunMode::warmup(syncing)
+                        command::RunMode::warmup(syncing, hopr.status().to_string())
                     }
-                    RunMode::Full { .. } => {
+                    RunMode::ValueingTicket { .. } => command::RunMode::valueing_ticket(),
+                    RunMode::Full { hopr, .. } => {
                         let connection_state = match (
                             self.target_destination.clone(),
                             self.connection.clone().map(|c| c.destination()),
@@ -264,15 +427,15 @@ impl Core {
                         };
                         let funding_state: command::FundingState =
                             if let (Some(balance), Some(ticket_stats)) = (&self.balance, &self.ticket_stats) {
-                                let ticket_price = ticket_stats.ticket_price()?;
+                                let ticket_value = ticket_stats.ticket_value()?;
                                 balance
-                                    .to_funding_issues(self.config.channel_targets().len(), ticket_price)
+                                    .to_funding_issues(self.config.channel_targets().len(), ticket_value)
                                     .into()
                             } else {
                                 command::FundingState::Unknown
                             };
 
-                        command::RunMode::running(connection_state, funding_state)
+                        command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
                     }
                 };
 
@@ -294,9 +457,9 @@ impl Core {
             }
             Command::Balance => match (&self.balance, &self.info, &self.ticket_stats) {
                 (Some(balance), Some(info), Some(ticket_stats)) => {
-                    let ticket_price = ticket_stats.ticket_price()?;
+                    let ticket_value = ticket_stats.ticket_value()?;
                     let issues: Vec<balance::FundingIssue> =
-                        balance.to_funding_issues(self.config.channel_targets().len(), ticket_price);
+                        balance.to_funding_issues(self.config.channel_targets().len(), ticket_value);
 
                     let resp = command::BalanceResponse::new(
                         format!("{} xDai", balance.node_xdai),
@@ -312,31 +475,10 @@ impl Core {
                 }
                 _ => Ok(Response::Balance(None)),
             },
-            Command::RefreshNode => match &self.run_mode {
-                RunMode::PreSafe { .. } => {
-                    tracing::info!("edge client not running - cannot refresh node");
-                    Err(Error::EdgeNotReady)
-                }
-                RunMode::Syncing { .. } => {
-                    self.balance = None;
-                    self.info = None;
-                    self.cancel(Cancel::Node);
-                    self.cancel(Cancel::Metrics);
-                    self.cancel(Cancel::OneShotTasks);
-                    self.run_mode =
-                        determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
-                    Ok(Response::Empty)
-                }
-                RunMode::Full { .. } => {
-                    self.balance = None;
-                    self.info = None;
-                    self.cancel(Cancel::Node);
-                    self.cancel(Cancel::ChannelFunding);
-                    self.run_mode =
-                        determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
-                    Ok(Response::Empty)
-                }
-            },
+            Command::RefreshNode => {
+                // TODO
+                Ok(Response::Empty)
+            }
             Command::FundingTool(secret) => match &self.run_mode {
                 RunMode::PreSafe {
                     onboarding,
@@ -380,8 +522,8 @@ impl Core {
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
             Event::ChannelFunding(channel_funding::Event::Done) => self.on_channels_funded(),
             Event::Metrics(metrics::Event::Metrics(val)) => self.on_metrics(val),
-            Event::OneShotTasks(one_shot_tasks::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
-            Event::OneShotTasks(one_shot_tasks::Event::BackoffExhausted) => self.on_failed_one_shot_tasks(),
+            Event::ValueingTicket(valueing_ticket::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
+            Event::ValueingTicket(valueing_ticket::Event::BackoffExhausted) => self.on_failed_valueing_ticket(),
         }
     }
 
@@ -409,10 +551,8 @@ impl Core {
             // recheck run mode
             self.balance = None;
             self.info = None;
-            self.cancel(Cancel::Onboarding);
-            self.cancel(Cancel::Node);
-            self.cancel(Cancel::Metrics);
-            self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+            self.cancel_run_mode();
+            self.run_mode = self.determine_run_mode()?;
             Ok(())
         }
     }
@@ -443,8 +583,16 @@ impl Core {
 
     fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
         match &self.run_mode {
+            RunMode::Initializing => {
+                tracing::warn!("edge client not running - waiting to connect");
+                Ok(())
+            }
             RunMode::PreSafe { .. } => {
                 tracing::warn!("edge client not running - waiting to connect");
+                Ok(())
+            }
+            RunMode::ValueingTicket { .. } => {
+                tracing::warn!("edge client not ready - waiting to connect");
                 Ok(())
             }
             RunMode::Syncing { .. } => {
@@ -515,7 +663,9 @@ impl Core {
         tracing::info!("connection closed");
         self.connection = None;
         self.session_connected = false;
-        self.cancel(Cancel::Connection);
+        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+            tracing::error!(%e, "failed to send cancel event to connection");
+        });
         if let Some(sender) = self.shutdown_sender.as_ref() {
             tracing::debug!("shutting down after disconnecting");
             _ = sender.send(()).map_err(|e| {
@@ -541,13 +691,8 @@ impl Core {
 
     fn on_inoperable_node(&mut self) -> Result<(), Error> {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
-        self.balance = None;
-        self.info = None;
-        self.cancel(Cancel::Node);
-        self.cancel(Cancel::Metrics);
-        self.cancel(Cancel::ChannelFunding);
-        self.cancel(Cancel::OneShotTasks);
-        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+        self.cancel_run_mode();
+        self.run_mode = self.determine_run_mode()?;
         Ok(())
     }
 
@@ -559,34 +704,15 @@ impl Core {
 
     fn on_onboarding_safe_module(&mut self, safe_module: hopr_config::SafeModule) -> Result<(), Error> {
         tracing::info!(?safe_module, "on safe module");
-        self.cancel(Cancel::Onboarding);
-        match self.hopr_params.config_mode.clone() {
-            hopr_params::ConfigFileMode::Manual(_) => {
-                tracing::warn!("manual configuration mode - not overwriting existing configuration");
-                return Ok(());
-            }
-            hopr_params::ConfigFileMode::Generated => {
-                let ticket_price = self
-                    .ticket_stats
-                    .ok_or(Error::Sequence("missing ticket price after created safe".to_string()))?
-                    .ticket_price()?;
-                let cfg = hopr_config::generate(
-                    self.hopr_params.network.clone(),
-                    self.hopr_params.rpc_provider.clone(),
-                    safe_module,
-                    ticket_price,
-                )?;
-                hopr_config::write_default(&cfg)?;
-            }
-        };
-        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+        hopr_config::store_safe(&safe_module)?;
+        self.run_mode = self.determine_run_mode()?;
         Ok(())
     }
 
     fn on_failed_onboarding(&mut self) -> Result<(), Error> {
         tracing::error!("onboarding failed - please check your configuration and network connectivity");
-        self.cancel(Cancel::Onboarding);
-        self.run_mode = determine_run_mode(self.sender.clone(), self.cancel_channel.1.clone(), &self.hopr_params)?;
+        self.cancel_run_mode();
+        self.run_mode = self.determine_run_mode()?;
         Ok(())
     }
 
@@ -607,6 +733,7 @@ impl Core {
     fn on_ticket_stats(&mut self, stats: TicketStats) -> Result<(), Error> {
         tracing::debug!(?stats, "received ticket stats");
         self.ticket_stats = Some(stats);
+        self.run_mode = self.determine_run_mode()?;
         Ok(())
     }
 
@@ -635,90 +762,51 @@ impl Core {
     fn on_metrics(&mut self, metrics: HoprTelemetry) -> Result<(), Error> {
         tracing::debug!(?metrics, "received metrics");
         self.metrics = Some(metrics);
-        let ticket_price = match self.ticket_stats {
-            Some(stats) => stats.ticket_price()?,
-            None => {
-                tracing::info!("waiting for ticket price");
-                return Ok(());
-            }
-        };
-        let run_mode = self.run_mode.clone();
-        tracing::debug!(%run_mode, "checking runmode transition");
-        if let RunMode::Syncing { hopr, .. } | RunMode::Full { hopr, .. } = self.run_mode.clone() {
-            let status: HoprState = hopr.status();
-            tracing::debug!(?status, "checking hopr status transition requirement");
-        }
-        if let RunMode::Syncing { hopr, node, .. } = self.run_mode.clone()
-            && hopr.status() == HoprState::Running
-        {
-            tracing::info!("edge client synced - switching to full mode");
-            self.cancel(Cancel::Metrics);
-            self.cancel(Cancel::OneShotTasks);
-
-            let channel_funding = setup_channel_funding(
-                self.sender.clone(),
-                self.cancel_channel.1.clone(),
-                hopr.clone(),
-                self.config.channel_targets(),
-                ticket_price,
-            )?;
-
-            channel_funding.run();
-
-            self.run_mode = RunMode::Full {
-                hopr: hopr.clone(),
-                node: node.clone(),
-                channel_funding: Box::new(channel_funding),
-            };
-            // check if we need to connect
-            if let Some(dest) = self.target_destination.clone() {
-                self.check_connect(&dest)?;
-            }
-        }
+        self.run_mode = self.determine_run_mode()?;
         Ok(())
     }
 
-    fn on_failed_one_shot_tasks(&mut self) -> Result<(), Error> {
-        tracing::warn!("one shot tasks failed - please check your RPC provider setting");
+    fn on_failed_valueing_ticket(&mut self) -> Result<(), Error> {
+        tracing::error!("failed valueing ticket - please check your RPC provider setting");
+        // TODO start from scratch
         Ok(())
     }
 
-    fn cancel(&mut self, what: Cancel) {
-        match what {
-            Cancel::Node => {
-                tracing::debug!("cancelling node");
-                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to node");
-                });
-            }
-            Cancel::Connection => {
-                tracing::debug!("cancelling connection");
-                _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to connection");
-                });
-            }
-            Cancel::Onboarding => {
-                tracing::debug!("cancelling onboarding");
+    fn cancel_run_mode(&mut self) {
+        match self.run_mode.clone() {
+            RunMode::Initializing => {}
+            RunMode::PreSafe {
+                onboarding: _,
+                node_address: _,
+            } => {
+                tracing::debug!("cancel onboarding");
                 _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to onboarding");
+                    tracing::error!(%e, "failed to send cancel event to onboarding");
                 });
             }
-            Cancel::ChannelFunding => {
-                tracing::debug!("cancelling channel funding");
-                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to channel funding");
+            RunMode::ValueingTicket { valueing_ticket: _ } => {
+                tracing::debug!("cancel valueing ticket");
+                _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to valueing_ticket");
                 });
             }
-            Cancel::Metrics => {
-                tracing::debug!("cancelling metrics");
+            RunMode::Syncing { .. } => {
+                tracing::debug!("cancel metrics and node");
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to node");
+                });
                 _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to metrics");
+                    tracing::error!(%e, "failed to send cancel event to metrics");
                 });
             }
-            Cancel::OneShotTasks => {
-                tracing::debug!("cancelling one shot tasks");
-                _ = self.cancel_channel.0.send(Cancel::OneShotTasks).map_err(|e| {
-                    tracing::error!(%e, "failed to send cancel to one shot tasks");
+            RunMode::Full { .. } => {
+                tracing::debug!("cancel channel funding and node");
+                tracing::debug!("cancel metrics and node");
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to node");
+                });
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                    tracing::error!(%e, "failed to send cancel event to channel_funding");
                 });
             }
         }
@@ -740,6 +828,7 @@ fn setup_onboarding(
         node_address,
         hopr_params.network.clone(),
     );
+    let cancel_onboarding = onboarding.clone();
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -747,6 +836,7 @@ fn setup_onboarding(
                     match msg {
                         Ok(Cancel::Onboarding) => {
                             tracing::info!("shutting down onboarding event handler");
+                            cancel_onboarding.cancel();
                             break;
                         }
                         Ok(_) => {
@@ -785,6 +875,7 @@ fn setup_node(
 ) -> Result<Node, Error> {
     let (s, r) = crossbeam_channel::unbounded();
     let node = Node::new(s, edgli.clone());
+    let cancel_node = node.clone();
     thread::spawn(move || {
         let mut hopr_processes = Vec::new();
 
@@ -794,6 +885,7 @@ fn setup_node(
                     match msg {
                         Ok(Cancel::Node) => {
                             tracing::info!("shutting down node event handler");
+                            cancel_node.cancel();
                             break;
                         }
                         Ok(_) => {
@@ -870,10 +962,11 @@ fn setup_channel_funding(
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     edgli: Arc<Hopr>,
     channel_targets: Vec<Address>,
-    ticket_price: Balance<WxHOPR>,
+    ticket_value: Balance<WxHOPR>,
 ) -> Result<ChannelFunding, Error> {
     let (s, r) = crossbeam_channel::unbounded();
-    let channel_funding = ChannelFunding::new(s, edgli.clone(), channel_targets, ticket_price);
+    let channel_funding = ChannelFunding::new(s, edgli.clone(), channel_targets, ticket_value);
+    let cancel_channel_funding = channel_funding.clone();
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -881,6 +974,7 @@ fn setup_channel_funding(
                     match msg {
                         Ok(Cancel::ChannelFunding) => {
                             tracing::info!("shutting down channel funding event handler");
+                            cancel_channel_funding.cancel();
                             break;
                         }
                         Ok(_) => {
@@ -916,6 +1010,7 @@ fn setup_metrics(
 ) -> Result<Metrics, Error> {
     let (s, r) = crossbeam_channel::unbounded();
     let metrics = Metrics::new(s, edgli.clone());
+    let cancel_metrics = metrics.clone();
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -923,6 +1018,7 @@ fn setup_metrics(
                     match msg {
                         Ok(Cancel::Metrics) => {
                             tracing::info!("shutting down metrics event handler");
+                            cancel_metrics.cancel();
                             break;
                         }
                         Ok(_) => {
@@ -951,22 +1047,24 @@ fn setup_metrics(
     Ok(metrics)
 }
 
-fn setup_one_shot_tasks(
+fn setup_valueing_ticket(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     private_key: ChainKeypair,
     rpc_provider: Url,
     network: Network,
-) -> Result<OneShotTasks, Error> {
+) -> Result<ValueingTicket, Error> {
     let (s, r) = crossbeam_channel::unbounded();
-    let one_shot_tasks = OneShotTasks::new(s, private_key, rpc_provider, network);
+    let valueing_ticket = ValueingTicket::new(s, private_key, rpc_provider, network);
+    let cancel_valueing_ticket = valueing_ticket.clone();
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
                 recv(cancel_receiver) -> msg => {
                     match msg {
-                        Ok(Cancel::OneShotTasks) => {
+                        Ok(Cancel::ValueingTicket) => {
                             tracing::info!("shutting down one shot tasks event handler");
+                            cancel_valueing_ticket.cancel();
                             break;
                         }
                         Ok(_) => {
@@ -980,8 +1078,8 @@ fn setup_one_shot_tasks(
                 recv(r) -> ticket_stats => {
                     match ticket_stats {
                         Ok(ref event) => {
-                                _ = sender.send(Event::OneShotTasks(event.clone())).map_err(|error| {
-                                    tracing::error!(%event, %error, "failed to send OneShotTasks event");
+                                _ = sender.send(Event::ValueingTicket(event.clone())).map_err(|error| {
+                                    tracing::error!(%event, %error, "failed to send ValueingTicket event");
                                 });
                         }
                         Err(e) => {
@@ -992,14 +1090,10 @@ fn setup_one_shot_tasks(
             }
         }
     });
-    Ok(one_shot_tasks)
+    Ok(valueing_ticket)
 }
 
-fn determine_run_mode(
-    sender: crossbeam_channel::Sender<Event>,
-    cancel_receiver: crossbeam_channel::Receiver<Cancel>,
-    hopr_params: &HoprParams,
-) -> Result<RunMode, Error> {
+fn calc_keys(hopr_params: &HoprParams) -> Result<HoprKeys, Error> {
     let identity_file = match &hopr_params.identity_file {
         Some(path) => path.to_path_buf(),
         None => {
@@ -1032,78 +1126,15 @@ fn determine_run_mode(
         }
     };
 
-    let cfg = match hopr_params.config_mode.clone() {
-        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
-        hopr_params::ConfigFileMode::Generated => {
-            let conf_file = hopr_config::config_file()?;
-            if conf_file.exists() {
-                hopr_config::from_path(&conf_file)?
-            } else {
-                let keys = identity::from_path(identity_file.as_path(), identity_pass)?;
-                let node_address = keys.chain_key.public().to_address();
-                let onboarding = setup_onboarding(
-                    sender.clone(),
-                    cancel_receiver.clone(),
-                    keys.chain_key.clone(),
-                    hopr_params,
-                    node_address,
-                );
-                let one_shot_tasks = setup_one_shot_tasks(
-                    sender.clone(),
-                    cancel_receiver.clone(),
-                    keys.chain_key,
-                    hopr_params.rpc_provider.clone(),
-                    hopr_params.network.clone(),
-                )?;
-                onboarding.run();
-                one_shot_tasks.run();
-                return Ok(RunMode::PreSafe {
-                    node_address,
-                    onboarding: Box::new(onboarding),
-                    one_shot_tasks: Box::new(one_shot_tasks),
-                });
-            }
-        }
-    };
-
-    let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
-    let keys = identity::from_path(identity_file.as_path(), identity_pass.clone())?;
-    let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
-    let hopr = Arc::new(hoprd);
-
-    let node = setup_node(
-        sender.clone(),
-        cancel_receiver.clone(),
-        hopr.clone(),
-        hopr_startup_notifier_rx.clone(),
-    )?;
-
-    let metrics = setup_metrics(sender.clone(), cancel_receiver.clone(), hopr.clone())?;
-    let keys = identity::from_path(identity_file.as_path(), identity_pass.clone())?;
-    let one_shot_tasks = setup_one_shot_tasks(
-        sender.clone(),
-        cancel_receiver.clone(),
-        keys.chain_key,
-        hopr_params.rpc_provider.clone(),
-        hopr_params.network.clone(),
-    )?;
-
-    node.run();
-    metrics.run();
-    one_shot_tasks.run();
-
-    Ok(RunMode::Syncing {
-        hopr,
-        node: Box::new(node),
-        metrics: Box::new(metrics),
-        one_shot_tasks: Box::new(one_shot_tasks),
-    })
+    identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
 }
 
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            RunMode::Initializing => write!(f, "Initializing"),
             RunMode::PreSafe { .. } => write!(f, "PreSafe"),
+            RunMode::ValueingTicket { .. } => write!(f, "ValueingTicket"),
             RunMode::Syncing { .. } => write!(f, "Syncing"),
             RunMode::Full { .. } => write!(f, "Full"),
         }

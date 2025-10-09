@@ -166,7 +166,7 @@ impl Onboarding {
         });
     }
 
-    pub fn cancel(&mut self) {
+    pub fn cancel(&self) {
         _ = self.cancel_channel.0.send(()).map_err(|error| {
             tracing::error!(phase = %self.phase, %error, "Failed sending cancel signal");
         });
@@ -182,11 +182,7 @@ impl Onboarding {
         thread::spawn(move || {
             let client = reqwest::blocking::Client::new();
             let headers = remote_data::json_headers();
-
-            let body = json!({
-                "address": address,
-                "code": code,
-            });
+            let body = json!({ "address": address, "code": code, });
 
             tracing::debug!(%url, ?headers, %body, "Posting funding tool");
 

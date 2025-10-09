@@ -1,14 +1,9 @@
-use std::fmt::{self, Display};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
-
 use bytesize::ByteSize;
-use edgli::hopr_lib::errors::HoprChainError;
 use edgli::{
     EdgliProcesses,
     hopr_lib::{
         Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
         SurbBalancerConfig,
-        errors::ChainActionsError,
         errors::HoprLibError,
         utils::session::{
             ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
@@ -17,7 +12,11 @@ use edgli::{
     run_hopr_edge_node,
 };
 use regex::Regex;
+use thiserror::Error;
 use tracing::instrument;
+
+use std::fmt::{self, Display};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
 use crate::{
     balance::Balances,
@@ -31,6 +30,18 @@ pub struct Hopr {
     rt: tokio::runtime::Runtime,
     // processes: Vec<EdgliProcesses>,      // TODO: add processes once the app is async
     open_listeners: ListenerJoinHandles,
+}
+
+#[derive(Debug, Error)]
+pub enum ChannelError {
+    #[error("failed to fund channel: {0}")]
+    Fund(HoprError),
+    #[error("channel is pending to close")]
+    PendingToClose,
+    #[error("failed to open channel: {0}")]
+    Open(HoprError),
+    #[error("HOPR library error: {0}")]
+    HoprLibError(#[from] HoprLibError),
 }
 
 impl Hopr {
@@ -76,28 +87,43 @@ impl Hopr {
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
-    ) -> std::result::Result<(), HoprError> {
+        threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
+    ) -> std::result::Result<(), ChannelError> {
         let hopr = self.hopr.clone();
         self.rt.block_on(async move {
-            let open_channels_from_me = hopr.channels_from(&hopr.me_onchain()).await?;
+            let channels_from_me = hopr.channels_from(&hopr.me_onchain()).await?;
 
-            if let Some(channel) = open_channels_from_me
-                .iter()
-                .find(|ch| ch.destination == target && matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open))
-            {
-                // This leaves a gray area, where the channel exists but is in a PendingToClose state at which point nothing
-                // can be done here, but to wait for the channel closure, e.g. through a set strategy.
-                tracing::info!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
-                hopr.fund_channel(&channel.get_id(), amount)
-                    .await
-                    .map_or_else(exists_to_ok, |_| Ok(()))
-                    .map_err(HoprError::HoprLib)
+            if let Some(channel) = channels_from_me.iter().find(|ch| { ch.destination == target }) {
+                match channel.status {
+                    edgli::hopr_lib::ChannelStatus::Open => {
+                        if channel.balance < threshold {
+                            tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
+                            hopr.fund_channel(&channel.get_id(), amount)
+                                .await
+                                .map(|_| ())
+                                .map_err(HoprError::HoprLib).map_err(ChannelError::Fund)
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    edgli::hopr_lib::ChannelStatus::PendingToClose(_) => {
+                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is pending to close, cannot fund or open a new one");
+                        Err(ChannelError::PendingToClose)
+                    }
+                    edgli::hopr_lib::ChannelStatus::Closed => {
+                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is closed, opening a new one");
+                        hopr.open_channel(&target, amount)
+                            .await
+                                .map(|_| ())
+                            .map_err(HoprError::HoprLib).map_err(ChannelError::Open)
+                    }
+                }
             } else {
-                tracing::info!(destination = %target, %amount, "opening a new channel");
-                hopr.open_channel(&target, amount)
-                    .await
-                    .map_or_else(exists_to_ok, |_| Ok(()))
-                    .map_err(HoprError::HoprLib)
+                tracing::debug!(destination = %target, %amount, "no existing channel found, opening a new one");
+                        hopr.open_channel(&target, amount)
+                            .await
+                                .map(|_| ())
+                            .map_err(HoprError::HoprLib).map_err(ChannelError::Open)
             }
         })
     }
@@ -345,6 +371,7 @@ impl Hopr {
 
         edgli::hopr_lib::Hopr::collect_hopr_metrics()
             .map(move |prometheus_values| {
+                tracing::debug!("prometheus metrics: {}", prometheus_values);
                 let sync_percentage = re
                     .captures(prometheus_values.as_ref())
                     .and_then(|caps| caps.get(1))
@@ -403,12 +430,5 @@ impl Drop for Hopr {
                 process.1.abort_handle.abort();
             }
         })
-    }
-}
-
-fn exists_to_ok(err: HoprLibError) -> Result<(), HoprLibError> {
-    match err {
-        HoprLibError::ChainApi(HoprChainError::ActionsError(ChainActionsError::ChannelAlreadyExists)) => Ok(()),
-        e => Err(e),
     }
 }

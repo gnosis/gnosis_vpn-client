@@ -130,7 +130,7 @@ impl Node {
         });
     }
 
-    pub fn cancel(&mut self) {
+    pub fn cancel(&self) {
         _ = self.cancel_channel.0.send(()).map_err(|error| {
             tracing::error!(phase = %self.phase, %error, "Failed sending cancel signal");
         });

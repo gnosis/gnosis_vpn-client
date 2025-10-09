@@ -12,20 +12,21 @@ pub enum Error {
 
 #[derive(Copy, Debug, Clone)]
 pub struct TicketStats {
-    pub ticket_value: Balance<WxHOPR>,
+    pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
 }
 
 impl TicketStats {
-    pub fn new(ticket_value: Balance<WxHOPR>, winning_probability: f64) -> Self {
+    pub fn new(ticket_price: Balance<WxHOPR>, winning_probability: f64) -> Self {
         Self {
-            ticket_value,
+            ticket_price,
             winning_probability,
         }
     }
 
-    pub fn ticket_price(&self) -> Result<Balance<WxHOPR>, Error> {
-        self.ticket_value.div_f64(self.winning_probability).map_err(Error::Hopr)
+    /// Calculate ticket value from onchain ticket price and winning probability
+    pub fn ticket_value(&self) -> Result<Balance<WxHOPR>, Error> {
+        self.ticket_price.div_f64(self.winning_probability).map_err(Error::Hopr)
     }
 }
 
@@ -34,7 +35,7 @@ impl Display for TicketStats {
         write!(
             f,
             "Ticket value: {:?}, Winning probability: {:.4}",
-            self.ticket_value, self.winning_probability,
+            self.ticket_price, self.winning_probability,
         )
     }
 }

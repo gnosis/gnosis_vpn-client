@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::hopr::{Hopr, HoprError};
+use crate::balance;
+use crate::hopr::Hopr;
+use crate::hopr::api::ChannelError;
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -33,7 +35,7 @@ enum InternalEvent {
 #[derive(Debug)]
 struct ChannelResult {
     address: Address,
-    res: Result<(), HoprError>,
+    res: Result<(), ChannelError>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,7 +139,7 @@ impl ChannelFunding {
         });
     }
 
-    pub fn cancel(&mut self) {
+    pub fn cancel(&self) {
         _ = self.cancel_channel.0.send(()).map_err(|error| {
             tracing::error!(phase = %self.phase, %error, "Failed sending cancel signal");
         });
@@ -157,24 +159,35 @@ impl ChannelFunding {
                 let mut failed_channels = vec![];
                 for ChannelResult { address, res } in results {
                     match res {
+                        Err(ChannelError::Fund(_)) => {
+                            self.backoff = BackoffState::Active(short_backoff());
+                            failed_channels.push(address);
+                        }
+                        Err(ChannelError::PendingToClose) => {
+                            self.backoff = BackoffState::Active(pending_to_close_backoff());
+                            failed_channels.push(address);
+                        }
+                        Err(ChannelError::Open(_)) => {
+                            self.backoff = BackoffState::Active(short_backoff());
+                            failed_channels.push(address);
+                        }
+                        Err(err) => {
+                            tracing::error!(phase = %self.phase, address = %address, %err, "ensure channel funding error");
+                            self.backoff = BackoffState::Active(short_backoff());
+                            _ = self.sender.send(Event::ChannelNotFunded(address));
+                        }
                         Ok(()) => {
                             _ = self.sender.send(Event::ChannelFundedOk(address));
                         }
-
-                        Err(error) => {
-                            tracing::error!(phase = %self.phase, address = %address, %error, "Channel funding failed");
-                            failed_channels.push(address);
-                            _ = self.sender.send(Event::ChannelNotFunded(address));
-                        }
                     }
                 }
+
                 if failed_channels.is_empty() {
                     self.backoff = BackoffState::Inactive;
                     _ = self.sender.send(Event::Done).map_err(|error| {
                         tracing::error!(%error, "Failed sending done event");
                     });
                 } else {
-                    self.backoff = BackoffState::Active(channel_backoff());
                     self.phase = Phase::FailedChannelFunding(failed_channels);
                 }
                 Ok(())
@@ -186,10 +199,11 @@ impl ChannelFunding {
         let (s, r) = crossbeam_channel::bounded(1);
         let edgli = self.edgli.clone();
         let ticket_price = self.ticket_price;
+        let min_stake_threshold = balance::min_stake_threshold(ticket_price);
         thread::spawn(move || {
             let mut results = Vec::with_capacity(channel_addresses.len());
             for address in channel_addresses {
-                let res = edgli.ensure_channel_open_and_funded(address, ticket_price);
+                let res = edgli.ensure_channel_open_and_funded(address, ticket_price, min_stake_threshold);
                 results.push(ChannelResult { address, res });
             }
             _ = s.send(InternalEvent::ChannelFunding(results)).map_err(|error| {
@@ -249,11 +263,20 @@ impl Display for Event {
     }
 }
 
-fn channel_backoff() -> ExponentialBackoff {
+fn short_backoff() -> ExponentialBackoff {
     ExponentialBackoffBuilder::new()
-        .with_initial_interval(Duration::from_secs(3))
-        .with_randomization_factor(0.3)
-        .with_multiplier(1.5)
+        .with_initial_interval(Duration::from_secs(2))
+        .with_randomization_factor(0.2)
+        .with_multiplier(1.1)
+        .with_max_elapsed_time(Some(Duration::from_secs(60))) // 1 minute
+        .build()
+}
+
+fn pending_to_close_backoff() -> ExponentialBackoff {
+    ExponentialBackoffBuilder::new()
+        .with_initial_interval(Duration::from_secs(2))
+        .with_randomization_factor(0.2)
+        .with_multiplier(1.1)
         .with_max_elapsed_time(Some(Duration::from_secs(10 * 60))) // 10 minutes
         .build()
 }
