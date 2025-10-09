@@ -37,6 +37,7 @@ pub struct StatusResponse {
     pub run_mode: RunMode,
     pub available_destinations: Vec<Destination>,
     pub network: Network,
+    pub hopr_state: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,11 +170,17 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(run_mode: RunMode, available_destinations: Vec<Destination>, network: Network) -> Self {
+    pub fn new(
+        run_mode: RunMode,
+        available_destinations: Vec<Destination>,
+        network: Network,
+        hopr_state: String,
+    ) -> Self {
         StatusResponse {
             run_mode,
             available_destinations,
             network,
+            hopr_state,
         }
     }
 }
