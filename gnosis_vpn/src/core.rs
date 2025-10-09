@@ -756,6 +756,9 @@ impl Core {
 
     fn on_channels_funded(&mut self) -> Result<(), Error> {
         tracing::info!("channel funding completed successfully");
+        _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+            tracing::error!(%e, "failed to send cancel event to channel funding");
+        });
         Ok(())
     }
 

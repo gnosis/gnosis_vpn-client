@@ -25,6 +25,7 @@ pub enum Event {
 enum Phase {
     ChannelFunding,
     FailedChannelFunding(Vec<Address>),
+    Done,
 }
 
 #[derive(Debug)]
@@ -150,6 +151,7 @@ impl ChannelFunding {
         match self.phase.clone() {
             Phase::ChannelFunding => self.channel_funding(self.channel_addresses.clone()),
             Phase::FailedChannelFunding(failed_channels) => self.channel_funding(failed_channels),
+            Phase::Done => crossbeam_channel::never(), // should not happen
         }
     }
 
@@ -196,6 +198,7 @@ impl ChannelFunding {
                     _ = self.sender.send(Event::Done).map_err(|error| {
                         tracing::error!(%error, "Failed sending done event");
                     });
+                    self.phase = Phase::Done;
                 } else {
                     self.phase = Phase::FailedChannelFunding(failed_channels);
                 }
@@ -237,6 +240,7 @@ impl Display for Phase {
                 }
                 write!(f, ")")
             }
+            Phase::Done => write!(f, "Done"),
         }
     }
 }
