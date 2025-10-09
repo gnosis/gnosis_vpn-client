@@ -44,16 +44,10 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Balance error: {0}")]
     Balance(#[from] balance::Error),
-    #[error("Edge client not ready")]
-    EdgeNotReady,
     #[error(transparent)]
     Url(#[from] url::ParseError),
-    #[error("Unexpected event sequence: {0}")]
-    Sequence(String),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
-    #[error("Balance not yet available")]
-    BalanceMissing,
 }
 
 pub struct Core {
@@ -103,6 +97,7 @@ enum RunMode {
         onboarding: Box<Onboarding>,
     },
     ValueingTicket {
+        #[allow(dead_code)]
         valueing_ticket: Box<ValueingTicket>,
     },
     Syncing {
@@ -115,10 +110,13 @@ enum RunMode {
     },
     Full {
         hopr: Arc<Hopr>,
+        #[allow(dead_code)]
         ticket_value: Balance<WxHOPR>,
         // thread loop around funding and general node
+        #[allow(dead_code)]
         node: Box<Node>,
         // thread loop around channel funding
+        #[allow(dead_code)]
         channel_funding: Box<ChannelFunding>,
     },
 }
@@ -208,7 +206,7 @@ impl Core {
             } => {
                 if hopr_config::has_safe() {
                     tracing::debug!("safe found: onboarding -> valueing ticket");
-                    self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                    _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                         tracing::error!(%e, "failed to send cancel event to onboarding");
                     });
                     let keys = calc_keys(&self.hopr_params)?;
@@ -231,7 +229,7 @@ impl Core {
             RunMode::ValueingTicket { valueing_ticket: _ } => {
                 if let Some(stats) = &self.ticket_stats {
                     tracing::debug!("ticket stats: valueing ticket -> syncing");
-                    self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                    _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
                         tracing::error!(%e, "failed to send cancel event to onboarding");
                     });
                     let ticket_value = stats.ticket_value()?;
@@ -279,7 +277,7 @@ impl Core {
                 if hopr.status() == HoprState::Running {
                     tracing::debug!("hopr running: syncing -> full");
                     metrics.cancel();
-                    self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                    _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
                         tracing::error!(%e, "failed to send cancel event to onboarding");
                     });
 
@@ -288,7 +286,7 @@ impl Core {
                         self.cancel_channel.1.clone(),
                         hopr.clone(),
                         self.config.channel_targets(),
-                        ticket_value.clone(),
+                        ticket_value,
                     )?;
 
                     channel_funding.run();
@@ -297,7 +295,7 @@ impl Core {
                         hopr: hopr.clone(),
                         node: node.clone(),
                         channel_funding: Box::new(channel_funding),
-                        ticket_value: ticket_value.clone(),
+                        ticket_value,
                     })
                 } else {
                     tracing::debug!("hopr not running: syncing");
@@ -318,7 +316,7 @@ impl Core {
             RunMode::Initializing => {}
             RunMode::PreSafe { .. } => {
                 tracing::debug!("shutting down from presafe mode");
-                self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to onboarding");
                 });
                 if let Some(s) = self.shutdown_sender.as_ref() {
@@ -329,16 +327,16 @@ impl Core {
             }
             RunMode::ValueingTicket { .. } => {
                 tracing::debug!("shutting down from ticket pricing mode");
-                self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
                 });
             }
             RunMode::Syncing { .. } => {
                 tracing::debug!("shutting down from syncing mode");
-                self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
                 });
-                self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
                 });
                 if let Some(s) = self.shutdown_sender.as_ref() {
@@ -349,10 +347,10 @@ impl Core {
             }
             RunMode::Full { .. } => {
                 tracing::debug!("shutting down from normal mode");
-                self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
                 });
-                self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing ticket");
                 });
                 match &mut self.connection {
@@ -363,7 +361,7 @@ impl Core {
                     }
                     None => {
                         tracing::debug!("direct shutdown - no connection to disconnect");
-                        self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+                        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
                             tracing::error!(%e, "failed to send cancel event to connection");
                         });
                         if let Some(s) = self.shutdown_sender.as_ref() {
@@ -665,7 +663,7 @@ impl Core {
         tracing::info!("connection closed");
         self.connection = None;
         self.session_connected = false;
-        self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
+        _ = self.cancel_channel.0.send(Cancel::Connection).map_err(|e| {
             tracing::error!(%e, "failed to send cancel event to connection");
         });
         if let Some(sender) = self.shutdown_sender.as_ref() {
@@ -782,32 +780,32 @@ impl Core {
                 node_address: _,
             } => {
                 tracing::debug!("cancel onboarding");
-                self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to onboarding");
                 });
             }
             RunMode::ValueingTicket { valueing_ticket: _ } => {
                 tracing::debug!("cancel valueing ticket");
-                self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing_ticket");
                 });
             }
             RunMode::Syncing { .. } => {
                 tracing::debug!("cancel metrics and node");
-                self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to node");
                 });
-                self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to metrics");
                 });
             }
             RunMode::Full { .. } => {
                 tracing::debug!("cancel channel funding and node");
                 tracing::debug!("cancel metrics and node");
-                self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::Node).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to node");
                 });
-                self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
+                _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to channel_funding");
                 });
             }
