@@ -211,6 +211,7 @@ impl Session {
             _ => return Err(HoprError::SessionAmbiguousClient),
         };
 
+        tracing::debug!(session_id = %active_client, "adjusting session config");
         config.edgli.adjust_session(config.balancer_config, active_client)
     }
 
