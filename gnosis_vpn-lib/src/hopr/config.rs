@@ -58,7 +58,7 @@ pub fn store_safe(safe_module: &SafeModule) -> Result<(), Error> {
 }
 
 pub fn has_safe() -> bool {
-    safe_file().map_or(false, |path| path.exists())
+    safe_file().is_ok_and(|path| path.exists())
 }
 
 pub fn generate(network: Network, rpc_provider: Url, ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
