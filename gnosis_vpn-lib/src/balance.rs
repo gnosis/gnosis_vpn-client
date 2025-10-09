@@ -139,15 +139,15 @@ impl Balances {
 }
 
 /// worth 1 more ticket than min_stake_threshold
-//pub fn funding_amount(ticket_price: Balance<WxHOPR>) -> Balance<WxHOPR> {
-pub fn funding_amount(ticket_price: Balance<WxHOPR>) -> Balance<WxHOPR> {
-    min_stake_threshold(ticket_price) + ticket_price
+//pub fn funding_amount(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+pub fn funding_amount(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+    min_stake_threshold(ticket_value) + ticket_value
 }
 
-/// imposed by 3hops. 3 times ticket_price at least are needed in a channel in case the 1st relayer wants to redeem a winning ticket
-// pub fn min_stake_threshold(ticket_price: Balance<WxHOPR>) -> Balance<WxHOPR> {
-pub fn min_stake_threshold(ticket_price: Balance<WxHOPR>) -> Balance<WxHOPR> {
-    ticket_price * 3
+/// imposed by 3hops. 3 times ticket_value at least are needed in a channel in case the 1st relayer wants to redeem a winning ticket
+// pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
+    ticket_value * 3
 }
 
 /// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)

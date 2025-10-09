@@ -373,6 +373,7 @@ impl Hopr {
 
         edgli::hopr_lib::Hopr::collect_hopr_metrics()
             .map(move |prometheus_values| {
+                tracing::debug!("prometheus metrics: {}", prometheus_values);
                 let sync_percentage = re
                     .captures(prometheus_values.as_ref())
                     .and_then(|caps| caps.get(1))
@@ -431,12 +432,5 @@ impl Drop for Hopr {
                 process.1.abort_handle.abort();
             }
         })
-    }
-}
-
-fn exists_to_ok(err: HoprLibError) -> Result<(), HoprLibError> {
-    match err {
-        HoprLibError::ChainApi(HoprChainError::ActionsError(ChainActionsError::ChannelAlreadyExists)) => Ok(()),
-        e => Err(e),
     }
 }

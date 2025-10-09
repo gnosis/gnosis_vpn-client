@@ -48,7 +48,7 @@ enum InternalError {
 }
 
 #[derive(Clone, Debug)]
-pub struct OneShotTasks {
+pub struct ValueingTicket {
     // message passing helper
     cancel_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
 
@@ -63,14 +63,14 @@ pub struct OneShotTasks {
     network_specs: NetworkSpecifications,
 }
 
-impl OneShotTasks {
+impl ValueingTicket {
     pub fn new(
         sender: crossbeam_channel::Sender<Event>,
         private_key: ChainKeypair,
         rpc_provider: Url,
         network: Network,
     ) -> Self {
-        OneShotTasks {
+        ValueingTicket {
             cancel_channel: crossbeam_channel::bounded(1),
             backoff: BackoffState::Inactive,
             phase: Phase::TicketStats,

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::balance;
 use crate::hopr::Hopr;
 use crate::hopr::api::ChannelError;
 
@@ -61,7 +62,6 @@ pub struct ChannelFunding {
     sender: crossbeam_channel::Sender<Event>,
     channel_addresses: Vec<Address>,
     ticket_price: Balance<WxHOPR>,
-    min_stake_threshold: Balance<WxHOPR>,
 }
 
 impl ChannelFunding {
@@ -70,7 +70,6 @@ impl ChannelFunding {
         edgli: Arc<Hopr>,
         channel_addresses: Vec<Address>,
         ticket_price: Balance<WxHOPR>,
-        min_stake_threshold: Balance<WxHOPR>,
     ) -> Self {
         ChannelFunding {
             cancel_channel: crossbeam_channel::bounded(1),
@@ -80,7 +79,6 @@ impl ChannelFunding {
             sender,
             channel_addresses,
             ticket_price,
-            min_stake_threshold,
         }
     }
 
@@ -201,7 +199,7 @@ impl ChannelFunding {
         let (s, r) = crossbeam_channel::bounded(1);
         let edgli = self.edgli.clone();
         let ticket_price = self.ticket_price;
-        let min_stake_threshold = self.min_stake_threshold;
+        let min_stake_threshold = balance::min_stake_threshold(ticket_price);
         thread::spawn(move || {
             let mut results = Vec::with_capacity(channel_addresses.len());
             for address in channel_addresses {
