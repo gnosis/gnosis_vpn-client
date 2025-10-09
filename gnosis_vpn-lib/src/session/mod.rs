@@ -70,7 +70,7 @@ impl OpenSession {
         balancer_cfg: SurbBalancerConfig,
     ) -> Self {
         OpenSession {
-            edgli: edgli.clone(),
+            edgli,
             destination,
             capabilities,
             path: path.clone(),
@@ -91,7 +91,7 @@ impl OpenSession {
         balancer_cfg: SurbBalancerConfig,
     ) -> Self {
         OpenSession {
-            edgli: edgli.clone(),
+            edgli,
             destination,
             capabilities,
             path: path.clone(),
@@ -118,17 +118,14 @@ impl From<&OpenSession> for edgli::hopr_lib::SessionClientConfig {
 }
 
 impl CloseSession {
-    pub fn new(edgli: &Arc<Hopr>) -> Self {
-        CloseSession { edgli: edgli.clone() }
+    pub fn new(edgli: Arc<Hopr>) -> Self {
+        CloseSession { edgli }
     }
 }
 
 impl ListSession {
-    pub fn new(edgli: &Arc<Hopr>, protocol: &IpProtocol) -> Self {
-        ListSession {
-            edgli: edgli.clone(),
-            protocol: *protocol,
-        }
+    pub fn new(edgli: Arc<Hopr>, protocol: IpProtocol) -> Self {
+        ListSession { edgli, protocol }
     }
 }
 

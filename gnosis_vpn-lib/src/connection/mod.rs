@@ -1,5 +1,6 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use crossbeam_channel;
+use edgli::hopr_lib::IpProtocol;
 use rand::Rng;
 use reqwest::blocking;
 use thiserror::Error;
@@ -65,6 +66,7 @@ enum InternalEvent {
     OpenSession(Result<Session, HoprError>),
     UpdateSession(Result<(), HoprError>),
     CloseSession(Result<(), HoprError>),
+    ListSessions(Result<Vec<Session>, HoprError>),
     RegisterWg(Result<Registration, gvpn_client::Error>),
     UnregisterWg(Result<(), gvpn_client::Error>),
     WgOpenTunnel(WgOpenResult),
@@ -341,7 +343,7 @@ impl Connection {
             PhaseUp::PreparePingTunnel(session, registration) => self.open_wg_session(&session, &registration),
             PhaseUp::CheckPingTunnel(_session, _registration) => self.immediate_ping(),
             PhaseUp::UpgradeToMainTunnel(session, _registration) => self.set_main_config(&session),
-            PhaseUp::MonitorTunnel(_session, _registration, _monitor) => self.delayed_ping(),
+            PhaseUp::MonitorTunnel(_session, _registration, _monitor) => self.list_tcp_sessions_delayed(),
             PhaseUp::TunnelBroken(session, _registration) => self.close_wg_session(&session),
         }
     }
@@ -430,11 +432,6 @@ impl Connection {
                     self.backoff = BackoffState::Inactive;
                     Ok(())
                 }
-                (Ok(_), PhaseUp::MonitorTunnel(session, registration, monitor)) => {
-                    tracing::info!(%session, "Session verified as open for {}", log_output::elapsed(&monitor.since));
-                    self.phase_up = PhaseUp::MonitorTunnel(session, registration, monitor.add_success());
-                    Ok(())
-                }
                 (Err(error), PhaseUp::CheckPingTunnel(session, _registration)) => {
                     tracing::warn!(%session, %error, "Ping during initial check failed");
                     if !error.would_block() {
@@ -442,13 +439,18 @@ impl Connection {
                     }
                     Ok(())
                 }
-                (Err(_), PhaseUp::MonitorTunnel(session, registration, monitor)) => {
-                    if monitor.success_count > 3 {
-                        tracing::warn!(%session, "Ignoring failed session ping after {}", log_output::elapsed(&monitor.since));
+                _ => Err(InternalError::UnexpectedPhase),
+            },
+
+            InternalEvent::ListSessions(res) => match (res?, self.phase_up.clone()) {
+                (sessions, PhaseUp::MonitorTunnel(session, registration, monitor)) => {
+                    if session.verify_open(&sessions) {
+                        tracing::debug!(%session, "Session existence verified for {}", log_output::elapsed(&monitor.since));
                         self.phase_up = PhaseUp::MonitorTunnel(session, registration, monitor.reset_success());
+                        self.backoff = BackoffState::Inactive;
                         Ok(())
                     } else {
-                        tracing::warn!(%session, "Session ping failed after {}", log_output::elapsed(&monitor.since));
+                        tracing::warn!(%session, "Session not found in active sessions");
                         self.phase_up = PhaseUp::TunnelBroken(session, registration);
                         self.backoff = BackoffState::Inactive;
                         self.sender.send(Event::Disconnected).map_err(InternalError::SendError)
@@ -519,6 +521,7 @@ impl Connection {
                 }
             }
             InternalEvent::Ping(_)
+            | InternalEvent::ListSessions(_)
             | InternalEvent::RegisterWg(_)
             | InternalEvent::WgOpenTunnel(_)
             | InternalEvent::UpdateSession(_) => Err(InternalError::UnexpectedEvent(Box::new(event))),
@@ -555,6 +558,24 @@ impl Connection {
         r
     }
 
+    fn list_tcp_sessions_delayed(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+        let (s, r) = crossbeam_channel::bounded(1);
+        let edgli = self.edgli.clone();
+        thread::spawn(move || {
+            let mut rng = rand::rng();
+            let delay = Duration::from_secs(rng.random_range(1..10) as u64);
+            let after = crossbeam_channel::after(delay);
+            crossbeam_channel::select! {
+                recv(after) -> _ => {
+                    let params = session::ListSession::new(edgli, IpProtocol::UDP);
+                    let res = Session::list(&params);
+                    _ = s.send(InternalEvent::ListSessions(res));
+                }
+            }
+        });
+        r
+    }
+
     fn immediate_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
         let opts = self.options.ping_options.clone();
@@ -565,24 +586,6 @@ impl Connection {
         thread::spawn(move || {
             let res = ping::ping(&opts);
             _ = s.send(InternalEvent::Ping(res));
-        });
-        r
-    }
-
-    fn delayed_ping(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let (s, r) = crossbeam_channel::bounded(1);
-        let opts = self.options.ping_options.clone();
-        let range = self.options.ping_interval.clone();
-        thread::spawn(move || {
-            let mut rng = rand::rng();
-            let delay = Duration::from_secs(rng.random_range(range) as u64);
-            let after = crossbeam_channel::after(delay);
-            crossbeam_channel::select! {
-                recv(after) -> _ => {
-                    let res = ping::ping(&opts);
-                    _ = s.send(InternalEvent::Ping(res));
-                }
-            }
         });
         r
     }
@@ -606,7 +609,7 @@ impl Connection {
     }
 
     fn close_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
-        let params = session::CloseSession::new(&self.edgli);
+        let params = session::CloseSession::new(self.edgli.clone());
         let (s, r) = crossbeam_channel::bounded(1);
         let session = session.clone();
         if let BackoffState::Inactive = self.backoff {
@@ -781,6 +784,7 @@ impl Display for InternalEvent {
             InternalEvent::Ping(res) => write!(f, "Ping({res:?})"),
             InternalEvent::WgOpenTunnel(res) => write!(f, "WgOpenTunnel({res:?})"),
             InternalEvent::UpdateSession(res) => write!(f, "UpdateSession({res:?})"),
+            InternalEvent::ListSessions(res) => write!(f, "ListSessions({res:?})"),
         }
     }
 }
