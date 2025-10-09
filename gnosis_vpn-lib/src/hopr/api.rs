@@ -1,11 +1,9 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::errors::HoprChainError;
 use edgli::{
     EdgliProcesses,
     hopr_lib::{
-        Address, HoprLibError, HoprSessionId, IpProtocol, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig,
-        SessionTarget, SurbBalancerConfig,
-        errors::ChainActionsError,
+        Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
+        SurbBalancerConfig,
         errors::HoprLibError,
         utils::session::{
             ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
