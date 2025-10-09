@@ -445,7 +445,7 @@ impl Connection {
             InternalEvent::ListSessions(res) => match (res?, self.phase_up.clone()) {
                 (sessions, PhaseUp::MonitorTunnel(session, registration, monitor)) => {
                     if session.verify_open(&sessions) {
-                        tracing::debug!(%session, "Session existence verified for {}", log_output::elapsed(&monitor.since));
+                        tracing::info!(%session, "Session existence verified for {}", log_output::elapsed(&monitor.since));
                         self.phase_up = PhaseUp::MonitorTunnel(session, registration, monitor.reset_success());
                         self.backoff = BackoffState::Inactive;
                         Ok(())
