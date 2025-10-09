@@ -679,7 +679,9 @@ impl Connection {
         let session = session.clone();
         thread::spawn(move || {
             let res = session.update(&params);
-            _ = s.send(InternalEvent::UpdateSession(res));
+            if let Err(error) = s.send(InternalEvent::UpdateSession(res)) {
+                tracing::error!(%error, "Failed sending update session event");
+            }
         });
         r
     }

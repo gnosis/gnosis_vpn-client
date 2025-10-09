@@ -131,6 +131,7 @@ impl Hopr {
     // --- session management ---
 
     /// Open a local port and return the configuration
+    #[tracing::instrument(skip(self), level = "info", ret, err)]
     pub fn open_session(
         &self,
         destination: Address,
@@ -176,13 +177,13 @@ impl Hopr {
         };
 
         let max_surb_upstream = cfg.surb_management.map(|v| {
-            human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64).as_ref())
+            human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
                 .expect("config value extract that cannot fail")
         });
 
         let response_buffer: Option<bytesize::ByteSize> = cfg
             .surb_management
-            .map(|v| ByteSize::kib(v.target_surb_buffer_size * SESSION_MTU as u64));
+            .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
 
         let listener_id = ListenerId(protocol, bind_host);
 
@@ -303,6 +304,7 @@ impl Hopr {
         })
     }
 
+    #[tracing::instrument(skip(self), level = "info", ret, err)]
     pub fn adjust_session(
         &self,
         balancer_cfg: SurbBalancerConfig,
