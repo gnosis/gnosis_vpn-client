@@ -545,6 +545,18 @@ impl Core {
         tracing::error!("node is inoperable - please check your configuration and network connectivity");
         self.balance = None;
         self.info = None;
+        match self.run_mode {
+            RunMode::Syncing { .. } => {
+                self.cancel(Cancel::Node);
+                self.cancel(Cancel::Metrics);
+                self.cancel(Cancel::OneShotTasks);
+            }
+            RunMode::Full { .. } => {
+                self.cancel(Cancel::Node);
+                self.cancel(Cancel::ChannelFunding);
+            }
+            _ => { /* nothing to cancel */ }
+        }
         self.cancel(Cancel::Node);
         self.cancel(Cancel::Metrics);
         self.cancel(Cancel::ChannelFunding);
