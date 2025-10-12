@@ -206,20 +206,38 @@ embed_binaries() {
     local x86="x86_64-darwin"
     local arm="aarch64-darwin"
 
-    # gnosis_vpn
-    download_asset "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}"
+    # Download all binaries in parallel for faster builds
+    log_info "Starting parallel downloads..."
+    download_asset "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}" &
+    local pid1=$!
+    download_asset "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}" &
+    local pid2=$!
+    download_asset "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}" &
+    local pid3=$!
+    download_asset "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}" &
+    local pid4=$!
+
+    # Wait for all downloads to complete
+    log_info "Waiting for downloads to complete..."
+    if ! wait $pid1 || ! wait $pid2 || ! wait $pid3 || ! wait $pid4; then
+        log_error "One or more downloads failed"
+        exit 1
+    fi
+    log_success "All downloads completed"
+
+    # Verify checksums for all downloaded binaries
+    log_info "Verifying checksums..."
     verify_checksum "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}"
-    download_asset "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
     verify_checksum "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
+    verify_checksum "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
+    verify_checksum "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
+
+    # Create universal binaries
+    log_info "Creating universal binaries..."
     lipo -create -output "$BUILD_DIR/root/usr/local/bin/gnosis_vpn" \
         "$tmp_dir/gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${arm}"
     chmod 755 "$BUILD_DIR/root/usr/local/bin/gnosis_vpn"
 
-    # gnosis_vpn-ctl
-    download_asset "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
-    verify_checksum "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
-    download_asset "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
-    verify_checksum "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
     lipo -create -output "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl" \
         "$tmp_dir/gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
     chmod 755 "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl"
