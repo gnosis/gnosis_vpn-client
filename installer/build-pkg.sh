@@ -197,6 +197,45 @@ verify_checksum() {
     rm -f "$checksum_file"
 }
 
+# Verify GPG signature for downloaded asset (optional, non-blocking)
+verify_gpg_signature() {
+    local asset="$1"
+    local file="$2"
+    local sig_url="${RELEASE_BASE_URL}/${VERSION}/${asset}.sig"
+
+    log_info "Checking for GPG signature for $asset"
+
+    # Check if GPG is available
+    if ! command -v gpg &>/dev/null; then
+        log_warn "GPG not found, skipping signature verification"
+        log_info "Install GPG for additional security: brew install gnupg"
+        return 0
+    fi
+
+    # Try to download signature file
+    local sig_file="${file}.sig"
+    if ! curl -fsSL "$sig_url" -o "$sig_file" 2>/dev/null; then
+        log_warn "GPG signature not available for $asset"
+        log_info "Signature URL: $sig_url"
+        return 0
+    fi
+
+    log_info "GPG signature found, verifying..."
+
+    # Verify signature
+    if gpg --verify "$sig_file" "$file" 2>&1 | tee /tmp/gpg-verify.log; then
+        log_success "GPG signature verified for $asset"
+        rm -f "$sig_file"
+        return 0
+    else
+        log_error "GPG signature verification failed for $asset"
+        log_error "This could indicate a security issue"
+        cat /tmp/gpg-verify.log
+        rm -f "$sig_file"
+        exit 1
+    fi
+}
+
 # Download arch-specific binaries and build universal binaries
 embed_binaries() {
     log_info "Embedding binaries for version $VERSION"
@@ -237,6 +276,13 @@ embed_binaries() {
     verify_checksum "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
     verify_checksum "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
     verify_checksum "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
+
+    # Verify GPG signatures if available (optional, non-blocking if not available)
+    log_info "Checking for GPG signatures..."
+    verify_gpg_signature "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}"
+    verify_gpg_signature "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
+    verify_gpg_signature "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
+    verify_gpg_signature "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
 
     # Create universal binaries
     log_info "Creating universal binaries..."
