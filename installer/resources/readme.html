@@ -129,7 +129,7 @@
             <span class="check-icon">⚠</span>
             <div>
                 <strong>WireGuard Tools</strong><br>
-                <span id="wireguard-details">WireGuard will be verified during installation. If not found, it will be installed via Homebrew.</span>
+                <span id="wireguard-details">WireGuard will be verified during installation. If not found, you will need to install it manually.</span>
             </div>
         </div>
 
@@ -146,12 +146,10 @@
         <h3>Installation Details</h3>
         <p>This installer will:</p>
         <ul>
-            <li>Download the latest Gnosis VPN binaries from GitHub releases</li>
             <li>Install command-line tools to <code>/usr/local/bin/</code></li>
-            <li>Install GnosisVPN.app to <code>/Applications/</code></li>
-            <li>Remove macOS quarantine attributes for proper execution</li>
             <li>Generate a default configuration file with VPN destinations</li>
-            <li>Verify and install WireGuard tools if necessary</li>
+            <li>Set proper permissions for binaries and configuration files</li>
+            <li>Check for WireGuard tools (required for VPN functionality)</li>
         </ul>
     </div>
 
@@ -161,22 +159,20 @@
         <ul>
             <li><code>/usr/local/bin/gnosis_vpn</code> - Main VPN client daemon</li>
             <li><code>/usr/local/bin/gnosis_vpn-ctl</code> - Control utility</li>
-            <li><code>/Applications/GnosisVPN.app</code> - Graphical application</li>
             <li><code>/etc/gnosisvpn/config.toml</code> - Configuration file</li>
         </ul>
     </div>
 
     <div class="info-box">
-        <p><strong>Note:</strong> The installer requires administrator privileges to:</p>
-        <ul>
-            <li>Install files to /Applications</li>
-            <li>Remove quarantine attributes from downloaded binaries</li>
-            <li>Install WireGuard tools if not present</li>
-        </ul>
+        <p><strong>Note:</strong> The installer requires administrator privileges to install files to system directories (/usr/local/bin and /etc).</p>
     </div>
 
     <div class="info-box">
-        <p><strong>Privacy:</strong> This installer downloads binaries from GitHub and does not collect or transmit any personal information.</p>
+        <p><strong>WireGuard Required:</strong> This VPN client requires WireGuard tools to be installed. If not found, install via Homebrew: <code>brew install wireguard-tools</code> or visit <a href="https://www.wireguard.com/install/" target="_blank">https://www.wireguard.com/install/</a></p>
+    </div>
+
+    <div class="info-box">
+        <p><strong>Privacy:</strong> This installer does not collect or transmit any personal information.</p>
     </div>
 </body>
 </html>
