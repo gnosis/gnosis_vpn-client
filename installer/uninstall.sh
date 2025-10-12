@@ -74,6 +74,39 @@ confirm_uninstall() {
     echo ""
 }
 
+# Stop running processes
+stop_processes() {
+    log_info "Checking for running VPN processes..."
+
+    if pgrep -f gnosis_vpn >/dev/null 2>&1; then
+        log_warn "Found running gnosis_vpn process(es)"
+        log_info "Stopping VPN processes..."
+        
+        # Try graceful shutdown first
+        pkill -TERM -f gnosis_vpn 2>/dev/null || true
+        sleep 2
+        
+        # Force kill if still running
+        if pgrep -f gnosis_vpn >/dev/null 2>&1; then
+            log_warn "Processes still running, forcing shutdown..."
+            pkill -KILL -f gnosis_vpn 2>/dev/null || true
+            sleep 1
+        fi
+        
+        # Verify processes stopped
+        if pgrep -f gnosis_vpn >/dev/null 2>&1; then
+            log_error "Failed to stop VPN processes"
+            log_info "Please stop gnosis_vpn manually before uninstalling"
+            exit 1
+        fi
+        
+        log_success "VPN processes stopped"
+    else
+        log_info "No running VPN processes found"
+    fi
+    echo ""
+}
+
 # Backup configuration
 backup_config() {
     if [[ -d "$CONFIG_DIR" ]]; then
@@ -216,6 +249,7 @@ main() {
     print_banner
     check_root
     confirm_uninstall
+    stop_processes
     backup_config
     remove_binaries
     remove_config
