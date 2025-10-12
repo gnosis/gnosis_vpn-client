@@ -148,6 +148,49 @@ download_asset() {
     fi
 }
 
+# Verify SHA-256 checksum for downloaded asset
+verify_checksum() {
+    local asset="$1"
+    local file="$2"
+    local checksum_url="${RELEASE_BASE_URL}/${VERSION}/${asset}.sha256"
+    
+    log_info "Verifying checksum for $asset"
+    
+    # Download checksum file
+    local checksum_file="${file}.sha256"
+    if ! curl -fsSL "$checksum_url" -o "$checksum_file"; then
+        log_error "Failed to download checksum file: $checksum_url"
+        log_error "Checksum verification is required for security"
+        exit 1
+    fi
+    
+    # Extract expected checksum (format: "checksum  filename")
+    local expected_checksum
+    expected_checksum=$(awk '{print $1}' "$checksum_file")
+    
+    # Validate that we got a checksum
+    if [[ -z "$expected_checksum" ]]; then
+        log_error "Checksum file is empty or invalid: $checksum_file"
+        exit 1
+    fi
+    
+    # Calculate actual checksum
+    local actual_checksum
+    actual_checksum=$(shasum -a 256 "$file" | awk '{print $1}')
+    
+    # Compare checksums
+    if [[ "$expected_checksum" != "$actual_checksum" ]]; then
+        log_error "Checksum verification failed for $asset"
+        log_error "Expected: $expected_checksum"
+        log_error "Actual:   $actual_checksum"
+        log_error "This could indicate a corrupted download or security issue"
+        exit 1
+    fi
+    
+    log_success "Checksum verified: $expected_checksum"
+    rm -f "$checksum_file"
+}
+
 # Download arch-specific binaries and build universal binaries
 embed_binaries() {
     log_info "Embedding binaries for version $VERSION"
@@ -160,14 +203,18 @@ embed_binaries() {
 
     # gnosis_vpn
     download_asset "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}"
+    verify_checksum "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}"
     download_asset "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
+    verify_checksum "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
     lipo -create -output "$BUILD_DIR/root/usr/local/bin/gnosis_vpn" \
         "$tmp_dir/gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${arm}"
     chmod 755 "$BUILD_DIR/root/usr/local/bin/gnosis_vpn"
 
     # gnosis_vpn-ctl
     download_asset "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
+    verify_checksum "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
     download_asset "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
+    verify_checksum "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
     lipo -create -output "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl" \
         "$tmp_dir/gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
     chmod 755 "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl"

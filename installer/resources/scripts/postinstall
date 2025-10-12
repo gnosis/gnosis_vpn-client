@@ -25,7 +25,11 @@ CONFIG_DIR="${2}/etc/gnosisvpn"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 BIN_DIR="${2}/usr/local/bin"
 NETWORK="${INSTALLER_CHOICE_NETWORK:-rotsee}"
-LOG_FILE="/tmp/gnosis-vpn-postinstall.log"
+
+# Create log directory if it doesn't exist
+LOG_DIR="/Library/Logs/GnosisVPNInstaller"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/postinstall.log"
 
 # Redirect all output to log file
 exec >> "$LOG_FILE" 2>&1

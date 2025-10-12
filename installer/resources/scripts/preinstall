@@ -13,7 +13,10 @@
 
 set -euo pipefail
 
-LOG_FILE="/tmp/gnosis-vpn-preinstall.log"
+# Create log directory if it doesn't exist
+LOG_DIR="/Library/Logs/GnosisVPNInstaller"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/preinstall.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "=========================================="

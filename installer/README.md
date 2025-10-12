@@ -256,6 +256,20 @@ shasum -a 256 GnosisVPN-Installer-1.0.0-signed.pkg
 - Verify GitHub releases are accessible
 - Try specifying a specific version: `./build-pkg.sh v1.0.0`
 
+**"Checksum verification failed"**
+- The build process detected a checksum mismatch
+- This could indicate:
+  - Corrupted download (try building again)
+  - Network proxy interfering with downloads
+  - Security issue with the release assets
+- If the problem persists, verify the checksums manually:
+  ```bash
+  curl -L https://github.com/gnosis/gnosis_vpn-client/releases/download/v0.12.0/gnosis_vpn-aarch64-darwin -o /tmp/test-binary
+  curl -L https://github.com/gnosis/gnosis_vpn-client/releases/download/v0.12.0/gnosis_vpn-aarch64-darwin.sha256 -o /tmp/test.sha256
+  shasum -a 256 /tmp/test-binary
+  cat /tmp/test.sha256
+  ```
+
 **"GnosisVPN.app not found"**
 - The app may not be available for all platforms
 - The installer will still complete successfully with just the command-line tools
@@ -263,13 +277,13 @@ shasum -a 256 GnosisVPN-Installer-1.0.0-signed.pkg
 ## Logs
 
 Installation logs are written to:
-- Pre-install: `/tmp/gnosis-vpn-preinstall.log`
-- Post-install: `/tmp/gnosis-vpn-postinstall.log`
+- Pre-install: `/Library/Logs/GnosisVPNInstaller/preinstall.log`
+- Post-install: `/Library/Logs/GnosisVPNInstaller/postinstall.log`
 
 View logs:
 ```bash
-cat /tmp/gnosis-vpn-preinstall.log
-cat /tmp/gnosis-vpn-postinstall.log
+cat /Library/Logs/GnosisVPNInstaller/preinstall.log
+cat /Library/Logs/GnosisVPNInstaller/postinstall.log
 ```
 
 ## Development
@@ -319,12 +333,83 @@ To build an installer for a specific version:
 ./build-pkg.sh v1.2.3
 ```
 
+## Uninstallation
+
+To completely remove Gnosis VPN from your system:
+
+### Option 1: Using the Uninstall Script (Recommended)
+
+```bash
+cd installer
+sudo ./uninstall.sh
+```
+
+The uninstall script will:
+- Back up your configuration to `~/gnosis-vpn-config-backup-*`
+- Remove binaries from `/usr/local/bin/`
+- Remove configuration from `/etc/gnosisvpn/`
+- Remove installation logs from `/Library/Logs/GnosisVPNInstaller/`
+- Forget the package receipt
+
+### Option 2: Manual Uninstallation
+
+If you prefer to uninstall manually:
+
+1. **Remove the binaries:**
+   ```bash
+   sudo rm -f /usr/local/bin/gnosis_vpn
+   sudo rm -f /usr/local/bin/gnosis_vpn-ctl
+   ```
+
+2. **Remove the configuration (backup first if needed):**
+   ```bash
+   sudo cp -R /etc/gnosisvpn ~/gnosis-vpn-config-backup
+   sudo rm -rf /etc/gnosisvpn
+   ```
+
+3. **Remove installation logs:**
+   ```bash
+   sudo rm -rf /Library/Logs/GnosisVPNInstaller
+   ```
+
+4. **Forget the package receipt:**
+   ```bash
+   sudo pkgutil --forget org.gnosis.vpn.client
+   ```
+
+### Verifying Uninstallation
+
+Check that all components are removed:
+
+```bash
+# Verify binaries are removed
+ls -l /usr/local/bin/gnosis_vpn* 2>/dev/null || echo "✓ Binaries removed"
+
+# Verify configuration is removed
+ls -ld /etc/gnosisvpn 2>/dev/null || echo "✓ Configuration removed"
+
+# Verify package receipt is removed
+pkgutil --pkgs | grep gnosis || echo "✓ Package receipt removed"
+```
+
 ## Security
 
 - Scripts run with root privileges during installation
 - Binaries are downloaded over HTTPS from GitHub at build time
+- SHA-256 checksums are verified for all downloaded binaries (build fails if verification fails)
 - Universal binaries are packaged directly into the PKG
 - No personal information is collected or transmitted
+
+### Checksum Verification
+
+The build process automatically verifies SHA-256 checksums for all downloaded binaries:
+- Checksum files (`.sha256`) are downloaded from the same GitHub release
+- Each binary is verified before being packaged
+- **Build fails immediately if:**
+  - Checksum file cannot be downloaded
+  - Checksum file is empty or invalid
+  - Calculated checksum doesn't match the expected checksum
+- This protects against corrupted downloads and potential security issues
 
 ## License
 

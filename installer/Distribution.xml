@@ -63,7 +63,7 @@
     <pkg-ref id="org.gnosis.vpn.client"
              version="0"
              auth="root"
-             installKBytes="10240"
+             installKBytes="16384"
              onConclusion="none">
         #GnosisVPN.pkg
     </pkg-ref>
