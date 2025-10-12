@@ -1,0 +1,319 @@
+#!/bin/bash
+#
+# Build script for Gnosis VPN macOS PKG installer
+#
+# This script creates a distributable .pkg installer with custom UI for macOS.
+# It uses pkgbuild and productbuild to create a standard macOS installer package.
+#
+# Usage:
+#   ./build-pkg.sh [version]
+#
+# Example:
+#   ./build-pkg.sh 1.0.0
+#
+
+set -euo pipefail
+
+# Configuration
+VERSION_ARG="${1:-latest}"
+VERSION="$VERSION_ARG"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${SCRIPT_DIR}/build"
+RESOURCES_DIR="${SCRIPT_DIR}/resources"
+DISTRIBUTION_XML="${SCRIPT_DIR}/Distribution.xml"
+PKG_NAME="GnosisVPN-Installer-${VERSION}.pkg"
+COMPONENT_PKG="GnosisVPN.pkg"
+
+# GitHub release config
+REPO_OWNER="gnosis"
+REPO_NAME="gnosis_vpn-client"
+LATEST_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/LATEST"
+RELEASE_BASE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $*"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $*"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $*"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $*"
+}
+
+# Print banner
+print_banner() {
+    echo "=========================================="
+    echo "  Gnosis VPN PKG Installer Builder"
+    echo "  Version: ${VERSION}"
+    echo "=========================================="
+    echo ""
+}
+
+# Verify prerequisites
+check_prerequisites() {
+    log_info "Checking prerequisites..."
+
+    local missing=0
+
+    # Check for required tools
+    for cmd in pkgbuild productbuild curl lipo; do
+        if ! command -v "$cmd" &>/dev/null; then
+            log_error "Required tool not found: $cmd"
+            missing=$((missing + 1))
+        fi
+    done
+
+    # Check for required files
+    if [[ ! -f "$DISTRIBUTION_XML" ]]; then
+        log_error "Distribution.xml not found: $DISTRIBUTION_XML"
+        missing=$((missing + 1))
+    fi
+
+    if [[ ! -d "$RESOURCES_DIR" ]]; then
+        log_error "Resources directory not found: $RESOURCES_DIR"
+        missing=$((missing + 1))
+    fi
+
+    if [[ $missing -gt 0 ]]; then
+        log_error "Prerequisites check failed. Please install missing tools and verify file structure."
+        exit 1
+    fi
+
+    log_success "Prerequisites check passed"
+    echo ""
+}
+
+# Clean and prepare build directory
+prepare_build_dir() {
+    log_info "Preparing build directory..."
+
+    # Clean existing build directory
+    if [[ -d "$BUILD_DIR" ]]; then
+        log_info "Cleaning existing build directory..."
+        rm -rf "$BUILD_DIR"
+    fi
+
+    # Create fresh build directory structure
+    mkdir -p "$BUILD_DIR/root/usr/local/bin"
+    mkdir -p "$BUILD_DIR/root/etc/gnosisvpn"
+    mkdir -p "$BUILD_DIR/root/Applications"
+    mkdir -p "$BUILD_DIR/scripts"
+
+    log_success "Build directory prepared"
+    echo ""
+}
+
+# Resolve version (supports "latest")
+resolve_version() {
+    if [[ "$VERSION_ARG" == "latest" ]]; then
+        log_info "Fetching latest version tag from GitHub..."
+        if ! VERSION=$(curl -fsSL "$LATEST_URL" | tr -d '[:space:]'); then
+            log_error "Failed to fetch LATEST version"
+            exit 1
+        fi
+        if [[ -z "$VERSION" ]]; then
+            log_error "LATEST file is empty"
+            exit 1
+        fi
+        PKG_NAME="GnosisVPN-Installer-${VERSION}.pkg"
+        log_success "Resolved version: $VERSION"
+        echo ""
+    fi
+}
+
+# Download asset from GitHub releases
+download_asset() {
+    local asset="$1"
+    local out="$2"
+    local url="${RELEASE_BASE_URL}/${VERSION}/${asset}"
+    log_info "Downloading $asset"
+    log_info "URL: $url"
+    if ! curl -fL --progress-bar "$url" -o "$out"; then
+        log_error "Failed to download $asset from $url"
+        exit 1
+    fi
+}
+
+# Download arch-specific binaries and build universal binaries
+embed_binaries() {
+    log_info "Embedding binaries for version $VERSION"
+
+    local tmp_dir="$BUILD_DIR/tmp"
+    mkdir -p "$tmp_dir"
+
+    local x86="x86_64-darwin"
+    local arm="aarch64-darwin"
+
+    # gnosis_vpn
+    download_asset "gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${x86}"
+    download_asset "gnosis_vpn-${arm}" "$tmp_dir/gnosis_vpn-${arm}"
+    lipo -create -output "$BUILD_DIR/root/usr/local/bin/gnosis_vpn" \
+        "$tmp_dir/gnosis_vpn-${x86}" "$tmp_dir/gnosis_vpn-${arm}"
+    chmod 755 "$BUILD_DIR/root/usr/local/bin/gnosis_vpn"
+
+    # gnosis_vpn-ctl
+    download_asset "gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${x86}"
+    download_asset "gnosis_vpn-ctl-${arm}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
+    lipo -create -output "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl" \
+        "$tmp_dir/gnosis_vpn-ctl-${x86}" "$tmp_dir/gnosis_vpn-ctl-${arm}"
+    chmod 755 "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl"
+
+    # Quick sanity: confirm universals
+    log_info "Verifying universal binaries:"
+    lipo -info "$BUILD_DIR/root/usr/local/bin/gnosis_vpn" || true
+    lipo -info "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl" || true
+
+    rm -rf "$tmp_dir"
+    log_success "Binaries embedded"
+    echo ""
+}
+
+# Copy installation scripts
+copy_scripts() {
+    log_info "Copying installation scripts..."
+
+    # Preinstall is now a minimal no-op (optional WireGuard check only)
+    if [[ -f "$RESOURCES_DIR/scripts/preinstall" ]]; then
+        cp "$RESOURCES_DIR/scripts/preinstall" "$BUILD_DIR/scripts/"
+        chmod +x "$BUILD_DIR/scripts/preinstall"
+        log_success "Copied preinstall script"
+    fi
+
+    if [[ -f "$RESOURCES_DIR/scripts/postinstall" ]]; then
+        cp "$RESOURCES_DIR/scripts/postinstall" "$BUILD_DIR/scripts/"
+        chmod +x "$BUILD_DIR/scripts/postinstall"
+        log_success "Copied postinstall script"
+    fi
+
+    echo ""
+}
+
+# Build component package
+build_component_package() {
+    log_info "Building component package..."
+
+    pkgbuild \
+        --root "$BUILD_DIR/root" \
+        --scripts "$BUILD_DIR/scripts" \
+        --identifier "org.gnosis.vpn.client" \
+        --version "$VERSION" \
+        --install-location "/" \
+        --ownership recommended \
+        "$BUILD_DIR/$COMPONENT_PKG"
+
+    if [[ -f "$BUILD_DIR/$COMPONENT_PKG" ]]; then
+        local size
+        size=$(du -h "$BUILD_DIR/$COMPONENT_PKG" | cut -f1)
+        log_success "Component package created: $COMPONENT_PKG ($size)"
+    else
+        log_error "Failed to create component package"
+        exit 1
+    fi
+
+    echo ""
+}
+
+# Build distribution package
+build_distribution_package() {
+    log_info "Building distribution package with custom UI..."
+
+    productbuild \
+        --distribution "$DISTRIBUTION_XML" \
+        --resources "$RESOURCES_DIR" \
+        --package-path "$BUILD_DIR" \
+        --version "$VERSION" \
+        "$BUILD_DIR/$PKG_NAME"
+
+    if [[ -f "$BUILD_DIR/$PKG_NAME" ]]; then
+        local size
+        size=$(du -h "$BUILD_DIR/$PKG_NAME" | cut -f1)
+        log_success "Distribution package created: $PKG_NAME ($size)"
+    else
+        log_error "Failed to create distribution package"
+        exit 1
+    fi
+
+    echo ""
+}
+
+# Verify package
+verify_package() {
+    log_info "Verifying package structure..."
+
+    # Check package structure
+    if pkgutil --check-signature "$BUILD_DIR/$PKG_NAME" &>/dev/null; then
+        log_warn "Package is signed"
+    else
+        log_warn "Package is unsigned (will require signing for distribution)"
+    fi
+
+    # List package contents
+    log_info "Package contents:"
+    pkgutil --payload-files "$BUILD_DIR/$COMPONENT_PKG" 2>/dev/null | head -n 10 || true
+
+    echo ""
+}
+
+# Print build summary
+print_summary() {
+    echo "=========================================="
+    echo "  Build Summary"
+    echo "=========================================="
+    echo "Version:        $VERSION"
+    echo "Package:        $BUILD_DIR/$PKG_NAME"
+    echo "Component:      $BUILD_DIR/$COMPONENT_PKG"
+    echo ""
+
+    if [[ -f "$BUILD_DIR/$PKG_NAME" ]]; then
+        local pkg_size
+        pkg_size=$(du -h "$BUILD_DIR/$PKG_NAME" | cut -f1)
+        echo "Package size:   $pkg_size"
+
+        local sha256
+        sha256=$(shasum -a 256 "$BUILD_DIR/$PKG_NAME" | cut -d' ' -f1)
+        echo "SHA256:         $sha256"
+    fi
+
+    echo ""
+    echo "Next steps:"
+    echo "  1. Test the installer:"
+    echo "     open $BUILD_DIR/$PKG_NAME"
+    echo ""
+    echo "  2. Sign the package for distribution:"
+    echo "     ./sign-pkg.sh $BUILD_DIR/$PKG_NAME"
+    echo ""
+    echo "=========================================="
+}
+
+# Main build process
+main() {
+    resolve_version
+    print_banner
+    check_prerequisites
+    prepare_build_dir
+    embed_binaries
+    copy_scripts
+    build_component_package
+    build_distribution_package
+    verify_package
+    print_summary
+}
+
+# Execute main
+main
+
+exit 0

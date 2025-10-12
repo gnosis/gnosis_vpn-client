@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installation Complete</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .success-banner {
+            background: linear-gradient(135deg, #0066cc 0%, #0052a3 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .success-banner h2 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .success-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+
+        h3 {
+            color: #0066cc;
+            font-size: 20px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .next-steps {
+            background: #e8f4f8;
+            padding: 20px;
+            border-left: 4px solid #0066cc;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+
+        .next-steps ol {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+
+        .next-steps li {
+            margin: 15px 0;
+            line-height: 1.8;
+        }
+
+        .command {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 12px 15px;
+            border-radius: 5px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            margin: 10px 0;
+            overflow-x: auto;
+            border: 1px solid #1a1a1a;
+        }
+
+        .info-box {
+            background: #f5f7fa;
+            padding: 18px;
+            border-radius: 6px;
+            margin: 20px 0;
+            border-left: 4px solid #6c757d;
+        }
+
+        .info-box h4 {
+            margin-top: 0;
+            color: #495057;
+            font-size: 16px;
+        }
+
+        .info-box code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .locations {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }
+
+        .locations ul {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+
+        .locations li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .locations li:last-child {
+            border-bottom: none;
+        }
+
+        .location-flag {
+            font-size: 20px;
+            margin-right: 10px;
+        }
+
+        .proxy-info {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 18px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+
+        .proxy-info strong {
+            color: #155724;
+        }
+
+        .links {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .links a {
+            color: #0066cc;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .links a:hover {
+            text-decoration: underline;
+        }
+
+        .config-location {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="success-banner">
+        <div class="success-icon">✓</div>
+        <h2>Installation Successful!</h2>
+        <p style="margin: 10px 0 0 0; font-size: 16px;">Gnosis VPN client has been installed on your system</p>
+    </div>
+
+    <div class="next-steps">
+        <h3 style="margin-top: 0; color: #0066cc;">Getting Started</h3>
+        <ol>
+            <li>
+                <strong>Start the VPN client service:</strong>
+                <div class="command">sudo gnosis_vpn -c /etc/gnosisvpn/config.toml</div>
+                <em style="color: #666;">This starts the VPN daemon. Keep this terminal open while using the VPN.</em>
+            </li>
+            <li>
+                <strong>Check the connection status:</strong>
+                <div class="command">gnosis_vpn-ctl status</div>
+            </li>
+            <li>
+                <strong>Connect to a VPN location:</strong>
+                <div class="command">gnosis_vpn-ctl connect 0x7220CfE91F369bfE79F883c2891e97407D7a4D48</div>
+                <em style="color: #666;">This example connects to the USA (Iowa) location on Rotsee network.</em>
+            </li>
+        </ol>
+    </div>
+
+    <div class="locations">
+        <h3>Available VPN Locations</h3>
+        <p><strong>Rotsee Network</strong> (default):</p>
+        <ul>
+            <li>
+                <span class="location-flag">🇺🇸</span>
+                <strong>USA (Iowa):</strong>
+                <code style="font-size: 11px;">0x7220CfE91F369bfE79F883c2891e97407D7a4D48</code>
+            </li>
+            <li>
+                <span class="location-flag">🇬🇧</span>
+                <strong>UK (London):</strong>
+                <code style="font-size: 11px;">0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA</code>
+            </li>
+        </ul>
+        <p><strong>Dufour Network</strong>:</p>
+        <ul>
+            <li>
+                <span class="location-flag">🇩🇪</span>
+                <strong>Germany:</strong>
+                <code style="font-size: 11px;">0xD9c11f07BfBC1914877d7395459223aFF9Dc2739</code>
+            </li>
+            <li>
+                <span class="location-flag">🇺🇸</span>
+                <strong>USA:</strong>
+                <code style="font-size: 11px;">0xa5Ca174Ef94403d6162a969341a61baeA48F57F8</code>
+            </li>
+            <li>
+                <span class="location-flag">🇪🇸</span>
+                <strong>Spain:</strong>
+                <code style="font-size: 11px;">0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254</code>
+            </li>
+            <li>
+                <span class="location-flag">🇮🇳</span>
+                <strong>India:</strong>
+                <code style="font-size: 11px;">0x9454fc1F54DC7682124BA2d153345f4F6b404A79</code>
+            </li>
+        </ul>
+    </div>
+
+    <div class="proxy-info">
+        <h3 style="margin-top: 0; color: #155724;">HTTP(S) Proxy Configuration</h3>
+        <p>After establishing a VPN connection, configure your applications to use:</p>
+        <div class="command" style="background: #155724; border-color: #0c3d17;">HTTP(S) Proxy: 10.128.0.1:3128</div>
+        <p style="margin-bottom: 0;">This allows you to browse anonymously through the VPN connection.</p>
+    </div>
+
+    <div class="config-location">
+        <h4>Configuration File</h4>
+        <p>Your VPN settings are stored at: <code>/etc/gnosisvpn/config.toml</code></p>
+        <p style="margin-bottom: 0;">You can edit this file to customize destinations, add intermediates, or configure advanced options.</p>
+    </div>
+
+    <div class="info-box">
+        <h4>GnosisVPN Application</h4>
+        <p>The GnosisVPN.app has been installed to <code>/Applications</code>. You can launch it from:</p>
+        <ul>
+            <li>Finder → Applications → GnosisVPN</li>
+            <li>Spotlight (⌘+Space) → type "GnosisVPN"</li>
+        </ul>
+        <p style="margin-bottom: 0;">The command-line tools (<code>gnosis_vpn</code> and <code>gnosis_vpn-ctl</code>) are available in your PATH.</p>
+    </div>
+
+    <div class="links">
+        <h3>Additional Resources</h3>
+        <ul>
+            <li><a href="https://github.com/gnosis/gnosis_vpn-client" target="_blank">📖 Documentation & User Guide</a></li>
+            <li><a href="https://github.com/gnosis/gnosis_vpn-client/issues" target="_blank">🐛 Report Issues</a></li>
+            <li><a href="https://github.com/gnosis/gnosis_vpn-client/releases" target="_blank">📦 Release Notes</a></li>
+        </ul>
+    </div>
+</body>
+</html>

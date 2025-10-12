@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Gnosis VPN</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .logo {
+            text-align: center;
+            margin: 20px 0 30px 0;
+        }
+
+        .logo svg {
+            width: 96px;
+            height: 96px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #0066cc;
+            font-size: 28px;
+            margin: 10px 0 30px 0;
+            font-weight: 600;
+        }
+
+        .intro {
+            font-size: 16px;
+            margin-bottom: 25px;
+            text-align: center;
+            color: #555;
+        }
+
+        .requirements {
+            background: #f5f7fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #0066cc;
+        }
+
+        .requirements h3 {
+            margin-top: 0;
+            color: #0066cc;
+            font-size: 18px;
+        }
+
+        .requirements ul {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+
+        .requirements li {
+            margin: 8px 0;
+            color: #555;
+        }
+
+        .install-time {
+            text-align: center;
+            margin-top: 25px;
+            padding: 15px;
+            background: #e8f4f8;
+            border-radius: 6px;
+            color: #0066cc;
+            font-weight: 500;
+        }
+
+        .feature-list {
+            margin: 20px 0;
+        }
+
+        .feature-list h3 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: start;
+            margin: 12px 0;
+        }
+
+        .feature-icon {
+            color: #0066cc;
+            font-size: 20px;
+            margin-right: 10px;
+            min-width: 24px;
+        }
+
+        .feature-text {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="logo">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="50" cy="50" r="45" fill="#0066cc" opacity="0.1"/>
+            <circle cx="50" cy="50" r="35" fill="none" stroke="#0066cc" stroke-width="3"/>
+            <path d="M 50 25 L 50 50 L 65 50" stroke="#0066cc" stroke-width="3" stroke-linecap="round" fill="none"/>
+            <circle cx="50" cy="50" r="5" fill="#0066cc"/>
+        </svg>
+    </div>
+
+    <h1>Gnosis VPN Client Installer</h1>
+
+    <p class="intro">
+        Welcome! This installer will set up the Gnosis VPN client on your Mac,
+        providing you with decentralized VPN connectivity through the HOPR network.
+    </p>
+
+    <div class="feature-list">
+        <h3>What will be installed:</h3>
+        <div class="feature-item">
+            <span class="feature-icon">✓</span>
+            <span class="feature-text">Gnosis VPN client daemon</span>
+        </div>
+        <div class="feature-item">
+            <span class="feature-icon">✓</span>
+            <span class="feature-text">Gnosis VPN control utility (gnosis_vpn-ctl)</span>
+        </div>
+        <div class="feature-item">
+            <span class="feature-icon">✓</span>
+            <span class="feature-text">Default configuration with multiple VPN locations</span>
+        </div>
+    </div>
+
+    <div class="requirements">
+        <h3>System Requirements</h3>
+        <ul>
+            <li>macOS 11.0 (Big Sur) or later</li>
+            <li>WireGuard tools (will be checked and installed if needed)</li>
+            <li>Approximately 50MB of available disk space</li>
+            <li>Active internet connection for downloading binaries</li>
+        </ul>
+    </div>
+
+    <div class="install-time">
+        <strong>Estimated installation time:</strong> 2-3 minutes
+    </div>
+</body>
+</html>

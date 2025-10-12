@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Gnosis VPN Client</title>
+    <organization>org.gnosis.vpn</organization>
+    <domains enable_anywhere="true"/>
+
+    <!-- Package metadata -->
+    <pkg-ref id="org.gnosis.vpn.client"/>
+
+    <!-- Options -->
+    <options customize="allow" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+
+    <!-- Welcome screen -->
+    <welcome file="welcome.html" mime-type="text/html"/>
+
+    <!-- Read Me screen with requirements -->
+    <readme file="readme.html" mime-type="text/html"/>
+
+    <!-- Conclusion screen with next steps -->
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+
+    <!-- Choices outline - what the user sees -->
+    <choices-outline>
+        <line choice="default">
+            <line choice="network"/>
+        </line>
+    </choices-outline>
+
+    <!-- Default choice (always selected, hidden) -->
+    <choice id="default"
+            title="Gnosis VPN Client"
+            description="Gnosis VPN client binaries and configuration"
+            visible="false"
+            enabled="true"
+            selected="true">
+        <pkg-ref id="org.gnosis.vpn.client"/>
+    </choice>
+
+    <!-- Network selection choice -->
+    <choice id="network"
+            title="HOPR Network"
+            description="Select the HOPR network configuration for your VPN destinations"
+            start_selected="rotsee"
+            start_enabled="true"
+            start_visible="true">
+        <choice-item id="rotsee"/>
+        <choice-item id="dufour"/>
+    </choice>
+
+    <!-- Rotsee network sub-choice -->
+    <choice id="rotsee"
+            title="Rotsee Network (Recommended)"
+            description="Connect to VPN nodes on Rotsee network - USA (Iowa), UK (London)">
+    </choice>
+
+    <!-- Dufour network sub-choice -->
+    <choice id="dufour"
+            title="Dufour Network"
+            description="Connect to VPN nodes on Dufour network - Germany, USA, Spain, India">
+    </choice>
+
+    <!-- Component package reference -->
+    <pkg-ref id="org.gnosis.vpn.client"
+             version="0"
+             auth="root"
+             installKBytes="10240"
+             onConclusion="none">
+        #GnosisVPN.pkg
+    </pkg-ref>
+
+    <!-- Localization (default English) -->
+    <localization>
+        <strings language="en">
+            <![CDATA[
+                // Installer strings
+            ]]>
+        </strings>
+    </localization>
+
+</installer-gui-script>

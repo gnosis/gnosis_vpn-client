@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installation Information</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        h2 {
+            color: #0066cc;
+            font-size: 24px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        h3 {
+            color: #333;
+            font-size: 18px;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .check-section {
+            margin: 25px 0;
+        }
+
+        .check-item {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .check-pass {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .check-warn {
+            background: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+
+        .check-fail {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        .check-icon {
+            font-size: 20px;
+            font-weight: bold;
+            min-width: 24px;
+        }
+
+        .install-list {
+            background: #f5f7fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .install-list ul {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+
+        .install-list li {
+            margin: 8px 0;
+            color: #555;
+        }
+
+        .info-box {
+            background: #e8f4f8;
+            border-left: 4px solid #0066cc;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .info-box p {
+            margin: 5px 0;
+            color: #0066cc;
+        }
+
+        .location-info {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }
+
+        .location-info code {
+            background: #e0e0e0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Installation Information</h2>
+
+    <div class="check-section">
+        <h3>System Checks</h3>
+        <p>The following checks will be performed before installation:</p>
+
+        <div id="platform-check" class="check-item check-pass">
+            <span class="check-icon">✓</span>
+            <div>
+                <strong>Platform Detection</strong><br>
+                <span id="platform-details">Checking system platform and architecture...</span>
+            </div>
+        </div>
+
+        <div id="wireguard-check" class="check-item">
+            <span class="check-icon">⚠</span>
+            <div>
+                <strong>WireGuard Tools</strong><br>
+                <span id="wireguard-details">WireGuard will be verified during installation. If not found, it will be installed via Homebrew.</span>
+            </div>
+        </div>
+
+        <div id="diskspace-check" class="check-item check-pass">
+            <span class="check-icon">✓</span>
+            <div>
+                <strong>Disk Space</strong><br>
+                <span id="diskspace-details">At least 50MB of free space required</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="install-list">
+        <h3>Installation Details</h3>
+        <p>This installer will:</p>
+        <ul>
+            <li>Download the latest Gnosis VPN binaries from GitHub releases</li>
+            <li>Install command-line tools to <code>/usr/local/bin/</code></li>
+            <li>Install GnosisVPN.app to <code>/Applications/</code></li>
+            <li>Remove macOS quarantine attributes for proper execution</li>
+            <li>Generate a default configuration file with VPN destinations</li>
+            <li>Verify and install WireGuard tools if necessary</li>
+        </ul>
+    </div>
+
+    <div class="location-info">
+        <h3>Installation Locations</h3>
+        <p>Files will be installed to:</p>
+        <ul>
+            <li><code>/usr/local/bin/gnosis_vpn</code> - Main VPN client daemon</li>
+            <li><code>/usr/local/bin/gnosis_vpn-ctl</code> - Control utility</li>
+            <li><code>/Applications/GnosisVPN.app</code> - Graphical application</li>
+            <li><code>/etc/gnosisvpn/config.toml</code> - Configuration file</li>
+        </ul>
+    </div>
+
+    <div class="info-box">
+        <p><strong>Note:</strong> The installer requires administrator privileges to:</p>
+        <ul>
+            <li>Install files to /Applications</li>
+            <li>Remove quarantine attributes from downloaded binaries</li>
+            <li>Install WireGuard tools if not present</li>
+        </ul>
+    </div>
+
+    <div class="info-box">
+        <p><strong>Privacy:</strong> This installer downloads binaries from GitHub and does not collect or transmit any personal information.</p>
+    </div>
+</body>
+</html>
