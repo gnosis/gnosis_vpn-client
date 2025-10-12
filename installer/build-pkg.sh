@@ -141,17 +141,37 @@ resolve_version() {
     fi
 }
 
-# Download asset from GitHub releases
+# Download asset from GitHub releases with retry logic
 download_asset() {
     local asset="$1"
     local out="$2"
     local url="${RELEASE_BASE_URL}/${VERSION}/${asset}"
+    local max_retries=3
+    local retry_count=0
+    local wait_time=2
+
     log_info "Downloading $asset"
     log_info "URL: $url"
-    if ! curl -fL --progress-bar "$url" -o "$out"; then
-        log_error "Failed to download $asset from $url"
-        exit 1
-    fi
+
+    while [[ $retry_count -lt $max_retries ]]; do
+        if curl -fL --progress-bar --connect-timeout 30 --max-time 300 "$url" -o "$out"; then
+            log_success "Successfully downloaded $asset"
+            return 0
+        fi
+
+        retry_count=$((retry_count + 1))
+
+        if [[ $retry_count -lt $max_retries ]]; then
+            log_warn "Download failed, retrying in ${wait_time}s (attempt $retry_count/$max_retries)"
+            sleep "$wait_time"
+            # Exponential backoff: double the wait time for next retry
+            wait_time=$((wait_time * 2))
+        fi
+    done
+
+    log_error "Failed to download $asset after $max_retries attempts"
+    log_error "URL: $url"
+    exit 1
 }
 
 # Verify SHA-256 checksum for downloaded asset
