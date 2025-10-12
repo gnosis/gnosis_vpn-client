@@ -195,8 +195,13 @@ verify_checksum() {
 embed_binaries() {
     log_info "Embedding binaries for version $VERSION"
 
-    local tmp_dir="$BUILD_DIR/tmp"
-    mkdir -p "$tmp_dir"
+    # Create secure temporary directory with restrictive permissions
+    local tmp_dir
+    tmp_dir=$(mktemp -d -t gnosis-vpn-build.XXXXXX)
+    chmod 700 "$tmp_dir"
+
+    # Ensure cleanup on exit
+    trap "rm -rf '$tmp_dir'" EXIT
 
     local x86="x86_64-darwin"
     local arm="aarch64-darwin"
@@ -224,7 +229,7 @@ embed_binaries() {
     lipo -info "$BUILD_DIR/root/usr/local/bin/gnosis_vpn" || true
     lipo -info "$BUILD_DIR/root/usr/local/bin/gnosis_vpn-ctl" || true
 
-    rm -rf "$tmp_dir"
+    # Cleanup handled by trap
     log_success "Binaries embedded"
     echo ""
 }
