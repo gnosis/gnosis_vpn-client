@@ -54,6 +54,65 @@ echo "Configuration file: $CONFIG_FILE"
 echo "Network: $NETWORK"
 echo ""
 
+# Rollback mechanism
+ROLLBACK_STEPS=()
+ROLLBACK_ENABLED=true
+
+# Add a rollback step
+add_rollback_step() {
+    local step="$1"
+    ROLLBACK_STEPS+=("$step")
+    echo "Rollback: Registered step - $step"
+}
+
+# Execute rollback
+execute_rollback() {
+    if [[ "$ROLLBACK_ENABLED" != "true" ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "ERROR: Installation failed, executing rollback"
+    echo "=========================================="
+    echo ""
+
+    local steps="${#ROLLBACK_STEPS[@]}"
+    if [[ $steps -eq 0 ]]; then
+        echo "No rollback steps registered"
+        return 0
+    fi
+
+    echo "Rolling back $steps step(s)..."
+    echo ""
+
+    # Execute rollback steps in reverse order
+    for ((i=${#ROLLBACK_STEPS[@]}-1; i>=0; i--)); do
+        local step="${ROLLBACK_STEPS[$i]}"
+        echo "Rollback step $((steps - i))/$steps: $step"
+        if eval "$step"; then
+            echo "✓ Rollback step completed"
+        else
+            echo "✗ Rollback step failed (continuing anyway)"
+        fi
+        echo ""
+    done
+
+    echo "=========================================="
+    echo "Rollback completed"
+    echo "=========================================="
+    echo ""
+}
+
+# Set up trap for automatic rollback on error
+trap 'execute_rollback' ERR EXIT
+
+# Disable rollback after successful installation
+disable_rollback() {
+    ROLLBACK_ENABLED=false
+    trap - ERR EXIT
+}
+
 # Backup existing configuration if present
 backup_config() {
     # Create config directory if it doesn't exist
@@ -101,6 +160,15 @@ generate_config() {
 
     local destinations
     destinations=$(generate_destinations)
+
+    # Save previous config file path for rollback if it exists
+    local prev_config="${CONFIG_FILE}.pre-install"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        cp "$CONFIG_FILE" "$prev_config"
+        add_rollback_step "mv '$prev_config' '$CONFIG_FILE' && echo 'Restored previous config'"
+    else
+        add_rollback_step "rm -f '$CONFIG_FILE' && echo 'Removed generated config'"
+    fi
 
     # Write configuration file
     cat > "$CONFIG_FILE" <<EOF
@@ -215,6 +283,9 @@ main() {
     verify_path
     verify_installation
     print_summary
+
+    # Disable rollback after successful completion
+    disable_rollback
 }
 
 # Execute main function
