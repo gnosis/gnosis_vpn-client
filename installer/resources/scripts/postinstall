@@ -108,13 +108,12 @@ backup_config() {
         timestamp=$(date +%Y%m%d-%H%M%S)
         local backup_file="${CONFIG_DIR}/config-${timestamp}.toml.backup"
 
-        echo "Existing configuration found. Creating backup..."
+        log_info "Existing configuration found. Creating backup..."
         if cp "$CONFIG_FILE" "$backup_file"; then
-            echo "✓ Backup created: $backup_file"
+            log_success "Backup created: $backup_file"
         else
-            echo "WARNING: Failed to create backup of existing config"
+            log_warn "Failed to create backup of existing config"
         fi
-        echo ""
     fi
 }
 
@@ -183,7 +182,7 @@ EOF
 
 # Set proper file permissions
 set_permissions() {
-    echo "Setting file permissions..."
+    log_info "Setting file permissions..."
 
     chmod 755 "$BIN_DIR/gnosis_vpn" 2>/dev/null || true
     chmod 755 "$BIN_DIR/gnosis_vpn-ctl" 2>/dev/null || true
@@ -192,49 +191,51 @@ set_permissions() {
     # Make the config directory readable by all users
     chmod 755 "$CONFIG_DIR" 2>/dev/null || true
 
-    echo "✓ Permissions set"
-    echo ""
+    # Set ownership to root:wheel
+    chown root:wheel "$BIN_DIR/gnosis_vpn" 2>/dev/null || true
+    chown root:wheel "$BIN_DIR/gnosis_vpn-ctl" 2>/dev/null || true
+    chown root:wheel "$CONFIG_FILE" 2>/dev/null || true
+    chown root:wheel "$CONFIG_DIR" 2>/dev/null || true
+
+    log_success "Permissions and ownership set"
 }
 
 # Verify binaries are in PATH
 verify_path() {
-    echo "Verifying binaries are in PATH..."
+    log_info "Verifying binaries are in PATH..."
 
     # Binaries are already in /usr/local/bin which is typically in PATH
-    echo "✓ Binaries installed to $BIN_DIR (typically in PATH)"
-    echo "  You should be able to run 'gnosis_vpn' and 'gnosis_vpn-ctl' from anywhere"
-    echo ""
+    log_success "Binaries installed to $BIN_DIR (typically in PATH)"
+    log_info "You should be able to run 'gnosis_vpn' and 'gnosis_vpn-ctl' from anywhere"
 }
 
 # Verify installation
 verify_installation() {
-    echo "Verifying installation..."
+    log_info "Verifying installation..."
 
     local errors=0
 
     if [[ ! -x "$BIN_DIR/gnosis_vpn" ]]; then
-        echo "ERROR: gnosis_vpn binary not found or not executable"
+        log_error "gnosis_vpn binary not found or not executable"
         errors=$((errors + 1))
     fi
 
     if [[ ! -x "$BIN_DIR/gnosis_vpn-ctl" ]]; then
-        echo "ERROR: gnosis_vpn-ctl binary not found or not executable"
+        log_error "gnosis_vpn-ctl binary not found or not executable"
         errors=$((errors + 1))
     fi
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "ERROR: Configuration file not found"
+        log_error "Configuration file not found"
         errors=$((errors + 1))
     fi
 
     if [[ $errors -gt 0 ]]; then
-        echo ""
-        echo "Installation verification failed with $errors error(s)"
+        log_error "Installation verification failed with $errors error(s)"
         exit 1
     fi
 
-    echo "✓ Installation verified successfully"
-    echo ""
+    log_success "Installation verified successfully"
 }
 
 # Print installation summary
