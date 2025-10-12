@@ -51,6 +51,22 @@ log_info "Network: $NETWORK"
 # Rollback mechanism
 ROLLBACK_STEPS=()
 ROLLBACK_ENABLED=true
+PREV_CONFIG_FILE=""
+
+# Rollback functions
+rollback_restore_config() {
+    if [[ -n "$PREV_CONFIG_FILE" ]] && [[ -f "$PREV_CONFIG_FILE" ]]; then
+        log_info "Restoring previous configuration"
+        mv -f "$PREV_CONFIG_FILE" "$CONFIG_FILE" || true
+    fi
+}
+
+rollback_remove_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        log_info "Removing newly created configuration"
+        rm -f "$CONFIG_FILE" || true
+    fi
+}
 
 # Add a rollback step
 add_rollback_step() {
@@ -79,7 +95,9 @@ execute_rollback() {
     for ((i=${#ROLLBACK_STEPS[@]}-1; i>=0; i--)); do
         local step="${ROLLBACK_STEPS[$i]}"
         log_info "Rollback step $((steps - i))/$steps: $step"
-        if eval "$step"; then
+        
+        # Call the rollback function directly (no eval)
+        if "$step"; then
             log_success "Rollback step completed"
         else
             log_warn "Rollback step failed (continuing anyway)"
@@ -146,13 +164,13 @@ generate_config() {
     local destinations
     destinations=$(generate_destinations)
 
-    # Save previous config file path for rollback if it exists
-    local prev_config="${CONFIG_FILE}.pre-install"
+    # Save previous config file for rollback if it exists
     if [[ -f "$CONFIG_FILE" ]]; then
-        cp "$CONFIG_FILE" "$prev_config"
-        add_rollback_step "mv '$prev_config' '$CONFIG_FILE'"
+        PREV_CONFIG_FILE="${CONFIG_FILE}.pre-install"
+        cp "$CONFIG_FILE" "$PREV_CONFIG_FILE"
+        add_rollback_step "rollback_restore_config"
     else
-        add_rollback_step "rm -f '$CONFIG_FILE'"
+        add_rollback_step "rollback_remove_config"
     fi
 
     # Write configuration file
