@@ -13,33 +13,26 @@
 
 set -euo pipefail
 
-# Create log directory if it doesn't exist
-LOG_DIR="/Library/Logs/GnosisVPNInstaller"
-mkdir -p "$LOG_DIR"
-LOG_FILE="${LOG_DIR}/preinstall.log"
-exec > >(tee -a "$LOG_FILE") 2>&1
+# Source unified logging library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/logging.sh"
 
-echo "=========================================="
-echo "Gnosis VPN Pre-Installation Script"
-echo "=========================================="
-echo "Started at: $(date)"
-echo "Install package: $1"
-echo "Target volume: $2"
-echo ""
+# Setup logging
+setup_logging "preinstall"
+
+log_info "Install package: $1"
+log_info "Target volume: $2"
 
 # Optional: warn if WireGuard tools missing (do not exit non-zero)
 if ! command -v wg &>/dev/null || ! command -v wg-quick &>/dev/null; then
-    echo "WARNING: wireguard-tools not found."
-    echo "WireGuard is required for VPN functionality."
-    echo "Install with: brew install wireguard-tools"
-    echo "Or visit: https://www.wireguard.com/install/"
-    echo ""
+    log_warn "wireguard-tools not found"
+    log_info "WireGuard is required for VPN functionality"
+    log_info "Install with: brew install wireguard-tools"
+    log_info "Or visit: https://www.wireguard.com/install/"
 fi
 
-echo "=========================================="
-echo "Pre-installation checks completed"
-echo "=========================================="
-echo "Log file: $LOG_FILE"
-echo ""
+log_success "Pre-installation checks completed"
+log_info "Log file: $INSTALLER_LOG_FILE"
+log_script_end "success"
 
 exit 0

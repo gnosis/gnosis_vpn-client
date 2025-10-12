@@ -20,6 +20,13 @@
 
 set -euo pipefail
 
+# Source unified logging library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/logging.sh"
+
+# Setup logging
+setup_logging "postinstall"
+
 # Configuration
 CONFIG_DIR="${2}/etc/gnosisvpn"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
@@ -29,30 +36,17 @@ NETWORK="${INSTALLER_CHOICE_NETWORK:-rotsee}"
 
 # Validate network selection (whitelist)
 if [[ ! "$NETWORK" =~ ^(rotsee|dufour)$ ]]; then
-    echo "ERROR: Invalid network selection: $NETWORK"
-    echo "Valid options: rotsee, dufour"
+    log_error "Invalid network selection: $NETWORK"
+    log_info "Valid options: rotsee, dufour"
     exit 1
 fi
 
-# Create log directory if it doesn't exist
-LOG_DIR="/Library/Logs/GnosisVPNInstaller"
-mkdir -p "$LOG_DIR"
-LOG_FILE="${LOG_DIR}/postinstall.log"
-
-# Redirect all output to log file
-exec >> "$LOG_FILE" 2>&1
-
-echo "=========================================="
-echo "Gnosis VPN Post-Installation Script"
-echo "=========================================="
-echo "Started at: $(date)"
-echo "Install package: $1"
-echo "Target volume: $2"
-echo "Binary directory: $BIN_DIR"
-echo "Configuration directory: $CONFIG_DIR"
-echo "Configuration file: $CONFIG_FILE"
-echo "Network: $NETWORK"
-echo ""
+log_info "Install package: $1"
+log_info "Target volume: $2"
+log_info "Binary directory: $BIN_DIR"
+log_info "Configuration directory: $CONFIG_DIR"
+log_info "Configuration file: $CONFIG_FILE"
+log_info "Network: $NETWORK"
 
 # Rollback mechanism
 ROLLBACK_STEPS=()
@@ -62,7 +56,7 @@ ROLLBACK_ENABLED=true
 add_rollback_step() {
     local step="$1"
     ROLLBACK_STEPS+=("$step")
-    echo "Rollback: Registered step - $step"
+    log_debug "Rollback: Registered step - $step"
 }
 
 # Execute rollback
@@ -71,37 +65,28 @@ execute_rollback() {
         return 0
     fi
 
-    echo ""
-    echo "=========================================="
-    echo "ERROR: Installation failed, executing rollback"
-    echo "=========================================="
-    echo ""
+    log_section "ERROR: Installation failed, executing rollback"
 
     local steps="${#ROLLBACK_STEPS[@]}"
     if [[ $steps -eq 0 ]]; then
-        echo "No rollback steps registered"
+        log_warn "No rollback steps registered"
         return 0
     fi
 
-    echo "Rolling back $steps step(s)..."
-    echo ""
+    log_info "Rolling back $steps step(s)..."
 
     # Execute rollback steps in reverse order
     for ((i=${#ROLLBACK_STEPS[@]}-1; i>=0; i--)); do
         local step="${ROLLBACK_STEPS[$i]}"
-        echo "Rollback step $((steps - i))/$steps: $step"
+        log_info "Rollback step $((steps - i))/$steps: $step"
         if eval "$step"; then
-            echo "✓ Rollback step completed"
+            log_success "Rollback step completed"
         else
-            echo "✗ Rollback step failed (continuing anyway)"
+            log_warn "Rollback step failed (continuing anyway)"
         fi
-        echo ""
     done
 
-    echo "=========================================="
-    echo "Rollback completed"
-    echo "=========================================="
-    echo ""
+    log_section "Rollback completed"
 }
 
 # Set up trap for automatic rollback on error
@@ -156,7 +141,7 @@ generate_destinations() {
 
 # Generate the configuration file
 generate_config() {
-    echo "Generating configuration file..."
+    log_info "Generating configuration file..."
 
     local destinations
     destinations=$(generate_destinations)
@@ -165,9 +150,9 @@ generate_config() {
     local prev_config="${CONFIG_FILE}.pre-install"
     if [[ -f "$CONFIG_FILE" ]]; then
         cp "$CONFIG_FILE" "$prev_config"
-        add_rollback_step "mv '$prev_config' '$CONFIG_FILE' && echo 'Restored previous config'"
+        add_rollback_step "mv '$prev_config' '$CONFIG_FILE'"
     else
-        add_rollback_step "rm -f '$CONFIG_FILE' && echo 'Removed generated config'"
+        add_rollback_step "rm -f '$CONFIG_FILE'"
     fi
 
     # Write configuration file
@@ -188,12 +173,11 @@ ${destinations}
 EOF
 
     if [[ -f "$CONFIG_FILE" ]]; then
-        echo "✓ Configuration file created: $CONFIG_FILE"
+        log_success "Configuration file created: $CONFIG_FILE"
     else
-        echo "ERROR: Failed to create configuration file"
+        log_error "Failed to create configuration file"
         exit 1
     fi
-    echo ""
 }
 
 # Set proper file permissions
@@ -254,25 +238,20 @@ verify_installation() {
 
 # Print installation summary
 print_summary() {
-    echo "=========================================="
-    echo "Installation Summary"
-    echo "=========================================="
-    echo "Binary directory: $BIN_DIR"
-    echo "Configuration file: $CONFIG_FILE"
-    echo "Network: $NETWORK"
+    log_section "Installation Summary"
+    log_info "Binary directory: $BIN_DIR"
+    log_info "Configuration file: $CONFIG_FILE"
+    log_info "Network: $NETWORK"
     echo ""
-    echo "Installed binaries:"
+    log_info "Installed binaries:"
     ls -lh "$BIN_DIR"/gnosis_vpn* 2>/dev/null || true
     echo ""
-    echo "To get started:"
-    echo "  1. sudo gnosis_vpn -c $CONFIG_FILE"
-    echo "  2. gnosis_vpn-ctl status"
+    log_info "To get started:"
+    log_info "  1. sudo gnosis_vpn -c $CONFIG_FILE"
+    log_info "  2. gnosis_vpn-ctl status"
     echo ""
-    echo "Log file: $LOG_FILE"
-    echo "=========================================="
-    echo "Post-installation completed successfully!"
-    echo "=========================================="
-    echo ""
+    log_info "Log file: $INSTALLER_LOG_FILE"
+    log_success "Post-installation completed successfully!"
 }
 
 # Main execution
@@ -286,6 +265,9 @@ main() {
 
     # Disable rollback after successful completion
     disable_rollback
+
+    # Log script completion
+    log_script_end "success"
 }
 
 # Execute main function
