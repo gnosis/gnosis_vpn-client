@@ -30,7 +30,7 @@ setup_logging "postinstall"
 # Configuration
 CONFIG_DIR="${2}/etc/gnosisvpn"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
-TEMPLATE_DIR="${CONFIG_DIR}/templates"
+TEMPLATE_DIR_BUNDLE="${SCRIPT_DIR}/../config-templates"
 BIN_DIR="${2}/usr/local/bin"
 NETWORK="${INSTALLER_CHOICE_NETWORK:-rotsee}"
 
@@ -120,16 +120,17 @@ backup_config() {
 
 # Generate destinations configuration based on network selection
 generate_destinations() {
-    local template_file="${TEMPLATE_DIR}/${NETWORK}.toml.template"
+    local template_file="${TEMPLATE_DIR_BUNDLE}/${NETWORK}.toml.template"
 
     # Check if template file exists
     if [[ ! -f "$template_file" ]]; then
-        echo "ERROR: Template file not found: $template_file"
-        echo "Falling back to default configuration"
+        log_error "Template file not found: $template_file"
+        log_info "Falling back to default configuration"
         # Fallback to rotsee template
-        template_file="${TEMPLATE_DIR}/rotsee.toml.template"
+        template_file="${TEMPLATE_DIR_BUNDLE}/rotsee.toml.template"
         if [[ ! -f "$template_file" ]]; then
-            echo "ERROR: Default template file not found: $template_file"
+            log_error "Default template file not found: $template_file"
+            log_error "Template directory should be: $TEMPLATE_DIR_BUNDLE"
             exit 1
         fi
     fi
