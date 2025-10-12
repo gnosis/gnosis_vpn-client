@@ -23,6 +23,7 @@ set -euo pipefail
 # Configuration
 CONFIG_DIR="${2}/etc/gnosisvpn"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
+TEMPLATE_DIR="${CONFIG_DIR}/templates"
 BIN_DIR="${2}/usr/local/bin"
 NETWORK="${INSTALLER_CHOICE_NETWORK:-rotsee}"
 
@@ -75,56 +76,22 @@ backup_config() {
 
 # Generate destinations configuration based on network selection
 generate_destinations() {
-    local destinations
+    local template_file="${TEMPLATE_DIR}/${NETWORK}.toml.template"
 
-    if [[ "$NETWORK" == "rotsee" ]]; then
-        # Rotsee network destinations
-        destinations='###
-## destinations section - configure available target destinations
-[destinations.0x7220CfE91F369bfE79F883c2891e97407D7a4D48]
-meta = { location = "USA", state = "Iowa" }
-# path = { intermediates = [ "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" ] }
-path = { hops = 0 }
-
-[destinations.0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA]
-meta = { location = "UK", city = "London" }
-path = { intermediates = [ "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" ] }
-# path = { hops = 0 }'
-    elif [[ "$NETWORK" == "dufour" ]]; then
-        # Dufour network destinations
-        destinations='###
-## destinations section - configure available target destinations
-[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
-meta = { location = "Germany" }
-path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
-
-[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
-meta = { location = "USA" }
-path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
-
-[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
-meta = { location = "Spain" }
-path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
-
-[destinations.0x9454fc1F54DC7682124BA2d153345f4F6b404A79]
-meta = { location = "India" }
-path = { intermediates = [ "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" ] }'
-    else
-        # Default to rotsee if unknown network
-        destinations='###
-## destinations section - configure available target destinations
-[destinations.0x7220CfE91F369bfE79F883c2891e97407D7a4D48]
-meta = { location = "USA", state = "Iowa" }
-# path = { intermediates = [ "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" ] }
-path = { hops = 0 }
-
-[destinations.0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA]
-meta = { location = "UK", city = "London" }
-path = { intermediates = [ "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" ] }
-# path = { hops = 0 }'
+    # Check if template file exists
+    if [[ ! -f "$template_file" ]]; then
+        echo "ERROR: Template file not found: $template_file"
+        echo "Falling back to default configuration"
+        # Fallback to rotsee template
+        template_file="${TEMPLATE_DIR}/rotsee.toml.template"
+        if [[ ! -f "$template_file" ]]; then
+            echo "ERROR: Default template file not found: $template_file"
+            exit 1
+        fi
     fi
 
-    echo "$destinations"
+    # Read and output template content
+    cat "$template_file"
 }
 
 

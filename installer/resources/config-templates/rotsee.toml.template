@@ -1,0 +1,11 @@
+###
+## destinations section - configure available target destinations
+[destinations.0x7220CfE91F369bfE79F883c2891e97407D7a4D48]
+meta = { location = "USA", state = "Iowa" }
+# path = { intermediates = [ "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" ] }
+path = { hops = 0 }
+
+[destinations.0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA]
+meta = { location = "UK", city = "London" }
+path = { intermediates = [ "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" ] }
+# path = { hops = 0 }

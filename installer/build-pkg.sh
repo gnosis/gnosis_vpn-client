@@ -109,9 +109,15 @@ prepare_build_dir() {
 
     # Create fresh build directory structure
     mkdir -p "$BUILD_DIR/root/usr/local/bin"
-    mkdir -p "$BUILD_DIR/root/etc/gnosisvpn"
+    mkdir -p "$BUILD_DIR/root/etc/gnosisvpn/templates"
     mkdir -p "$BUILD_DIR/root/Applications"
     mkdir -p "$BUILD_DIR/scripts"
+
+    # Copy config templates to package payload
+    if [[ -d "$RESOURCES_DIR/config-templates" ]]; then
+        cp "$RESOURCES_DIR/config-templates"/*.template "$BUILD_DIR/root/etc/gnosisvpn/templates/" || true
+        log_success "Config templates copied"
+    fi
 
     log_success "Build directory prepared"
     echo ""
