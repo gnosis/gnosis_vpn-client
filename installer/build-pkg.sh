@@ -78,12 +78,12 @@ check_prerequisites() {
     done
 
     # Check for required files
-    if [[ ! -f "$DISTRIBUTION_XML" ]]; then
+    if [[ ! -f $DISTRIBUTION_XML ]]; then
         log_error "Distribution.xml not found: $DISTRIBUTION_XML"
         missing=$((missing + 1))
     fi
 
-    if [[ ! -d "$RESOURCES_DIR" ]]; then
+    if [[ ! -d $RESOURCES_DIR ]]; then
         log_error "Resources directory not found: $RESOURCES_DIR"
         missing=$((missing + 1))
     fi
@@ -102,7 +102,7 @@ prepare_build_dir() {
     log_info "Preparing build directory..."
 
     # Clean existing build directory
-    if [[ -d "$BUILD_DIR" ]]; then
+    if [[ -d $BUILD_DIR ]]; then
         log_info "Cleaning existing build directory..."
         rm -rf "$BUILD_DIR"
     fi
@@ -125,13 +125,13 @@ prepare_build_dir() {
 
 # Resolve version (supports "latest")
 resolve_version() {
-    if [[ "$VERSION_ARG" == "latest" ]]; then
+    if [[ $VERSION_ARG == "latest" ]]; then
         log_info "Fetching latest version tag from GitHub..."
         if ! VERSION=$(curl -fsSL "$LATEST_URL" | tr -d '[:space:]'); then
             log_error "Failed to fetch LATEST version"
             exit 1
         fi
-        if [[ -z "$VERSION" ]]; then
+        if [[ -z $VERSION ]]; then
             log_error "LATEST file is empty"
             exit 1
         fi
@@ -179,9 +179,9 @@ verify_checksum() {
     local asset="$1"
     local file="$2"
     local checksum_url="${RELEASE_BASE_URL}/${VERSION}/${asset}.sha256"
-    
+
     log_info "Verifying checksum for $asset"
-    
+
     # Download checksum file
     local checksum_file="${file}.sha256"
     if ! curl -fsSL "$checksum_url" -o "$checksum_file"; then
@@ -189,30 +189,30 @@ verify_checksum() {
         log_error "Checksum verification is required for security"
         exit 1
     fi
-    
+
     # Extract expected checksum (format: "checksum  filename")
     local expected_checksum
     expected_checksum=$(awk '{print $1}' "$checksum_file")
-    
+
     # Validate that we got a checksum
-    if [[ -z "$expected_checksum" ]]; then
+    if [[ -z $expected_checksum ]]; then
         log_error "Checksum file is empty or invalid: $checksum_file"
         exit 1
     fi
-    
+
     # Calculate actual checksum
     local actual_checksum
     actual_checksum=$(shasum -a 256 "$file" | awk '{print $1}')
-    
+
     # Compare checksums
-    if [[ "$expected_checksum" != "$actual_checksum" ]]; then
+    if [[ $expected_checksum != "$actual_checksum" ]]; then
         log_error "Checksum verification failed for $asset"
         log_error "Expected: $expected_checksum"
         log_error "Actual:   $actual_checksum"
         log_error "This could indicate a corrupted download or security issue"
         exit 1
     fi
-    
+
     log_success "Checksum verified: $expected_checksum"
     rm -f "$checksum_file"
 }
@@ -266,7 +266,7 @@ embed_binaries() {
     chmod 700 "$tmp_dir"
 
     # Ensure cleanup on exit
-    trap "rm -rf '$tmp_dir'" EXIT
+    trap 'rm -rf "$tmp_dir"' EXIT
 
     local x86="x86_64-darwin"
     local arm="aarch64-darwin"
