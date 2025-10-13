@@ -12,7 +12,7 @@ name = "gnosis_vpn"
 
 [workspace.dependencies]
 backoff = "0.4.0"
-clap = { version = "4.5.48", features = ["derive", "env"] }
+clap = { version = "4.5.49", features = ["derive", "env"] }
 crossbeam-channel = "0.5.15"
 ctrlc = { version = "3.5.0", features = ["termination"] }
 directories = "6.0.0"
