@@ -32,7 +32,9 @@ hex = "0.4.3"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
-mimalloc = { version = "0.1.48", default-features = false, features = [ "secure" ] }
+mimalloc = { version = "0.1.48", default-features = false, features = [
+  "secure",
+] }
 notify = { version = "8.2.0", features = ["crossbeam-channel"] }
 ping = "0.6.1"
 primitive-types = "0.14.0"
