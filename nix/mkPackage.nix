@@ -15,6 +15,7 @@
   targetForSystem, # Target triple for the current system (e.g., "x86_64-unknown-linux-musl")
   cargoArtifacts, # Pre-built cargo dependencies for caching
   version, # Package version extracted from Cargo.toml
+  commonArgs, # Common build arguments including buildInputs and nativeBuildInputs
 }:
 {
   pname, # Package name (e.g., "gnosis_vpn" or "gnosis_vpn-dev")
@@ -72,18 +73,19 @@ let
 
   # Final package arguments
   # Merges all configuration layers in order:
-  # 1. Base crate arguments (version, artifacts, doCheck)
-  # 2. Package-specific settings (pname, profile, source)
-  # 3. Target-specific flags (RUSTFLAGS, target triple)
-  # 4. Additional user-provided arguments (after filtering internal ones)
+  # 1. Common arguments (buildInputs, nativeBuildInputs, src, etc.)
+  # 2. Base crate arguments (version, artifacts, doCheck)
+  # 3. Package-specific settings (pname, profile, source)
+  # 4. Target-specific flags (RUSTFLAGS, target triple)
+  # 5. Additional user-provided arguments (after filtering internal ones)
   packageArgs =
-    individualCrateArgs
+    commonArgs
+    // individualCrateArgs
     // {
       inherit pname;
       inherit cargoExtraArgs;
       src = srcFiles;
       CARGO_PROFILE = profile;
-      LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.pkgsBuildHost.openssl ];
     }
     // (builtins.getAttr targetForSystem targetCrateArgs)
     // (builtins.removeAttrs args [

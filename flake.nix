@@ -136,6 +136,7 @@
               targetForSystem
               cargoArtifacts
               pkgs
+              commonArgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
           };
