@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
+use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
@@ -22,7 +23,6 @@ use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
-use gnosis_vpn_lib::valueing_ticket::{self, ValueingTicket};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -96,10 +96,7 @@ enum RunMode {
         node_address: Address,
         onboarding: Box<Onboarding>,
     },
-    ValueingTicket {
-        #[allow(dead_code)]
-        valueing_ticket: Box<ValueingTicket>,
-    },
+    ValueingTicket,
     Syncing {
         hopr: Arc<Hopr>,
         ticket_value: Balance<WxHOPR>,
@@ -171,17 +168,14 @@ impl Core {
                 if hopr_config::has_safe() {
                     tracing::debug!("safe found: init -> valueing ticket");
                     let keys = calc_keys(&self.hopr_params)?;
-                    let valueing_ticket = setup_valueing_ticket(
+                    fetch_ticket_stats(
                         self.sender.clone(),
                         self.cancel_channel.1.clone(),
                         keys.chain_key,
                         self.hopr_params.rpc_provider.clone(),
                         self.hopr_params.network.clone(),
-                    )?;
-                    valueing_ticket.run();
-                    Ok(RunMode::ValueingTicket {
-                        valueing_ticket: Box::new(valueing_ticket),
-                    })
+                    );
+                    Ok(RunMode::ValueingTicket)
                 } else {
                     tracing::debug!("safe not found: init -> onboarding");
                     let keys = calc_keys(&self.hopr_params)?;
@@ -210,23 +204,20 @@ impl Core {
                         tracing::error!(%e, "failed to send cancel event to onboarding");
                     });
                     let keys = calc_keys(&self.hopr_params)?;
-                    let valueing_ticket = setup_valueing_ticket(
+                    fetch_ticket_stats(
                         self.sender.clone(),
                         self.cancel_channel.1.clone(),
                         keys.chain_key,
                         self.hopr_params.rpc_provider.clone(),
                         self.hopr_params.network.clone(),
-                    )?;
-                    valueing_ticket.run();
-                    Ok(RunMode::ValueingTicket {
-                        valueing_ticket: Box::new(valueing_ticket),
-                    })
+                    );
+                    Ok(RunMode::ValueingTicket)
                 } else {
                     tracing::debug!("safe not found: onboarding");
                     Ok(self.run_mode.clone())
                 }
             }
-            RunMode::ValueingTicket { valueing_ticket: _ } => {
+            RunMode::ValueingTicket => {
                 if let Some(stats) = &self.ticket_stats {
                     tracing::debug!("ticket stats: valueing ticket -> syncing");
                     _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
@@ -522,8 +513,8 @@ impl Core {
             Event::ChannelFunding(channel_funding::Event::BackoffExhausted) => self.on_failed_channel_funding(),
             Event::ChannelFunding(channel_funding::Event::Done) => self.on_channels_funded(),
             Event::Metrics(metrics::Event::Metrics(val)) => self.on_metrics(val),
-            Event::ValueingTicket(valueing_ticket::Event::TicketStats(stats)) => self.on_ticket_stats(stats),
-            Event::ValueingTicket(valueing_ticket::Event::BackoffExhausted) => self.on_failed_valueing_ticket(),
+            Event::TicketStats(Ok(stats)) => self.on_ticket_stats(stats),
+            Event::TicketStats(Err(err)) => self.on_failed_valueing_ticket(),
         }
     }
 
@@ -787,7 +778,7 @@ impl Core {
                     tracing::error!(%e, "failed to send cancel event to onboarding");
                 });
             }
-            RunMode::ValueingTicket { valueing_ticket: _ } => {
+            RunMode::ValueingTicket => {
                 tracing::debug!("cancel valueing ticket");
                 _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
                     tracing::error!(%e, "failed to send cancel event to valueing_ticket");
@@ -1050,16 +1041,26 @@ fn setup_metrics(
     Ok(metrics)
 }
 
-fn setup_valueing_ticket(
+fn fetch_ticket_stats(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
     private_key: ChainKeypair,
     rpc_provider: Url,
     network: Network,
-) -> Result<ValueingTicket, Error> {
+) {
     let (s, r) = crossbeam_channel::unbounded();
-    let valueing_ticket = ValueingTicket::new(s, private_key, rpc_provider, network);
-    let cancel_valueing_ticket = valueing_ticket.clone();
+    thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let res = rt.block_on(TicketStats::fetch(
+            &private_key,
+            rpc_provider.as_str(),
+            &NetworkSpecifications::from_network(&network),
+        ));
+        s.send(res);
+    });
     thread::spawn(move || {
         loop {
             crossbeam_channel::select! {
@@ -1067,7 +1068,6 @@ fn setup_valueing_ticket(
                     match msg {
                         Ok(Cancel::ValueingTicket) => {
                             tracing::info!("shutting down one shot tasks event handler");
-                            cancel_valueing_ticket.cancel();
                             break;
                         }
                         Ok(_) => {
@@ -1080,9 +1080,9 @@ fn setup_valueing_ticket(
                 },
                 recv(r) -> ticket_stats => {
                     match ticket_stats {
-                        Ok(ref event) => {
-                                _ = sender.send(Event::ValueingTicket(event.clone())).map_err(|error| {
-                                    tracing::error!(%event, %error, "failed to send ValueingTicket event");
+                        Ok(event) => {
+                                let _ = sender.send(Event::TicketStats(event)).map_err(|error| {
+                                    tracing::error!(%error, "failed to send ValueingTicket event");
                                 });
                         }
                         Err(e) => {
@@ -1093,7 +1093,6 @@ fn setup_valueing_ticket(
             }
         }
     });
-    Ok(valueing_ticket)
 }
 
 fn calc_keys(hopr_params: &HoprParams) -> Result<HoprKeys, Error> {

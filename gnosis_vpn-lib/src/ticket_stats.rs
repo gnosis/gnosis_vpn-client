@@ -1,13 +1,21 @@
+use backoff::ExponentialBackoff;
 use edgli::hopr_lib::UnitaryFloatOps;
+use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
 
+use crate::chain::client::GnosisRpcClient;
+use crate::chain::contracts::NetworkSpecifications;
+use crate::chain::errors::ChainError;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Error calculating ticket price: {0}")]
     Hopr(#[from] GeneralError),
+    #[error(transparent)]
+    Chain(#[from] ChainError),
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -30,16 +38,16 @@ impl TicketStats {
     }
 
     pub async fn fetch(
-        priv_key: ChainKeypair,
-        rpc_provider: String,
-        network_specs: NetworkSpecifications,
+        priv_key: &ChainKeypair,
+        rpc_provider: &str,
+        network_specs: &NetworkSpecifications,
     ) -> Result<TicketStats, ChainError> {
         backoff::future::retry(ExponentialBackoff::default(), || async {
-            let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
-            network_specs
+            let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider).await?;
+            Ok(network_specs
                 .contracts
                 .get_win_prob_ticket_price(&client.provider)
-                .await?
+                .await?)
         })
         .await
     }
