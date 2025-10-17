@@ -14,7 +14,6 @@ pub mod onboarding;
 pub mod session;
 pub mod socket;
 pub mod ticket_stats;
-pub mod valueing_ticket;
 pub mod wg_tooling;
 
 mod dirs;
