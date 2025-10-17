@@ -223,7 +223,17 @@
               formatter.include_document_start = true;
             };
           };
-
+          generate-lockfile = {
+            type = "app";
+            program = toString (
+              pkgs.writeShellScript "generate-lockfile" ''
+                # Minimal script to run cargo generate-lockfile
+                # Only requires the Rust toolchain, no build dependencies
+                export PATH="${craneLib.rustc}/bin:$PATH"
+                exec cargo generate-lockfile "$@"
+              ''
+            );
+          };
         in
         {
           inherit treefmt;
@@ -283,6 +293,10 @@
             inherit gvpn-dev;
             inherit pre-commit-check;
             default = gvpn;
+          };
+
+          apps = {
+            inherit generate-lockfile;
           };
 
           devShells.default = craneLib.devShell {
