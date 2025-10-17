@@ -28,6 +28,21 @@ impl TicketStats {
     pub fn ticket_value(&self) -> Result<Balance<WxHOPR>, Error> {
         self.ticket_price.div_f64(self.winning_probability).map_err(Error::Hopr)
     }
+
+    pub async fn fetch(
+        priv_key: ChainKeypair,
+        rpc_provider: String,
+        network_specs: NetworkSpecifications,
+    ) -> Result<TicketStats, ChainError> {
+        backoff::future::retry(ExponentialBackoff::default(), || async {
+            let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+            network_specs
+                .contracts
+                .get_win_prob_ticket_price(&client.provider)
+                .await?
+        })
+        .await
+    }
 }
 
 impl Display for TicketStats {
