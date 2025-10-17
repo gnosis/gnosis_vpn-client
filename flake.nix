@@ -118,6 +118,17 @@
             ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv # Required for Darwin builds
             ];
+          }
+          # Add musl-specific CFLAGS for C dependencies (SQLite, mimalloc, etc.)
+          # The cc crate used by build scripts also checks TARGET_CFLAGS
+          // lib.optionalAttrs (lib.hasInfix "musl" targetForSystem) {
+            # Disable Nix hardening features that are incompatible with musl
+            hardeningDisable = [ "fortify" "stackprotector" ];
+
+            CFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC -Dfcntl64=fcntl";
+            CPPFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC -Dfcntl64=fcntl";
+            TARGET_CFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC -Dfcntl64=fcntl";
+            "CFLAGS_${lib.replaceStrings ["-"] ["_"] targetForSystem}" = "-O3 -ffunction-sections -fdata-sections -fPIC -Dfcntl64=fcntl";
           };
 
           # Build *just* the cargo dependencies (of the entire workspace)
