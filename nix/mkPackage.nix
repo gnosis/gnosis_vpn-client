@@ -20,7 +20,7 @@
 {
   pname, # Package name (e.g., "gnosis_vpn" or "gnosis_vpn-dev")
   profile ? "release", # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
-  cargoExtraArgs ? "--all", # Additional cargo build arguments (default: "--all")
+  cargoExtraArgs ? "--bin gnosis_vpn --bin gnosis_vpn-ctl", # Build only binary crates in workspace
   ... # Any additional arguments are passed through to craneLib.buildPackage
 }@args:
 let
