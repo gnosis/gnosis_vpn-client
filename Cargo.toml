@@ -32,7 +32,7 @@ hex = "0.4.3"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
-tikv-jemallocator = "0.6.0"
+mimalloc = { version = "0.1.48", default-features = false, features = [ "secure" ] }
 notify = { version = "8.2.0", features = ["crossbeam-channel"] }
 ping = "0.6.1"
 primitive-types = "0.14.0"
@@ -47,7 +47,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 tokio = { version = "1.47.1", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "5b55111b59eedb89fa8b717d7d6b1d50e1887e3e", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "489383801eb25546cb558f96c0bfd48a1dc3e122", features = [
   "prometheus",
 ] }
 serde_with = "3.15"

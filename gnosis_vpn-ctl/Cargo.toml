@@ -12,4 +12,4 @@ serde_json.workspace = true
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemallocator = { workspace = true }
+mimalloc = { workspace = true }
