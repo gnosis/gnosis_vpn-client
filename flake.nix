@@ -227,20 +227,19 @@
             type = "app";
             program = toString (
               pkgs.writeShellScript "generate-lockfile" ''
-                # Minimal script to run cargo generate-lockfile
-                # Only requires the Rust toolchain, no build dependencies
                 export PATH="${craneLib.rustc}/bin:$PATH"
                 exec cargo generate-lockfile "$@"
               ''
             );
+            meta.description = "Generate Cargo.lock with minimal dependencies (Rust toolchain only)";
           };
         in
         {
           inherit treefmt;
 
           checks = {
-            # Build the crates as part of `nix flake check` for convenience
-            inherit gvpn;
+            # Build the dev crates as part of `nix flake check` for convenience
+            inherit gvpn-dev;
 
             # Run clippy (and deny all warnings) on the workspace source,
             # again, reusing the dependency artifacts from above.
@@ -266,6 +265,8 @@
             # Audit dependencies
             audit = craneLib.cargoAudit {
               inherit src advisory-db;
+              # Ignore RSA vulnerability (RUSTSEC-2023-0071) - comes from hopr-lib transitive dependency
+              cargoAuditExtraArgs = "--ignore RUSTSEC-2023-0071";
             };
 
             # Audit licenses
