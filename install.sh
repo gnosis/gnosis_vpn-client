@@ -5,11 +5,7 @@ set -euo pipefail
 # inputs
 NON_INTERACTIVE=""
 INSTALL_FOLDER="./gnosis_vpn"
-HOPRD_API_ENDPOINT=""
-HOPRD_API_TOKEN=""
-HOPRD_SESSION_PORT=1422
 WG_PRIVATE_KEY=""
-EXPERT_CHANNELS=""
 VERSION_TAG=""
 
 # internals
@@ -31,9 +27,6 @@ usage() {
     echo "Options:"
     echo "  --non-interactive              run the script in non-interactive mode"
     echo "  -i, --install-folder <string>  installation folder (default: ./gnosis_vpn)"
-    echo "  --api-endpoint <string>        hoprd API endpoint (default: empty, will prompt)"
-    echo "  --api-token <string>           hoprd API token (default: empty, will prompt)"
-    echo "  --session-port <integer>       hoprd session port (default: 1422, will prompt)"
     echo "  --expert-wg <string>           use Gnosis VPN without WireGuard key rotation (not recommended) - expects WireGuard private key"
     echo "  --expert-channels              ignore Gnosis VPN relayer channels (not recommended)"
     echo "  --version-tag <string>         specific version tag to install"
@@ -55,40 +48,12 @@ parse_arguments() {
         case $1 in
         --help) usage ;;
         --non-interactive) NON_INTERACTIVE="yes" ;;
-        --expert-channels) EXPERT_CHANNELS="yes" ;;
         -i | --install-folder)
             if [[ -n ${2:-} ]]; then
                 INSTALL_FOLDER="$2"
                 shift
             else
                 echo "${BRed}Error:${Color_Off} --install-folder requires a non-empty argument."
-                exit 1
-            fi
-            ;;
-        --api-endpoint)
-            if [[ -n ${2:-} ]]; then
-                HOPRD_API_ENDPOINT="$2"
-                shift
-            else
-                echo "${BRed}Error:${Color_Off} --api-endpoint requires a non-empty argument."
-                exit 1
-            fi
-            ;;
-        --api-token)
-            if [[ -n ${2:-} ]]; then
-                HOPRD_API_TOKEN="$2"
-                shift
-            else
-                echo "${BRed}Error:${Color_Off} --api-token requires a non-empty argument."
-                exit 1
-            fi
-            ;;
-        --session-port)
-            if [[ -n ${2:-} ]]; then
-                HOPRD_SESSION_PORT="$2"
-                shift
-            else
-                echo "${BRed}Error:${Color_Off} --session-port requires a non-empty argument."
                 exit 1
             fi
             ;;
@@ -125,19 +90,12 @@ print_intro() {
     echo "This script will help you install and configure the Gnosis VPN client on your system."
     echo ""
     echo "Requirements:"
-    echo "  - A running hoprd node that will act as your entry node."
     echo "  - Open channels to the Gnosis VPN relayer nodes."
     echo "  - WireGuard tools installed on your system."
-    echo "  - An additional open port on your node for Gnosis VPN to connect to."
     echo ""
-    echo "Note:"
-    echo "  Gnosis VPN uses a port called 'internal_connection_port' for both TCP and UDP connections."
     echo ""
     echo "This installer will:"
     echo "  - Download the Gnosis VPN client and control application."
-    echo "  - Prompt you for API access to your hoprd node."
-    echo "  - Check your hoprd node for open channels to Gnosis VPN relayer nodes."
-    echo "  - Prompt you for the 'internal_connection_port'."
     echo "  - Generate a configuration file based on your input."
 
     echo ""
@@ -182,172 +140,6 @@ prompt_install_dir() {
 urldecode() {
     : "${*//+/ }"
     echo -e "${_//%/\\x}"
-}
-
-prompt_api_access() {
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        echo ""
-        echo "[NON-INTERACTIVE] Using hoprd API endpoint: ${HOPRD_API_ENDPOINT:-}"
-        sleep 1
-        echo "[NON-INTERACTIVE] Using hoprd API token: ${HOPRD_API_TOKEN:-}"
-        sleep 1
-        return
-    fi
-
-    echo ""
-    echo "Gnosis VPN uses your hoprd node as entry connection point."
-    echo "Therefore, you need to provide the API endpoint and token for your hoprd node."
-    echo -e "If you are connected to your hoprd node via ${BCyan}HOPR Admin UI${Color_Off}, paste its full URL."
-    echo "The script will try to parse the required values from the URL."
-    declare admin_url
-    read -r -p "Enter full hoprd admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
-    admin_url=$(trim "${admin_url}")
-
-    declare api_endpoint=""
-    declare api_token=""
-    if [[ -n ${admin_url} ]]; then
-        echo ""
-        echo "Parsing admin URL..."
-        declare decoded_url
-        decoded_url=$(urldecode "$admin_url")
-        api_endpoint=$(echo "$decoded_url" | grep -o 'apiEndpoint=[^&]*' | sed 's/apiEndpoint=//' || true)
-        api_token=$(echo "$decoded_url" | grep -o 'apiToken=[^&]*' | sed 's/apiToken=//' || true)
-    fi
-
-    echo ""
-    if [[ -z ${api_endpoint} ]]; then
-        if [[ -n ${admin_url} ]]; then
-            echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
-        fi
-        read -r -p "Enter hoprd API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
-        api_endpoint=$(trim "${api_endpoint}")
-    else
-        echo "Using parsed API endpoint: ${api_endpoint}"
-    fi
-    if [[ -z ${api_token} ]]; then
-        if [[ -n ${admin_url} ]]; then
-            echo "Warning: Could not parse API token from the provided URL. Please provide it manually."
-        fi
-        read -r -p "Enter hoprd API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
-        api_token=$(trim "${api_token}")
-    else
-        echo "Using parsed API token: ${api_token}"
-    fi
-
-    HOPRD_API_ENDPOINT="${api_endpoint:-$HOPRD_API_ENDPOINT}"
-    HOPRD_API_TOKEN="${api_token:-$HOPRD_API_TOKEN}"
-}
-
-prompt_session_port() {
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        echo ""
-        echo "[NON-INTERACTIVE] Using hoprd session port: ${HOPRD_SESSION_PORT}"
-        sleep 1
-        return
-    fi
-
-    echo ""
-    echo "Gnosis VPN requires a port for internal connections."
-    echo "This port will be used for both TCP and UDP connections."
-    read -r -p "Enter hoprd session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
-    HOPRD_SESSION_PORT=$(trim "${session_port:-$HOPRD_SESSION_PORT}")
-}
-
-fetch_network() {
-    echo ""
-    echo "Accessing hoprd API to determine network"
-    HOPR_NETWORK=$(curl --fail -L --progress-bar \
-        -H "Content-Type: application/json" \
-        -H "x-auth-token: $HOPRD_API_TOKEN" \
-        "${HOPRD_API_ENDPOINT}/api/v4/node/info" |
-        grep '"network":' |
-        sed -E 's/.*"network": *"([^"]*)".*/\1/')
-    echo ""
-    echo "Detected network: $HOPR_NETWORK"
-}
-
-check_channel() {
-    declare channels="$1"
-    declare channel="$2"
-    declare name="$3"
-
-    #  \"peerAddress\":\"<peer>\" followed by any non-}  then \"status\":\"(capture)\"
-    local re='\"peerAddress\":\"'"$channel"'\"[^}]*\"status\":\"([^\"]+)\"'
-
-    if [[ $channels =~ $re ]]; then
-        # BASH_REMATCH[1] now holds the status
-        [[ ${BASH_REMATCH[1]} == Open ]]
-    else
-        echo -e ""
-        echo -e "${BRed}Error:${Color_Off} Missing channel to ${name} relayer"
-        echo -e "Please open a channel to ${name} relayer node ${BCyan}${channel}${Color_Off} before proceeding."
-        return 1
-    fi
-}
-
-check_channels() {
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        if [[ -n ${EXPERT_CHANNELS} ]]; then
-            echo ""
-            echo "[NON-INTERACTIVE] Skipping Gnosis VPN relayer channels check."
-            sleep 1
-            return
-        fi
-    fi
-
-    if [[ -n ${EXPERT_CHANNELS} ]]; then
-        echo ""
-        echo "Skipping Gnosis VPN relayer channels check."
-        return
-    fi
-
-    echo ""
-    echo "Checking for open channels to Gnosis VPN relayer nodes..."
-    declare channels
-    channels=$(curl --fail -L --progress-bar \
-        -H "Content-Type: application/json" \
-        -H "x-auth-token: $HOPRD_API_TOKEN" \
-        "${HOPRD_API_ENDPOINT}/api/v4/channels?includingClosed=false&fullTopology=false")
-
-    # strip everything up through the opening [ of outgoing
-    declare outgoing_inc_remainder="${channels#*\"outgoing\":[}"
-    # now cut off everything after the matching ]
-    declare outgoing="${outgoing_inc_remainder%%]*}]"
-
-    declare missing_channel=""
-    if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        check_channel "${outgoing}" "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" "Stockholm" || missing_channel="yes"
-        check_channel "${outgoing}" "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" "Columbus" || missing_channel="yes"
-    else
-        check_channel "${outgoing}" "0x25865191AdDe377fd85E91566241178070F4797A" "USA" || missing_channel="yes"
-        check_channel "${outgoing}" "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" "India" || missing_channel="yes"
-        check_channel "${outgoing}" "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA" "Germany" || missing_channel="yes"
-        check_channel "${outgoing}" "0x2Cf9E5951C9e60e01b579f654dF447087468fc04" "Spain" || missing_channel="yes"
-    fi
-
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        if [[ -n ${missing_channel} ]]; then
-            echo ""
-            echo "[NON-INTERACTIVE] Missing open channels to Gnosis VPN relayer nodes."
-            echo "[NON-INTERACTIVE] Stopping non interactive installation."
-            exit 1
-        fi
-        return
-    fi
-
-    if [[ -n ${missing_channel} ]]; then
-        for i in {30..2}; do
-            printf "\rRechecking open channels to Gnosis VPN relayer nodes in %d seconds... " "$i"
-            sleep 1
-        done
-        printf "\rRechecking open channels to Gnosis VPN relayer nodes in 1 second...\n"
-        sleep 1
-        check_channels
-        return
-    fi
-
-    echo ""
-    echo "Found open channels to Gnosis VPN relayer nodes"
 }
 
 fetch_version_tag() {
@@ -581,12 +373,8 @@ path = { intermediates = [ "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" ] }
     cat <<EOF >./config.toml
 # Generated by Gnosis VPN install script
 
-version = 3
+version = 4
 
-[hoprd_node]
-endpoint = "${HOPRD_API_ENDPOINT}"
-api_token = "${HOPRD_API_TOKEN}"
-internal_connection_port = ${HOPRD_SESSION_PORT}
 ${destinations}
 ${wg_section}
 EOF
@@ -614,7 +402,7 @@ print_outro() {
     echo "Configuration file is located at: ${INSTALL_FOLDER}/config.toml"
     echo "You can edit this file to change settings as needed."
     echo ""
-    echo "After establishing a VPN connection you can browse anonymously by using this HTTP proxy:"
+    echo "After establishing a VPN connection you can browse anonymously by using this HTTPS proxy:"
     echo -e "${BCyan}HTTP(s) Proxy: 10.128.0.1:3128${Color_Off}"
     echo ""
 }
@@ -627,11 +415,6 @@ main() {
     check_wireguard
     fetch_version_tag
 
-    prompt_api_access
-    fetch_network
-    check_channels
-
-    prompt_session_port
     prompt_install_dir
 
     enter_install_dir

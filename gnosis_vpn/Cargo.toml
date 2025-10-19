@@ -10,15 +10,18 @@ license = { workspace = true }
 clap.workspace = true
 crossbeam-channel.workspace = true
 ctrlc.workspace = true
+edgli.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
-humantime.workspace = true
 notify.workspace = true
 reqwest.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+uuid.workspace = true
+
+# Target-specific dependencies for memory allocators
+[target.'cfg(target_os = "linux")'.dependencies]
+mimalloc = { workspace = true }

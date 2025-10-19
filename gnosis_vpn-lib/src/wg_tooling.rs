@@ -1,7 +1,6 @@
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use thiserror::Error;
 
@@ -9,20 +8,20 @@ use crate::dirs;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("implementation not available")]
+    #[error("Implementation not available")]
     NotAvailable,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("encoding error: {0}")]
+    #[error("Encoding error: {0}")]
     FromUtf8Error(#[from] std::string::FromUtf8Error),
-    #[error("toml error: {0}")]
+    #[error("TOML error: {0}")]
     Toml(#[from] toml::ser::Error),
-    #[error("monitoring error: {0}")]
+    #[error("Monitoring error: {0}")]
     Monitoring(String),
-    #[error("wireguard error [status: {0}]: {1}")]
+    #[error("WireGuard error [status: {0}]: {1}")]
     WgError(i32, String),
-    #[error("Unable to determine project directories")]
-    ProjectDirs,
+    #[error("Project directory error: {0}")]
+    Dirs(#[from] crate::dirs::Error),
 }
 
 #[derive(Clone, Debug)]
@@ -51,7 +50,7 @@ pub struct KeyPair {
     pub public_key: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
@@ -87,14 +86,7 @@ pub fn available() -> Result<(), Error> {
     }
 }
 
-const TMP_FILE: &str = "wg0_gnosisvpn.conf";
-
-fn wg_config_file() -> Result<PathBuf, Error> {
-    let p_dirs = dirs::project().ok_or(Error::ProjectDirs)?;
-    let cache_dir = p_dirs.cache_dir();
-    fs::create_dir_all(cache_dir)?;
-    Ok(cache_dir.join(TMP_FILE))
-}
+const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 
 fn generate_key() -> Result<String, Error> {
     let output = Command::new("wg").arg("genkey").output()?;
@@ -146,7 +138,7 @@ impl WireGuard {
     }
 
     pub fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
-        let conf_file = wg_config_file()?;
+        let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
         let config = self.to_file_string(interface, peer);
         let content = config.as_bytes();
         fs::write(&conf_file, content)?;
@@ -172,7 +164,7 @@ impl WireGuard {
     }
 
     pub fn close_session(&self) -> Result<(), Error> {
-        let conf_file = wg_config_file()?;
+        let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
 
         let output = Command::new("wg-quick").arg("down").arg(conf_file).output()?;
         if !output.stdout.is_empty() {

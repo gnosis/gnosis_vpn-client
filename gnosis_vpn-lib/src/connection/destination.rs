@@ -1,24 +1,24 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 
-use crate::address::Address;
-use crate::log_output;
-use crate::session;
+pub use edgli::hopr_lib::{Address, RoutingOptions};
 
-#[derive(Clone, Debug)]
+use crate::log_output;
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,
-    pub path: session::Path,
+    pub routing: RoutingOptions,
 }
 
 impl Destination {
-    pub fn new(address: Address, path: session::Path, meta: HashMap<String, String>) -> Self {
-        Self { address, path, meta }
+    pub fn new(address: Address, routing: RoutingOptions, meta: HashMap<String, String>) -> Self {
+        Self { address, routing, meta }
     }
 
     pub fn pretty_print_path(&self) -> String {
-        format!("{}({})", self.path, log_output::address(&self.address))
+        format!("{:?}({})", self.routing, log_output::address(&self.address))
     }
 
     fn meta_str(&self) -> String {

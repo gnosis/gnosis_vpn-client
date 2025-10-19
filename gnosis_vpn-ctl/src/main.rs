@@ -6,6 +6,12 @@ use gnosis_vpn_lib::socket;
 
 mod cli;
 
+// Avoid musl's default allocator due to degraded performance
+// https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let args = cli::parse();
 
@@ -50,18 +56,12 @@ fn pretty_print(resp: &Response) {
             eprintln!("Currently not connected to any destination");
         }
         Response::Status(command::StatusResponse {
-            status,
+            run_mode,
             available_destinations,
-            funding,
             network,
         }) => {
-            let mut str_resp = format!("Status: {status}\n");
-            if let Some(network) = network {
-                str_resp.push_str(&format!("Network: {network}\n"));
-            }
-            if let command::FundingState::TopIssue(issue) = funding {
-                str_resp.push_str(&format!("---\nWARNING: {issue}\n---\n"));
-            }
+            let mut str_resp = format!("Status: {run_mode}\n");
+            str_resp.push_str(&format!("Network: {network}\n"));
             if available_destinations.is_empty() {
                 str_resp.push_str("No destinations available.\n")
             } else {
@@ -97,8 +97,8 @@ fn pretty_print(resp: &Response) {
         Response::Pong => {
             println!("Pong");
         }
-        Response::RefreshNode => {
-            println!("Requested node information update");
+        Response::Empty => {
+            println!();
         }
     }
 }
@@ -112,6 +112,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Status(..) => exitcode::OK,
         Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
-        Response::RefreshNode => exitcode::OK,
+        Response::Empty => exitcode::OK,
     }
 }

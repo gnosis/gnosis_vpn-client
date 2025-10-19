@@ -1,25 +1,29 @@
 # Gnosis VPN Client
 
-Gnosis VPN is a VPN solution build on top the HOPR mixnet.
-This repo contains the system service and a control application.
-It is part of a larger project consisting of:
+Gnosis VPN is a VPN solution build on top the HOPR mixnet. This repo contains
+the system service and a control application. It is part of a larger project
+consisting of:
 
-- [Gnosis VPN App](https://github.com/gnosis/gnosis_vpn-app) handling user interface
-- [Gnosis VPN Server](https://github.com/gnosis/gnosis_vpn-server) handling VPN server side
+- [Gnosis VPN App](https://github.com/gnosis/gnosis_vpn-app) handling user
+  interface
+- [Gnosis VPN Server](https://github.com/gnosis/gnosis_vpn-server) handling VPN
+  server side
 
 ## General concept
 
-The client offers two binaries, `gnosis_vpn` and `gnosis_vpn-ctl`.
-The client (`gnosis_vpn`) runs as a system service with privileged access.
-The control application (`gnosis_vpn-ctl`) is used to manage the client and its connections.
+The client offers two binaries, `gnosis_vpn` and `gnosis_vpn-ctl`. The client
+(`gnosis_vpn`) runs as a system service with privileged access. The control
+application (`gnosis_vpn-ctl`) is used to manage the client and its connections.
 
 ## Installation
 
-Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node and install the Gnosis VPN client.
+Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node
+and install the Gnosis VPN client.
 
 ### Check signatures
 
-To validate the signature of the downloaded binary from GitHub, follow these steps:
+To validate the signature of the downloaded binary from GitHub, follow these
+steps:
 
 1. Import the public key (checkout the repository first):
 
@@ -49,8 +53,7 @@ To validate the signature of the downloaded binary from GitHub, follow these ste
 
 Check available params and env vars via:
 
-`gnosis_vpn --help`
-`gnosis_vpn-ctl --help`
+`gnosis_vpn --help` `gnosis_vpn-ctl --help`
 
 ## Deployment
 

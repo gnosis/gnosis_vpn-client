@@ -1,13 +1,16 @@
 use clap::Parser;
-use gnosis_vpn_lib::config;
-use gnosis_vpn_lib::socket;
+use url::Url;
+
 use std::path::PathBuf;
 
+use gnosis_vpn_lib::network::Network;
+use gnosis_vpn_lib::{config, hopr, socket};
+
 /// Gnosis VPN system service - client application for Gnosis VPN connections
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(version)]
 pub struct Cli {
-    /// Specify socket path
+    /// Socket path for communication with this servive
     #[arg(
         short,
         long,
@@ -16,14 +19,34 @@ pub struct Cli {
     )]
     pub socket_path: PathBuf,
 
-    /// Specify configuration path
+    /// General configuration file
     #[arg(
         short,
         long,
         env = config::ENV_VAR,
-        default_value = config::DEFAULT_PATH)
-    ]
+        default_value = config::DEFAULT_PATH,
+        )]
     pub config_path: PathBuf,
+
+    /// RPC provider URL needed for fat Hopr edge client
+    #[arg(long, env = hopr::RPC_PROVIDER_ENV)]
+    pub hopr_rpc_provider: Url,
+
+    /// Hopr network
+    #[arg(long, env = hopr::NETWORK_ENV, default_value = "dufour")]
+    pub hopr_network: Network,
+
+    /// Hopr edge client configuration path
+    #[arg( long, env = hopr::CONFIG_ENV, default_value = None) ]
+    pub hopr_config_path: Option<PathBuf>,
+
+    /// Hopr edge client identity path
+    #[arg( long, env = hopr::ID_FILE_ENV, default_value = None)]
+    pub hopr_identity_file: Option<PathBuf>,
+
+    /// Hopr edge client identity pass
+    #[arg( long, env = hopr::ID_PASS_ENV, default_value = None)]
+    pub hopr_identity_pass: Option<String>,
 }
 
 pub fn parse() -> Cli {

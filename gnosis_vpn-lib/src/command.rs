@@ -1,23 +1,25 @@
+use edgli::hopr_lib::{Address, RoutingOptions};
+use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::address::Address;
-use crate::balance::FundingIssue;
+use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
-use crate::session;
+use crate::network::Network;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     Status,
     Connect(Address),
     Disconnect,
-    Ping,
     Balance,
+    Ping,
     RefreshNode,
+    FundingTool(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,20 +28,42 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
-    RefreshNode,
     Pong,
+    Empty,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub status: Status,
+    pub run_mode: RunMode,
     pub available_destinations: Vec<Destination>,
-    pub funding: FundingState,
-    pub network: Option<String>,
+    pub network: Network,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Status {
+pub enum RunMode {
+    /// Initial start
+    Init,
+    /// after creating safe this state will not be reached again
+    PreparingSafe {
+        node_address: Address,
+        node_xdai: Balance<XDai>,
+        node_wxhopr: Balance<WxHOPR>,
+        funding_tool: balance::FundingTool,
+    },
+    /// Before config generation
+    ValueingTicket,
+    /// Subsequent service start up in this state and after preparing safe
+    Warmup { sync_progress: f32, hopr_state: String },
+    /// Normal operation where connections can be made
+    Running {
+        connection: ConnectionState,
+        funding: FundingState,
+        hopr_state: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ConnectionState {
     Connecting(Destination),
     Disconnecting(Destination),
     Connected(Destination),
@@ -49,8 +73,8 @@ pub enum Status {
 // in order of priority
 #[derive(Debug, Serialize, Deserialize)]
 pub enum FundingState {
-    Unknown, // state not queried yet
-    TopIssue(FundingIssue),
+    Unknown,                // state not queried yet
+    TopIssue(FundingIssue), // there is at least one issue
     WellFunded,
 }
 
@@ -70,7 +94,7 @@ pub enum DisconnectResponse {
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,
-    pub path: session::Path,
+    pub path: RoutingOptions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,21 +112,58 @@ pub struct Addresses {
     pub safe: Address,
 }
 
-impl Status {
+impl ConnectionState {
     pub fn connecting(destination: Destination) -> Self {
-        Status::Connecting(destination)
-    }
-
-    pub fn connected(destination: Destination) -> Self {
-        Status::Connected(destination)
+        ConnectionState::Connecting(destination)
     }
 
     pub fn disconnecting(destination: Destination) -> Self {
-        Status::Disconnecting(destination)
+        ConnectionState::Disconnecting(destination)
+    }
+
+    pub fn connected(destination: Destination) -> Self {
+        ConnectionState::Connected(destination)
     }
 
     pub fn disconnected() -> Self {
-        Status::Disconnected
+        ConnectionState::Disconnected
+    }
+}
+
+impl RunMode {
+    pub fn initializing() -> Self {
+        RunMode::Init
+    }
+    pub fn preparing_safe(
+        node_address: Address,
+        pre_safe: balance::PreSafe,
+        funding_tool: balance::FundingTool,
+    ) -> Self {
+        RunMode::PreparingSafe {
+            node_address,
+            node_xdai: pre_safe.node_xdai,
+            node_wxhopr: pre_safe.node_wxhopr,
+            funding_tool,
+        }
+    }
+
+    pub fn warmup(sync_progress: f32, hopr_state: String) -> Self {
+        RunMode::Warmup {
+            sync_progress,
+            hopr_state,
+        }
+    }
+
+    pub fn valueing_ticket() -> Self {
+        RunMode::ValueingTicket
+    }
+
+    pub fn running(connection: ConnectionState, funding: FundingState, hopr_state: String) -> Self {
+        RunMode::Running {
+            connection,
+            funding,
+            hopr_state,
+        }
     }
 }
 
@@ -127,16 +188,10 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(
-        status: Status,
-        available_destinations: Vec<Destination>,
-        funding: FundingState,
-        network: Option<String>,
-    ) -> Self {
+    pub fn new(run_mode: RunMode, available_destinations: Vec<Destination>, network: Network) -> Self {
         StatusResponse {
-            status,
+            run_mode,
             available_destinations,
-            funding,
             network,
         }
     }
@@ -194,7 +249,17 @@ impl From<ConnectionDestination> for Destination {
         Destination {
             address: destination.address,
             meta: destination.meta,
-            path: destination.path,
+            path: destination.routing,
+        }
+    }
+}
+
+impl From<Vec<FundingIssue>> for FundingState {
+    fn from(issues: Vec<FundingIssue>) -> Self {
+        if issues.is_empty() {
+            FundingState::WellFunded
+        } else {
+            FundingState::TopIssue(issues[0].clone())
         }
     }
 }
@@ -210,7 +275,7 @@ impl fmt::Display for Destination {
         let short_addr = log_output::address(&self.address);
         write!(
             f,
-            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
+            "Address: {address}, Route: (entry){path:?}({short_addr}), {meta}",
             meta = meta,
             path = self.path,
             address = self.address,
@@ -219,27 +284,52 @@ impl fmt::Display for Destination {
     }
 }
 
-impl fmt::Display for Status {
+impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Status::Connecting(dest) => write!(f, "Connecting to {dest}"),
-            Status::Disconnecting(dest) => write!(f, "Disconnecting from {dest}"),
-            Status::Connected(dest) => write!(f, "Connected to {dest}"),
-            Status::Disconnected => write!(f, "Disconnected"),
+            RunMode::Init => write!(f, "Initializing..."),
+            RunMode::ValueingTicket => write!(f, "Valueing Ticket..."),
+            RunMode::PreparingSafe {
+                node_address,
+                node_xdai,
+                node_wxhopr,
+                funding_tool,
+            } => {
+                write!(
+                    f,
+                    "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
+                )
+            }
+            RunMode::Warmup {
+                sync_progress,
+                hopr_state,
+            } => write!(f, "Hopr: {hopr_state}, Syncing... {:.2}%", sync_progress * 100.0),
+            RunMode::Running {
+                connection,
+                funding,
+                hopr_state,
+            } => write!(f, "Hopr: {hopr_state}, Connection: {connection}, Funding: {funding}"),
         }
     }
 }
 
-impl From<Option<Vec<FundingIssue>>> for FundingState {
-    fn from(issues: Option<Vec<FundingIssue>>) -> Self {
-        let issues = match issues {
-            Some(issues) => issues,
-            None => return FundingState::Unknown,
-        };
-        if issues.is_empty() {
-            return FundingState::WellFunded;
+impl fmt::Display for ConnectionState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConnectionState::Connecting(dest) => write!(f, "Connecting to {}", dest),
+            ConnectionState::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
+            ConnectionState::Connected(dest) => write!(f, "Connected to {}", dest),
+            ConnectionState::Disconnected => write!(f, "Disconnected"),
         }
-        let top_issue = &issues[0];
-        FundingState::TopIssue(top_issue.clone())
+    }
+}
+
+impl fmt::Display for FundingState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FundingState::Unknown => write!(f, "Unknown"),
+            FundingState::TopIssue(issue) => write!(f, "Issue: {}", issue),
+            FundingState::WellFunded => write!(f, "Well Funded"),
+        }
     }
 }

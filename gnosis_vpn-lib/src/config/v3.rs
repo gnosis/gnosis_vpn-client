@@ -1,29 +1,24 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use edgli::hopr_lib::Address;
+use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use url::Url;
 
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::net::SocketAddr;
-use std::time::Duration;
 use std::vec::Vec;
 
-use crate::address::Address;
-use crate::connection::{destination::Destination as ConnDestination, options};
-use crate::entry_node::{self, EntryNode};
-use crate::ping;
-use crate::session;
-use crate::wg_tooling::Config as WireGuardConfig;
+use crate::config;
+use crate::config::v4;
 
-const MAX_HOPS: u8 = 3;
-
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
     pub(super) hoprd_node: HoprdNode,
-    pub(super) destinations: Option<HashMap<Address, Destination>>,
-    pub(super) connection: Option<Connection>,
-    pub(super) wireguard: Option<WireGuard>,
+    #[serde_as(as = "Option<HashMap<DisplayFromStr, _>>")]
+    pub(super) destinations: Option<HashMap<Address, v4::Destination>>,
+    pub(super) connection: Option<v4::Connection>,
+    pub(super) wireguard: Option<v4::WireGuard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -31,106 +26,6 @@ pub(super) struct HoprdNode {
     endpoint: Url,
     api_token: String,
     internal_connection_port: Option<u16>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Destination {
-    meta: Option<HashMap<String, String>>,
-    path: Option<DestinationPath>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum DestinationPath {
-    #[serde(alias = "intermediates")]
-    Intermediates(Vec<Address>),
-    #[serde(alias = "hops", deserialize_with = "validate_hops")]
-    Hops(u8),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Connection {
-    listen_host: Option<String>,
-    #[serde(default, with = "humantime_serde::option")]
-    session_timeout: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
-    http_timeout: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
-    ping_retries_timeout: Option<Duration>,
-    bridge: Option<ConnectionProtocol>,
-    wg: Option<ConnectionProtocol>,
-    ping: Option<PingOptions>,
-    buffer: Option<BufferOptions>,
-    max_surb_upstream: Option<MaxSurbUpstreamOptions>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct ConnectionProtocol {
-    capabilities: Option<Vec<SessionCapability>>,
-    target: Option<SocketAddr>,
-    target_type: Option<SessionTargetType>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) enum SessionCapability {
-    #[serde(alias = "segmentation")]
-    Segmentation,
-    #[serde(alias = "retransmission")]
-    Retransmission,
-    #[serde(alias = "retransmission_ack_only")]
-    RetransmissionAckOnly,
-    #[serde(alias = "no_delay")]
-    NoDelay,
-    #[serde(alias = "no_rate_control")]
-    NoRateControl,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-enum SessionTargetType {
-    #[default]
-    #[serde(alias = "plain")]
-    Plain,
-    #[serde(alias = "sealed")]
-    Sealed,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct PingOptions {
-    address: Option<IpAddr>,
-    #[serde(default, with = "humantime_serde::option")]
-    timeout: Option<Duration>,
-    ttl: Option<u32>,
-    seq_count: Option<u16>,
-    #[serde(default, deserialize_with = "validate_ping_interval")]
-    interval: Option<PingInterval>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct PingInterval {
-    min: u8,
-    max: u8,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct BufferOptions {
-    // could be improved by using bytesize crates parser
-    bridge: Option<String>,
-    ping: Option<String>,
-    main: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct MaxSurbUpstreamOptions {
-    // could be improved by using human-bandwidth crates parser
-    bridge: Option<String>,
-    ping: Option<String>,
-    main: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct WireGuard {
-    pub(super) listen_port: Option<u16>,
-    pub(super) allowed_ips: Option<String>,
-    pub(super) force_private_key: Option<String>,
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
@@ -263,259 +158,18 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong_keys
 }
 
-fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = u8::deserialize(deserializer)?;
-    if value <= MAX_HOPS {
-        Ok(value)
-    } else {
-        Err(serde::de::Error::custom(format!(
-            "hops must be less than or equal to {MAX_HOPS}"
-        )))
-    }
-}
+impl TryFrom<Config> for config::Config {
+    type Error = config::Error;
 
-fn validate_ping_interval<'de, D>(deserializer: D) -> Result<Option<PingInterval>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<PingInterval> = Option::deserialize(deserializer)?;
-    match value {
-        Some(interval) => {
-            if interval.min < interval.max {
-                Ok(Some(interval))
-            } else {
-                Err(serde::de::Error::custom("min must be less than max"))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
-impl From<&SessionCapability> for session::Capability {
-    fn from(val: &SessionCapability) -> Self {
-        match val {
-            SessionCapability::Segmentation => session::Capability::Segmentation,
-            SessionCapability::Retransmission => session::Capability::Retransmission,
-            SessionCapability::RetransmissionAckOnly => session::Capability::RetransmissionAckOnly,
-            SessionCapability::NoDelay => session::Capability::NoDelay,
-            SessionCapability::NoRateControl => session::Capability::NoRateControl,
-        }
-    }
-}
-
-impl Connection {
-    pub fn default_bridge_capabilities() -> Vec<session::Capability> {
-        vec![session::Capability::Segmentation, session::Capability::Retransmission]
-    }
-
-    pub fn default_wg_capabilities() -> Vec<session::Capability> {
-        vec![session::Capability::Segmentation, session::Capability::NoDelay]
-    }
-
-    pub fn default_bridge_target() -> SocketAddr {
-        SocketAddr::from(([172, 30, 0, 1], 8000))
-    }
-
-    pub fn default_wg_target() -> SocketAddr {
-        SocketAddr::from(([172, 30, 0, 1], 51820))
-    }
-
-    pub fn default_listen_host() -> String {
-        ":1422".to_string()
-    }
-
-    pub fn default_http_timeout() -> Duration {
-        Duration::from_secs(5)
-    }
-
-    pub fn default_session_timeout() -> Duration {
-        Duration::from_secs(15)
-    }
-
-    pub fn default_ping_retry_timeout() -> Duration {
-        Duration::from_secs(10)
-    }
-
-    pub fn default_ping_interval() -> PingInterval {
-        PingInterval { min: 5, max: 10 }
-    }
-}
-
-impl Default for options::Options {
-    fn default() -> Self {
-        let bridge_target = session::Target::Plain(Connection::default_bridge_target());
-        let wg_target = session::Target::Plain(Connection::default_wg_target());
-        let bridge_caps = Connection::default_bridge_capabilities();
-        let wg_caps = Connection::default_wg_capabilities();
-        options::Options::new(
-            options::SessionParameters::new(bridge_target, bridge_caps),
-            options::SessionParameters::new(wg_target, wg_caps),
-            Connection::default_ping_interval().min..Connection::default_ping_interval().max,
-            ping::PingOptions::default(),
-            options::BufferSizes::default(),
-            options::MaxSurbUpstream::default(),
-            Connection::default_ping_retry_timeout(),
-        )
-    }
-}
-
-impl From<BufferOptions> for options::BufferSizes {
-    fn from(buffer: BufferOptions) -> Self {
-        let def = options::BufferSizes::default();
-        options::BufferSizes::new(
-            buffer.bridge.unwrap_or(def.bridge),
-            buffer.ping.unwrap_or(def.ping),
-            buffer.main.unwrap_or(def.main),
-        )
-    }
-}
-
-impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
-    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
-        let def = options::MaxSurbUpstream::default();
-        options::MaxSurbUpstream::new(
-            surbs.bridge.unwrap_or(def.bridge),
-            surbs.ping.unwrap_or(def.ping),
-            surbs.main.unwrap_or(def.main),
-        )
-    }
-}
-
-impl Config {
-    pub fn entry_node(&self) -> EntryNode {
-        let internal_connection_port = self.hoprd_node.internal_connection_port.map(|p| format!(":{p}"));
-        let listen_host = self
-            .connection
-            .as_ref()
-            .and_then(|c| c.listen_host.clone())
-            .or(internal_connection_port)
-            .unwrap_or(Connection::default_listen_host());
-        let http_timeout = self
-            .connection
-            .as_ref()
-            .and_then(|c| c.http_timeout)
-            .unwrap_or(Connection::default_http_timeout());
-        let session_timeout = self
-            .connection
-            .as_ref()
-            .and_then(|c| c.session_timeout)
-            .unwrap_or(Connection::default_session_timeout());
-        EntryNode::new(
-            self.hoprd_node.endpoint.clone(),
-            self.hoprd_node.api_token.clone(),
-            listen_host,
-            http_timeout,
-            session_timeout,
-            entry_node::APIVersion::V4,
-        )
-    }
-
-    pub fn destinations(&self) -> HashMap<Address, ConnDestination> {
-        let config_dests = self.destinations.clone().unwrap_or_default();
-        config_dests
-            .iter()
-            .map(|(k, v)| {
-                let path = match v.path.clone() {
-                    Some(DestinationPath::Intermediates(p)) => session::Path::IntermediatePath(p),
-                    Some(DestinationPath::Hops(h)) => session::Path::Hops(h),
-                    None => session::Path::default(),
-                };
-
-                let meta = v.meta.clone().unwrap_or_default();
-
-                let dest = ConnDestination::new(*k, path, meta);
-                (*k, dest)
-            })
-            .collect()
-    }
-
-    pub fn connection(&self) -> options::Options {
-        let connection = self.connection.as_ref();
-        let bridge_caps = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.capabilities.clone())
-            .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
-            .unwrap_or(Connection::default_bridge_capabilities());
-        let bridge_target_socket = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .unwrap_or(Connection::default_bridge_target());
-        let bridge_target_type = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target_type.clone())
-            .unwrap_or_default();
-        let bridge_target = match bridge_target_type {
-            SessionTargetType::Plain => session::Target::Plain(bridge_target_socket),
-            SessionTargetType::Sealed => session::Target::Sealed(bridge_target_socket),
-        };
-        let params_bridge = options::SessionParameters::new(bridge_target, bridge_caps);
-        let wg_caps = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.capabilities.clone())
-            .map(|caps| caps.iter().map(|cap| cap.into()).collect::<Vec<session::Capability>>())
-            .unwrap_or(Connection::default_wg_capabilities());
-        let wg_target_socket = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .unwrap_or(Connection::default_wg_target());
-        let wg_target_type = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target_type.clone())
-            .unwrap_or_default();
-        let wg_target = match wg_target_type {
-            SessionTargetType::Plain => session::Target::Plain(wg_target_socket),
-            SessionTargetType::Sealed => session::Target::Sealed(wg_target_socket),
-        };
-        let params_wg = options::SessionParameters::new(wg_target, wg_caps);
-
-        let interval = connection
-            .and_then(|c| c.ping.as_ref())
-            .and_then(|p| p.interval.clone())
-            .unwrap_or(Connection::default_ping_interval());
-
-        let def_opts = ping::PingOptions::default();
-        let ping_opts = connection
-            .and_then(|c| c.ping.as_ref())
-            .map(|p| ping::PingOptions {
-                address: p.address.unwrap_or(def_opts.address),
-                timeout: p.timeout.unwrap_or(def_opts.timeout),
-                ttl: p.ttl.unwrap_or(def_opts.ttl),
-                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
-            })
-            .unwrap_or(def_opts);
-        let ping_range = interval.min..interval.max;
-
-        let buffer_sizes = connection
-            .and_then(|c| c.buffer.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let max_surb_upstream = connection
-            .and_then(|c| c.max_surb_upstream.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let ping_retries_timeout = connection
-            .and_then(|c| c.ping_retries_timeout)
-            .unwrap_or(Connection::default_ping_retry_timeout());
-
-        options::Options::new(
-            params_bridge,
-            params_wg,
-            ping_range,
-            ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
-            ping_retries_timeout,
-        )
-    }
-
-    pub fn wireguard(&self) -> WireGuardConfig {
-        let listen_port = self.wireguard.as_ref().and_then(|wg| wg.listen_port);
-        let allowed_ips = self.wireguard.as_ref().and_then(|wg| wg.allowed_ips.clone());
-        let force_private_key = self.wireguard.as_ref().and_then(|wg| wg.force_private_key.clone());
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key)
+    fn try_from(value: Config) -> Result<Self, Self::Error> {
+        let connection = value.connection.into();
+        let destinations = v4::convert_destinations(value.destinations)?;
+        let wireguard = value.wireguard.into();
+        Ok(config::Config {
+            connection,
+            destinations,
+            wireguard,
+        })
     }
 }
 
@@ -524,18 +178,19 @@ mod tests {
     use super::Config;
 
     #[test]
-    fn test_minimal_config() {
+    fn test_minimal_config() -> anyhow::Result<()> {
         let config = r#####"
 version = 3
 [hoprd_node]
 endpoint = "http://127.0.0.1:3001"
 api_token = "1234567890"
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse minimal config");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]
-    fn test_ping_without_interval() {
+    fn test_ping_without_interval() -> anyhow::Result<()> {
         let config = r#####"
 version = 3
 [hoprd_node]
@@ -546,11 +201,12 @@ api_token = "1234567890"
 address = "10.128.0.1"
 
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse minimal ping");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 
     #[test]
-    fn test_full_config() {
+    fn test_full_config() -> anyhow::Result<()> {
         let config = r#####"
 version = 3
 [hoprd_node]
@@ -613,6 +269,7 @@ allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 "#####;
-        toml::from_str::<Config>(config).expect("Failed to parse full config");
+        toml::from_str::<Config>(config)?;
+        Ok(())
     }
 }

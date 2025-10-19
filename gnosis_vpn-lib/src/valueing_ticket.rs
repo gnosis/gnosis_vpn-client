@@ -1,36 +1,35 @@
 use backoff::{ExponentialBackoff, backoff::Backoff};
-use reqwest::blocking;
+use crossbeam_channel;
+use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use thiserror::Error;
+use tokio::runtime::Runtime;
+use url::Url;
 
 use std::fmt::{self, Display};
 use std::thread;
-use std::time::{Duration, SystemTime};
 
-use crate::balance::{self, Balance};
-use crate::entry_node::EntryNode;
-use crate::info::{self, Info};
-use crate::log_output;
+use crate::chain::client::GnosisRpcClient;
+use crate::chain::contracts::NetworkSpecifications;
+use crate::chain::errors::ChainError;
+use crate::network::Network;
+use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Info(Info),
-    Balance(Balance),
+    TicketStats(TicketStats),
     BackoffExhausted,
 }
 
 /// Represents the different phases of establishing a connection.
 #[derive(Clone, Debug)]
 enum Phase {
-    Info,
-    Balance,
-    Idle(SystemTime),
+    TicketStats,
+    Done,
 }
 
 #[derive(Debug)]
 enum InternalEvent {
-    Info(Result<Info, info::Error>),
-    Balance(Result<Balance, balance::Error>),
-    Tick,
+    TicketStats(Result<TicketStats, ChainError>),
 }
 
 #[derive(Clone, Debug)]
@@ -40,42 +39,45 @@ enum BackoffState {
     Triggered(ExponentialBackoff),
 }
 
+#[derive(Debug, Error)]
+enum InternalError {
+    #[error(transparent)]
+    Chain(#[from] ChainError),
+    #[error(transparent)]
+    TicketStats(#[from] ticket_stats::Error),
+}
+
 #[derive(Clone, Debug)]
-pub struct Node {
+pub struct ValueingTicket {
     // message passing helper
     cancel_channel: (crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<()>),
-
-    // reuse http client
-    client: blocking::Client,
 
     // dynamic runtime data
     backoff: BackoffState,
     phase: Phase,
 
     // static input data
-    entry_node: EntryNode,
     sender: crossbeam_channel::Sender<Event>,
+    private_key: ChainKeypair,
+    rpc_provider: Url,
+    network_specs: NetworkSpecifications,
 }
 
-#[derive(Debug, Error)]
-enum InternalError {
-    #[error("Channel send error: {0}")]
-    Send(#[from] crossbeam_channel::SendError<Event>),
-    #[error("Info error: {0}")]
-    Info(#[from] info::Error),
-    #[error("Balance error: {0}")]
-    Balance(#[from] balance::Error),
-}
-
-impl Node {
-    pub fn new(entry_node: EntryNode, sender: crossbeam_channel::Sender<Event>) -> Self {
-        Node {
+impl ValueingTicket {
+    pub fn new(
+        sender: crossbeam_channel::Sender<Event>,
+        private_key: ChainKeypair,
+        rpc_provider: Url,
+        network: Network,
+    ) -> Self {
+        ValueingTicket {
             cancel_channel: crossbeam_channel::bounded(1),
-            client: blocking::Client::new(),
             backoff: BackoffState::Inactive,
-            phase: Phase::Info,
-            entry_node,
+            phase: Phase::TicketStats,
             sender,
+            private_key,
+            rpc_provider,
+            network_specs: NetworkSpecifications::from_network(&network),
         }
     }
 
@@ -84,12 +86,19 @@ impl Node {
         let mut me = self.clone();
         thread::spawn(move || {
             loop {
+                let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        tracing::error!(%error, "Failed creating tokio runtime");
+                        continue;
+                    }
+                };
                 // Backoff handling
                 // Inactive - no backoff was set, act up
                 // Active - backoff was set and can trigger, don't act until backoff delay
                 // Triggered - backoff was triggered, time to act up again keeping backoff active
                 let (recv_event, recv_backoff) = match me.backoff.clone() {
-                    BackoffState::Inactive => (me.act(), crossbeam_channel::never()),
+                    BackoffState::Inactive => (me.act(rt), crossbeam_channel::never()),
                     BackoffState::Active(mut backoff) => match backoff.next_backoff() {
                         Some(delay) => {
                             tracing::debug!(phase = %me.phase, ?backoff, delay = ?delay, "Triggering backoff delay");
@@ -108,7 +117,7 @@ impl Node {
                     BackoffState::Triggered(backoff) => {
                         tracing::debug!(phase = %me.phase, ?backoff, "Activating backoff");
                         me.backoff = BackoffState::Active(backoff);
-                        (me.act(), crossbeam_channel::never())
+                        (me.act(rt), crossbeam_channel::never())
                     }
                 };
 
@@ -136,75 +145,49 @@ impl Node {
         });
     }
 
-    pub fn cancel(&mut self) {
+    pub fn cancel(&self) {
         _ = self.cancel_channel.0.send(()).map_err(|error| {
             tracing::error!(phase = %self.phase, %error, "Failed sending cancel signal");
         });
     }
 
-    fn act(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn act(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase, "Acting on phase");
-        match self.phase {
-            Phase::Info => self.fetch_info(),
-            Phase::Balance => self.fetch_balance(),
-            Phase::Idle(_system_time) => self.idle(),
+        match &self.phase {
+            Phase::TicketStats => self.ticket_stats(runtime),
+            Phase::Done => crossbeam_channel::never(),
         }
     }
 
     fn event(&mut self, event: InternalEvent) -> Result<(), InternalError> {
         match event {
-            InternalEvent::Info(res) => {
-                self.sender.send(Event::Info(res?))?;
-                self.phase = Phase::Balance;
-                self.backoff = BackoffState::Inactive;
-                Ok(())
-            }
-            InternalEvent::Balance(res) => {
-                self.sender.send(Event::Balance(res?))?;
-                self.phase = Phase::Idle(SystemTime::now());
-                self.backoff = BackoffState::Inactive;
-                Ok(())
-            }
-            InternalEvent::Tick => {
-                self.phase = Phase::Balance;
-                Ok(())
-            }
+            InternalEvent::TicketStats(res) => match res {
+                Ok(stats) => {
+                    tracing::debug!(phase = %self.phase, %stats, "Got ticket stats");
+                    _ = self.sender.send(Event::TicketStats(stats)).map_err(|error| {
+                        tracing::error!(%error, "Failed sending ticket stats event");
+                    });
+                    self.phase = Phase::Done;
+                    self.backoff = BackoffState::Inactive;
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::error!(phase = %self.phase, %error, "Failed getting ticket stats");
+                    self.backoff = BackoffState::Active(ExponentialBackoff::default());
+                    Ok(())
+                }
+            },
         }
     }
 
-    fn fetch_info(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
+    fn ticket_stats(&mut self, runtime: Runtime) -> crossbeam_channel::Receiver<InternalEvent> {
         let (s, r) = crossbeam_channel::bounded(1);
-        if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(ExponentialBackoff::default());
-        }
-        let entry_node = self.entry_node.clone();
+        let network_specs = self.network_specs.clone();
+        let priv_key = self.private_key.clone();
+        let rpc_provider = self.rpc_provider.clone();
         thread::spawn(move || {
-            let res = Info::gather(&client, &entry_node);
-            _ = s.send(InternalEvent::Info(res));
-        });
-        r
-    }
-
-    fn fetch_balance(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let client = self.client.clone();
-        let (s, r) = crossbeam_channel::bounded(1);
-        if let BackoffState::Inactive = self.backoff {
-            self.backoff = BackoffState::Active(ExponentialBackoff::default());
-        }
-        let entry_node = self.entry_node.clone();
-        thread::spawn(move || {
-            let res = Balance::calc_for_node(&client, &entry_node);
-            _ = s.send(InternalEvent::Balance(res));
-        });
-        r
-    }
-
-    fn idle(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
-        let (s, r) = crossbeam_channel::bounded(1);
-        thread::spawn(move || {
-            thread::sleep(Duration::from_secs(60));
-            _ = s.send(InternalEvent::Tick);
+            let res = runtime.block_on(ticket_stats(priv_key, rpc_provider.to_string(), network_specs));
+            _ = s.send(InternalEvent::TicketStats(res));
         });
         r
     }
@@ -213,9 +196,8 @@ impl Node {
 impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Phase::Info => write!(f, "Info"),
-            Phase::Balance => write!(f, "Balance"),
-            Phase::Idle(since) => write!(f, "Idle for {}", log_output::elapsed(since)),
+            Phase::TicketStats => write!(f, "TicketStats"),
+            Phase::Done => write!(f, "Done"),
         }
     }
 }
@@ -223,9 +205,10 @@ impl Display for Phase {
 impl Display for InternalEvent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            InternalEvent::Info(res) => write!(f, "Info({res:?})"),
-            InternalEvent::Balance(res) => write!(f, "Balance({res:?})"),
-            InternalEvent::Tick => write!(f, "Tick"),
+            InternalEvent::TicketStats(res) => match res {
+                Ok(stats) => write!(f, "TicketStats({})", stats),
+                Err(error) => write!(f, "TicketStatsError({})", error),
+            },
         }
     }
 }
@@ -233,9 +216,20 @@ impl Display for InternalEvent {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::Info(info) => write!(f, "Info: {info}"),
-            Event::Balance(balance) => write!(f, "Balance: {balance}"),
+            Event::TicketStats(stats) => write!(f, "TicketStats({})", stats),
             Event::BackoffExhausted => write!(f, "BackoffExhausted"),
         }
     }
+}
+
+async fn ticket_stats(
+    priv_key: ChainKeypair,
+    rpc_provider: String,
+    network_specs: NetworkSpecifications,
+) -> Result<TicketStats, ChainError> {
+    let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+    network_specs
+        .contracts
+        .get_win_prob_ticket_price(&client.provider)
+        .await
 }
