@@ -49,7 +49,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 tokio = { version = "1.47.1", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "ff930b7321b687b0f647d232ffedeea7b2b1c683", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "b99c3186b09490cbbb22cdb82a0c4398e1aea0ab", features = [
   "prometheus",
 ] }
 serde_with = "3.15"
