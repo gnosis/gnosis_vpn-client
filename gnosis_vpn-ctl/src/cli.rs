@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use gnosis_vpn_lib::address::Address;
 use gnosis_vpn_lib::command::Command as LibCommand;
+use gnosis_vpn_lib::prelude::Address;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 
@@ -49,6 +49,13 @@ pub enum Command {
     /// Trigger a refresh of node information including balance
     #[command()]
     RefreshNode {},
+
+    /// Trigger a funding tool run to claim funds for your account during onboarding
+    #[command()]
+    FundingTool {
+        /// Your secret hash
+        secret: String,
+    },
 }
 
 impl From<Command> for LibCommand {
@@ -59,6 +66,7 @@ impl From<Command> for LibCommand {
             Command::Disconnect {} => LibCommand::Disconnect,
             Command::Balance {} => LibCommand::Balance,
             Command::RefreshNode {} => LibCommand::RefreshNode,
+            Command::FundingTool { secret } => LibCommand::FundingTool(secret),
         }
     }
 }

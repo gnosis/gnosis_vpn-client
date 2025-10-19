@@ -2,10 +2,19 @@ use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum Protocol {
     Udp,
     Tcp,
+}
+
+impl From<&Protocol> for edgli::hopr_lib::IpProtocol {
+    fn from(value: &Protocol) -> Self {
+        match value {
+            Protocol::Udp => edgli::hopr_lib::IpProtocol::UDP,
+            Protocol::Tcp => edgli::hopr_lib::IpProtocol::TCP,
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for Protocol {

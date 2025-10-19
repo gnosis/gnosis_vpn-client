@@ -1,2 +1,11 @@
 [install]
 root = ".cargo"
+
+[env]
+# C/C++ compiler flags for optimized builds
+# -O3: Maximum optimization level for best performance
+# -ffunction-sections/-fdata-sections: Enable dead code elimination
+# -fPIC: Generate position-independent code for shared libraries
+CFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"
+CPPFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"
+LDFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"

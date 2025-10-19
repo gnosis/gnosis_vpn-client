@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 use thiserror::Error;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PingOptions {
     pub address: IpAddr,
     pub timeout: Duration,

@@ -3,8 +3,8 @@ use serde::ser::Serialize;
 
 use std::time::SystemTime;
 
-use crate::address::Address;
 use crate::session;
+use edgli::hopr_lib::Address;
 
 pub fn serialize<T>(v: &T) -> String
 where
@@ -90,16 +90,6 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
 "#,
         port,
         prot_str,
-    );
-}
-
-pub fn print_no_destinations() {
-    tracing::error!(
-        r#"
-
->>!!>> No destinations found in configuration file.
->>!!>> Please rerun installer from https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/heads/main/install.sh.
-"#
     );
 }
 
