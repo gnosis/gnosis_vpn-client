@@ -17,8 +17,7 @@ application (`gnosis_vpn-ctl`) is used to manage the client and its connections.
 
 ## Installation
 
-Follow the [onboarding instructions](./ONBOARDING.md) to set up your HOPR node
-and install the Gnosis VPN client.
+Use the [install script](./install.sh).
 
 ### Check signatures
 
