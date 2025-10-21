@@ -41,7 +41,7 @@ impl TicketStats {
         priv_key: &ChainKeypair,
         rpc_provider: &str,
         network_specs: &NetworkSpecifications,
-    ) -> Result<TicketStats, ChainError> {
+    ) -> Result<Self, ChainError> {
         backoff::future::retry(ExponentialBackoff::default(), || async {
             let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider).await?;
             Ok(network_specs
