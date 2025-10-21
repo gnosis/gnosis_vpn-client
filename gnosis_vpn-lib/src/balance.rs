@@ -64,6 +64,17 @@ pub struct PreSafe {
     pub node_wxhopr: Balance<WxHOPR>,
 }
 
+impl PreSafe {
+    pub async fn fetch(priv_key: &ChainKeypair, rpc_provider: &str, node_address: Address) -> Result<Self, ChainError> {
+        backoff::future::retry(ExponentialBackoff::default(), || async {
+            let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+            let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
+            Ok(check_balance_inputs.check(&client.provider).await?)
+        })
+        .await
+    }
+}
+
 impl Default for PreSafe {
     fn default() -> Self {
         Self {
