@@ -120,6 +120,16 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
         }
     };
 
+    let socket_dir = socket_path.parent().ok_or_else(|| {
+        tracing::error!("socket path has no parent");
+        exitcode::UNAVAILABLE
+    })?;
+
+    fs::create_dir_all(socket_dir).map_err(|e| {
+        tracing::error!(error = %e, "error creating socket directory");
+        exitcode::IOERR
+    })?;
+
     let stream = net::UnixListener::bind(socket_path).map_err(|e| {
         tracing::error!(error = ?e, "error binding socket");
         exitcode::OSFILE
@@ -282,9 +292,10 @@ fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let ctrlc_receiver = ctrlc_channel()?;
     // keep config watcher in scope so it does not get dropped
     let (_config_watcher, config_receiver) = config_channel(&config_path)?;
+    let socket_path = args.socket_path.clone();
+
     let socket_receiver = socket_channel(&args.socket_path)?;
 
-    let socket_path = args.socket_path.clone();
     let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args);
     match fs::remove_file(&socket_path) {
         Ok(_) => (),
