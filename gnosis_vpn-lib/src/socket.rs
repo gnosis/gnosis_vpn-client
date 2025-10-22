@@ -22,7 +22,7 @@ pub enum Error {
     ReadSocketIO(io::Error),
 }
 
-pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn.sock";
+pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.sock";
 pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 
 // #[cfg(target_family = "windows")]
