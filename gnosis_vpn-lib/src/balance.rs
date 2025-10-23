@@ -1,3 +1,6 @@
+use backoff::ExponentialBackoff;
+use edgli::hopr_lib::Address;
+use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 pub use edgli::hopr_lib::{Balance, GeneralError, WxHOPR, XDai};
 use primitive_types::U256;
 use serde::{Deserialize, Serialize};
@@ -5,7 +8,9 @@ use thiserror::Error;
 
 use std::fmt::{self, Display};
 
-use crate::chain::contracts::CheckBalanceResult;
+use crate::chain::client::GnosisRpcClient;
+use crate::chain::contracts::{CheckBalanceInputs, CheckBalanceResult};
+use crate::chain::errors::ChainError;
 
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,9 +72,9 @@ pub struct PreSafe {
 impl PreSafe {
     pub async fn fetch(priv_key: &ChainKeypair, rpc_provider: &str, node_address: Address) -> Result<Self, ChainError> {
         backoff::future::retry(ExponentialBackoff::default(), || async {
-            let client = GnosisRpcClient::with_url(priv_key, rpc_provider.as_str()).await?;
+            let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider).await?;
             let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
-            Ok(check_balance_inputs.check(&client.provider).await?)
+            Ok(check_balance_inputs.check(&client.provider).await?.into())
         })
         .await
     }
