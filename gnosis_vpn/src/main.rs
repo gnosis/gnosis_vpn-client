@@ -6,7 +6,6 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
 
 use std::fs;
-use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process;
@@ -174,12 +173,12 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
     Ok(receiver)
 }
 
-fn incoming_stream(core: &mut core::Core, stream: &mut UnixStream) {
+async fn incoming_stream(core: &mut crate::core::Core, stream: &mut UnixStream) {
     let mut msg = String::new();
-    if let Err(e) = stream.read_to_string(&mut msg) {
+    if let Err(e) = stream.read_to_string(&mut msg).await {
         tracing::error!(error = ?e, "error reading message");
         return;
-    };
+    }
 
     let cmd = match msg.parse::<Command>() {
         Ok(cmd) => cmd,
@@ -207,13 +206,13 @@ fn incoming_stream(core: &mut core::Core, stream: &mut UnixStream) {
         }
     };
 
-    if let Err(e) = stream.write_all(str_resp.as_bytes()) {
-        tracing::error!(error = %e, "error writing response");
+    if let Err(e) = stream.write_all(str_resp.as_bytes()).await {
+        tracing::error!(error = ?e, "error writing response");
         return;
     }
 
-    if let Err(e) = stream.flush() {
-        tracing::error!(error = ?e, "error flushing stream")
+    if let Err(e) = stream.flush().await {
+        tracing::error!(error = ?e, "error flushing stream");
     }
 }
 
@@ -333,7 +332,7 @@ async fn loop_daemon(
                 return exitcode::OK;
             }
             res = socket_receiver.recv() => match res {
-                Some(stream) => incoming_stream(&mut core, &mut stream),
+                Some(stream) => incoming_stream(&mut core, &mut stream).await,
                 None => {
                     tracing::error!("socket receiver closed unexpectedly");
                     return exitcode::IOERR;
