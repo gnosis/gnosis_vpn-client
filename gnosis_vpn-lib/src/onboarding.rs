@@ -3,6 +3,7 @@ use backoff::{ExponentialBackoff, backoff::Backoff};
 use crossbeam_channel;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
+use rand::Rng;
 use serde_json::json;
 use thiserror::Error;
 use tokio::runtime::Runtime;
@@ -96,7 +97,7 @@ impl Onboarding {
             private_key,
             rpc_provider,
             node_address,
-            nonce: U256::from(0),
+            nonce: U256::from(rand::rng().random_range(1..1_000)),
             network_specs: NetworkSpecifications::from_network(&network),
         }
     }
