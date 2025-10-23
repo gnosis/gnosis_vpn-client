@@ -256,21 +256,21 @@ fn incoming_config_fs_event(res_event: notify::Result<notify::Event>, config_pat
     tracing::debug!(?event, ?config_path, "incoming config event");
 
     match event {
-        (notify::Event {
+        notify::Event {
             kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
             paths,
             attrs: _,
-        })
-        | (notify::Event {
+        }
+        | notify::Event {
             kind: kind @ notify::event::EventKind::Remove(notify::event::RemoveKind::File),
             paths,
             attrs: _,
-        })
-        | (notify::Event {
+        }
+        | notify::Event {
             kind: kind @ notify::event::EventKind::Modify(notify::event::ModifyKind::Data(_)),
             paths,
             attrs: _,
-        }) => {
+        } => {
             if paths.as_slice() == [config_path] {
                 tracing::debug!(?kind, "config file change detected");
                 true
@@ -278,11 +278,7 @@ fn incoming_config_fs_event(res_event: notify::Result<notify::Event>, config_pat
                 false
             }
         }
-        Ok(_) => false,
-        Err(e) => {
-            tracing::error!(error = ?e, "error watching config folder");
-            false
-        }
+        _ => false,
     }
 }
 
