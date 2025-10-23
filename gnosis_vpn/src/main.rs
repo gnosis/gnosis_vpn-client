@@ -1,4 +1,4 @@
-use notify::{RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
@@ -54,19 +54,13 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     Ok(receiver)
 }
 
-fn config_channel(
+async fn config_channel(
     param_config_path: &Path,
-) -> Result<
-    (
-        notify::RecommendedWatcher,
-        crossbeam_channel::Receiver<notify::Result<notify::Event>>,
-    ),
-    exitcode::ExitCode,
-> {
+) -> Result<(RecommendedWatcher, mpsc::Receiver<notify::Result<notify::Event>>), exitcode::ExitCode> {
     match param_config_path.try_exists() {
         Ok(true) => (),
         Ok(false) => {
-            tracing::error!(config_file=%param_config_path.display(), "cannot find configuration file");
+            tracing::error!(config_file = %param_config_path.display(), "cannot find configuration file");
             return Err(exitcode::NOINPUT);
         }
         Err(e) => {
@@ -75,27 +69,40 @@ fn config_channel(
         }
     };
 
-    let config_path = fs::canonicalize(param_config_path).map_err(|e| {
-        tracing::error!(error = ?e, "error canonicalizing config path");
-        exitcode::IOERR
-    })?;
+    let config_path = match fs::canonicalize(param_config_path) {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(error = ?e, "error canonicalizing config path");
+            return Err(exitcode::IOERR);
+        }
+    };
 
-    let parent = config_path.parent().ok_or_else(|| {
-        tracing::error!("config path has no parent");
-        exitcode::UNAVAILABLE
-    })?;
+    let parent = match config_path.parent() {
+        Some(p) => p,
+        None => {
+            tracing::error!("config path has no parent");
+            return Err(exitcode::UNAVAILABLE);
+        }
+    };
 
-    let (sender, receiver) = crossbeam_channel::unbounded::<notify::Result<notify::Event>>();
+    let (sender, receiver) = mpsc::channel(32);
+    let watcher = match notify::recommended_watcher(move |res| {
+        // Use blocking_send to send from non-async context
+        let _ = sender.blocking_send(res).map_err(|e| {
+            tracing::error!(error = ?e, "error sending config watch event");
+        });
+    }) {
+        Ok(watcher) => watcher,
+        Err(e) => {
+            tracing::error!(error = ?e, "error creating config watcher");
+            return Err(exitcode::IOERR);
+        }
+    };
 
-    let mut watcher = notify::recommended_watcher(sender).map_err(|e| {
-        tracing::error!(error = ?e, "error creating config watcher");
-        exitcode::IOERR
-    })?;
-
-    watcher.watch(parent, RecursiveMode::NonRecursive).map_err(|e| {
+    if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
         tracing::error!(error = ?e, "error watching config directory");
-        exitcode::IOERR
-    })?;
+        return Err(exitcode::IOERR);
+    }
 
     Ok((watcher, receiver))
 }
@@ -298,7 +305,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let ctrlc_receiver = ctrlc_channel().await?;
 
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = config_channel(&config_path)?;
+    let (_config_watcher, config_receiver) = config_channel(&config_path).await?;
 
     let socket_path = args.socket_path.clone();
 
