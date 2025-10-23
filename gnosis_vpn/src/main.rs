@@ -1,5 +1,6 @@
-use ctrlc::Error as CtrlcError;
 use notify::{RecursiveMode, Watcher};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -24,28 +25,33 @@ mod hopr_params;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode> {
-    let (sender, receiver) = crossbeam_channel::bounded(2);
-    match ctrlc::set_handler(move || match sender.send(()) {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!(error = ?e, "sending incoming data");
+async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
+    let (sender, receiver) = mpsc::channel(1);
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
+        tracing::error!(error = ?e, "error setting up SIGINT handler");
+        exitcode::IOERR
+    })?;
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
+        tracing::error!(error = ?e, "error setting up SIGTERM handler");
+        exitcode::IOERR
+    })?;
+
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = sigint.recv() => {
+                let _ = sender.send(()).await.map_err(|e| {
+                    tracing::error!(error = ?e, "sending sigint");
+                });
+            }
+            _ = sigterm.recv() => {
+                let _ = sender.send(()).await.map_err(|e| {
+                    tracing::error!(error = ?e, "sending sigterm");
+                });
+            }
         }
-    }) {
-        Ok(_) => Ok(receiver),
-        Err(CtrlcError::NoSuchSignal(signal_type)) => {
-            tracing::error!(?signal_type, "no such signal");
-            Err(exitcode::OSERR)
-        }
-        Err(CtrlcError::MultipleHandlers) => {
-            tracing::error!("multiple handlers");
-            Err(exitcode::UNAVAILABLE)
-        }
-        Err(CtrlcError::System(e)) => {
-            tracing::error!(error = ?e, "system error");
-            Err(exitcode::IOERR)
-        }
-    }
+    });
+
+    Ok(receiver)
 }
 
 fn config_channel(
@@ -281,7 +287,7 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
@@ -289,9 +295,11 @@ fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
-    let ctrlc_receiver = ctrlc_channel()?;
+    let ctrlc_receiver = ctrlc_channel().await?;
+
     // keep config watcher in scope so it does not get dropped
     let (_config_watcher, config_receiver) = config_channel(&config_path)?;
+
     let socket_path = args.socket_path.clone();
 
     let socket_receiver = socket_channel(&args.socket_path)?;
@@ -365,8 +373,10 @@ fn loop_daemon(
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = cli::parse();
+    println!("Hello, world!");
 
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
@@ -376,7 +386,7 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    match daemon(args) {
+    match daemon(args).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {
