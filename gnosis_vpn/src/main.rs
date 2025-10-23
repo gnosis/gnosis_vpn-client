@@ -1,4 +1,5 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
@@ -8,7 +9,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net;
 use std::path::Path;
 use std::process;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::command::Command;
@@ -86,7 +86,7 @@ async fn config_channel(
     };
 
     let (sender, receiver) = mpsc::channel(32);
-    let watcher = match notify::recommended_watcher(move |res| {
+    let mut watcher = match notify::recommended_watcher(move |res| {
         // Use blocking_send to send from non-async context
         let _ = sender.blocking_send(res).map_err(|e| {
             tracing::error!(error = ?e, "error sending config watch event");
@@ -107,7 +107,7 @@ async fn config_channel(
     Ok((watcher, receiver))
 }
 
-fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net::UnixStream>, exitcode::ExitCode> {
+async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net::UnixStream>, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -116,7 +116,6 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
                     tracing::error!("system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);
                 }
-
                 Err(e) => {
                     tracing::debug!(warn = ?e, "done probing for running instance");
                 }
@@ -137,39 +136,36 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
         tracing::error!("socket path has no parent");
         exitcode::UNAVAILABLE
     })?;
-
     fs::create_dir_all(socket_dir).map_err(|e| {
         tracing::error!(error = %e, "error creating socket directory");
         exitcode::IOERR
     })?;
 
-    let stream = net::UnixListener::bind(socket_path).map_err(|e| {
+    let listener = UnixListener::bind(socket_path).map_err(|e| {
         tracing::error!(error = ?e, "error binding socket");
         exitcode::OSFILE
     })?;
 
     // update permissions to allow unprivileged access
-    // TODO this would better be handled by allowing group access and let the installer create a
-    // gvpn group and additionally add users to it
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666)).map_err(|e| {
         tracing::error!(error = ?e, "error setting socket permissions");
         exitcode::NOPERM
     })?;
 
-    let (sender, receiver) = crossbeam_channel::unbounded::<net::UnixStream>();
-    thread::spawn(move || {
-        for strm in stream.incoming() {
-            match strm {
-                Ok(s) => match sender.send(s) {
-                    Ok(_) => (),
-                    Err(e) => {
+    let (sender, receiver) = mpsc::channel(32);
+
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    if let Err(e) = sender.send(stream).await {
                         tracing::error!(error = ?e, "sending incoming data");
                     }
-                },
+                }
                 Err(e) => {
                     tracing::error!(error = ?e, "waiting for incoming message");
                 }
-            };
+            }
         }
     });
 
@@ -302,14 +298,14 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
+
     let ctrlc_receiver = ctrlc_channel().await?;
 
     // keep config watcher in scope so it does not get dropped
     let (_config_watcher, config_receiver) = config_channel(&config_path).await?;
 
     let socket_path = args.socket_path.clone();
-
-    let socket_receiver = socket_channel(&args.socket_path)?;
+    let socket_receiver = socket_channel(&args.socket_path).await?;
 
     let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args);
     match fs::remove_file(&socket_path) {
