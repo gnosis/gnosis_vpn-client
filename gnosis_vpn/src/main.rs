@@ -245,47 +245,43 @@ fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbe
 // handling fs config events with a grace period to avoid duplicate reads without delay
 const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
 
-fn incoming_config_fs_event(
-    res_event: Result<notify::Result<notify::Event>, crossbeam_channel::RecvError>,
-    config_path: &Path,
-) -> Option<crossbeam_channel::Receiver<Instant>> {
-    let event: notify::Result<notify::Event> = match res_event {
+fn incoming_config_fs_event(res_event: notify::Result<notify::Event>, config_path: &Path) -> bool {
+    let event = match res_event {
         Ok(evt) => evt,
         Err(e) => {
-            tracing::error!(error = ?e, "error receiving config event");
-            return None;
+            tracing::error!(error = ?e, "error watching config folder");
+            return false;
         }
     };
-
     tracing::debug!(?event, ?config_path, "incoming config event");
 
     match event {
-        Ok(notify::Event {
+        (notify::Event {
             kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
             paths,
             attrs: _,
         })
-        | Ok(notify::Event {
+        | (notify::Event {
             kind: kind @ notify::event::EventKind::Remove(notify::event::RemoveKind::File),
             paths,
             attrs: _,
         })
-        | Ok(notify::Event {
+        | (notify::Event {
             kind: kind @ notify::event::EventKind::Modify(notify::event::ModifyKind::Data(_)),
             paths,
             attrs: _,
         }) => {
-            if paths == vec![config_path] {
+            if paths.as_slice() == [config_path] {
                 tracing::debug!(?kind, "config file change detected");
-                Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
+                true
             } else {
-                None
+                false
             }
         }
-        Ok(_) => None,
+        Ok(_) => false,
         Err(e) => {
             tracing::error!(error = ?e, "error watching config folder");
-            None
+            false
         }
     }
 }
@@ -307,7 +303,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let socket_receiver = socket_channel(&args.socket_path).await?;
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args);
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args).await;
     match fs::remove_file(&socket_path) {
         Ok(_) => (),
         Err(e) => {
@@ -317,10 +313,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     Err(exit_code)
 }
 
-fn loop_daemon(
-    ctrlc_receiver: &crossbeam_channel::Receiver<()>,
-    config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
-    socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
+async fn loop_daemon(
+    ctrlc_receiver: &mpsc::Receiver<()>,
+    config_receiver: &mpsc::Receiver<notify::Result<notify::Event>>,
+    socket_receiver: &mpsc::Receiver<tokio::net::UnixStream>,
     args: cli::Cli,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
