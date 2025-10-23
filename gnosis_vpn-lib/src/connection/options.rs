@@ -86,7 +86,7 @@ impl Default for BufferSizes {
         Self {
             bridge: ByteSize::b(0),
             ping: ByteSize::kb(32),
-            // maximum allowed session buffer size
+            // using maximum allowed session buffer size
             main: ByteSize::mb(10),
         }
     }
