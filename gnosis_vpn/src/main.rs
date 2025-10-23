@@ -1,15 +1,15 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use tokio::net::UnixListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep};
 
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net;
 use std::path::Path;
 use std::process;
-use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::socket;
@@ -56,7 +56,7 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
 
 async fn config_channel(
     param_config_path: &Path,
-) -> Result<(RecommendedWatcher, mpsc::Receiver<notify::Result<notify::Event>>), exitcode::ExitCode> {
+) -> Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>), exitcode::ExitCode> {
     match param_config_path.try_exists() {
         Ok(true) => (),
         Ok(false) => {
@@ -86,11 +86,13 @@ async fn config_channel(
     };
 
     let (sender, receiver) = mpsc::channel(32);
-    let mut watcher = match notify::recommended_watcher(move |res| {
-        // Use blocking_send to send from non-async context
-        let _ = sender.blocking_send(res).map_err(|e| {
-            tracing::error!(error = ?e, "error sending config watch event");
-        });
+    let mut watcher = match notify::recommended_watcher(move |res| match res {
+        Ok(event) => {
+            sender.blocking_send(event).map_err(|e| {
+                tracing::error!(error = ?e, "error sending config watch event");
+            });
+        }
+        Err(e) => tracing::error!(error = ?e, "config watch error"),
     }) {
         Ok(watcher) => watcher,
         Err(e) => {
@@ -172,15 +174,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
     Ok(receiver)
 }
 
-fn incoming_stream(core: &mut core::Core, res_stream: Result<net::UnixStream, crossbeam_channel::RecvError>) {
-    let mut stream: net::UnixStream = match res_stream {
-        Ok(strm) => strm,
-        Err(e) => {
-            tracing::error!(error = ?e, "error receiving stream");
-            return;
-        }
-    };
-
+fn incoming_stream(core: &mut core::Core, stream: &mut UnixStream) {
     let mut msg = String::new();
     if let Err(e) = stream.read_to_string(&mut msg) {
         tracing::error!(error = ?e, "error reading message");
@@ -245,16 +239,8 @@ fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbe
 // handling fs config events with a grace period to avoid duplicate reads without delay
 const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
 
-fn incoming_config_fs_event(res_event: notify::Result<notify::Event>, config_path: &Path) -> bool {
-    let event = match res_event {
-        Ok(evt) => evt,
-        Err(e) => {
-            tracing::error!(error = ?e, "error watching config folder");
-            return false;
-        }
-    };
+fn incoming_config_fs_event(event: notify::Event, config_path: &Path) -> bool {
     tracing::debug!(?event, ?config_path, "incoming config event");
-
     match event {
         notify::Event {
             kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
@@ -311,14 +297,13 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
 async fn loop_daemon(
     ctrlc_receiver: &mpsc::Receiver<()>,
-    config_receiver: &mpsc::Receiver<notify::Result<notify::Event>>,
-    socket_receiver: &mpsc::Receiver<tokio::net::UnixStream>,
+    config_receiver: &mpsc::Receiver<notify::Event>,
+    socket_receiver: &mpsc::Receiver<UnixStream>,
     args: cli::Cli,
 ) -> exitcode::ExitCode {
-    let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
     let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
-    let mut core = match core::Core::init(&config_path, sender, hopr_params) {
+    let mut core = match core::Core::init(&config_path, hopr_params) {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");
@@ -326,44 +311,71 @@ async fn loop_daemon(
         }
     };
 
-    let mut read_config_receiver: crossbeam_channel::Receiver<Instant> = crossbeam_channel::never();
-    let mut shutdown_receiver: crossbeam_channel::Receiver<()> = crossbeam_channel::never();
+    // Channel to signal when to reload the config after the grace period
+    let (mut reload_sender, mut reload_receiver) = mpsc::channel(1);
+    // Channel to signal when shutdown is complete
+    let (mut shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
     let mut ctrc_already_triggered = false;
-
     tracing::info!("enter listening mode");
     loop {
-        crossbeam_channel::select! {
-            recv(ctrlc_receiver) -> _ => {
+        tokio::select! {
+            _ = ctrlc_receiver.recv() => {
                 if ctrc_already_triggered {
                     tracing::info!("force shutdown immediately");
                     return exitcode::OK;
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                    shutdown_receiver = core.shutdown();
+                     shutdown_receiver = core.shutdown().await;
                 }
             }
-            recv(shutdown_receiver) -> _ => {
+            _ = shutdown_receiver.recv() => {
                 return exitcode::OK;
             }
-            recv(socket_receiver) -> stream => incoming_stream(&mut core, stream),
-            recv(core_receiver) -> event => incoming_event(&mut core, event),
-            recv(config_receiver) -> event => {
-                let resp = incoming_config_fs_event(event, &config_path);
-                if let Some(r) = resp {
-                    read_config_receiver = r
+            res = socket_receiver.recv() => match res {
+                Some(stream) => incoming_stream(&mut core, &mut stream),
+                None => {
+                    tracing::error!("socket receiver closed unexpectedly");
+                    return exitcode::IOERR;
                 }
             },
-            recv(read_config_receiver) -> _ => {
-                match core.update_config(&config_path) {
-                    Ok(_) => {
-                        tracing::info!("updated configuration - resetting application");
+            res = config_receiver.recv() => match res {
+                Some(evt) => if incoming_config_fs_event(evt, &config_path) {
+                        let (tx, mut rx) = mpsc::channel(1);
+                        reload_sender = tx;
+
+                        // Spawn a task to handle the grace period
+                        tokio::spawn(async move {
+                            sleep(CONFIG_GRACE_PERIOD).await;
+                            // If we get here, no new events were received within the grace period
+                            // Check if this is the most recent channel by trying to send a signal
+                            if let Err(e) = reload_sender.send(()).await {
+                                tracing::error!(error = ?e, "error sending reload signal");
+                            }
+                        });
                     }
-                    Err(e) => {
-                        tracing::error!(error = ?e, "failed to update configuration - staying on current configuration");
+                None => {
+                    tracing::error!("config receiver closed unexpectedly");
+                    return exitcode::IOERR;
+                }
+            },
+            res = reload_receiver.recv() => match res {
+                Some(_) => {
+                    match core.update_config(&config_path).await {
+                        Ok(_) => {
+                            tracing::info!("updated configuration - resetting application");
+                        }
+                        Err(e) => {
+                            tracing::error!(error = ?e, "failed to update configuration - staying on current configuration");
+                        }
                     }
                 }
-            }
+                None => {
+                    tracing::error!("reload receiver closed unexpectedly");
+                    return exitcode::IOERR;
+                }
+            },
+
         }
     }
 }
