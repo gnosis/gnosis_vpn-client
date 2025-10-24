@@ -175,6 +175,10 @@ impl Core {
                                     continue;
                                 }
                             };
+                            if self.config == config {
+                                tracing::debug!("configuration unchanged - no action taken");
+                                continue;
+                            }
                             self.config = config;
                             self.cancel_token.cancel();
                             self.run_mode = RunMode::Initializing;
