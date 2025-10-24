@@ -30,7 +30,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
-mod run_mode;
+mod event_loop;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -150,34 +150,31 @@ impl Core {
     }
 
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
+        let cancel_token = CancellationToken::new();
+        let (results_sender, mut results_receiver) = mpsc::channel(32);
+        let mut event_loop = event_loop::EventLoop {};
+        tokio::spawn(async move { cancel_token.run_until_cancelled(event_loop.start(results_sender)).await });
         loop {
-            let run_mode = self.determine_run_mode();
-            let handle = tokio::spawn(async move { run_mode.run().await });
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
-                    self.handle_event(event).await;
+                    self.on_event(event).await;
                 }
-                res = handle => {
-                    match res {
-                        Ok(_) => {
-                            tracing::debug!("run mode task completed");
-                        }
-                        Err(e) => {
-                            tracing::error!(%e, "run mode task panicked");
-                        }
-                    }
+                Some(event) = results_receiver.recv() => {
+                    self.on_results(event).await;
                 }
             }
         }
     }
 
-    fn determine_run_mode(&self) -> run_mode::RunMode {
-        return run_mode::RunMode {};
+    async fn on_event(&mut self, event: Event) {
+        tracing::debug!(%event, "handling outside event");
+        // TODO implement event handling
+        unimplemented!()
     }
 
-    async fn handle_event(&mut self, event: Event) {
-        tracing::debug!(%event, "handling event");
-        // TODO implement event handling
+    async fn on_results(&mut self, results: event_loop::Results) {
+        tracing::debug!(%results, "handling inside event");
+        // TODO implement results handling
         unimplemented!()
     }
 

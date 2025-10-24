@@ -298,7 +298,7 @@ async fn loop_daemon(
 ) -> exitcode::ExitCode {
     let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
-    let (mut event_sender, event_receiver) = mpsc::channel(32);
+    let (mut event_sender, mut event_receiver) = mpsc::channel(32);
     let core = match core::Core::init(&config_path, hopr_params) {
         Ok(core) => core,
         Err(e) => {
@@ -308,7 +308,7 @@ async fn loop_daemon(
     };
 
     tracing::info!("enter listening mode");
-    tokio::spawn(async move { core.start(event_receiver).await });
+    tokio::spawn(async move { core.start(&mut event_receiver).await });
     let mut reload_cancel = CancellationToken::new();
 
     let mut ctrc_already_triggered = false;
