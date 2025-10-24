@@ -26,7 +26,7 @@ mod hopr_params;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
-    let (sender, receiver) = mpsc::channel(1);
+    let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
         tracing::error!(error = ?e, "error setting up SIGINT handler");
         exitcode::IOERR
@@ -37,16 +37,26 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     })?;
 
     tokio::spawn(async move {
-        tokio::select! {
-            _ = sigint.recv() => {
-                let _ = sender.send(()).await.map_err(|e| {
-                    tracing::error!(error = ?e, "sending sigint");
-                });
-            }
-            _ = sigterm.recv() => {
-                let _ = sender.send(()).await.map_err(|e| {
-                    tracing::error!(error = ?e, "sending sigterm");
-                });
+        loop {
+            tokio::select! {
+                Some(_) = sigint.recv() => {
+                        tracing::debug!("received SIGINT");
+                        if sender.send(()).await.is_err() {
+                            tracing::warn!("sigint: receiver closed");
+                            break;
+                        }
+                    },
+                Some(_) = sigterm.recv() => {
+                        tracing::debug!("received SIGTERM");
+                        if sender.send(()).await.is_err() {
+                            tracing::warn!("sigterm: receiver closed");
+                            break;
+                        }
+                    },
+                    else => {
+                        tracing::warn!("sigint and sigterm streams closed");
+                            break;
+                    }
             }
         }
     });
@@ -312,7 +322,8 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-            _ = ctrlc_receiver.recv() => {
+            res = ctrlc_receiver.recv() => match res {
+                Some(_) => {
                 if ctrc_already_triggered {
                     tracing::info!("force shutdown immediately");
                     return exitcode::OK;
@@ -333,7 +344,11 @@ async fn loop_daemon(
                         }
                     }
                 }
-            }
+                },
+                None => {
+                    tracing::warn!("ctrlc receiver closed unexpectedly");
+                }
+            },
             _ = &mut shutdown_receiver => {
                 tracing::info!("shutdown complete");
                 return exitcode::OK;
