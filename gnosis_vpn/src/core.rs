@@ -4,6 +4,8 @@ use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
+use tokio::sync::mpsc::Receiver;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use std::fmt::{self, Display};
@@ -130,8 +132,8 @@ enum Cancel {
 impl Core {
     pub fn init(
         config_path: &Path,
-        sender: crossbeam_channel::Sender<Event>,
         hopr_params: HoprParams,
+        event_receiver: ,
     ) -> Result<Core, Error> {
         let config = config::read(config_path)?;
         wg_tooling::available()?;
@@ -160,6 +162,58 @@ impl Core {
         core.run_mode = run_mode;
 
         Ok(core)
+    }
+
+    pub async fn run(mut self) {
+        match self.run_mode.clone() {
+            RunMode::Initializing => {
+                if hopr_config::has_safe() {
+                    tracing::debug!("safe found: init -> valueing ticket");
+                    self.run_mode = RunMode::ValueingTicket;
+                } else {
+                    tracing::debug!("safe not found: init -> onboarding");
+                    let keys = calc_keys(&self.hopr_params).unwrap();
+                    let node_address = keys.chain_key.public().to_address();
+                    // self.run_mode = RunMode::PreSafe { node_address };
+                }
+            }
+            // RunMode::PreSafe { node_address } => {}
+            RunMode::ValueingTicket => {
+                let keys = calc_keys(&self.hopr_params).unwrap();
+                let private_key = keys.chain_key;
+                let rpc_provider = self.hopr_params.rpc_provider.clone();
+                let network = self.hopr_params.network.clone();
+                unimplemented!("TODO cancel token");
+                /*
+                let res = self
+                    .cancel_token
+                    .run_until_cancelled(TicketStats::fetch(
+                        &private_key,
+                        rpc_provider.as_str(),
+                        &NetworkSpecifications::from_network(&network),
+                    ))
+                    .await;
+                match res {
+                    Some(Ok(stats)) => {
+                        tracing::debug!(?stats, "received ticket attributes");
+                        self.ticket_stats = Some(stats);
+                        // self.run_mode = RunMode::Syncing;
+                    }
+                    Some(Err(err)) => {
+                        tracing::error!(%err, "failed fetching ticket attributes");
+                        self.ticket_stats = None;
+                        self.run_mode = RunMode::ValueingTicket;
+                    }
+                    None => {
+                        tracing::debug!("cancelled ticket attributes fetching");
+                    }
+                }
+                */
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
     }
 
     fn determine_run_mode(&mut self) -> Result<RunMode, Error> {

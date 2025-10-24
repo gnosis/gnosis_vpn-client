@@ -302,7 +302,8 @@ async fn loop_daemon(
 ) -> exitcode::ExitCode {
     let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
-    let mut core = match core::Core::init(&config_path, hopr_params) {
+    let (mut event_sender, mut event_receiver) = mpsc::channel(32);
+    let core = match core::Core::init(&config_path, hopr_params, event_receiver) {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");
@@ -316,9 +317,9 @@ async fn loop_daemon(
     // let (mut shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
     let mut ctrc_already_triggered = false;
     tracing::info!("enter listening mode");
+    tokio::spawn(async move { core.run().await });
     loop {
         tokio::select! {
-            _ = &core.run().await => { },
             _ = ctrlc_receiver.recv() => {
                 if ctrc_already_triggered {
                     tracing::info!("force shutdown immediately");
