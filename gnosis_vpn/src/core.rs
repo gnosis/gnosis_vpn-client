@@ -30,6 +30,8 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod run_mode;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Configuration error: {0}")]
@@ -55,8 +57,6 @@ pub enum Error {
 pub struct Core {
     // configuration data
     config: Config,
-    // outside event receiver
-    event_receiver: mpsc::Receiver<Event>,
     // depending on safe creation state
     run_mode: RunMode,
     // enable cancellation of tasks
@@ -127,17 +127,12 @@ enum Cancel {
 }
 
 impl Core {
-    pub fn init(
-        config_path: &Path,
-        hopr_params: HoprParams,
-        event_receiver: mpsc::Receiver<Event>,
-    ) -> Result<Core, Error> {
+    pub fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path)?;
         wg_tooling::available()?;
 
         Ok(Core {
             config,
-            event_receiver,
             cancel_token: CancellationToken::new(),
             connection: None,
             run_mode: RunMode::Initializing,
@@ -154,103 +149,73 @@ impl Core {
         })
     }
 
-    pub async fn run(mut self) {
+    pub async fn start(mut self, event_receiver: mpsc::Receiver<Event>) {
         loop {
+            let run_mode = self.determine_run_mode();
+            let handle = tokio::spawn(run_mode.run().await);
             tokio::select! {
-                Some(event) = self.event_receiver.recv() => {
-                    match event {
-                        Event::Shutdown { resp } => {
-                            tracing::debug!("shutting down core");
-                            if resp.send(()).is_err() {
-                                tracing::warn!("shutdown receiver dropped");
-                            }
-                            break;
-                        }
-                        Event::ConfigReload { path }=> {
-                            tracing::debug!("reloading configuration");
-                            let config = match config::read(&path) {
-                                Ok(cfg) => cfg,
-                                Err(err) => {
-                                    tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
-                                    continue;
-                                }
-                            };
-                            if self.config == config {
-                                tracing::debug!("configuration unchanged - no action taken");
-                                continue;
-                            }
-                            self.config = config;
-                            self.cancel_token.cancel();
-                            self.run_mode = RunMode::Initializing;
-                        }
-                        evt => {
-                            tracing::debug!(%evt, "handling event");
-                            // TODO implement event handling
-                            unimplemented!()
-                        }
-                    }
-                }
-                else => {
-                    tracing::warn!("event receiver closed");
+                Some(event) = event_receiver.recv() => {
+                    self.handle_event(event).await;
                 }
             }
         }
     }
 
+    async fn handle_event(&mut self, event: Event) {
+        tracing::debug!(%event, "handling event");
+        // TODO implement event handling
+        unimplemented!()
+    }
+
     /*
-        pub async fn run(mut self) {
-            match self.run_mode.clone() {
-                RunMode::Initializing => {
-                    if hopr_config::has_safe() {
-                        tracing::debug!("safe found: init -> valueing ticket");
-                        self.run_mode = RunMode::ValueingTicket;
-                    } else {
-                        tracing::debug!("safe not found: init -> onboarding");
-                        let keys = calc_keys(&self.hopr_params).unwrap();
-                        let node_address = keys.chain_key.public().to_address();
-                        // self.run_mode = RunMode::PreSafe { node_address };
+            match event {
+                Event::Shutdown { resp } => {
+                    tracing::debug!("shutting down core");
+                    if resp.send(()).is_err() {
+                        tracing::warn!("shutdown receiver dropped");
                     }
+                    break;
                 }
-                // RunMode::PreSafe { node_address } => {}
-                RunMode::ValueingTicket => {
-                    let keys = calc_keys(&self.hopr_params).unwrap();
-                    let private_key = keys.chain_key;
-                    let rpc_provider = self.hopr_params.rpc_provider.clone();
-                    let network = self.hopr_params.network.clone();
-                    unimplemented!("TODO cancel token");
-                    /*
-                    let res = self
-                        .cancel_token
-                        .run_until_cancelled(TicketStats::fetch(
-                            &private_key,
-                            rpc_provider.as_str(),
-                            &NetworkSpecifications::from_network(&network),
-                        ))
-                        .await;
-                    match res {
-                        Some(Ok(stats)) => {
-                            tracing::debug!(?stats, "received ticket attributes");
-                            self.ticket_stats = Some(stats);
-                            // self.run_mode = RunMode::Syncing;
+                Event::ConfigReload { path }=> {
+                    tracing::debug!("reloading configuration");
+                    let config = match config::read(&path) {
+                        Ok(cfg) => cfg,
+                        Err(err) => {
+                            tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
+                            continue;
                         }
-                        Some(Err(err)) => {
-                            tracing::error!(%err, "failed fetching ticket attributes");
-                            self.ticket_stats = None;
-                            self.run_mode = RunMode::ValueingTicket;
-                        }
-                        None => {
-                            tracing::debug!("cancelled ticket attributes fetching");
-                        }
+                    };
+                    if self.config == config {
+                        tracing::debug!("configuration unchanged - no action taken");
+                        continue;
                     }
-                    */
+                    self.config = config;
+                    self.cancel_token.cancel();
+                    self.run_mode = RunMode::Initializing;
                 }
-                _ => {
+                evt => {
+                    tracing::debug!(%evt, "handling event");
+                    // TODO implement event handling
                     unimplemented!()
                 }
             }
         }
+        else => {
+            tracing::warn!("event receiver closed");
+        }
+    }
     */
 
+    async fn event_loop(mut self) {
+        loop {
+            // TODO implement event loop
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+        }
+    }
+
+    fn determine_run_mode(&self) -> run_mode::RunMode {
+        return run_mode::RunMode {};
+    }
     /*
         fn determine_run_mode(&mut self) -> Result<RunMode, Error> {
             match self.run_mode.clone() {
@@ -1244,6 +1209,59 @@ impl Display for RunMode {
             RunMode::ValueingTicket { .. } => write!(f, "ValueingTicket"),
             RunMode::Syncing { .. } => write!(f, "Syncing"),
             RunMode::Full { .. } => write!(f, "Full"),
+        }
+    }
+}
+
+async fn act_on_run_mode(run_mode: RunMode, hopr_params: HoprParams) -> Result<RunMode, Error> {
+    match run_mode.clone() {
+        RunMode::Initializing => {
+            if hopr_config::has_safe() {
+                tracing::debug!("safe found: init -> valueing ticket");
+                Ok(RunMode::ValueingTicket)
+            } else {
+                tracing::debug!("safe not found: init -> onboarding");
+                let keys = calc_keys(&hopr_params)?;
+                let node_address = keys.chain_key.public().to_address();
+                unimplemented!("TODO cancel token");
+                // Ok(RunMode::PreSafe { node_address })
+            }
+        }
+        // RunMode::PreSafe { node_address } => {}
+        RunMode::ValueingTicket => {
+            let keys = calc_keys(&hopr_params)?;
+            let private_key = keys.chain_key;
+            let rpc_provider = hopr_params.rpc_provider.clone();
+            let network = hopr_params.network.clone();
+            unimplemented!("TODO cancel token");
+            /*
+            let res = self
+                .cancel_token
+                .run_until_cancelled(TicketStats::fetch(
+                    &private_key,
+                    rpc_provider.as_str(),
+                    &NetworkSpecifications::from_network(&network),
+                ))
+                .await;
+            match res {
+                Some(Ok(stats)) => {
+                    tracing::debug!(?stats, "received ticket attributes");
+                    self.ticket_stats = Some(stats);
+                    // self.run_mode = RunMode::Syncing;
+                }
+                Some(Err(err)) => {
+                    tracing::error!(%err, "failed fetching ticket attributes");
+                    self.ticket_stats = None;
+                    self.run_mode = RunMode::ValueingTicket;
+                }
+                None => {
+                    tracing::debug!("cancelled ticket attributes fetching");
+                }
+            }
+            */
+        }
+        _ => {
+            unimplemented!()
         }
     }
 }
