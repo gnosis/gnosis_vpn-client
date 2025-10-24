@@ -161,11 +161,23 @@ impl Core {
                     match event {
                         Event::Shutdown { resp } => {
                             tracing::debug!("shutting down core");
-                            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                             if resp.send(()).is_err() {
                                 tracing::warn!("shutdown receiver dropped");
                             }
                             break;
+                        }
+                        Event::ConfigReload { path }=> {
+                            tracing::debug!("reloading configuration");
+                            let config = match config::read(&path) {
+                                Ok(cfg) => cfg,
+                                Err(err) => {
+                                    tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
+                                    continue;
+                                }
+                            };
+                            self.config = config;
+                            self.cancel_token.cancel();
+                            self.run_mode = RunMode::Initializing;
                         }
                         evt => {
                             tracing::debug!(%evt, "handling event");
