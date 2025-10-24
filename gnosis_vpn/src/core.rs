@@ -157,21 +157,25 @@ impl Core {
     pub async fn run(mut self) {
         loop {
             tokio::select! {
-            res = self.event_receiver.recv() => match res {
-                    Some(Event::Shutdown{ resp }) => {
-                        tracing::debug!("shutting down core");
-                        if resp.send(()).is_err() {
-                            tracing::warn!("failed to send shutdown complete signal");
+                Some(event) = self.event_receiver.recv() => {
+                    match event {
+                        Event::Shutdown { resp } => {
+                            tracing::debug!("shutting down core");
+                            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                            if resp.send(()).is_err() {
+                                tracing::warn!("shutdown receiver dropped");
+                            }
+                            break;
+                        }
+                        evt => {
+                            tracing::debug!(%evt, "handling event");
+                            // TODO implement event handling
+                            unimplemented!()
                         }
                     }
-                    Some(evt) => {
-                        tracing::debug!(%evt, "handling event");
-                        break;
-                    }
-                    None => {
-                        tracing::warn!("event receiver closed");
-                        break;
-                    }
+                }
+                else => {
+                    tracing::warn!("event receiver closed");
                 }
             }
         }
