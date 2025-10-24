@@ -15,6 +15,7 @@ pub enum Event {
     Shutdown {
         resp: oneshot::Sender<()>,
     },
+    ConfigReload,
 
     Connection(connection::Event),
     Node(node::Event),
@@ -29,6 +30,7 @@ impl Display for Event {
         match self {
             Event::Command { cmd, .. } => write!(f, "CommandEvent: {cmd}"),
             Event::Shutdown { .. } => write!(f, "ShutdownEvent"),
+            Event::ConfigReload => write!(f, "ConfigReloadEvent"),
             Event::Connection(event) => write!(f, "ConnectionEvent: {event}"),
             Event::Node(event) => write!(f, "NodeEvent: {event}"),
             Event::Onboarding(event) => write!(f, "OnboardingEvent: {event}"),
