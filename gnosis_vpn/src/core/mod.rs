@@ -153,29 +153,56 @@ impl Core {
         let cancel_token = CancellationToken::new();
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         let mut event_loop = event_loop::EventLoop {};
-        tokio::spawn(async move { cancel_token.run_until_cancelled(event_loop.start(results_sender)).await });
+        let event_loop_token = cancel_token.clone();
+        tokio::spawn(async move {
+            event_loop_token
+                .run_until_cancelled(event_loop.start(results_sender))
+                .await
+        });
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
-                    self.on_event(event).await;
+                    if self.on_event(event, cancel_token.clone()).await {
+                        continue;
+                    } else {
+                        break;
+                    }
                 }
                 Some(event) = results_receiver.recv() => {
                     self.on_results(event).await;
+                }
+                else => {
+                    tracing::warn!("event receiver closed");
+                    break;
                 }
             }
         }
     }
 
-    async fn on_event(&mut self, event: Event) {
+    async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
         tracing::debug!(%event, "handling outside event");
-        // TODO implement event handling
-        unimplemented!()
+        match event {
+            Event::Shutdown { resp } => {
+                tracing::debug!("shutting down core");
+                cancel_token.cancel();
+                if resp.send(()).is_err() {
+                    tracing::warn!("shutdown receiver dropped");
+                }
+                false
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
     }
 
     async fn on_results(&mut self, results: event_loop::Results) {
         tracing::debug!(%results, "handling inside event");
-        // TODO implement results handling
-        unimplemented!()
+        match results {
+            event_loop::Results::Foobar => {
+                tracing::info!("received Foobar result");
+            }
+        }
     }
 
     /*
@@ -885,6 +912,7 @@ impl Core {
     */
 }
 
+/*
 fn setup_onboarding(
     sender: crossbeam_channel::Sender<Event>,
     cancel_receiver: crossbeam_channel::Receiver<Cancel>,
@@ -1172,6 +1200,7 @@ fn fetch_ticket_stats(
         }
     });
 }
+*/
 
 fn calc_keys(hopr_params: &HoprParams) -> Result<HoprKeys, Error> {
     let identity_file = match &hopr_params.identity_file {
