@@ -130,11 +130,7 @@ enum Cancel {
 }
 
 impl Core {
-    pub fn init(
-        config_path: &Path,
-        hopr_params: HoprParams,
-        event_receiver: ,
-    ) -> Result<Core, Error> {
+    pub fn init(config_path: &Path, hopr_params: HoprParams, event_receiver: Receiver<Event>) -> Result<Core, Error> {
         let config = config::read(config_path)?;
         wg_tooling::available()?;
 
