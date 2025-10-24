@@ -149,16 +149,30 @@ impl Core {
         })
     }
 
-    pub async fn start(mut self, event_receiver: mpsc::Receiver<Event>) {
+    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
         loop {
             let run_mode = self.determine_run_mode();
-            let handle = tokio::spawn(run_mode.run().await);
+            let handle = tokio::spawn(async move { run_mode.run().await });
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
                     self.handle_event(event).await;
                 }
+                res = handle => {
+                    match res {
+                        Ok(_) => {
+                            tracing::debug!("run mode task completed");
+                        }
+                        Err(e) => {
+                            tracing::error!(%e, "run mode task panicked");
+                        }
+                    }
+                }
             }
         }
+    }
+
+    fn determine_run_mode(&self) -> run_mode::RunMode {
+        return run_mode::RunMode {};
     }
 
     async fn handle_event(&mut self, event: Event) {
@@ -213,9 +227,6 @@ impl Core {
         }
     }
 
-    fn determine_run_mode(&self) -> run_mode::RunMode {
-        return run_mode::RunMode {};
-    }
     /*
         fn determine_run_mode(&mut self) -> Result<RunMode, Error> {
             match self.run_mode.clone() {
