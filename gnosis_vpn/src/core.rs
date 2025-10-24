@@ -4,7 +4,7 @@ use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -55,15 +55,12 @@ pub enum Error {
 pub struct Core {
     // configuration data
     config: Config,
-    // global event transmitter
-    sender: crossbeam_channel::Sender<Event>,
-    // shutdown event emitter
-    shutdown_sender: Option<crossbeam_channel::Sender<()>>,
-    // internal cancellation sender
-    cancel_channel: (crossbeam_channel::Sender<Cancel>, crossbeam_channel::Receiver<Cancel>),
-
+    // outside event receiver
+    event_receiver: mpsc::Receiver<Event>,
     // depending on safe creation state
     run_mode: RunMode,
+    // enable cancellation of tasks
+    cancel_token: CancellationToken,
 
     // connection to exit node
     connection: Option<connection::Connection>,
@@ -130,15 +127,18 @@ enum Cancel {
 }
 
 impl Core {
-    pub fn init(config_path: &Path, hopr_params: HoprParams, event_receiver: Receiver<Event>) -> Result<Core, Error> {
+    pub fn init(
+        config_path: &Path,
+        hopr_params: HoprParams,
+        event_receiver: mpsc::Receiver<Event>,
+    ) -> Result<Core, Error> {
         let config = config::read(config_path)?;
         wg_tooling::available()?;
 
-        let cancel_channel = crossbeam_channel::unbounded::<Cancel>();
-        let mut core = Core {
+        Ok(Core {
             config,
-            sender: sender.clone(),
-            shutdown_sender: None,
+            event_receiver,
+            cancel_token: CancellationToken::new(),
             connection: None,
             run_mode: RunMode::Initializing,
             session_connected: false,
@@ -146,210 +146,225 @@ impl Core {
             balance: None,
             info: None,
             hopr_params,
-            cancel_channel,
             presafe_balance: None,
             funding_tool: balance::FundingTool::NotStarted,
             funded_channels: Vec::new(),
             metrics: None,
             ticket_stats: None,
-        };
-
-        let run_mode = core.determine_run_mode()?;
-        core.run_mode = run_mode;
-
-        Ok(core)
+        })
     }
 
     pub async fn run(mut self) {
-        match self.run_mode.clone() {
-            RunMode::Initializing => {
-                if hopr_config::has_safe() {
-                    tracing::debug!("safe found: init -> valueing ticket");
-                    self.run_mode = RunMode::ValueingTicket;
-                } else {
-                    tracing::debug!("safe not found: init -> onboarding");
-                    let keys = calc_keys(&self.hopr_params).unwrap();
-                    let node_address = keys.chain_key.public().to_address();
-                    // self.run_mode = RunMode::PreSafe { node_address };
-                }
-            }
-            // RunMode::PreSafe { node_address } => {}
-            RunMode::ValueingTicket => {
-                let keys = calc_keys(&self.hopr_params).unwrap();
-                let private_key = keys.chain_key;
-                let rpc_provider = self.hopr_params.rpc_provider.clone();
-                let network = self.hopr_params.network.clone();
-                unimplemented!("TODO cancel token");
-                /*
-                let res = self
-                    .cancel_token
-                    .run_until_cancelled(TicketStats::fetch(
-                        &private_key,
-                        rpc_provider.as_str(),
-                        &NetworkSpecifications::from_network(&network),
-                    ))
-                    .await;
-                match res {
-                    Some(Ok(stats)) => {
-                        tracing::debug!(?stats, "received ticket attributes");
-                        self.ticket_stats = Some(stats);
-                        // self.run_mode = RunMode::Syncing;
-                    }
-                    Some(Err(err)) => {
-                        tracing::error!(%err, "failed fetching ticket attributes");
-                        self.ticket_stats = None;
-                        self.run_mode = RunMode::ValueingTicket;
+        loop {
+            tokio::select! {
+            res = self.event_receiver.recv() => match res {
+                    Some(evt) => {
+                        tracing::info!(%evt, "received event");
                     }
                     None => {
-                        tracing::debug!("cancelled ticket attributes fetching");
+                        tracing::warn!("event receiver closed");
+                        break;
                     }
                 }
-                */
-            }
-            _ => {
-                unimplemented!()
             }
         }
     }
 
-    fn determine_run_mode(&mut self) -> Result<RunMode, Error> {
-        match self.run_mode.clone() {
-            RunMode::Initializing => {
-                if hopr_config::has_safe() {
-                    tracing::debug!("safe found: init -> valueing ticket");
-                    let keys = calc_keys(&self.hopr_params)?;
-                    fetch_ticket_stats(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        keys.chain_key,
-                        self.hopr_params.rpc_provider.clone(),
-                        self.hopr_params.network.clone(),
-                    );
-                    Ok(RunMode::ValueingTicket)
-                } else {
-                    tracing::debug!("safe not found: init -> onboarding");
-                    let keys = calc_keys(&self.hopr_params)?;
-                    let node_address = keys.chain_key.public().to_address();
-                    let onboarding = setup_onboarding(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        keys.chain_key.clone(),
-                        &self.hopr_params,
-                        node_address,
-                    );
-                    onboarding.run();
-                    Ok(RunMode::PreSafe {
-                        node_address,
-                        onboarding: Box::new(onboarding),
-                    })
+    /*
+        pub async fn run(mut self) {
+            match self.run_mode.clone() {
+                RunMode::Initializing => {
+                    if hopr_config::has_safe() {
+                        tracing::debug!("safe found: init -> valueing ticket");
+                        self.run_mode = RunMode::ValueingTicket;
+                    } else {
+                        tracing::debug!("safe not found: init -> onboarding");
+                        let keys = calc_keys(&self.hopr_params).unwrap();
+                        let node_address = keys.chain_key.public().to_address();
+                        // self.run_mode = RunMode::PreSafe { node_address };
+                    }
+                }
+                // RunMode::PreSafe { node_address } => {}
+                RunMode::ValueingTicket => {
+                    let keys = calc_keys(&self.hopr_params).unwrap();
+                    let private_key = keys.chain_key;
+                    let rpc_provider = self.hopr_params.rpc_provider.clone();
+                    let network = self.hopr_params.network.clone();
+                    unimplemented!("TODO cancel token");
+                    /*
+                    let res = self
+                        .cancel_token
+                        .run_until_cancelled(TicketStats::fetch(
+                            &private_key,
+                            rpc_provider.as_str(),
+                            &NetworkSpecifications::from_network(&network),
+                        ))
+                        .await;
+                    match res {
+                        Some(Ok(stats)) => {
+                            tracing::debug!(?stats, "received ticket attributes");
+                            self.ticket_stats = Some(stats);
+                            // self.run_mode = RunMode::Syncing;
+                        }
+                        Some(Err(err)) => {
+                            tracing::error!(%err, "failed fetching ticket attributes");
+                            self.ticket_stats = None;
+                            self.run_mode = RunMode::ValueingTicket;
+                        }
+                        None => {
+                            tracing::debug!("cancelled ticket attributes fetching");
+                        }
+                    }
+                    */
+                }
+                _ => {
+                    unimplemented!()
                 }
             }
-            RunMode::PreSafe {
-                node_address: _,
-                onboarding: _,
-            } => {
-                if hopr_config::has_safe() {
-                    tracing::debug!("safe found: onboarding -> valueing ticket");
-                    _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to onboarding");
-                    });
-                    let keys = calc_keys(&self.hopr_params)?;
-                    fetch_ticket_stats(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        keys.chain_key,
-                        self.hopr_params.rpc_provider.clone(),
-                        self.hopr_params.network.clone(),
-                    );
-                    Ok(RunMode::ValueingTicket)
-                } else {
-                    tracing::debug!("safe not found: onboarding");
-                    Ok(self.run_mode.clone())
-                }
-            }
-            RunMode::ValueingTicket => {
-                if let Some(stats) = &self.ticket_stats {
-                    tracing::debug!("ticket stats: valueing ticket -> syncing");
-                    _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to onboarding");
-                    });
-                    let ticket_value = stats.ticket_value()?;
-                    let cfg = match self.hopr_params.config_mode.clone() {
-                        // use user provided configuration path
-                        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
-                        // check status of config generation
-                        hopr_params::ConfigFileMode::Generated => hopr_config::generate(
-                            self.hopr_params.network.clone(),
+        }
+    */
+
+    /*
+        fn determine_run_mode(&mut self) -> Result<RunMode, Error> {
+            match self.run_mode.clone() {
+                RunMode::Initializing => {
+                    if hopr_config::has_safe() {
+                        tracing::debug!("safe found: init -> valueing ticket");
+                        let keys = calc_keys(&self.hopr_params)?;
+                        fetch_ticket_stats(
+                            self.sender.clone(),
+                            self.cancel_channel.1.clone(),
+                            keys.chain_key,
                             self.hopr_params.rpc_provider.clone(),
+                            self.hopr_params.network.clone(),
+                        );
+                        Ok(RunMode::ValueingTicket)
+                    } else {
+                        tracing::debug!("safe not found: init -> onboarding");
+                        let keys = calc_keys(&self.hopr_params)?;
+                        let node_address = keys.chain_key.public().to_address();
+                        let onboarding = setup_onboarding(
+                            self.sender.clone(),
+                            self.cancel_channel.1.clone(),
+                            keys.chain_key.clone(),
+                            &self.hopr_params,
+                            node_address,
+                        );
+                        onboarding.run();
+                        Ok(RunMode::PreSafe {
+                            node_address,
+                            onboarding: Box::new(onboarding),
+                        })
+                    }
+                }
+                RunMode::PreSafe {
+                    node_address: _,
+                    onboarding: _,
+                } => {
+                    if hopr_config::has_safe() {
+                        tracing::debug!("safe found: onboarding -> valueing ticket");
+                        _ = self.cancel_channel.0.send(Cancel::Onboarding).map_err(|e| {
+                            tracing::error!(%e, "failed to send cancel event to onboarding");
+                        });
+                        let keys = calc_keys(&self.hopr_params)?;
+                        fetch_ticket_stats(
+                            self.sender.clone(),
+                            self.cancel_channel.1.clone(),
+                            keys.chain_key,
+                            self.hopr_params.rpc_provider.clone(),
+                            self.hopr_params.network.clone(),
+                        );
+                        Ok(RunMode::ValueingTicket)
+                    } else {
+                        tracing::debug!("safe not found: onboarding");
+                        Ok(self.run_mode.clone())
+                    }
+                }
+                RunMode::ValueingTicket => {
+                    if let Some(stats) = &self.ticket_stats {
+                        tracing::debug!("ticket stats: valueing ticket -> syncing");
+                        _ = self.cancel_channel.0.send(Cancel::ValueingTicket).map_err(|e| {
+                            tracing::error!(%e, "failed to send cancel event to onboarding");
+                        });
+                        let ticket_value = stats.ticket_value()?;
+                        let cfg = match self.hopr_params.config_mode.clone() {
+                            // use user provided configuration path
+                            hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
+                            // check status of config generation
+                            hopr_params::ConfigFileMode::Generated => hopr_config::generate(
+                                self.hopr_params.network.clone(),
+                                self.hopr_params.rpc_provider.clone(),
+                                ticket_value,
+                            )?,
+                        };
+                        let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
+                        let keys = calc_keys(&self.hopr_params)?;
+                        let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
+                        let hopr = Arc::new(hoprd);
+                        let node = setup_node(
+                            self.sender.clone(),
+                            self.cancel_channel.1.clone(),
+                            hopr.clone(),
+                            hopr_startup_notifier_rx.clone(),
+                        )?;
+                        let metrics = setup_metrics(self.sender.clone(), self.cancel_channel.1.clone(), hopr.clone())?;
+                        node.run();
+                        metrics.run();
+
+                        Ok(RunMode::Syncing {
+                            hopr,
+                            node: Box::new(node),
+                            metrics: Box::new(metrics),
                             ticket_value,
-                        )?,
-                    };
-                    let (hopr_startup_notifier_tx, hopr_startup_notifier_rx) = crossbeam_channel::bounded(1);
-                    let keys = calc_keys(&self.hopr_params)?;
-                    let hoprd = Hopr::new(cfg, keys, hopr_startup_notifier_tx)?;
-                    let hopr = Arc::new(hoprd);
-                    let node = setup_node(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        hopr.clone(),
-                        hopr_startup_notifier_rx.clone(),
-                    )?;
-                    let metrics = setup_metrics(self.sender.clone(), self.cancel_channel.1.clone(), hopr.clone())?;
-                    node.run();
-                    metrics.run();
+                        })
+                    } else {
+                        tracing::debug!("no ticket stats: valueing ticket");
+                        Ok(self.run_mode.clone())
+                    }
+                }
+                RunMode::Syncing {
+                    hopr,
+                    node,
+                    metrics,
+                    ticket_value,
+                } => {
+                    if hopr.status() == HoprState::Running {
+                        tracing::debug!("hopr running: syncing -> full");
+                        metrics.cancel();
+                        _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
+                            tracing::error!(%e, "failed to send cancel event to onboarding");
+                        });
 
-                    Ok(RunMode::Syncing {
-                        hopr,
-                        node: Box::new(node),
-                        metrics: Box::new(metrics),
-                        ticket_value,
-                    })
-                } else {
-                    tracing::debug!("no ticket stats: valueing ticket");
+                        let channel_funding = setup_channel_funding(
+                            self.sender.clone(),
+                            self.cancel_channel.1.clone(),
+                            hopr.clone(),
+                            self.config.channel_targets(),
+                            ticket_value,
+                        )?;
+
+                        channel_funding.run();
+
+                        Ok(RunMode::Full {
+                            hopr: hopr.clone(),
+                            node: node.clone(),
+                            channel_funding: Box::new(channel_funding),
+                            ticket_value,
+                        })
+                    } else {
+                        tracing::debug!("hopr not running: syncing");
+                        Ok(self.run_mode.clone())
+                    }
+                }
+                RunMode::Full { .. } => {
+                    tracing::debug!("full operation");
                     Ok(self.run_mode.clone())
                 }
-            }
-            RunMode::Syncing {
-                hopr,
-                node,
-                metrics,
-                ticket_value,
-            } => {
-                if hopr.status() == HoprState::Running {
-                    tracing::debug!("hopr running: syncing -> full");
-                    metrics.cancel();
-                    _ = self.cancel_channel.0.send(Cancel::Metrics).map_err(|e| {
-                        tracing::error!(%e, "failed to send cancel event to onboarding");
-                    });
-
-                    let channel_funding = setup_channel_funding(
-                        self.sender.clone(),
-                        self.cancel_channel.1.clone(),
-                        hopr.clone(),
-                        self.config.channel_targets(),
-                        ticket_value,
-                    )?;
-
-                    channel_funding.run();
-
-                    Ok(RunMode::Full {
-                        hopr: hopr.clone(),
-                        node: node.clone(),
-                        channel_funding: Box::new(channel_funding),
-                        ticket_value,
-                    })
-                } else {
-                    tracing::debug!("hopr not running: syncing");
-                    Ok(self.run_mode.clone())
-                }
-            }
-            RunMode::Full { .. } => {
-                tracing::debug!("full operation");
-                Ok(self.run_mode.clone())
             }
         }
-    }
+    */
 
+    /*
     pub fn shutdown(&mut self) -> crossbeam_channel::Receiver<()> {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         self.shutdown_sender = Some(sender);
@@ -416,128 +431,132 @@ impl Core {
         }
         receiver
     }
+        */
 
-    pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
-        tracing::debug!(%cmd, "handling command");
-        let destinations = self.config.destinations.clone();
-        match cmd {
-            Command::Ping => Ok(Response::Pong),
-            Command::Connect(address) => match destinations.get(address) {
-                Some(dest) => {
-                    self.target_destination = Some(dest.clone());
+    /*
+        pub fn handle_cmd(&mut self, cmd: &Command) -> Result<Response, Error> {
+            tracing::debug!(%cmd, "handling command");
+            let destinations = self.config.destinations.clone();
+            match cmd {
+                Command::Ping => Ok(Response::Pong),
+                Command::Connect(address) => match destinations.get(address) {
+                    Some(dest) => {
+                        self.target_destination = Some(dest.clone());
+                        self.act_on_target()?;
+                        Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
+                    }
+                    None => {
+                        tracing::info!(address = %address, "cannot connect to destination - address not found");
+                        Ok(Response::connect(command::ConnectResponse::address_not_found()))
+                    }
+                },
+                Command::Disconnect => {
+                    self.target_destination = None;
                     self.act_on_target()?;
-                    Ok(Response::connect(command::ConnectResponse::new(dest.clone().into())))
-                }
-                None => {
-                    tracing::info!(address = %address, "cannot connect to destination - address not found");
-                    Ok(Response::connect(command::ConnectResponse::address_not_found()))
-                }
-            },
-            Command::Disconnect => {
-                self.target_destination = None;
-                self.act_on_target()?;
-                let dest = self.connection.as_ref().map(|c| c.destination());
-                match dest {
-                    Some(d) => Ok(Response::disconnect(command::DisconnectResponse::new(d.into()))),
-                    None => Ok(Response::disconnect(command::DisconnectResponse::not_connected())),
-                }
-            }
-            Command::Status => {
-                let run_mode = match &self.run_mode {
-                    RunMode::Initializing => command::RunMode::initializing(),
-                    RunMode::PreSafe { node_address, .. } => {
-                        let balance = self.presafe_balance.clone().unwrap_or_default();
-                        let funding_tool = self.funding_tool.clone();
-                        command::RunMode::preparing_safe(*node_address, balance, funding_tool)
+                    let dest = self.connection.as_ref().map(|c| c.destination());
+                    match dest {
+                        Some(d) => Ok(Response::disconnect(command::DisconnectResponse::new(d.into()))),
+                        None => Ok(Response::disconnect(command::DisconnectResponse::not_connected())),
                     }
-                    RunMode::Syncing { hopr, .. } => {
-                        let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
-                        command::RunMode::warmup(syncing, hopr.status().to_string())
-                    }
-                    RunMode::ValueingTicket { .. } => command::RunMode::valueing_ticket(),
-                    RunMode::Full { hopr, .. } => {
-                        let connection_state = match (
-                            self.target_destination.clone(),
-                            self.connection.clone().map(|c| c.destination()),
-                            self.session_connected,
-                        ) {
-                            (Some(dest), _, true) => command::ConnectionState::connected(dest.clone().into()),
-                            (Some(dest), _, false) => command::ConnectionState::connecting(dest.clone().into()),
-                            (None, Some(conn_dest), _) => command::ConnectionState::disconnecting(conn_dest.into()),
-                            (None, None, _) => command::ConnectionState::disconnected(),
-                        };
-                        let funding_state: command::FundingState =
-                            if let (Some(balance), Some(ticket_stats)) = (&self.balance, &self.ticket_stats) {
-                                let ticket_value = ticket_stats.ticket_value()?;
-                                balance
-                                    .to_funding_issues(self.config.channel_targets().len(), ticket_value)
-                                    .into()
-                            } else {
-                                command::FundingState::Unknown
+                }
+                Command::Status => {
+                    let run_mode = match &self.run_mode {
+                        RunMode::Initializing => command::RunMode::initializing(),
+                        RunMode::PreSafe { node_address, .. } => {
+                            let balance = self.presafe_balance.clone().unwrap_or_default();
+                            let funding_tool = self.funding_tool.clone();
+                            command::RunMode::preparing_safe(*node_address, balance, funding_tool)
+                        }
+                        RunMode::Syncing { hopr, .. } => {
+                            let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
+                            command::RunMode::warmup(syncing, hopr.status().to_string())
+                        }
+                        RunMode::ValueingTicket { .. } => command::RunMode::valueing_ticket(),
+                        RunMode::Full { hopr, .. } => {
+                            let connection_state = match (
+                                self.target_destination.clone(),
+                                self.connection.clone().map(|c| c.destination()),
+                                self.session_connected,
+                            ) {
+                                (Some(dest), _, true) => command::ConnectionState::connected(dest.clone().into()),
+                                (Some(dest), _, false) => command::ConnectionState::connecting(dest.clone().into()),
+                                (None, Some(conn_dest), _) => command::ConnectionState::disconnecting(conn_dest.into()),
+                                (None, None, _) => command::ConnectionState::disconnected(),
                             };
+                            let funding_state: command::FundingState =
+                                if let (Some(balance), Some(ticket_stats)) = (&self.balance, &self.ticket_stats) {
+                                    let ticket_value = ticket_stats.ticket_value()?;
+                                    balance
+                                        .to_funding_issues(self.config.channel_targets().len(), ticket_value)
+                                        .into()
+                                } else {
+                                    command::FundingState::Unknown
+                                };
 
-                        command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
+                            command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
+                        }
+                    };
+
+                    let available_destinations = self
+                        .config
+                        .destinations
+                        .values()
+                        .map(|v| {
+                            let dest = v.clone();
+                            dest.into()
+                        })
+                        .collect();
+                    let network = self.hopr_params.network.clone();
+                    Ok(Response::status(command::StatusResponse::new(
+                        run_mode,
+                        available_destinations,
+                        network,
+                    )))
+                }
+                Command::Balance => match (&self.balance, &self.info, &self.ticket_stats) {
+                    (Some(balance), Some(info), Some(ticket_stats)) => {
+                        let ticket_value = ticket_stats.ticket_value()?;
+                        let issues: Vec<balance::FundingIssue> =
+                            balance.to_funding_issues(self.config.channel_targets().len(), ticket_value);
+
+                        let resp = command::BalanceResponse::new(
+                            format!("{} xDai", balance.node_xdai),
+                            format!("{} wxHOPR", balance.safe_wxhopr),
+                            format!("{} wxHOPR", balance.channels_out_wxhopr),
+                            issues,
+                            command::Addresses {
+                                node: info.node_address,
+                                safe: info.safe_address,
+                            },
+                        );
+                        Ok(Response::Balance(Some(resp)))
                     }
-                };
-
-                let available_destinations = self
-                    .config
-                    .destinations
-                    .values()
-                    .map(|v| {
-                        let dest = v.clone();
-                        dest.into()
-                    })
-                    .collect();
-                let network = self.hopr_params.network.clone();
-                Ok(Response::status(command::StatusResponse::new(
-                    run_mode,
-                    available_destinations,
-                    network,
-                )))
-            }
-            Command::Balance => match (&self.balance, &self.info, &self.ticket_stats) {
-                (Some(balance), Some(info), Some(ticket_stats)) => {
-                    let ticket_value = ticket_stats.ticket_value()?;
-                    let issues: Vec<balance::FundingIssue> =
-                        balance.to_funding_issues(self.config.channel_targets().len(), ticket_value);
-
-                    let resp = command::BalanceResponse::new(
-                        format!("{} xDai", balance.node_xdai),
-                        format!("{} wxHOPR", balance.safe_wxhopr),
-                        format!("{} wxHOPR", balance.channels_out_wxhopr),
-                        issues,
-                        command::Addresses {
-                            node: info.node_address,
-                            safe: info.safe_address,
-                        },
-                    );
-                    Ok(Response::Balance(Some(resp)))
-                }
-                _ => Ok(Response::Balance(None)),
-            },
-            Command::RefreshNode => {
-                // TODO
-                Ok(Response::Empty)
-            }
-            Command::FundingTool(secret) => match &self.run_mode {
-                RunMode::PreSafe {
-                    onboarding,
-                    node_address,
-                    ..
-                } => {
-                    self.funding_tool = balance::FundingTool::InProgress;
-                    onboarding.fund_address(node_address, secret)?;
+                    _ => Ok(Response::Balance(None)),
+                },
+                Command::RefreshNode => {
+                    // TODO
                     Ok(Response::Empty)
                 }
-                _ => {
-                    tracing::warn!("funding tool only available during onboarding");
-                    Ok(Response::Empty)
-                }
-            },
+                Command::FundingTool(secret) => match &self.run_mode {
+                    RunMode::PreSafe {
+                        onboarding,
+                        node_address,
+                        ..
+                    } => {
+                        self.funding_tool = balance::FundingTool::InProgress;
+                        onboarding.fund_address(node_address, secret)?;
+                        Ok(Response::Empty)
+                    }
+                    _ => {
+                        tracing::warn!("funding tool only available during onboarding");
+                        Ok(Response::Empty)
+                    }
+                },
+            }
         }
-    }
+    */
 
+    /*
     pub fn handle_event(&mut self, event: Event) -> Result<(), Error> {
         tracing::debug!(%event, "handling event");
         match event {
@@ -567,7 +586,9 @@ impl Core {
             Event::TicketStats(Err(err)) => self.on_failed_valueing_ticket(),
         }
     }
+    */
 
+    /*
     pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
         let config = config::read(config_path)?;
         // update target
@@ -597,7 +618,9 @@ impl Core {
             Ok(())
         }
     }
+    */
 
+    /*
     fn act_on_target(&mut self) -> Result<(), Error> {
         match (self.target_destination.clone(), &mut self.connection) {
             (Some(dest), Some(conn)) => {
@@ -797,9 +820,11 @@ impl Core {
 
     fn on_channels_funded(&mut self) -> Result<(), Error> {
         tracing::info!("channel funding completed successfully");
+        /*
         _ = self.cancel_channel.0.send(Cancel::ChannelFunding).map_err(|e| {
             tracing::error!(%e, "failed to send cancel event to channel funding");
         });
+        */
         Ok(())
     }
 
@@ -815,7 +840,9 @@ impl Core {
         // TODO start from scratch
         Ok(())
     }
+    */
 
+    /*
     fn cancel_run_mode(&mut self) {
         match self.run_mode.clone() {
             RunMode::Initializing => {}
@@ -855,6 +882,7 @@ impl Core {
             }
         }
     }
+    */
 }
 
 fn setup_onboarding(

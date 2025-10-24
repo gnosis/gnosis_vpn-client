@@ -88,7 +88,7 @@ async fn config_channel(
     let (sender, receiver) = mpsc::channel(32);
     let mut watcher = match notify::recommended_watcher(move |res| match res {
         Ok(event) => {
-            sender.blocking_send(event).map_err(|e| {
+            let _ = sender.blocking_send(event).map_err(|e| {
                 tracing::error!(error = ?e, "error sending config watch event");
             });
         }
@@ -225,25 +225,6 @@ async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sende
     }
 }
 
-fn incoming_event(core: &mut core::Core, res_event: Result<event::Event, crossbeam_channel::RecvError>) {
-    let event: event::Event = match res_event {
-        Ok(evt) => evt,
-        Err(e) => {
-            tracing::error!(error = ?e, "error receiving event");
-            return;
-        }
-    };
-
-    tracing::debug!(event = %event, "incoming event");
-
-    match core.handle_event(event) {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!(error = ?e, "error handling event")
-        }
-    }
-}
-
 // handling fs config events with a grace period to avoid duplicate reads without delay
 const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
 
@@ -364,16 +345,25 @@ async fn loop_daemon(
                     return exitcode::IOERR;
                 }
             },
-            _  = config_receiver.recv() => {
-                reload_cancel.cancel();
-            reload_cancel = CancellationToken::new();
-                reload_cancel.run_until_cancelled(async {
+            res  = config_receiver.recv() => match res {
+                Some(evt) => if incoming_config_fs_event(evt, &config_path) {
+                    reload_cancel.cancel();
+                    reload_cancel = CancellationToken::new();
+                    let cancel_token = reload_cancel.clone();
+                    let evt_sender = event_sender.clone();
+                    tokio::spawn(async move {
+                        cancel_token.run_until_cancelled(async move {
                             sleep(CONFIG_GRACE_PERIOD).await;
-                            if let Err(err) = event_sender.send(event::Event::ConfigReload).await {
+                            if let Err(err) = evt_sender.send(event::Event::ConfigReload).await {
                                 tracing::error!(error = ?err, "error sending config reload event");
                             }
-                });
-        },
+                    }).await});
+                }
+                None => {
+                    tracing::error!("config receiver closed unexpectedly");
+                    return exitcode::IOERR;
+                }
+            },
 
 
         }
