@@ -4,13 +4,14 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, sleep};
+use tokio_util::sync::CancellationToken;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process;
 
-use gnosis_vpn_lib::command::{self, Command, Response};
+use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -191,7 +192,7 @@ async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sende
     tracing::debug!(command = %cmd, "incoming command");
 
     let (resp_sender, resp_receiver) = oneshot::channel();
-    match event_sender.send(event::new_command(cmd, resp_sender)).await {
+    match event_sender.send(event::command(cmd, resp_sender)).await {
         Ok(()) => (),
         Err(e) => {
             tracing::error!(error = ?e, "error handling command");
@@ -284,15 +285,15 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         }
     };
 
-    let ctrlc_receiver = ctrlc_channel().await?;
+    let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = config_channel(&config_path).await?;
+    let (_config_watcher, mut config_receiver) = config_channel(&config_path).await?;
 
     let socket_path = args.socket_path.clone();
-    let socket_receiver = socket_channel(&args.socket_path).await?;
+    let mut socket_receiver = socket_channel(&args.socket_path).await?;
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args).await;
+    let exit_code = loop_daemon(&mut ctrlc_receiver, &mut config_receiver, &mut socket_receiver, args).await;
     match fs::remove_file(&socket_path) {
         Ok(_) => (),
         Err(e) => {
@@ -310,7 +311,7 @@ async fn loop_daemon(
 ) -> exitcode::ExitCode {
     let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
-    let (mut event_sender, mut event_receiver) = mpsc::channel(32);
+    let (mut event_sender, event_receiver) = mpsc::channel(32);
     let core = match core::Core::init(&config_path, hopr_params, event_receiver) {
         Ok(core) => core,
         Err(e) => {
@@ -319,12 +320,15 @@ async fn loop_daemon(
         }
     };
 
-    // Channel to signal when to reload the config after the grace period
-    let (mut reload_sender, mut reload_receiver) = mpsc::channel(1);
-    // Channel to signal when shutdown is complete
-    let mut ctrc_already_triggered = false;
     tracing::info!("enter listening mode");
     tokio::spawn(async move { core.run().await });
+    let mut reload_cancel = CancellationToken::new();
+
+    let mut ctrc_already_triggered = false;
+    let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
+    // keep sender in an Option so we can take() it exactly once
+    let mut shutdown_sender_opt: Option<oneshot::Sender<()>> = Some(shutdown_sender);
+
     loop {
         tokio::select! {
             _ = ctrlc_receiver.recv() => {
@@ -334,17 +338,24 @@ async fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-                    if let Err(err) =  event_sender.send(event::shutdown(shutdown_sender)).await {
+
+                    match shutdown_sender_opt.take() {
+                        Some(sender) => {
+                    if let Err(err) =  event_sender.send(event::shutdown(sender)).await {
                         tracing::error!(error = ?err, "error sending shutdown event");
                         return exitcode::IOERR;
                     }
-                    if let Err(err) = shutdown_receiver.await {
-                        tracing::error!(error = ?err, "error awaiting shutdown completion");
-                        return exitcode::IOERR;
+                        }
+                        None => {
+                            tracing::error!("shutdown sender already taken");
+                            return exitcode::IOERR;
+                        }
                     }
-                    return exitcode::OK;
                 }
+            }
+            _ = &mut shutdown_receiver => {
+                tracing::info!("shutdown complete");
+                return exitcode::OK;
             }
             res = socket_receiver.recv() => match res {
                 Some(mut stream) => incoming_stream(&mut stream, &mut event_sender).await,
@@ -353,45 +364,17 @@ async fn loop_daemon(
                     return exitcode::IOERR;
                 }
             },
-            res = config_receiver.recv() => match res {
-                Some(evt) => if incoming_config_fs_event(evt, &config_path) {
-                        let (tx, mut rx) = mpsc::channel(1);
-                        reload_sender = tx;
-
-                        // Spawn a task to handle the grace period
-                        tokio::spawn(async move {
+            _  = config_receiver.recv() => {
+                reload_cancel.cancel();
+            reload_cancel = CancellationToken::new();
+                reload_cancel.run_until_cancelled(async {
                             sleep(CONFIG_GRACE_PERIOD).await;
-                            // If we get here, no new events were received within the grace period
-                            // Check if this is the most recent channel by trying to send a signal
-                            if let Err(e) = reload_sender.send(()).await {
-                                tracing::error!(error = ?e, "error sending reload signal");
+                            if let Err(err) = event_sender.send(event::Event::ConfigReload).await {
+                                tracing::error!(error = ?err, "error sending config reload event");
                             }
-                        });
-                    }
-                None => {
-                    tracing::error!("config receiver closed unexpectedly");
-                    return exitcode::IOERR;
-                }
-            },
-            res = reload_receiver.recv() => match res {
-                Some(_) => {
-                    unimplemented!("configuration reload not yet implemented");
-                    /*
-                    match core.update_config(&config_path).await {
-                        Ok(_) => {
-                            tracing::info!("updated configuration - resetting application");
-                        }
-                        Err(e) => {
-                            tracing::error!(error = ?e, "failed to update configuration - staying on current configuration");
-                        }
-                    }
-                    */
-                }
-                None => {
-                    tracing::error!("reload receiver closed unexpectedly");
-                    return exitcode::IOERR;
-                }
-            },
+                });
+        },
+
 
         }
     }
