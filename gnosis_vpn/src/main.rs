@@ -40,23 +40,23 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
-                        tracing::debug!("received SIGINT");
-                        if sender.send(()).await.is_err() {
-                            tracing::warn!("sigint: receiver closed");
-                            break;
-                        }
-                    },
-                Some(_) = sigterm.recv() => {
-                        tracing::debug!("received SIGTERM");
-                        if sender.send(()).await.is_err() {
-                            tracing::warn!("sigterm: receiver closed");
-                            break;
-                        }
-                    },
-                    else => {
-                        tracing::warn!("sigint and sigterm streams closed");
-                            break;
+                    tracing::debug!("received SIGINT");
+                    if sender.send(()).await.is_err() {
+                        tracing::warn!("sigint: receiver closed");
+                        break;
                     }
+                },
+                Some(_) = sigterm.recv() => {
+                    tracing::debug!("received SIGTERM");
+                    if sender.send(()).await.is_err() {
+                        tracing::warn!("sigterm: receiver closed");
+                        break;
+                    }
+                },
+                else => {
+                    tracing::warn!("sigint and sigterm streams closed");
+                    break;
+                }
             }
         }
     });
@@ -322,21 +322,18 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-            res = ctrlc_receiver.recv() => match res {
-                Some(_) => {
+            Some(_) = ctrlc_receiver.recv() => {
                 if ctrc_already_triggered {
                     tracing::info!("force shutdown immediately");
                     return exitcode::OK;
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-
                     match shutdown_sender_opt.take() {
                         Some(sender) => {
-                    if let Err(err) =  event_sender.send(event::shutdown(sender)).await {
-                        tracing::error!(error = ?err, "error sending shutdown event");
-                        return exitcode::IOERR;
-                    }
+                            if event_sender.send(event::shutdown(sender)).await.is_err() {
+                                tracing::warn!("event receiver already closed");
+                            }
                         }
                         None => {
                             tracing::error!("shutdown sender already taken");
@@ -344,24 +341,16 @@ async fn loop_daemon(
                         }
                     }
                 }
-                },
-                None => {
-                    tracing::warn!("ctrlc receiver closed unexpectedly");
-                }
             },
-            _ = &mut shutdown_receiver => {
+            Ok(_) = &mut shutdown_receiver => {
                 tracing::info!("shutdown complete");
                 return exitcode::OK;
             }
-            res = socket_receiver.recv() => match res {
-                Some(mut stream) => incoming_stream(&mut stream, &mut event_sender).await,
-                None => {
-                    tracing::error!("socket receiver closed unexpectedly");
-                    return exitcode::IOERR;
-                }
+            Some(mut stream) = socket_receiver.recv() => {
+                incoming_stream(&mut stream, &mut event_sender).await;
             },
-            res  = config_receiver.recv() => match res {
-                Some(evt) => if incoming_config_fs_event(evt, &config_path) {
+            Some(evt) = config_receiver.recv() => {
+                if incoming_config_fs_event(evt, &config_path) {
                     reload_cancel.cancel();
                     reload_cancel = CancellationToken::new();
                     let cancel_token = reload_cancel.clone();
@@ -369,18 +358,17 @@ async fn loop_daemon(
                     tokio::spawn(async move {
                         cancel_token.run_until_cancelled(async move {
                             sleep(CONFIG_GRACE_PERIOD).await;
-                            if let Err(err) = evt_sender.send(event::Event::ConfigReload).await {
-                                tracing::error!(error = ?err, "error sending config reload event");
+                            if evt_sender.send(event::Event::ConfigReload).await.is_err() {
+                                tracing::warn!("event receiver already closed");
                             }
-                    }).await});
-                }
-                None => {
-                    tracing::error!("config receiver closed unexpectedly");
-                    return exitcode::IOERR;
+                        }).await;
+                    });
                 }
             },
-
-
+            else => {
+                tracing::error!("unexpected channel closure");
+                return exitcode::IOERR;
+            }
         }
     }
 }
