@@ -355,10 +355,11 @@ async fn loop_daemon(
                     reload_cancel = CancellationToken::new();
                     let cancel_token = reload_cancel.clone();
                     let evt_sender = event_sender.clone();
+                    let path = config_path.clone();
                     tokio::spawn(async move {
                         cancel_token.run_until_cancelled(async move {
                             sleep(CONFIG_GRACE_PERIOD).await;
-                            if evt_sender.send(event::Event::ConfigReload).await.is_err() {
+                            if evt_sender.send(event::config_reload(path)).await.is_err() {
                                 tracing::warn!("event receiver already closed");
                             }
                         }).await;

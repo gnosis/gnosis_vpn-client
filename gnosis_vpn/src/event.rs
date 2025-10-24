@@ -1,4 +1,5 @@
 use std::fmt::{self, Display};
+use std::path::PathBuf;
 use tokio::sync::oneshot;
 
 use gnosis_vpn_lib::chain::errors::ChainError;
@@ -15,7 +16,9 @@ pub enum Event {
     Shutdown {
         resp: oneshot::Sender<()>,
     },
-    ConfigReload,
+    ConfigReload {
+        path: PathBuf,
+    },
 
     Connection(connection::Event),
     Node(node::Event),
@@ -30,7 +33,7 @@ impl Display for Event {
         match self {
             Event::Command { cmd, .. } => write!(f, "CommandEvent: {cmd}"),
             Event::Shutdown { .. } => write!(f, "ShutdownEvent"),
-            Event::ConfigReload => write!(f, "ConfigReloadEvent"),
+            Event::ConfigReload { path } => write!(f, "ConfigReloadEvent: {:?}", path),
             Event::Connection(event) => write!(f, "ConnectionEvent: {event}"),
             Event::Node(event) => write!(f, "NodeEvent: {event}"),
             Event::Onboarding(event) => write!(f, "OnboardingEvent: {event}"),
@@ -50,4 +53,8 @@ pub fn command(cmd: Command, resp: oneshot::Sender<Response>) -> Event {
 
 pub fn shutdown(resp: oneshot::Sender<()>) -> Event {
     Event::Shutdown { resp }
+}
+
+pub fn config_reload(path: PathBuf) -> Event {
+    Event::ConfigReload { path }
 }
