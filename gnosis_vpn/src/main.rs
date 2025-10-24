@@ -313,11 +313,12 @@ async fn loop_daemon(
     // Channel to signal when to reload the config after the grace period
     let (mut reload_sender, mut reload_receiver) = mpsc::channel(1);
     // Channel to signal when shutdown is complete
-    let (mut shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
+    // let (mut shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
     let mut ctrc_already_triggered = false;
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
+            _ = &core.run().await => { },
             _ = ctrlc_receiver.recv() => {
                 if ctrc_already_triggered {
                     tracing::info!("force shutdown immediately");
@@ -325,12 +326,16 @@ async fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                     shutdown_receiver = core.shutdown().await;
+                    unimplemented!("graceful shutdown not yet implemented");
+                     // shutdown_receiver = core.shutdown().await;
                 }
             }
+            /*
             _ = shutdown_receiver.recv() => {
                 return exitcode::OK;
             }
+            */
+            /*
             res = socket_receiver.recv() => match res {
                 Some(stream) => incoming_stream(&mut core, &mut stream).await,
                 None => {
@@ -338,6 +343,7 @@ async fn loop_daemon(
                     return exitcode::IOERR;
                 }
             },
+            */
             res = config_receiver.recv() => match res {
                 Some(evt) => if incoming_config_fs_event(evt, &config_path) {
                         let (tx, mut rx) = mpsc::channel(1);
@@ -360,6 +366,8 @@ async fn loop_daemon(
             },
             res = reload_receiver.recv() => match res {
                 Some(_) => {
+                    unimplemented!("configuration reload not yet implemented");
+                    /*
                     match core.update_config(&config_path).await {
                         Ok(_) => {
                             tracing::info!("updated configuration - resetting application");
@@ -368,6 +376,7 @@ async fn loop_daemon(
                             tracing::error!(error = ?e, "failed to update configuration - staying on current configuration");
                         }
                     }
+                    */
                 }
                 None => {
                     tracing::error!("reload receiver closed unexpectedly");
