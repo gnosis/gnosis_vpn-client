@@ -158,8 +158,15 @@ impl Core {
         loop {
             tokio::select! {
             res = self.event_receiver.recv() => match res {
+                    Some(Event::Shutdown{ resp }) => {
+                        tracing::debug!("shutting down core");
+                        if resp.send(()).is_err() {
+                            tracing::warn!("failed to send shutdown complete signal");
+                        }
+                    }
                     Some(evt) => {
-                        tracing::info!(%evt, "received event");
+                        tracing::debug!(%evt, "handling event");
+                        break;
                     }
                     None => {
                         tracing::warn!("event receiver closed");
