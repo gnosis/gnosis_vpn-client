@@ -243,25 +243,21 @@ fn incoming_config_fs_event(event: notify::Event, config_path: &Path) -> bool {
     match event {
         notify::Event {
             kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
-            paths,
+            paths: _,
             attrs: _,
         }
         | notify::Event {
             kind: kind @ notify::event::EventKind::Remove(notify::event::RemoveKind::File),
-            paths,
+            paths: _,
             attrs: _,
         }
         | notify::Event {
             kind: kind @ notify::event::EventKind::Modify(notify::event::ModifyKind::Data(_)),
-            paths,
+            paths: _,
             attrs: _,
         } => {
-            if paths.as_slice() == [config_path] {
-                tracing::debug!(?kind, "config file change detected");
-                true
-            } else {
-                false
-            }
+            tracing::debug!(?kind, "config file change detected");
+            true
         }
         _ => false,
     }
