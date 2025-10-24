@@ -2,7 +2,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 
 use std::fs;
@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process;
 
-use gnosis_vpn_lib::command::Command;
+use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -173,7 +173,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
     Ok(receiver)
 }
 
-async fn incoming_stream(core: &mut crate::core::Core, stream: &mut UnixStream) {
+async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sender<event::Event>) {
     let mut msg = String::new();
     if let Err(e) = stream.read_to_string(&mut msg).await {
         tracing::error!(error = ?e, "error reading message");
@@ -190,14 +190,22 @@ async fn incoming_stream(core: &mut crate::core::Core, stream: &mut UnixStream) 
 
     tracing::debug!(command = %cmd, "incoming command");
 
-    let resp = match core.handle_cmd(&cmd) {
-        Ok(res) => res,
+    let (resp_sender, resp_receiver) = oneshot::channel();
+    match event_sender.send(event::new_command(cmd, resp_sender)).await {
+        Ok(()) => (),
         Err(e) => {
             tracing::error!(error = ?e, "error handling command");
             return;
         }
     };
 
+    let resp = match resp_receiver.await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(error = ?e, "error receiving command response");
+            return;
+        }
+    };
     let str_resp = match serde_json::to_string(&resp) {
         Ok(res) => res,
         Err(e) => {
@@ -295,9 +303,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 }
 
 async fn loop_daemon(
-    ctrlc_receiver: &mpsc::Receiver<()>,
-    config_receiver: &mpsc::Receiver<notify::Event>,
-    socket_receiver: &mpsc::Receiver<UnixStream>,
+    ctrlc_receiver: &mut mpsc::Receiver<()>,
+    config_receiver: &mut mpsc::Receiver<notify::Event>,
+    socket_receiver: &mut mpsc::Receiver<UnixStream>,
     args: cli::Cli,
 ) -> exitcode::ExitCode {
     let hopr_params = hopr_params::HoprParams::from(args.clone());
@@ -314,7 +322,6 @@ async fn loop_daemon(
     // Channel to signal when to reload the config after the grace period
     let (mut reload_sender, mut reload_receiver) = mpsc::channel(1);
     // Channel to signal when shutdown is complete
-    // let (mut shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
     let mut ctrc_already_triggered = false;
     tracing::info!("enter listening mode");
     tokio::spawn(async move { core.run().await });
@@ -327,24 +334,25 @@ async fn loop_daemon(
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
-                    unimplemented!("graceful shutdown not yet implemented");
-                     // shutdown_receiver = core.shutdown().await;
+                    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+                    if let Err(err) =  event_sender.send(event::shutdown(shutdown_sender)).await {
+                        tracing::error!(error = ?err, "error sending shutdown event");
+                        return exitcode::IOERR;
+                    }
+                    if let Err(err) = shutdown_receiver.await {
+                        tracing::error!(error = ?err, "error awaiting shutdown completion");
+                        return exitcode::IOERR;
+                    }
+                    return exitcode::OK;
                 }
             }
-            /*
-            _ = shutdown_receiver.recv() => {
-                return exitcode::OK;
-            }
-            */
-            /*
             res = socket_receiver.recv() => match res {
-                Some(stream) => incoming_stream(&mut core, &mut stream).await,
+                Some(mut stream) => incoming_stream(&mut stream, &mut event_sender).await,
                 None => {
                     tracing::error!("socket receiver closed unexpectedly");
                     return exitcode::IOERR;
                 }
             },
-            */
             res = config_receiver.recv() => match res {
                 Some(evt) => if incoming_config_fs_event(evt, &config_path) {
                         let (tx, mut rx) = mpsc::channel(1);
