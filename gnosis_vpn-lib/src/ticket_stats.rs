@@ -1,4 +1,5 @@
 use backoff::ExponentialBackoff;
+use backoff::future::retry;
 use edgli::hopr_lib::UnitaryFloatOps;
 use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
@@ -42,7 +43,7 @@ impl TicketStats {
         rpc_provider: &str,
         network_specs: &NetworkSpecifications,
     ) -> Result<Self, ChainError> {
-        backoff::future::retry(ExponentialBackoff::default(), || async {
+        retry(ExponentialBackoff::default(), || async {
             let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider).await?;
             Ok(network_specs
                 .contracts
