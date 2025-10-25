@@ -42,13 +42,17 @@ impl TicketStats {
         priv_key: &ChainKeypair,
         rpc_provider: &str,
         network_specs: &NetworkSpecifications,
-    ) -> Result<Self, ChainError> {
+    ) -> Result<Self, Error> {
         retry(ExponentialBackoff::default(), || async {
-            let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider).await?;
-            Ok(network_specs
+            let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider)
+                .await
+                .map_err(Error::Chain)?;
+            let res = network_specs
                 .contracts
                 .get_win_prob_ticket_price(&client.provider)
-                .await?)
+                .await
+                .map_err(Error::Chain)?;
+            Ok(res)
         })
         .await
     }

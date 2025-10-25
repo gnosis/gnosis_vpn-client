@@ -30,7 +30,10 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod runner_results;
 mod ticket_stats_runner;
+
+use runner_results::RunnerResults;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -126,11 +129,6 @@ enum Cancel {
     ValueingTicket,
 }
 
-#[derive(Debug)]
-enum RunnerResults {
-    TicketStatsRunner(ticket_stats_runner::Results),
-}
-
 impl Core {
     pub fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path)?;
@@ -178,9 +176,8 @@ impl Core {
         }
     }
 
-    async fn runner(&self, results_sender: mpsc::Sender<ticket_stats_runner::Results>) {
-        // main core loop
-        let mut runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
+    async fn runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
     }
@@ -205,9 +202,12 @@ impl Core {
     async fn on_results(&mut self, results: RunnerResults) {
         tracing::debug!(?results, "handling inside event");
         match results {
-            ticket_stats_runner::Results::Success(stats) => {
+            RunnerResults::TicketStatsRunner(ticket_stats_runner::Results::Success(stats)) => {
                 tracing::debug!(?stats, "received ticket stats from runner");
                 self.ticket_stats = Some(stats);
+            }
+            _ => {
+                unimplemented!()
             }
         }
     }
