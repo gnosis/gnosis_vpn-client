@@ -30,7 +30,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
-mod event_loop;
+mod ticket_stats_runner;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -126,6 +126,11 @@ enum Cancel {
     ValueingTicket,
 }
 
+#[derive(Debug)]
+enum RunnerResults {
+    TicketStatsRunner(ticket_stats_runner::Results),
+}
+
 impl Core {
     pub fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path)?;
@@ -152,13 +157,7 @@ impl Core {
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
         let cancel_token = CancellationToken::new();
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        let mut event_loop = event_loop::EventLoop {};
-        let event_loop_token = cancel_token.clone();
-        tokio::spawn(async move {
-            event_loop_token
-                .run_until_cancelled(event_loop.start(results_sender))
-                .await
-        });
+        self.runner(results_sender.clone()).await;
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
@@ -179,6 +178,13 @@ impl Core {
         }
     }
 
+    async fn runner(&self, results_sender: mpsc::Sender<ticket_stats_runner::Results>) {
+        // main core loop
+        let mut runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
+        let cancel = self.cancel_token.clone();
+        tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
+    }
+
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
         tracing::debug!(%event, "handling outside event");
         match event {
@@ -196,24 +202,18 @@ impl Core {
         }
     }
 
-    async fn on_results(&mut self, results: event_loop::Results) {
-        tracing::debug!(%results, "handling inside event");
+    async fn on_results(&mut self, results: RunnerResults) {
+        tracing::debug!(?results, "handling inside event");
         match results {
-            event_loop::Results::Foobar => {
-                tracing::info!("received Foobar result");
+            ticket_stats_runner::Results::Success(stats) => {
+                tracing::debug!(?stats, "received ticket stats from runner");
+                self.ticket_stats = Some(stats);
             }
         }
     }
 
     /*
             match event {
-                Event::Shutdown { resp } => {
-                    tracing::debug!("shutting down core");
-                    if resp.send(()).is_err() {
-                        tracing::warn!("shutdown receiver dropped");
-                    }
-                    break;
-                }
                 Event::ConfigReload { path }=> {
                     tracing::debug!("reloading configuration");
                     let config = match config::read(&path) {
@@ -243,13 +243,6 @@ impl Core {
         }
     }
     */
-
-    async fn event_loop(mut self) {
-        loop {
-            // TODO implement event loop
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-        }
-    }
 
     /*
         fn determine_run_mode(&mut self) -> Result<RunMode, Error> {
@@ -1202,42 +1195,6 @@ fn fetch_ticket_stats(
 }
 */
 
-fn calc_keys(hopr_params: &HoprParams) -> Result<HoprKeys, Error> {
-    let identity_file = match &hopr_params.identity_file {
-        Some(path) => path.to_path_buf(),
-        None => {
-            let path = identity::file()?;
-            tracing::info!(?path, "No HOPR identity file path provided - using default");
-            path
-        }
-    };
-
-    let identity_pass = match &hopr_params.identity_pass {
-        Some(pass) => pass.to_string(),
-        None => {
-            let path = identity::pass_file()?;
-            match fs::read_to_string(&path) {
-                Ok(p) => {
-                    tracing::warn!(?path, "No HOPR identity pass provided - read from file instead");
-                    Ok(p)
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    tracing::warn!(
-                        ?path,
-                        "No HOPR identity pass provided - generating new one and storing alongside identity file"
-                    );
-                    let pw = identity::generate_pass();
-                    fs::write(&path, pw.as_bytes())?;
-                    Ok(pw)
-                }
-                Err(e) => Err(e),
-            }?
-        }
-    };
-
-    identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
-}
-
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1250,6 +1207,7 @@ impl Display for RunMode {
     }
 }
 
+/*
 async fn act_on_run_mode(run_mode: RunMode, hopr_params: HoprParams) -> Result<RunMode, Error> {
     match run_mode.clone() {
         RunMode::Initializing => {
@@ -1302,3 +1260,4 @@ async fn act_on_run_mode(run_mode: RunMode, hopr_params: HoprParams) -> Result<R
         }
     }
 }
+*/
