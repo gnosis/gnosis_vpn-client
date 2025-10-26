@@ -1,5 +1,3 @@
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
 use thiserror::Error;
 
 use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
@@ -26,19 +24,16 @@ impl TicketStatsRunner {
     }
 
     pub async fn start(&self) -> Result<TicketStats, Error> {
-        retry(ExponentialBackoff::default(), || async {
-            let keys = self.hopr_params.calc_keys()?;
-            let private_key = keys.chain_key;
-            let rpc_provider = self.hopr_params.rpc_provider.clone();
-            let network = self.hopr_params.network.clone();
-            let res = TicketStats::fetch(
-                &private_key,
-                rpc_provider.as_str(),
-                &NetworkSpecifications::from_network(&network),
-            )
-            .await?;
-            Ok(res)
-        })
-        .await
+        let keys = self.hopr_params.calc_keys()?;
+        let private_key = keys.chain_key;
+        let rpc_provider = self.hopr_params.rpc_provider.clone();
+        let network = self.hopr_params.network.clone();
+        let res = TicketStats::fetch(
+            &private_key,
+            rpc_provider.as_str(),
+            &NetworkSpecifications::from_network(&network),
+        )
+        .await?;
+        Ok(res)
     }
 }

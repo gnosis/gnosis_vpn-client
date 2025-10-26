@@ -6,6 +6,7 @@ use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -14,6 +15,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
@@ -33,6 +35,7 @@ use crate::hopr_params::{self, HoprParams};
 
 mod presafe_runner;
 mod runner_results;
+mod safe_deployment_runner;
 mod ticket_stats_runner;
 
 use runner_results::RunnerResults;
@@ -168,7 +171,7 @@ impl Core {
                     }
                 }
                 Some(results) = results_receiver.recv() => {
-                    self.on_results(results).await;
+                    self.on_results(results, &results_sender).await;
                 }
                 else => {
                     tracing::warn!("event receiver closed");
@@ -183,7 +186,7 @@ impl Core {
             tracing::debug!("safe found: starting ticket stats runner");
             self.spawn_ticket_stats_runner(results_sender.clone());
         } else {
-            self.spawn_presafe_runner(results_sender.clone());
+            self.spawn_presafe_runner(Duration::ZERO, results_sender.clone());
         }
     }
 
@@ -203,11 +206,12 @@ impl Core {
         });
     }
 
-    fn spawn_presafe_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+    fn spawn_presafe_runner(&self, delay: Duration, results_sender: mpsc::Sender<RunnerResults>) {
         let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
             let res = cancel.run_until_cancelled(runner.start()).await;
             if let Some(res) = res {
                 let _ = results_sender
@@ -217,6 +221,11 @@ impl Core {
                     .await;
             }
         });
+    }
+
+    fn spawn_safe_creation_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        // TODO implement safe creation runner
+        unimplemented!()
     }
 
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
@@ -236,9 +245,22 @@ impl Core {
         }
     }
 
-    async fn on_results(&mut self, results: RunnerResults) {
+    async fn on_results(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
         tracing::debug!(?results, "handling inside event");
         match results {
+            RunnerResults::PreSafe(res) => match res {
+                Ok(presafe) => {
+                    tracing::info!(%presafe, "presafe balance fetched");
+                    if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
+                        self.spawn_presafe_runner(Duration::from_secs(10), results_sender.clone());
+                    } else {
+                        self.spawn_safe_creation_runner(results_sender.clone());
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch presafe balance");
+                }
+            },
             _ => {
                 unimplemented!()
             }
