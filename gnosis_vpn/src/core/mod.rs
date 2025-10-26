@@ -157,7 +157,7 @@ impl Core {
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
         let cancel_token = CancellationToken::new();
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.runner(&results_sender);
+        self.initial_runner(&results_sender);
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
@@ -178,37 +178,44 @@ impl Core {
         }
     }
 
-    async fn runner(&self, results_sender: &mpsc::Sender<RunnerResults>) {
+    fn initial_runner(&self, results_sender: &mpsc::Sender<RunnerResults>) {
         if hopr_config::has_safe() {
             tracing::debug!("safe found: starting ticket stats runner");
-            let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
-            let cancel = self.cancel_token.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                let res = cancel.run_until_cancelled(runner.start()).await;
-                if let Some(res) = res {
-                    let _ = results_sender
-                        .send(RunnerResults::TicketStats(
-                            res.map_err(runner_results::Error::TicketStatsRunner),
-                        ))
-                        .await;
-                }
-            });
+            self.spawn_ticket_stats_runner(results_sender.clone());
         } else {
-            let runner = onboarding_runner::OnboardingRunner::new(self.hopr_params.clone());
-            let cancel = self.cancel_token.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                let res = cancel.run_until_cancelled(runner.start()).await;
-                if let Some(res) = res {
-                    let _ = results_sender
-                        .send(RunnerResults::PreSafe(
-                            res.map_err(runner_results::Error::OnboardingRunner),
-                        ))
-                        .await;
-                }
-            });
+            self.spawn_onboarding_runner(results_sender.clone());
         }
+    }
+
+    fn spawn_ticket_stats_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
+        let cancel = self.cancel_token.clone();
+        tokio::spawn(async move {
+            let res = cancel.run_until_cancelled(runner.start()).await;
+            if let Some(res) = res {
+                let _ = results_sender
+                    .send(RunnerResults::TicketStats(
+                        res.map_err(runner_results::Error::TicketStatsRunner),
+                    ))
+                    .await;
+            }
+        });
+    }
+
+    fn spawn_onboarding_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        let runner = onboarding_runner::OnboardingRunner::new(self.hopr_params.clone());
+        let cancel = self.cancel_token.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            let res = cancel.run_until_cancelled(runner.start()).await;
+            if let Some(res) = res {
+                let _ = results_sender
+                    .send(RunnerResults::PreSafe(
+                        res.map_err(runner_results::Error::OnboardingRunner),
+                    ))
+                    .await;
+            }
+        });
     }
 
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
