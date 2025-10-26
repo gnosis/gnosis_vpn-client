@@ -6,7 +6,7 @@ use gnosis_vpn_lib::balance::{self};
 use crate::hopr_params::{self, HoprParams};
 
 #[derive(Debug)]
-pub struct OnboardingRunner {
+pub struct PreSafeRunner {
     hopr_params: HoprParams,
 }
 
@@ -18,7 +18,7 @@ pub enum Error {
     PreSafe(#[from] balance::Error),
 }
 
-impl OnboardingRunner {
+impl PreSafeRunner {
     pub fn new(hopr_params: HoprParams) -> Self {
         Self { hopr_params }
     }

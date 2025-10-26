@@ -31,7 +31,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
-mod onboarding_runner;
+mod presafe_runner;
 mod runner_results;
 mod ticket_stats_runner;
 
@@ -183,7 +183,7 @@ impl Core {
             tracing::debug!("safe found: starting ticket stats runner");
             self.spawn_ticket_stats_runner(results_sender.clone());
         } else {
-            self.spawn_onboarding_runner(results_sender.clone());
+            self.spawn_presafe_runner(results_sender.clone());
         }
     }
 
@@ -191,7 +191,8 @@ impl Core {
         let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         tokio::spawn(async move {
-            let res = cancel.run_until_cancelled(runner.start()).await;
+            let res: Option<Result<TicketStats, ticket_stats_runner::Error>> =
+                cancel.run_until_cancelled(runner.start()).await;
             if let Some(res) = res {
                 let _ = results_sender
                     .send(RunnerResults::TicketStats(
@@ -202,8 +203,8 @@ impl Core {
         });
     }
 
-    fn spawn_onboarding_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
-        let runner = onboarding_runner::OnboardingRunner::new(self.hopr_params.clone());
+    fn spawn_presafe_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -211,7 +212,7 @@ impl Core {
             if let Some(res) = res {
                 let _ = results_sender
                     .send(RunnerResults::PreSafe(
-                        res.map_err(runner_results::Error::OnboardingRunner),
+                        res.map_err(runner_results::Error::PreSafeRunner),
                     ))
                     .await;
             }
