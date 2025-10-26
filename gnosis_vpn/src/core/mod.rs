@@ -5,6 +5,7 @@ use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -156,7 +157,7 @@ impl Core {
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
         let cancel_token = CancellationToken::new();
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.runner(results_sender.clone()).await;
+        self.runner(&results_sender);
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
@@ -166,8 +167,8 @@ impl Core {
                         break;
                     }
                 }
-                Some(event) = results_receiver.recv() => {
-                    self.on_results(event).await;
+                Some(results) = results_receiver.recv() => {
+                    self.on_results(results).await;
                 }
                 else => {
                     tracing::warn!("event receiver closed");
@@ -177,16 +178,36 @@ impl Core {
         }
     }
 
-    async fn runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+    async fn runner(&self, results_sender: &mpsc::Sender<RunnerResults>) {
         if hopr_config::has_safe() {
             tracing::debug!("safe found: starting ticket stats runner");
             let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
             let cancel = self.cancel_token.clone();
-            tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                let res = cancel.run_until_cancelled(runner.start()).await;
+                if let Some(res) = res {
+                    let _ = results_sender
+                        .send(RunnerResults::TicketStats(
+                            res.map_err(runner_results::Error::TicketStatsRunner),
+                        ))
+                        .await;
+                }
+            });
         } else {
             let runner = onboarding_runner::OnboardingRunner::new(self.hopr_params.clone());
             let cancel = self.cancel_token.clone();
-            tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                let res = cancel.run_until_cancelled(runner.start()).await;
+                if let Some(res) = res {
+                    let _ = results_sender
+                        .send(RunnerResults::PreSafe(
+                            res.map_err(runner_results::Error::OnboardingRunner),
+                        ))
+                        .await;
+                }
+            });
         }
     }
 
@@ -210,10 +231,6 @@ impl Core {
     async fn on_results(&mut self, results: RunnerResults) {
         tracing::debug!(?results, "handling inside event");
         match results {
-            RunnerResults::TicketStatsRunner(ticket_stats_runner::Results::Success(stats)) => {
-                tracing::debug!(?stats, "received ticket stats from runner");
-                self.ticket_stats = Some(stats);
-            }
             _ => {
                 unimplemented!()
             }
