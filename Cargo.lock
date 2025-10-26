@@ -3972,6 +3972,7 @@ dependencies = [
 name = "gnosis_vpn"
 version = "0.50.4"
 dependencies = [
+ "alloy",
  "backoff",
  "clap",
  "crossbeam-channel",
