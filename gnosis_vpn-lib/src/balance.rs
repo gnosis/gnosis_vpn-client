@@ -1,5 +1,3 @@
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 pub use edgli::hopr_lib::{Balance, GeneralError, WxHOPR, XDai};
@@ -72,18 +70,15 @@ pub struct PreSafe {
 
 impl PreSafe {
     pub async fn fetch(priv_key: &ChainKeypair, rpc_provider: &str, node_address: Address) -> Result<Self, Error> {
-        retry(ExponentialBackoff::default(), || async {
-            let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider)
-                .await
-                .map_err(Error::Chain)?;
-            let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
-            let res = check_balance_inputs
-                .check(&client.provider)
-                .await
-                .map_err(Error::Chain)?;
-            Ok(res.into())
-        })
-        .await
+        let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider)
+            .await
+            .map_err(Error::Chain)?;
+        let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
+        let res = check_balance_inputs
+            .check(&client.provider)
+            .await
+            .map_err(Error::Chain)?;
+        Ok(res.into())
     }
 }
 
