@@ -1,19 +1,20 @@
+use thiserror::Error;
+
+use gnosis_vpn_lib::balance::{self};
+use gnosis_vpn_lib::ticket_stats::TicketStats;
+
 use crate::core::{onboarding_runner, ticket_stats_runner};
 
 #[derive(Debug)]
 pub enum RunnerResults {
-    TicketStatsRunner(ticket_stats_runner::Results),
-    OnboardingRunner(onboarding_runner::Results),
+    TicketStats(Result<TicketStats, Error>),
+    PreSafe(Result<balance::PreSafe, Error>),
 }
 
-impl From<ticket_stats_runner::Results> for RunnerResults {
-    fn from(result: ticket_stats_runner::Results) -> Self {
-        RunnerResults::TicketStatsRunner(result)
-    }
-}
-
-impl From<onboarding_runner::Results> for RunnerResults {
-    fn from(result: onboarding_runner::Results) -> Self {
-        RunnerResults::OnboardingRunner(result)
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    TicketStatsRunner(#[from] ticket_stats_runner::Error),
+    #[error(transparent)]
+    OnboardingRunner(#[from] onboarding_runner::Error),
 }
