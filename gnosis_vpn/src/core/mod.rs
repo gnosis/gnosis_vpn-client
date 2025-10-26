@@ -30,6 +30,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod onboarding_runner;
 mod runner_results;
 mod ticket_stats_runner;
 
@@ -177,9 +178,16 @@ impl Core {
     }
 
     async fn runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
-        let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
-        let cancel = self.cancel_token.clone();
-        tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
+        if hopr_config::has_safe() {
+            tracing::debug!("safe found: starting ticket stats runner");
+            let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
+            let cancel = self.cancel_token.clone();
+            tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
+        } else {
+            let runner = onboarding_runner::OnboardingRunner::new(self.hopr_params.clone());
+            let cancel = self.cancel_token.clone();
+            tokio::spawn(async move { cancel.run_until_cancelled(runner.start(results_sender)).await });
+        }
     }
 
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {

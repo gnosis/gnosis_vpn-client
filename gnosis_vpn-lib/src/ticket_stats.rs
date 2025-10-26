@@ -13,7 +13,7 @@ use crate::chain::errors::ChainError;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Error calculating ticket price: {0}")]
+    #[error(transparent)]
     Hopr(#[from] GeneralError),
     #[error(transparent)]
     Chain(#[from] ChainError),
