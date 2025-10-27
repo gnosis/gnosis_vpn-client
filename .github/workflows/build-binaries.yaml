@@ -147,7 +147,7 @@ jobs:
           fi
       - name: Upload ${{ steps.vars.outputs.architecture }} binaries
         if: steps.version.outputs.publish_type == 'workflow'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: binary-${{ steps.vars.outputs.architecture }}
           path: ${{ github.workspace }}/binaries/upload/*
