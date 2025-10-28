@@ -17,7 +17,6 @@ use crate::hopr_params::{self, HoprParams};
 #[derive(Debug)]
 pub struct SafeDeploymentRunner {
     hopr_params: HoprParams,
-    nonce: U256,
     presafe: balance::PreSafe,
 }
 
@@ -31,12 +30,7 @@ pub enum Error {
 
 impl SafeDeploymentRunner {
     pub fn new(hopr_params: HoprParams, presafe: balance::PreSafe) -> Self {
-        let nonce = U256::from(rand::rng().random_range(u128::MIN..u128::MAX));
-        Self {
-            hopr_params,
-            nonce,
-            presafe,
-        }
+        Self { hopr_params, presafe }
     }
 
     pub async fn start(&self) -> Result<SafeModuleDeploymentResult, Error> {
@@ -52,7 +46,6 @@ impl SafeDeploymentRunner {
             private_key,
             rpc_provider.as_str(),
             node_address,
-            self.nonce,
             token_amount,
         )
         .await
@@ -64,10 +57,14 @@ async fn safe_module_deployment(
     priv_key: ChainKeypair,
     rpc_provider: &str,
     node_address: Address,
-    nonce: U256,
     token_amount: U256,
 ) -> Result<SafeModuleDeploymentResult, Error> {
     retry(ExponentialBackoff::default(), || async {
+        // random nonce used to salt safe creation process
+        // generate a new one on every request
+        let mut bytes = [0u8; 32];
+        rand::rng().fill(&mut bytes);
+        let nonce = U256::from_be_bytes(bytes);
         let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider)
             .await
             .map_err(Error::from)?;
