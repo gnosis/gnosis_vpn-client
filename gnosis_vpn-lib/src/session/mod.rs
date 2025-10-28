@@ -140,6 +140,8 @@ impl UpdateSessionConfig {
 
 impl Session {
     pub fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
+        unimplemented!()
+        /*
         let session_client_metadata = open_session.edgli.open_session(
             open_session.destination,
             open_session.target.clone(),
@@ -163,13 +165,19 @@ impl Session {
             session_pool: session_client_metadata.session_pool.map(|v| v as u16),
             active_clients: session_client_metadata.active_clients,
         })
+            */
     }
 
     pub fn close(&self, close_session: &CloseSession) -> Result<(), HoprError> {
+        unimplemented!()
+        /*
         close_session.edgli.close_session(self.bound_host, self.protocol)
+            */
     }
 
     pub fn list(list_session: &ListSession) -> Result<Vec<Self>, HoprError> {
+        unimplemented!()
+        /*
         Ok(list_session
             .edgli
             .list_sessions(list_session.protocol)
@@ -190,9 +198,12 @@ impl Session {
                 active_clients: session_client_metadata.active_clients,
             })
             .collect())
+            */
     }
 
     pub fn update(&self, config: &UpdateSessionConfig) -> Result<(), HoprError> {
+        unimplemented!()
+        /*
         let active_client = match self.active_clients.as_slice() {
             [] => return Err(HoprError::SessionNotFound),
             [client] => client.clone(),
@@ -201,6 +212,7 @@ impl Session {
 
         tracing::debug!(session_id = %active_client, "adjusting session config");
         config.edgli.adjust_session(config.balancer_config, active_client)
+            */
     }
 
     pub fn verify_open(&self, sessions: &[Session]) -> bool {

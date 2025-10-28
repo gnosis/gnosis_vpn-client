@@ -33,6 +33,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod hopr_runner;
 mod presafe_runner;
 mod runner_results;
 mod safe_deployment_runner;
@@ -237,6 +238,24 @@ impl Core {
         });
     }
 
+    fn spawn_hopr_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        if !hopr_config::has_safe() {
+            tracing::debug!("safe not found - waiting for finished safe deployment");
+            return;
+        }
+        tracing::debug!("starting hopr runner");
+        let runner = hopr_runner::HoprRunner::new(hopr);
+        let cancel = self.cancel_token.clone();
+        tokio::spawn(async move {
+            let res = cancel.run_until_cancelled(runner.start()).await;
+            if let Some(res) = res {
+                let _ = results_sender
+                    .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
+                    .await;
+            }
+        });
+    }
+
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
         tracing::debug!(%event, "handling outside event");
         match event {
@@ -261,6 +280,7 @@ impl Core {
                 Ok(stats) => {
                     tracing::info!(%stats, "on ticket stats");
                     self.ticket_stats = Some(stats);
+                    self.spawn_hopr_runner(results_sender.clone());
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch ticket stats, retrying");
@@ -290,6 +310,7 @@ impl Core {
                         tracing::error!("Please fix file permissions or out of disk space issues");
                         time::sleep(Duration::from_secs(5)).await;
                     }
+                    self.spawn_hopr_runner(results_sender.clone());
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");

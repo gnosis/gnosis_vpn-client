@@ -216,7 +216,7 @@ impl ChannelFunding {
             let mut results = Vec::with_capacity(channel_addresses.len());
             for address in channel_addresses {
                 let res = edgli.ensure_channel_open_and_funded(address, ticket_price, min_stake_threshold);
-                results.push(ChannelResult { address, res });
+                // results.push(ChannelResult { address, res });
             }
             _ = s.send(InternalEvent::ChannelFunding(results)).map_err(|error| {
                 tracing::error!(%error, "Failed sending channel funding results");
