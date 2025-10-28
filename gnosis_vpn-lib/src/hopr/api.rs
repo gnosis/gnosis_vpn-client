@@ -27,8 +27,7 @@ use crate::{
 
 pub struct Hopr {
     hopr: Arc<edgli::hopr_lib::Hopr>,
-    rt: tokio::runtime::Runtime,
-    // processes: Vec<EdgliProcesses>,      // TODO: add processes once the app is async
+    processes: Vec<EdgliProcesses>,
     open_listeners: ListenerJoinHandles,
 }
 
@@ -45,33 +44,20 @@ pub enum ChannelError {
 }
 
 impl Hopr {
-    pub fn new(
+    pub async fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
-        notifier: crossbeam_channel::Sender<std::result::Result<Vec<EdgliProcesses>, HoprLibError>>,
-    ) -> std::result::Result<Self, HoprError> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
+    ) -> Result<Self, HoprError> {
+        let (hopr, processes) = run_hopr_edge_node(cfg, keys)
+            .await
             .map_err(|e| HoprError::Construction(e.to_string()))?;
 
-        let (hopr, processes) = rt
-            .block_on(run_hopr_edge_node(cfg, keys))
-            .map_err(|e| HoprError::Construction(e.to_string()))?;
-
-        rt.spawn(async move {
-            let result = processes.await;
-            if let Err(e) = notifier.send(result) {
-                panic!("failed to notify HOPR process startup: {e}")
-            }
-        });
-
+        let processes = processes.await?;
         let open_listeners = Arc::new(async_lock::RwLock::new(HashMap::new()));
 
         Ok(Self {
             hopr,
-            rt,
-            //
+            processes,
             open_listeners,
         })
     }
@@ -83,63 +69,66 @@ impl Hopr {
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
     /// 2. AutoFunding making sure that once a channel is open, it will stay funded
     #[instrument(skip(self), level = "info", ret(level = "debug"), err)]
-    pub fn ensure_channel_open_and_funded(
+    pub async fn ensure_channel_open_and_funded(
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
         threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
-    ) -> std::result::Result<(), ChannelError> {
-        let hopr = self.hopr.clone();
-        self.rt.block_on(async move {
-            let channels_from_me = hopr.channels_from(&hopr.me_onchain()).await?;
+    ) -> Result<(), ChannelError> {
+        let channels_from_me = self.hopr.channels_from(&self.hopr.me_onchain()).await?;
 
-            if let Some(channel) = channels_from_me.iter().find(|ch| { ch.destination == target }) {
-                match channel.status {
-                    edgli::hopr_lib::ChannelStatus::Open => {
-                        if channel.balance < threshold {
-                            tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
-                            hopr.fund_channel(&channel.get_id(), amount)
-                                .await
-                                .map(|_| ())
-                                .map_err(HoprError::HoprLib).map_err(ChannelError::Fund)
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    edgli::hopr_lib::ChannelStatus::PendingToClose(_) => {
-                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is pending to close, cannot fund or open a new one");
-                        Err(ChannelError::PendingToClose)
-                    }
-                    edgli::hopr_lib::ChannelStatus::Closed => {
-                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is closed, opening a new one");
-                        hopr.open_channel(&target, amount)
+        if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
+            match channel.status {
+                edgli::hopr_lib::ChannelStatus::Open => {
+                    if channel.balance < threshold {
+                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
+                        self.hopr
+                            .fund_channel(&channel.get_id(), amount)
                             .await
-                                .map(|_| ())
-                            .map_err(HoprError::HoprLib).map_err(ChannelError::Open)
+                            .map(|_| ())
+                            .map_err(HoprError::HoprLib)
+                            .map_err(ChannelError::Fund)
+                    } else {
+                        Ok(())
                     }
                 }
-            } else {
-                tracing::debug!(destination = %target, %amount, "no existing channel found, opening a new one");
-                        hopr.open_channel(&target, amount)
-                            .await
-                                .map(|_| ())
-                            .map_err(HoprError::HoprLib).map_err(ChannelError::Open)
+                edgli::hopr_lib::ChannelStatus::PendingToClose(_) => {
+                    tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is pending to close, cannot fund or open a new one");
+                    Err(ChannelError::PendingToClose)
+                }
+                edgli::hopr_lib::ChannelStatus::Closed => {
+                    tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is closed, opening a new one");
+                    self.hopr
+                        .open_channel(&target, amount)
+                        .await
+                        .map(|_| ())
+                        .map_err(HoprError::HoprLib)
+                        .map_err(ChannelError::Open)
+                }
             }
-        })
+        } else {
+            tracing::debug!(destination = %target, %amount, "no existing channel found, opening a new one");
+            self.hopr
+                .open_channel(&target, amount)
+                .await
+                .map(|_| ())
+                .map_err(HoprError::HoprLib)
+                .map_err(ChannelError::Open)
+        }
     }
 
     // --- session management ---
 
     /// Open a local port and return the configuration
     #[tracing::instrument(skip(self), level = "info", ret, err)]
-    pub fn open_session(
+    pub async fn open_session(
         &self,
         destination: Address,
         target: SessionTarget,
         session_pool: Option<usize>,
         max_client_sessions: Option<usize>,
         cfg: SessionClientConfig,
-    ) -> std::result::Result<SessionClientMetadata, HoprError> {
+    ) -> Result<SessionClientMetadata, HoprError> {
         let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
 
         let protocol = match target {
@@ -180,153 +169,134 @@ impl Hopr {
 
         let hopr = self.hopr.clone();
         let open_listeners = self.open_listeners.clone();
-        self.rt.block_on(async move {
-            if bind_host.port() > 0 && open_listeners.read_arc().await.contains_key(&listener_id) {
-                return Err(HoprError::Construction("listener already exists".into()));
-            }
+        if bind_host.port() > 0 && open_listeners.read_arc().await.contains_key(&listener_id) {
+            return Err(HoprError::Construction("listener already exists".into()));
+        }
 
-            let port_range = std::env::var("GNOSISVPN_CLIENT_SESSION_PORT_RANGE").ok();
-            tracing::debug!(
-                "binding {protocol} session listening socket to {bind_host} (port range limitations: {port_range:?})"
-            );
+        let port_range = std::env::var("GNOSISVPN_CLIENT_SESSION_PORT_RANGE").ok();
+        tracing::debug!(
+            "binding {protocol} session listening socket to {bind_host} (port range limitations: {port_range:?})"
+        );
 
-            let (bound_host, udp_session_id, max_clients) = match protocol {
-                IpProtocol::TCP => create_tcp_client_binding(
-                    bind_host,
-                    port_range,
-                    hopr.clone(),
-                    open_listeners.clone(),
-                    destination,
-                    session_target_spec.clone(),
-                    cfg.clone(),
-                    session_pool,
-                    max_client_sessions,
-                )
-                .await
-                .map_err(|e| HoprError::Construction(format!("failed to create TCP client binding: {e}")))?,
-                IpProtocol::UDP => create_udp_client_binding(
-                    bind_host,
-                    port_range,
-                    hopr.clone(),
-                    open_listeners.clone(),
-                    destination,
-                    session_target_spec.clone(),
-                    cfg.clone(),
-                )
-                .await
-                .map_err(|e| HoprError::Construction(format!("failed to create UDP client binding: {e}")))?,
-            };
-
-            let max_surb_upstream = cfg.surb_management.map(|v| {
-                human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
-                    .expect("config value extract that cannot fail")
-            });
-
-            let response_buffer: Option<bytesize::ByteSize> = cfg
-                .surb_management
-                .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
-
-            Ok(SessionClientMetadata {
-                protocol,
-                bound_host,
-                target: session_target_spec.to_string(),
+        let (bound_host, udp_session_id, max_clients) = match protocol {
+            IpProtocol::TCP => create_tcp_client_binding(
+                bind_host,
+                port_range,
+                hopr.clone(),
+                open_listeners.clone(),
                 destination,
-                forward_path: cfg.forward_path_options,
-                return_path: cfg.return_path_options,
-                hopr_mtu: SESSION_MTU,
-                surb_len: SURB_SIZE,
-                active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),
-                max_client_sessions: max_clients,
-                max_surb_upstream,
-                response_buffer,
+                session_target_spec.clone(),
+                cfg.clone(),
                 session_pool,
-            })
+                max_client_sessions,
+            )
+            .await
+            .map_err(|e| HoprError::Construction(format!("failed to create TCP client binding: {e}")))?,
+            IpProtocol::UDP => create_udp_client_binding(
+                bind_host,
+                port_range,
+                hopr.clone(),
+                open_listeners.clone(),
+                destination,
+                session_target_spec.clone(),
+                cfg.clone(),
+            )
+            .await
+            .map_err(|e| HoprError::Construction(format!("failed to create UDP client binding: {e}")))?,
+        };
+
+        let max_surb_upstream = cfg.surb_management.map(|v| {
+            human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
+                .expect("config value extract that cannot fail")
+        });
+
+        let response_buffer: Option<bytesize::ByteSize> = cfg
+            .surb_management
+            .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
+
+        Ok(SessionClientMetadata {
+            protocol,
+            bound_host,
+            target: session_target_spec.to_string(),
+            destination,
+            forward_path: cfg.forward_path_options,
+            return_path: cfg.return_path_options,
+            hopr_mtu: SESSION_MTU,
+            surb_len: SURB_SIZE,
+            active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),
+            max_client_sessions: max_clients,
+            max_surb_upstream,
+            response_buffer,
+            session_pool,
         })
     }
 
-    pub fn close_session(&self, bound_session: SocketAddr, protocol: IpProtocol) -> std::result::Result<(), HoprError> {
+    pub async fn close_session(
+        &self,
+        bound_session: SocketAddr,
+        protocol: IpProtocol,
+    ) -> std::result::Result<(), HoprError> {
         let unspecified: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
 
-        self.rt.block_on(async move {
-            let mut open_listeners = self.open_listeners.write_arc().await;
+        let mut open_listeners = self.open_listeners.write_arc().await;
 
-            // Find all listeners with protocol, listening IP and optionally port number (if > 0)
-            let to_remove = open_listeners
-                .iter()
-                .filter_map(|(ListenerId(proto, addr), _)| {
-                    if protocol == *proto && (addr == &bound_session || addr == &unspecified) {
-                        Some(ListenerId(*proto, *addr))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+        // Find all listeners with protocol, listening IP and optionally port number (if > 0)
+        let to_remove = open_listeners
+            .iter()
+            .filter_map(|(ListenerId(proto, addr), _)| {
+                if protocol == *proto && (addr == &bound_session || addr == &unspecified) {
+                    Some(ListenerId(*proto, *addr))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
 
-            if to_remove.is_empty() {
-                return Err(HoprError::SessionNotFound);
-            }
+        if to_remove.is_empty() {
+            return Err(HoprError::SessionNotFound);
+        }
 
-            for bound_addr in to_remove {
-                let entry = open_listeners.remove(&bound_addr).ok_or(HoprError::SessionNotFound)?;
+        for bound_addr in to_remove {
+            let entry = open_listeners.remove(&bound_addr).ok_or(HoprError::SessionNotFound)?;
 
-                entry.abort_handle.abort();
-            }
+            entry.abort_handle.abort();
+        }
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    pub fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
-        let open_listeners = self.open_listeners.clone();
-
-        self.rt.block_on(async move {
-            open_listeners
-                .read_arc()
-                .await
-                .iter()
-                .filter(|(id, _)| id.0 == protocol)
-                .map(|(id, entry)| SessionClientMetadata {
-                    protocol,
-                    bound_host: id.1,
-                    target: entry.target.to_string(),
-                    forward_path: entry.forward_path.clone(),
-                    return_path: entry.return_path.clone(),
-                    destination: entry.destination,
-                    hopr_mtu: SESSION_MTU,
-                    surb_len: SURB_SIZE,
-                    active_clients: entry.get_clients().iter().map(|e| e.key().to_string()).collect(),
-                    max_client_sessions: entry.max_client_sessions,
-                    max_surb_upstream: entry.max_surb_upstream,
-                    response_buffer: entry.response_buffer,
-                    session_pool: entry.session_pool,
-                })
-                .collect::<Vec<_>>()
-        })
+    pub async fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
+        self.open_listeners
+            .read_arc()
+            .await
+            .iter()
+            .filter(|(id, _)| id.0 == protocol)
+            .map(|(id, entry)| SessionClientMetadata {
+                protocol,
+                bound_host: id.1,
+                target: entry.target.to_string(),
+                forward_path: entry.forward_path.clone(),
+                return_path: entry.return_path.clone(),
+                destination: entry.destination,
+                hopr_mtu: SESSION_MTU,
+                surb_len: SURB_SIZE,
+                active_clients: entry.get_clients().iter().map(|e| e.key().to_string()).collect(),
+                max_client_sessions: entry.max_client_sessions,
+                max_surb_upstream: entry.max_surb_upstream,
+                response_buffer: entry.response_buffer,
+                session_pool: entry.session_pool,
+            })
+            .collect::<Vec<_>>()
     }
 
     #[tracing::instrument(skip(self), level = "info", ret, err)]
-    pub fn adjust_session(
-        &self,
-        balancer_cfg: SurbBalancerConfig,
-        client: String,
-    ) -> std::result::Result<(), HoprError> {
-        self.rt.block_on(async move {
-            let session_id =
-                HoprSessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+    pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
+        let session_id = HoprSessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
-            self.hopr
-                .update_session_surb_balancer_config(&session_id, balancer_cfg)
-                .await
-                .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
-        })
-    }
-
-    pub fn as_hopr_ref(&self) -> &edgli::hopr_lib::Hopr {
-        self.hopr.as_ref()
-    }
-
-    pub fn as_hopr(&self) -> Arc<edgli::hopr_lib::Hopr> {
-        self.hopr.clone()
+        self.hopr
+            .update_session_surb_balancer_config(&session_id, balancer_cfg)
+            .await
+            .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
     }
 
     pub fn info(&self) -> Info {
@@ -383,16 +353,24 @@ impl Hopr {
             .map_err(|e| HoprError::Telemetry(e.to_string()))
     }
 
-    pub fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
-        self.rt.block_on(async move {
-            let ticket_price = self.hopr.get_ticket_price().await?;
-            let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
-            Ok(TicketStats::new(ticket_price, winning_probability.into()))
-        })
+    pub async fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
+        let ticket_price = self.hopr.get_ticket_price().await?;
+        let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
+        Ok(TicketStats::new(ticket_price, winning_probability.into()))
     }
 
     pub fn status(&self) -> edgli::hopr_lib::state::HoprState {
         self.hopr.status()
+    }
+
+    pub async fn close_listeners(&mut self) {
+        let open_listeners = self.open_listeners.clone();
+
+        let open_listeners = open_listeners.write_arc().await;
+        for process in open_listeners.iter() {
+            tracing::info!("shutting down session listener: {:?}", process.0);
+            process.1.abort_handle.abort();
+        }
     }
 }
 
@@ -413,22 +391,12 @@ impl Display for HoprTelemetry {
 
 impl Drop for Hopr {
     fn drop(&mut self) {
-        // for process in &mut self.processes {
-        //     tracing::info!("shutting down HOPR process: {process}");
-        //     match process {
-        //         EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
-        //         EdgliProcesses::Hopr(handle) => handle.abort(),
-        //     }
-        // }
-
-        let open_listeners = self.open_listeners.clone();
-
-        self.rt.block_on(async {
-            let open_listeners = open_listeners.write_arc().await;
-            for process in open_listeners.iter() {
-                tracing::info!("shutting down session listener: {:?}", process.0);
-                process.1.abort_handle.abort();
+        for process in &mut self.processes {
+            tracing::info!("shutting down HOPR process: {process}");
+            match process {
+                EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
+                EdgliProcesses::Hopr(handle) => handle.abort(),
             }
-        })
+        }
     }
 }
