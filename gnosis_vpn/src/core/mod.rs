@@ -182,15 +182,14 @@ impl Core {
     }
 
     fn initial_runner(&self, results_sender: &mpsc::Sender<RunnerResults>) {
-        if hopr_config::has_safe() {
-            tracing::debug!("safe found: starting ticket stats runner");
-            self.spawn_ticket_stats_runner(results_sender.clone());
-        } else {
+        self.spawn_ticket_stats_runner(results_sender.clone());
+        if !hopr_config::has_safe() {
             self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
         }
     }
 
     fn spawn_ticket_stats_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+        tracing::debug!("starting ticket stats runner");
         let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         tokio::spawn(async move {
@@ -207,6 +206,7 @@ impl Core {
     }
 
     fn spawn_presafe_runner(&self, results_sender: mpsc::Sender<RunnerResults>, delay: Duration) {
+        tracing::debug!("starting presafe balance runner");
         let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone(), delay);
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
@@ -221,6 +221,7 @@ impl Core {
     }
 
     fn spawn_safe_deployment_runner(&self, results_sender: mpsc::Sender<RunnerResults>, presafe: balance::PreSafe) {
+        tracing::debug!("starting safe deployment runner");
         let runner = safe_deployment_runner::SafeDeploymentRunner::new(self.hopr_params.clone(), presafe);
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
