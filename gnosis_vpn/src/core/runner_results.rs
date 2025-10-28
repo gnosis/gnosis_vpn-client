@@ -4,7 +4,7 @@ use gnosis_vpn_lib::balance::{self};
 use gnosis_vpn_lib::chain::contracts::SafeModuleDeploymentResult;
 use gnosis_vpn_lib::ticket_stats::TicketStats;
 
-use crate::core::{hopr_runner, presafe_runner, safe_deployment_runner, ticket_stats_runner};
+use crate::core::{funding_runner, hopr_runner, presafe_runner, safe_deployment_runner, ticket_stats_runner};
 
 #[derive(Debug)]
 pub enum RunnerResults {
