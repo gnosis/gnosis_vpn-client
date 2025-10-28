@@ -23,6 +23,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 backoff.workspace = true
+rand.workspace = true
 alloy.workspace = true
 uuid.workspace = true
 

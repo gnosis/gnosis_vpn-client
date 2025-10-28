@@ -186,7 +186,7 @@ impl Core {
             tracing::debug!("safe found: starting ticket stats runner");
             self.spawn_ticket_stats_runner(results_sender.clone());
         } else {
-            self.spawn_presafe_runner(Duration::ZERO, results_sender.clone());
+            self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
         }
     }
 
@@ -199,33 +199,41 @@ impl Core {
             if let Some(res) = res {
                 let _ = results_sender
                     .send(RunnerResults::TicketStats(
-                        res.map_err(runner_results::Error::TicketStatsRunner),
+                        res.map_err(runner_results::Error::TicketStats),
                     ))
                     .await;
             }
         });
     }
 
-    fn spawn_presafe_runner(&self, delay: Duration, results_sender: mpsc::Sender<RunnerResults>) {
-        let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
+    fn spawn_presafe_runner(&self, results_sender: mpsc::Sender<RunnerResults>, delay: Duration) {
+        let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone(), delay);
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
             let res = cancel.run_until_cancelled(runner.start()).await;
             if let Some(res) = res {
                 let _ = results_sender
-                    .send(RunnerResults::PreSafe(
-                        res.map_err(runner_results::Error::PreSafeRunner),
-                    ))
+                    .send(RunnerResults::PreSafe(res.map_err(runner_results::Error::PreSafe)))
                     .await;
             }
         });
     }
 
-    fn spawn_safe_creation_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
-        // TODO implement safe creation runner
-        unimplemented!()
+    fn spawn_safe_deployment_runner(&self, results_sender: mpsc::Sender<RunnerResults>, presafe: balance::PreSafe) {
+        let runner = safe_deployment_runner::SafeDeploymentRunner::new(self.hopr_params.clone(), presafe);
+        let cancel = self.cancel_token.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            let res = cancel.run_until_cancelled(runner.start()).await;
+            if let Some(res) = res {
+                let _ = results_sender
+                    .send(RunnerResults::SafeDeployment(
+                        res.map_err(runner_results::Error::SafeDeployment),
+                    ))
+                    .await;
+            }
+        });
     }
 
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
@@ -252,9 +260,9 @@ impl Core {
                 Ok(presafe) => {
                     tracing::info!(%presafe, "presafe balance fetched");
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                        self.spawn_presafe_runner(Duration::from_secs(10), results_sender.clone());
+                        self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
                     } else {
-                        self.spawn_safe_creation_runner(results_sender.clone());
+                        self.spawn_safe_deployment_runner(results_sender.clone(), presafe);
                     }
                 }
                 Err(err) => {
