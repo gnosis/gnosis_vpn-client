@@ -58,7 +58,7 @@ impl HoprParams {
             Some(path) => path.to_path_buf(),
             None => {
                 let path = identity::file()?;
-                tracing::info!(?path, "No HOPR identity file path provided - using default");
+                tracing::debug!(?path, "No HOPR identity file path provided - using default");
                 path
             }
         };
@@ -69,11 +69,11 @@ impl HoprParams {
                 let path = identity::pass_file()?;
                 match fs::read_to_string(&path) {
                     Ok(p) => {
-                        tracing::warn!(?path, "No HOPR identity pass provided - read from file instead");
+                        tracing::debug!(?path, "No HOPR identity pass provided - read from file instead");
                         Ok(p)
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        tracing::warn!(
+                        tracing::info!(
                             ?path,
                             "No HOPR identity pass provided - generating new one and storing alongside identity file"
                         );
