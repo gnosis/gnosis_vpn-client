@@ -33,6 +33,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod funding_runner;
 mod hopr_runner;
 mod presafe_runner;
 mod runner_results;
@@ -204,6 +205,21 @@ impl Core {
                     .send(RunnerResults::TicketStats(
                         res.map_err(runner_results::Error::TicketStats),
                     ))
+                    .await;
+            }
+        });
+    }
+
+    fn spawn_funding_runner(&self, results_sender: mpsc::Sender<RunnerResults>, address: Address, secret: String) {
+        tracing::debug!("starting funding runner");
+        let runner = funding_runner::FundingRunner::new(address, secret);
+        let cancel = self.cancel_token.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            let res = cancel.run_until_cancelled(runner.start()).await;
+            if let Some(res) = res {
+                let _ = results_sender
+                    .send(RunnerResults::Funding(res.map_err(runner_results::Error::Funding)))
                     .await;
             }
         });
