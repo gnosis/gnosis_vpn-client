@@ -1,6 +1,10 @@
 use thiserror::Error;
 
 use gnosis_vpn_lib::balance::{self};
+use gnosis_vpn_lib::chain::contracts::{
+    CheckBalanceInputs, CheckBalanceResult, NetworkSpecifications, SafeModuleDeploymentInputs,
+    SafeModuleDeploymentResult,
+};
 use gnosis_vpn_lib::ticket_stats::TicketStats;
 
 use crate::core::{presafe_runner, safe_deployment_runner, ticket_stats_runner};

@@ -4020,6 +4020,7 @@ dependencies = [
  "gnosis_vpn-lib",
  "mimalloc",
  "notify",
+ "rand 0.9.2",
  "reqwest",
  "serde_json",
  "thiserror 2.0.17",
