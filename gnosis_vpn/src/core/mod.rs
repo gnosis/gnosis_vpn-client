@@ -93,8 +93,10 @@ pub struct Core {
     // results from metrics
     metrics: Option<HoprTelemetry>,
 
-    // results from one shot tasks
+    // results from ticket stats
     ticket_stats: Option<TicketStats>,
+    // command sender to hopr
+    cmd_sender: Option<mpsc::Sender<hopr_runner::Cmd>>,
 }
 
 #[derive(Clone)]
@@ -143,6 +145,7 @@ impl Core {
         Ok(Core {
             config,
             cancel_token: CancellationToken::new(),
+            cmd_sender: None,
             connection: None,
             run_mode: RunMode::Initializing,
             session_connected: false,
@@ -238,17 +241,34 @@ impl Core {
         });
     }
 
-    fn spawn_hopr_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
+    fn spawn_hopr_runner(&mut self, results_sender: mpsc::Sender<RunnerResults>) {
         if !hopr_config::has_safe() {
             tracing::debug!("safe not found - waiting for finished safe deployment");
             return;
         }
+        let ts = match self.ticket_stats {
+            Some(ts) => ts,
+            None => {
+                tracing::debug!("ticket stats not found - waiting for ticket stats");
+                return;
+            }
+        };
+        let ticket_value = match ts.ticket_value() {
+            Ok(tv) => tv,
+            Err(err) => {
+                tracing::error!(%err, "cannot calculate ticket value - requesting new ticket stats");
+                self.spawn_ticket_stats_runner(results_sender.clone());
+                return;
+            }
+        };
+
         tracing::debug!("starting hopr runner");
-        let runner = hopr_runner::HoprRunner::new(hopr);
-        let cancel = self.cancel_token.clone();
+        let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
+        let (sender, mut receiver) = mpsc::channel(32);
+        self.cmd_sender = Some(sender);
         tokio::spawn(async move {
-            let res = cancel.run_until_cancelled(runner.start()).await;
-            if let Some(res) = res {
+            let res = runner.start(&mut receiver).await;
+            if res.is_err() {
                 let _ = results_sender
                     .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
                     .await;
@@ -315,6 +335,15 @@ impl Core {
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");
                     self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
+                }
+            },
+            RunnerResults::Hopr(res) => match res {
+                Ok(_) => {
+                    tracing::info!("hopr runner exited normally");
+                }
+                Err(err) => {
+                    tracing::error!(%err, "hopr runner exited with error - restarting");
+                    self.spawn_hopr_runner(results_sender.clone());
                 }
             },
         }
