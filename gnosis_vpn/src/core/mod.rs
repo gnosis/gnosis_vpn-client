@@ -181,7 +181,7 @@ impl Core {
         }
     }
 
-    fn initial_runner(&self, results_sender: &mpsc::Sender<RunnerResults>) {
+    fn initial_runner(&mut self, results_sender: &mpsc::Sender<RunnerResults>) {
         self.spawn_ticket_stats_runner(results_sender.clone());
         if !hopr_config::has_safe() {
             self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
@@ -255,24 +255,47 @@ impl Core {
     }
 
     async fn on_results(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
-        tracing::debug!(?results, "handling inside event");
+        tracing::debug!(?results, "handling event results");
         match results {
+            RunnerResults::TicketStats(res) => match res {
+                Ok(stats) => {
+                    tracing::info!(%stats, "on ticket stats");
+                    self.ticket_stats = Some(stats);
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch ticket stats, retrying");
+                    self.spawn_ticket_stats_runner(results_sender.clone());
+                }
+            },
             RunnerResults::PreSafe(res) => match res {
                 Ok(presafe) => {
-                    tracing::info!(%presafe, "presafe balance fetched");
+                    tracing::info!(%presafe, "on presafe balance");
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
+                        tracing::warn!("insufficient funds to start safe deployment - waiting");
                         self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
                     } else {
                         self.spawn_safe_deployment_runner(results_sender.clone(), presafe);
                     }
                 }
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch presafe balance");
+                    tracing::error!(%err, "failed to fetch presafe balance, retrying");
+                    self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
                 }
             },
-            _ => {
-                unimplemented!()
-            }
+            RunnerResults::SafeDeployment(res) => match res {
+                Ok(deployment) => {
+                    let safe_module: hopr_config::SafeModule = deployment.into();
+                    while let Err(err) = hopr_config::store_safe(&safe_module) {
+                        tracing::error!(%err, "critical error storing safe module after deployment");
+                        tracing::error!("Please fix file permissions or out of disk space issues");
+                        time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(%err, "error deploying safe module - rechecking balance");
+                    self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
+                }
+            },
         }
     }
 

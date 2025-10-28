@@ -337,28 +337,26 @@ impl Hopr {
         }
     }
 
-    pub fn balances(&self) -> Result<Balances, HoprError> {
-        let node = self.hopr.clone();
-        self.rt.block_on(async move {
-            Ok(Balances {
-                node_xdai: node.get_balance().await?,
-                safe_wxhopr: node.get_safe_balance().await?,
-                channels_out_wxhopr: node
-                    .channels_from(&node.me_onchain())
-                    .await?
-                    .into_iter()
-                    .filter_map(|ch| {
-                        if matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
-                            || matches!(ch.status, edgli::hopr_lib::ChannelStatus::PendingToClose(_))
-                        {
-                            Some(ch.balance)
-                        } else {
-                            None
-                        }
-                    })
-                    .reduce(|acc, x| acc + x)
-                    .unwrap_or(edgli::hopr_lib::Balance::<edgli::hopr_lib::WxHOPR>::zero()),
-            })
+    pub async fn balances(&self) -> Result<Balances, HoprError> {
+        Ok(Balances {
+            node_xdai: self.hopr.get_balance().await?,
+            safe_wxhopr: self.hopr.get_safe_balance().await?,
+            channels_out_wxhopr: self
+                .hopr
+                .channels_from(&self.hopr.me_onchain())
+                .await?
+                .into_iter()
+                .filter_map(|ch| {
+                    if matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
+                        || matches!(ch.status, edgli::hopr_lib::ChannelStatus::PendingToClose(_))
+                    {
+                        Some(ch.balance)
+                    } else {
+                        None
+                    }
+                })
+                .reduce(|acc, x| acc + x)
+                .unwrap_or(edgli::hopr_lib::Balance::<edgli::hopr_lib::WxHOPR>::zero()),
         })
     }
 

@@ -187,7 +187,7 @@ impl Node {
         let edgli = self.edgli.clone();
         thread::spawn(move || {
             let res = edgli.balances();
-            _ = s.send(InternalEvent::Balance(res));
+            //            _ = s.send(InternalEvent::Balance(res));
         });
         r
     }
