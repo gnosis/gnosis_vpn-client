@@ -4,7 +4,7 @@ use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -241,7 +241,7 @@ impl Core {
         });
     }
 
-    fn spawn_hopr_runner(&mut self, results_sender: mpsc::Sender<RunnerResults>) {
+    async fn spawn_hopr_runner(&mut self, results_sender: mpsc::Sender<RunnerResults>) {
         if !hopr_config::has_safe() {
             tracing::debug!("safe not found - waiting for finished safe deployment");
             return;
@@ -265,7 +265,8 @@ impl Core {
         tracing::debug!("starting hopr runner");
         let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
         let (sender, mut receiver) = mpsc::channel(32);
-        self.cmd_sender = Some(sender);
+        self.cmd_sender = Some(sender.clone());
+        let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             let res = runner.start(&mut receiver).await;
             if res.is_err() {
@@ -273,7 +274,38 @@ impl Core {
                     .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
                     .await;
             }
+            tx.send(());
         });
+
+        let _ = rx.await;
+        self.spawn_hopr_status(Duration::from_secs(3)).await;
+    }
+
+    async fn spawn_hopr_status(&mut self, delay: Duration) {
+        let sender = match self.cmd_sender.clone() {
+            Some(s) => s,
+            None => {
+                tracing::warn!("hopr runner not started - cannot request status");
+                return;
+            }
+        };
+        let (request, recv) = oneshot::channel();
+        tokio::spawn(async move {
+            time::sleep(delay).await;
+            sender.send(hopr_runner::Cmd::Status { rsp: request });
+        });
+        let state = match recv.await {
+            Ok(s) => s,
+            Err(_) => {
+                tracing::error!("hopr response sender dropped unexpectedly");
+                return;
+            }
+        };
+        self.on_hopr_status(state).await;
+    }
+
+    async fn on_hopr_status(&mut self, state: HoprState) {
+        tracing::info!(%state, "received hopr status");
     }
 
     async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
@@ -348,6 +380,8 @@ impl Core {
             },
         }
     }
+
+    async fn on_hopr_resp(&mut self) {}
 
     /*
             match event {

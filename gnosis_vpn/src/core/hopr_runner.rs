@@ -54,11 +54,15 @@ impl HoprRunner {
             match cmd {
                 Cmd::Shutdown { rsp } => {
                     hoprd.shutdown().await;
-                    rsp.send(());
+                    let _ = rsp.send(()).map_err(|err| {
+                        tracing::warn!(?err, "failed to send shutdown response");
+                    });
                     break;
                 }
                 Cmd::Status { rsp } => {
-                    rsp.send(hoprd.status());
+                    let _ = rsp.send(hoprd.status()).map_err(|err| {
+                        tracing::warn!(?err, "failed responding to status request");
+                    });
                 }
             }
         }
