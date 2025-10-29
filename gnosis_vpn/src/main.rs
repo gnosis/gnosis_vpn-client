@@ -310,7 +310,6 @@ async fn loop_daemon(
     tracing::info!("enter listening mode");
     tokio::spawn(async move { core.start(&mut event_receiver).await });
     let mut reload_cancel = CancellationToken::new();
-
     let mut ctrc_already_triggered = false;
     let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
     // keep sender in an Option so we can take() it exactly once

@@ -73,6 +73,8 @@ pub struct Core {
     run_mode: RunMode,
     // enable cancellation of tasks
     cancel_token: CancellationToken,
+    // enable balance loop cancellation separately
+    balances_cancel_token: CancellationToken,
 
     // connection to exit node
     connection: Option<connection::Connection>,
@@ -149,6 +151,7 @@ impl Core {
         Ok(Core {
             config,
             cancel_token: CancellationToken::new(),
+            balances_cancel_token: CancellationToken::new(),
             hopr_cmd_sender: None,
             hopr_evt_sender: None,
             connection: None,
@@ -168,13 +171,12 @@ impl Core {
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
         let (evt_sender, mut hopr_evt_receiver) = mpsc::channel(32);
         self.hopr_evt_sender = Some(evt_sender);
-        let cancel_token = CancellationToken::new();
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
-                    if self.on_event(event, cancel_token.clone()).await {
+                    if self.on_event(event, &results_sender).await {
                         continue;
                     } else {
                         break;
@@ -194,12 +196,13 @@ impl Core {
         }
     }
 
-    async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
+    async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<RunnerResults>) -> bool {
         tracing::debug!(%event, "handling outside event");
         match event {
             Event::Shutdown { resp } => {
                 tracing::debug!("shutting down core");
-                cancel_token.cancel();
+                self.cancel_token.cancel();
+                self.balances_cancel_token.cancel();
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
                     tracing::debug!("shutting down hopr");
                     let (tx, rx) = oneshot::channel();
@@ -210,6 +213,123 @@ impl Core {
                     tracing::warn!("shutdown receiver dropped");
                 }
                 false
+            }
+            Event::Command { cmd, resp } => {
+                tracing::debug!(%cmd, "incoming command");
+                match cmd {
+                    Command::Status => {
+                        // let run_mode = match &self.run_mode {
+                        //     RunMode::Initializing => command::RunMode::initializing(),
+                        //     RunMode::PreSafe { node_address, .. } => {
+                        //         let balance = self.presafe_balance.clone().unwrap_or_default();
+                        //         let funding_tool = self.funding_tool.clone();
+                        //         command::RunMode::preparing_safe(*node_address, balance, funding_tool)
+                        //     }
+                        //     RunMode::Syncing { hopr, .. } => {
+                        //         let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
+                        //         command::RunMode::warmup(syncing, hopr.status().to_string())
+                        //     }
+                        //     RunMode::ValueingTicket { .. } => command::RunMode::valueing_ticket(),
+                        //     RunMode::Full { hopr, .. } => {
+                        //         let connection_state = match (
+                        //             self.target_destination.clone(),
+                        //             self.connection.clone().map(|c| c.destination()),
+                        //             self.session_connected,
+                        //         ) {
+                        //             (Some(dest), _, true) => command::ConnectionState::connected(dest.clone().into()),
+                        //             (Some(dest), _, false) => command::ConnectionState::connecting(dest.clone().into()),
+                        //             (None, Some(conn_dest), _) => command::ConnectionState::disconnecting(conn_dest.into()),
+                        //             (None, None, _) => command::ConnectionState::disconnected(),
+                        //         };
+                        //         let funding_state: command::FundingState =
+                        //             if let (Some(balance), Some(ticket_stats)) = (&self.balance, &self.ticket_stats) {
+                        //                 let ticket_value = ticket_stats.ticket_value()?;
+                        //                 balance
+                        //                     .to_funding_issues(self.config.channel_targets().len(), ticket_value)
+                        //                     .into()
+                        //             } else {
+                        //                 command::FundingState::Unknown
+                        //             };
+
+                        //         command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
+                        //     }
+                        // };
+
+                        let available_destinations = self
+                            .config
+                            .destinations
+                            .values()
+                            .map(|v| {
+                                let dest = v.clone();
+                                dest.into()
+                            })
+                            .collect();
+                        let network = self.hopr_params.network.clone();
+                        let res = Response::status(command::StatusResponse::new(
+                            command::RunMode::initializing(),
+                            available_destinations,
+                            network,
+                        ));
+                        let _ = resp.send(res);
+                        return true;
+                    }
+                    Command::Connect(addr) => {
+                        unimplemented!()
+                    }
+                    Command::Disconnect => {
+                        unimplemented!()
+                    }
+                    Command::Balance => {
+                        if let (Some(cmd_sender), Some(balances), Some(Ok(ticket_value))) = (
+                            self.hopr_cmd_sender.clone(),
+                            self.balances.clone(),
+                            self.ticket_stats.map(|ts| ts.ticket_value()),
+                        ) {
+                            let (tx, rx) = oneshot::channel();
+                            let _ = cmd_sender.send(hopr_runner::Cmd::Info { rsp: tx }).await;
+                            let info = match rx.await {
+                                Ok(info) => info,
+                                Err(err) => {
+                                    tracing::error!(%err, "failed to get hopr info for balance command");
+                                    let _ = resp.send(Response::Balance(None));
+                                    return true;
+                                }
+                            };
+                            let issues: Vec<balance::FundingIssue> =
+                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
+
+                            let res = command::BalanceResponse::new(
+                                format!("{} xDai", balances.node_xdai),
+                                format!("{} wxHOPR", balances.safe_wxhopr),
+                                format!("{} wxHOPR", balances.channels_out_wxhopr),
+                                issues,
+                                command::Addresses {
+                                    node: info.node_address,
+                                    safe: info.safe_address,
+                                },
+                            );
+                            let _ = resp.send(Response::Balance(Some(res)));
+                        } else {
+                            let _ = resp.send(Response::Balance(None));
+                        }
+                    }
+                    Command::Ping => {
+                        let _ = resp.send(Response::Pong);
+                    }
+                    Command::RefreshNode => {
+                        // immediately request balances and cancel existing balance loop
+                        self.balances_cancel_token.cancel();
+                        self.balances_cancel_token = CancellationToken::new();
+                        if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
+                            tracing::debug!("requesting balances from hopr");
+                            let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
+                        }
+                    }
+                    Command::FundingTool(secret) => {
+                        self.spawn_funding_runner(results_sender.clone(), secret);
+                    }
+                }
+                true
             }
             _ => {
                 unimplemented!()
@@ -321,7 +441,7 @@ impl Core {
                 }
                 // reschedule next balance fetch
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
-                    let cancel = self.cancel_token.clone();
+                    let cancel = self.balances_cancel_token.clone();
                     tokio::spawn(async move {
                         cancel
                             .run_until_cancelled(async {
@@ -370,9 +490,9 @@ impl Core {
         });
     }
 
-    fn spawn_funding_runner(&self, results_sender: mpsc::Sender<RunnerResults>, address: Address, secret: String) {
+    fn spawn_funding_runner(&self, results_sender: mpsc::Sender<RunnerResults>, secret: String) {
         tracing::debug!("starting funding runner");
-        let runner = funding_runner::FundingRunner::new(address, secret);
+        let runner = funding_runner::FundingRunner::new(self.hopr_params.clone(), secret);
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
