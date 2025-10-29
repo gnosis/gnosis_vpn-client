@@ -74,7 +74,7 @@ jobs:
         uses: cachix/cachix-action@v16
         with:
           name: gnosis-vpn-client
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
       - name: Get version
@@ -92,8 +92,9 @@ jobs:
             echo "binary_version=${base_version}" >> $GITHUB_OUTPUT
             echo "publish_type=github" | tee -a $GITHUB_OUTPUT
           else
-            echo "Invalid version type"
-            exit 1
+            echo "Invoked with unknown version_type (workflow dispatch), defaulting to commit-based versioning"
+            echo "binary_version=${base_version}-commit.$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+            echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
           fi
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
@@ -105,6 +106,41 @@ jobs:
             mv binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
             mv binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
           fi
+
+      - name: Sign binary on ${{ steps.vars.outputs.architecture}}
+        if: endsWith(steps.vars.outputs.architecture, '-darwin')
+        # inputs.version_type == 'release' &&
+        run: |
+          set -o errexit -o nounset -o pipefail
+          set -x
+          echo "${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}" | base64 --decode > gnosisvpn-developer.p12
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security default-keychain -s build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security list-keychains -d user -s build.keychain
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security import gnosisvpn-developer.p12 -k build.keychain -P "${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
+          security find-identity -v -p codesigning build.keychain
+          CERT_INFO=$(security find-identity -v -p codesigning build.keychain)
+          CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+          codesign --sign "${CERT_ID}" --options runtime --timestamp binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
+          codesign --sign "${CERT_ID}" --options runtime --timestamp binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
+          codesign --verify --deep --strict --verbose=4 binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
+          codesign --verify --deep --strict --verbose=4 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
+
+      - name: Sign binary on ${{ steps.vars.outputs.architecture}}
+        if: ! endsWith(steps.vars.outputs.architecture, '-darwin')
+        # inputs.version_type == 'release' &&
+        run: |
+          set -o errexit -o nounset -o pipefail
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          gpg --armor --output binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.asc --detach-sign binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
+          shasum -a 256 binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.sha256
+          gpg --armor --output binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.asc --detach-sign binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
+          shasum -a 256 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
+
       - name: Setup GCP
         if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
@@ -112,26 +148,16 @@ jobs:
           google-credentials: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
           install-sdk: "true"
       - name: Publish Artifact registry
-        if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
+        ## if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
         run: |
           gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
-          if [[ "${{ inputs.version_type }}" == "release" ]]; then
-            echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-            binary=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-            gpg --armor --output ${binary}.sig --detach-sign ${binary}
-            shasum -a 256 ${binary} > ${binary}.sha256
-            gpg --armor --sign ${binary}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=${binary}.sig
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=${binary}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=${binary}.sha256.asc
-            binary=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
-            gpg --armor --output ${binary}.sig --detach-sign ${binary}
-            shasum -a 256 ${binary} > ${binary}.sha256
-            gpg --armor --sign ${binary}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=${binary}.sig
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=${binary}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=${binary}.sha256.asc
+          # [[ "${{ inputs.version_type }}" == "release" ]] && 
+          if [[ ! "${{ steps.vars.outputs.architecture }}" == *-darwin ]]; then
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.asc
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.sha256
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.asc
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
           fi
       - name: Upload ${{ steps.vars.outputs.architecture }} binaries
         if: steps.version.outputs.publish_type == 'workflow'
