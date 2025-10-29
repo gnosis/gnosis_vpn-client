@@ -324,9 +324,11 @@ impl Core {
                             tracing::debug!("requesting balances from hopr");
                             let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
                         }
+                        let _ = resp.send(Response::Empty);
                     }
                     Command::FundingTool(secret) => {
                         self.spawn_funding_runner(results_sender.clone(), secret);
+                        let _ = resp.send(Response::Empty);
                     }
                 }
                 true
@@ -474,10 +476,10 @@ impl Core {
     }
 
     fn spawn_ticket_stats_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
-        tracing::debug!("starting ticket stats runner");
         let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         tokio::spawn(async move {
+            tracing::debug!("starting ticket stats runner");
             let res: Option<Result<TicketStats, ticket_stats_runner::Error>> =
                 cancel.run_until_cancelled(runner.start()).await;
             if let Some(res) = res {
@@ -506,11 +508,12 @@ impl Core {
     }
 
     fn spawn_presafe_runner(&self, results_sender: mpsc::Sender<RunnerResults>, delay: Duration) {
-        tracing::debug!("starting presafe balance runner");
-        let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone(), delay);
+        let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
+            time::sleep(delay).await;
+            tracing::debug!("starting presafe balance runner");
             let res = cancel.run_until_cancelled(runner.start()).await;
             if let Some(res) = res {
                 let _ = results_sender
@@ -581,9 +584,9 @@ impl Core {
             self.ticket_stats.map(|ts| ts.ticket_value()),
         ) {
             let threshold = balance::min_stake_threshold(ticket_value);
-            tracing::debug!(%channel, %threshold, %ticket_value, "requesting channel funding");
             tokio::spawn(async move {
                 time::sleep(delay).await;
+                tracing::debug!(%channel, %threshold, %ticket_value, "requesting channel funding");
                 let _ = cmd_sender
                     .send(hopr_runner::Cmd::FundChannel {
                         address: channel,
