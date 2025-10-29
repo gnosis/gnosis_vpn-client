@@ -33,19 +33,13 @@ steps:
 2. Verify the binary signature:
 
    ```bash
-   gpg --verify gnosis_vpn-aarch64-darwin.sig gnosis_vpn-aarch64-darwin
+   gpg --verify gnosis_vpn-x86_64-linux.asc gnosis_vpn-x86_64-linux
    ```
 
-3. Verify the SHA256 checksum signature:
+3. Compare the checksum with the actual checksum:
 
    ```bash
-   gpg --verify gnosis_vpn-aarch64-darwin.sha256.asc
-   ```
-
-4. Compare the decrypted checksum with the actual checksum:
-
-   ```bash
-   diff -u <(gpg --decrypt gnosis_vpn-aarch64-darwin.sha256.asc) <(shasum -a 256 gnosis_vpn-aarch64-darwin)
+   diff -u <(cat gnosis_vpn-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-x86_64-linux)
    ```
 
 ## General usage
