@@ -304,7 +304,8 @@ impl Core {
                     self.funded_channels.push(address);
                 }
                 Err(err) => {
-                    tracing::error!(%err, %address, "failed to ensure channel funding");
+                    tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
+                    self.spawn_channel_funding(address, Duration::from_secs(60)).await;
                 }
             },
             Evt::Balances(res) => {
@@ -337,6 +338,9 @@ impl Core {
                 tracing::debug!(%status, "received hopr status");
                 if status == HoprState::Running {
                     tracing::info!("hopr is running");
+                    for c in self.config.channel_targets() {
+                        self.spawn_channel_funding(c, Duration::ZERO).await;
+                    }
                 }
             }
         }
@@ -447,6 +451,26 @@ impl Core {
                         .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
                         .await;
                 }
+            });
+        }
+    }
+
+    async fn spawn_channel_funding(&self, channel: Address, delay: Duration) {
+        if let (Some(cmd_sender), Some(Ok(ticket_value))) = (
+            self.hopr_cmd_sender.clone(),
+            self.ticket_stats.map(|ts| ts.ticket_value()),
+        ) {
+            let threshold = balance::min_stake_threshold(ticket_value);
+            tracing::debug!(%channel, %threshold, %ticket_value, "requesting channel funding");
+            tokio::spawn(async move {
+                time::sleep(delay).await;
+                let _ = cmd_sender
+                    .send(hopr_runner::Cmd::FundChannel {
+                        address: channel,
+                        amount: ticket_value,
+                        threshold,
+                    })
+                    .await;
             });
         }
     }
