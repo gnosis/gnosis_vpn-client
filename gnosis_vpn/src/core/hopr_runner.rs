@@ -6,9 +6,9 @@ use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
-use gnosis_vpn_lib::balance::{self, Balances};
+use gnosis_vpn_lib::balance::Balances;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
-use gnosis_vpn_lib::info::{self, Info};
+use gnosis_vpn_lib::info::Info;
 
 use std::sync::Arc;
 
@@ -25,9 +25,7 @@ pub enum Cmd {
     Shutdown {
         rsp: oneshot::Sender<()>,
     },
-    Status {
-        rsp: oneshot::Sender<HoprState>,
-    },
+    Status,
     Info {
         rsp: oneshot::Sender<Info>,
     },
@@ -44,6 +42,7 @@ pub enum Evt {
     Ready,
     FundChannel { address: Address, res: Result<(), Error> },
     Balances(Result<Balances, Error>),
+    Status(HoprState),
 }
 
 #[derive(Debug, Error)]
@@ -92,8 +91,12 @@ impl HoprRunner {
                     let _ = rsp.send(());
                     break;
                 }
-                Cmd::Status { rsp } => {
-                    let _ = rsp.send(hoprd.status());
+                Cmd::Status => {
+                    let status = hoprd.status();
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
+                        let _ = evt_sender.send(Evt::Status(status)).await;
+                    });
                 }
                 Cmd::Info { rsp } => {
                     let info = hoprd.info();
