@@ -1,11 +1,13 @@
-use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Balance, WxHOPR};
+use backoff::ExponentialBackoff;
+use backoff::future::retry;
+use edgli::hopr_lib::Address;
+use serde_json::json;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use url::Url;
 
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config};
+use gnosis_vpn_lib::remote_data;
 
-use crate::hopr_params::{self, HoprParams};
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct FundingRunner {
@@ -17,6 +19,8 @@ pub struct FundingRunner {
 pub enum Error {
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
+    #[error(transparent)]
+    Request(#[from] reqwest::Error),
 }
 
 impl FundingRunner {
@@ -29,8 +33,8 @@ impl FundingRunner {
 
     pub async fn start(&self) -> Result<bool, Error> {
         let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
-        let address = node_address.to_string();
-        let code = secret_hash.to_string();
+        let address = self.node_address.to_string();
+        let code = self.secret_key.to_string();
         post_funding_tool(url, address, code).await
     }
 }
@@ -43,6 +47,7 @@ async fn post_funding_tool(url: Url, address: String, code: String) -> Result<bo
 
         tracing::debug!(%url, ?headers, %body, "Posting funding tool");
 
+        let url = url.clone();
         let res = client
             .post(url)
             .json(&body)
@@ -51,18 +56,25 @@ async fn post_funding_tool(url: Url, address: String, code: String) -> Result<bo
             .send()
             .await;
 
-        let resp = res.map_err(|err| {
-            tracing::error!(?err, "Funding tool connect request failed");
-            err
-        })?;
+        let resp = res
+            .map_err(|err| {
+                tracing::error!(?err, "Funding tool connect request failed");
+                err
+            })
+            .map_err(Error::from)?;
 
         let status = resp.status();
-        let text = resp.text().await.map_err(|err| {
-            tracing::error!(?err, "Funding tool read response failed");
-            err
-        })?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|err| {
+                tracing::error!(?err, "Funding tool read response failed");
+                err
+            })
+            .map_err(Error::from)?;
 
         tracing::debug!(%status, ?text, "Funding tool response");
         Ok(status.is_success())
     })
+    .await
 }
