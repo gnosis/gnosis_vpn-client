@@ -122,7 +122,6 @@ jobs:
         if: inputs.version_type == 'release' && endsWith(steps.vars.outputs.architecture, '-darwin')
         run: |
           set -o errexit -o nounset -o pipefail
-          set -x
           echo "${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}" | base64 --decode > gnosisvpn-developer.p12
           KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
           security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
