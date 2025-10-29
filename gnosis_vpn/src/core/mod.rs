@@ -562,13 +562,13 @@ impl Core {
             }
         };
 
-        tracing::debug!("starting hopr runner");
         let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
         let (sender, mut receiver) = mpsc::channel(32);
         self.hopr_cmd_sender = Some(sender.clone());
         if let Some(evt_sender) = self.hopr_evt_sender.clone() {
             tokio::spawn(async move {
                 time::sleep(delay).await;
+                tracing::debug!("starting hopr runner");
                 let res = runner.start(&mut receiver, evt_sender).await;
                 if res.is_err() {
                     let _ = results_sender
