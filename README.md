@@ -39,7 +39,7 @@ steps:
 3. Compare the checksum with the actual checksum:
 
    ```bash
-   diff -u <(cat gnosis_vpn-aarch64-darwin.sha256) <(shasum -a 256 gnosis_vpn-aarch64-darwin)
+   diff -u <(cat gnosis_vpn-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-x86_64-linux)
    ```
 
 ## General usage
