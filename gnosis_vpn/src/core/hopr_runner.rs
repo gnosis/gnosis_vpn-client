@@ -1,5 +1,10 @@
+use backoff::ExponentialBackoff;
+use backoff::future::retry;
+use edgli::hopr_lib::Address;
+use edgli::hopr_lib::api::ChannelError;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR};
+use serde_json::json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
@@ -15,8 +20,23 @@ pub struct HoprRunner {
 
 #[derive(Debug)]
 pub enum Cmd {
-    Shutdown { rsp: oneshot::Sender<()> },
-    Status { rsp: oneshot::Sender<HoprState> },
+    Shutdown {
+        rsp: oneshot::Sender<()>,
+    },
+    Status {
+        rsp: oneshot::Sender<HoprState>,
+    },
+    FundChannel {
+        address: Address,
+        amount: Balance<WxHOPR>,
+        threshold: Balance<WxHOPR>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Evt {
+    Ready,
+    ChannelFunded(Address),
 }
 
 #[derive(Debug, Error)]
@@ -27,6 +47,8 @@ pub enum Error {
     HoprConfig(#[from] hopr_config::Error),
     #[error(transparent)]
     Hopr(#[from] HoprError),
+    #[error(transparent)]
+    Channel(#[from] ChannelError),
 }
 
 impl HoprRunner {
@@ -37,7 +59,11 @@ impl HoprRunner {
         }
     }
 
-    pub async fn start(&self, cmd_receiver: &mut mpsc::Receiver<Cmd>) -> Result<(), Error> {
+    pub async fn start(
+        &self,
+        cmd_receiver: &mut mpsc::Receiver<Cmd>,
+        evt_sender: mpsc::Sender<Evt>,
+    ) -> Result<(), Error> {
         let cfg = match self.hopr_params.config_mode.clone() {
             // use user provided configuration path
             hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
@@ -50,6 +76,7 @@ impl HoprRunner {
         };
         let keys = self.hopr_params.calc_keys()?;
         let mut hoprd = Hopr::new(cfg, keys).await?;
+        let _ = evt_sender.send(Evt::Ready).await;
         while let Some(cmd) = cmd_receiver.recv().await {
             match cmd {
                 Cmd::Shutdown { rsp } => {
@@ -68,4 +95,20 @@ impl HoprRunner {
         }
         Ok(())
     }
+}
+
+async fn fund_channel(
+    hoprd: &Hopr,
+    address: Address,
+    amount: Balance<WxHOPR>,
+    threshold: Balance<WxHOPR>,
+) -> Result<(), Error> {
+    retry(ExponentialBackoff::default(), || async {
+        hoprd
+            .ensure_channel_open_and_funded(address, amount, threshold)
+            .await
+            .map_err(Error::from)?;
+        Ok(())
+    })
+    .await
 }
