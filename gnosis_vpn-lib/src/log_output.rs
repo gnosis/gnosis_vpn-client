@@ -4,6 +4,7 @@ use serde::ser::Serialize;
 use std::time::SystemTime;
 
 use crate::session;
+use edgli::hopr_lib::Address;
 
 pub fn serialize<T>(v: &T) -> String
 where
@@ -11,20 +12,20 @@ where
 {
     match serde_json::to_string(&v) {
         Ok(s) => s,
-        Err(e) => format!("serializion error: {}", e),
+        Err(e) => format!("serialization error: {e}"),
     }
 }
 
 pub fn elapsed(timestamp: &SystemTime) -> String {
     match timestamp.elapsed() {
         Ok(elapsed) => truncate_after_second_space(format_duration(elapsed).to_string().as_str()).to_string(),
-        Err(e) => format!("error displaying duration: {}", e),
+        Err(e) => format!("error displaying duration: {e}"),
     }
 }
 
-pub fn peer_id(id: &str) -> String {
-    let l = id.len();
-    format!(".{}", &id[l - 4..])
+pub fn address(address: &Address) -> String {
+    let str = address.to_string();
+    format!("{}..{}", &str[..6], &str[38..])
 }
 
 fn truncate_after_second_space(s: &str) -> &str {
@@ -92,34 +93,27 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
     );
 }
 
-pub fn print_wg_manual_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> If you intend to use manual WireGuard mode, please add your public key to the configuration file:
->>!!>> [wireguard]
->>!!>> manual_mode = {{ public_key = "<wg public key>" }}
-"#
-    );
-}
-
-pub fn print_no_destinations() {
-    tracing::error!(
-        r#"
-
->>!!>> No destinations found in configuration file.
->>!!>> Please rerun installer or manually add destinations from https://gnosisvpn.com/servers.
-"#
-    );
-}
-
 pub fn print_session_path_instructions() {
     tracing::error!(
         r#"
 
 >>!!>> Cannot transport data through session.
 >>!!>> This could mean you are missing channel connections to relayers.
->>!!>> Please check your hoprd node and open channels to relayers as specified here: https://gnosisvpn.com/servers.
-        "#
+>>!!>> Please check your hoprd node and open channels to relayers as specified here: https://github.com/gnosis/gnosis_vpn-client/blob/main/ONBOARDING.md#relayers.
+"#
+    );
+}
+
+pub fn print_session_established(path: &str) {
+    tracing::info!(
+        r#"
+
+            /---==========================---\
+            |   VPN CONNECTION ESTABLISHED   |
+            \---==========================---/
+
+            route: {}
+        "#,
+        path
     );
 }

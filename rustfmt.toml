@@ -1,5 +1,2 @@
-edition = "2021"
-reorder_imports = true
-fn_params_layout = "Tall"
-# group_imports = "StdExternalCrate"
+edition = "2024"
 max_width = 120

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use gnosis_vpn_lib::command::Command as LibCommand;
-use gnosis_vpn_lib::peer_id::PeerId;
+use gnosis_vpn_lib::prelude::Address;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 
@@ -34,21 +34,39 @@ pub enum Command {
     /// Connect to this exit location
     #[command()]
     Connect {
-        /// Endpoint peer id
-        peer_id: PeerId,
+        /// Endpoint node address
+        address: Address,
     },
 
     /// Disconnect from current exit location
     #[command()]
     Disconnect {},
+
+    /// Query balance information
+    #[command()]
+    Balance {},
+
+    /// Trigger a refresh of node information including balance
+    #[command()]
+    RefreshNode {},
+
+    /// Trigger a funding tool run to claim funds for your account during onboarding
+    #[command()]
+    FundingTool {
+        /// Your secret hash
+        secret: String,
+    },
 }
 
 impl From<Command> for LibCommand {
     fn from(val: Command) -> Self {
         match val {
             Command::Status {} => LibCommand::Status,
-            Command::Connect { peer_id } => LibCommand::Connect(peer_id),
+            Command::Connect { address } => LibCommand::Connect(address),
             Command::Disconnect {} => LibCommand::Disconnect,
+            Command::Balance {} => LibCommand::Balance,
+            Command::RefreshNode {} => LibCommand::RefreshNode,
+            Command::FundingTool { secret } => LibCommand::FundingTool(secret),
         }
     }
 }

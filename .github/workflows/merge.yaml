@@ -16,7 +16,7 @@ jobs:
     if: github.event.pull_request.merged == true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup GCP
         id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
@@ -37,12 +37,8 @@ jobs:
         binary:
           - architecture: x86_64-linux
             runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: armv7l-linux
-            runner: ubuntu-24.04
           - architecture: aarch64-darwin
-            runner: macos-14
+            runner: macos-15
           - architecture: x86_64-darwin
             runner: macos-13
     name: Binary ${{ matrix.binary.architecture }}
@@ -62,7 +58,7 @@ jobs:
       - build-binaries
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Get version
         id: vars
         run: |
@@ -70,7 +66,7 @@ jobs:
           pr_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')-pr.${{ github.event.pull_request.number }}
           echo "pr_version=$pr_version" >> $GITHUB_OUTPUT
       - name: Create comment
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
@@ -92,3 +88,10 @@ jobs:
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-x86_64-darwin --destination=./binaries --local-filename=gnosis_vpn-x86_64-darwin
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-x86_64-darwin --destination=./binaries --local-filename=gnosis_vpn-x86_64-darwin
             ```
+  cache-deps:
+    name: Cache deps
+    if: github.event.pull_request.merged == true
+    uses: ./.github/workflows/cache-deps.yaml
+    with:
+      branch: ${{ github.event.pull_request.base.ref }}
+    secrets: inherit

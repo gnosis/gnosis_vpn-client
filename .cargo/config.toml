@@ -1,14 +1,11 @@
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor/"
-
 [install]
 root = ".cargo"
 
-# [build]
-# rustflags = ["-Wunused-crate-dependencies"]
-# Nightly only
-#rustflags = [ "-Zlocation-detail=none" ]
-#rustdocflags = ["--enable-index-page", "-Z", "unstable-options"]
+[env]
+# C/C++ compiler flags for optimized builds
+# -O3: Maximum optimization level for best performance
+# -ffunction-sections/-fdata-sections: Enable dead code elimination
+# -fPIC: Generate position-independent code for shared libraries
+CFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"
+CPPFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"
+LDFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"

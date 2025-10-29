@@ -1,19 +1,25 @@
+use edgli::hopr_lib::{Address, RoutingOptions};
+use edgli::hopr_lib::{Balance, WxHOPR, XDai};
+use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
-use crate::connection::Destination as ConnectionDestination;
+use crate::balance::{self, FundingIssue};
+use crate::connection::destination::Destination as ConnectionDestination;
 use crate::log_output;
-use crate::peer_id::PeerId;
+use crate::network::Network;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     Status,
-    Connect(PeerId),
+    Connect(Address),
     Disconnect,
+    Balance,
     Ping,
+    RefreshNode,
+    FundingTool(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,35 +27,61 @@ pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
+    Balance(Option<BalanceResponse>),
     Pong,
+    Empty,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub wireguard: WireGuardStatus,
-    pub status: Status,
+    pub run_mode: RunMode,
     pub available_destinations: Vec<Destination>,
+    pub network: Network,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum WireGuardStatus {
-    Up,
-    Down,
-    ManuallyManaged,
+pub enum RunMode {
+    /// Initial start
+    Init,
+    /// after creating safe this state will not be reached again
+    PreparingSafe {
+        node_address: Address,
+        node_xdai: Balance<XDai>,
+        node_wxhopr: Balance<WxHOPR>,
+        funding_tool: balance::FundingTool,
+    },
+    /// Before config generation
+    ValueingTicket,
+    /// Subsequent service start up in this state and after preparing safe
+    Warmup { sync_progress: f32, hopr_state: String },
+    /// Normal operation where connections can be made
+    Running {
+        connection: ConnectionState,
+        funding: FundingState,
+        hopr_state: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Status {
+pub enum ConnectionState {
     Connecting(Destination),
     Disconnecting(Destination),
     Connected(Destination),
     Disconnected,
 }
 
+// in order of priority
+#[derive(Debug, Serialize, Deserialize)]
+pub enum FundingState {
+    Unknown,                // state not queried yet
+    TopIssue(FundingIssue), // there is at least one issue
+    WellFunded,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    PeerIdNotFound,
+    AddressNotFound,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,38 +93,77 @@ pub enum DisconnectResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
-    pub peer_id: PeerId,
+    pub address: Address,
+    pub path: RoutingOptions,
 }
 
-impl WireGuardStatus {
-    pub fn new(connected: bool) -> Self {
-        if connected {
-            WireGuardStatus::Up
-        } else {
-            WireGuardStatus::Down
-        }
-    }
-
-    pub fn manual() -> Self {
-        WireGuardStatus::ManuallyManaged
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BalanceResponse {
+    pub node: String,
+    pub safe: String,
+    pub channels_out: String,
+    pub addresses: Addresses,
+    pub issues: Vec<FundingIssue>,
 }
 
-impl Status {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Addresses {
+    pub node: Address,
+    pub safe: Address,
+}
+
+impl ConnectionState {
     pub fn connecting(destination: Destination) -> Self {
-        Status::Connecting(destination)
-    }
-
-    pub fn connected(destination: Destination) -> Self {
-        Status::Connected(destination)
+        ConnectionState::Connecting(destination)
     }
 
     pub fn disconnecting(destination: Destination) -> Self {
-        Status::Disconnecting(destination)
+        ConnectionState::Disconnecting(destination)
+    }
+
+    pub fn connected(destination: Destination) -> Self {
+        ConnectionState::Connected(destination)
     }
 
     pub fn disconnected() -> Self {
-        Status::Disconnected
+        ConnectionState::Disconnected
+    }
+}
+
+impl RunMode {
+    pub fn initializing() -> Self {
+        RunMode::Init
+    }
+    pub fn preparing_safe(
+        node_address: Address,
+        pre_safe: balance::PreSafe,
+        funding_tool: balance::FundingTool,
+    ) -> Self {
+        RunMode::PreparingSafe {
+            node_address,
+            node_xdai: pre_safe.node_xdai,
+            node_wxhopr: pre_safe.node_wxhopr,
+            funding_tool,
+        }
+    }
+
+    pub fn warmup(sync_progress: f32, hopr_state: String) -> Self {
+        RunMode::Warmup {
+            sync_progress,
+            hopr_state,
+        }
+    }
+
+    pub fn valueing_ticket() -> Self {
+        RunMode::ValueingTicket
+    }
+
+    pub fn running(connection: ConnectionState, funding: FundingState, hopr_state: String) -> Self {
+        RunMode::Running {
+            connection,
+            funding,
+            hopr_state,
+        }
     }
 }
 
@@ -101,8 +172,8 @@ impl ConnectResponse {
         ConnectResponse::Connecting(destination)
     }
 
-    pub fn peer_id_not_found() -> Self {
-        ConnectResponse::PeerIdNotFound
+    pub fn address_not_found() -> Self {
+        ConnectResponse::AddressNotFound
     }
 }
 
@@ -117,11 +188,29 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(wireguard: WireGuardStatus, status: Status, available_destinations: Vec<Destination>) -> Self {
+    pub fn new(run_mode: RunMode, available_destinations: Vec<Destination>, network: Network) -> Self {
         StatusResponse {
-            wireguard,
-            status,
+            run_mode,
             available_destinations,
+            network,
+        }
+    }
+}
+
+impl BalanceResponse {
+    pub fn new(
+        node: String,
+        safe: String,
+        channels_out: String,
+        issues: Vec<FundingIssue>,
+        addresses: Addresses,
+    ) -> Self {
+        BalanceResponse {
+            node,
+            safe,
+            channels_out,
+            issues,
+            addresses,
         }
     }
 }
@@ -143,7 +232,7 @@ impl Response {
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = log_output::serialize(self);
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -158,8 +247,19 @@ impl FromStr for Command {
 impl From<ConnectionDestination> for Destination {
     fn from(destination: ConnectionDestination) -> Self {
         Destination {
-            peer_id: destination.peer_id,
+            address: destination.address,
             meta: destination.meta,
+            path: destination.routing,
+        }
+    }
+}
+
+impl From<Vec<FundingIssue>> for FundingState {
+    fn from(issues: Vec<FundingIssue>) -> Self {
+        if issues.is_empty() {
+            FundingState::WellFunded
+        } else {
+            FundingState::TopIssue(issues[0].clone())
         }
     }
 }
@@ -169,30 +269,67 @@ impl fmt::Display for Destination {
         let meta = self
             .meta
             .iter()
-            .map(|(k, v)| format!("{}: {}", k, v))
+            .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "Peer ID: {}, {}", self.peer_id, meta)
+        let short_addr = log_output::address(&self.address);
+        write!(
+            f,
+            "Address: {address}, Route: (entry){path:?}({short_addr}), {meta}",
+            meta = meta,
+            path = self.path,
+            address = self.address,
+            short_addr = short_addr,
+        )
     }
 }
 
-impl fmt::Display for WireGuardStatus {
+impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            WireGuardStatus::Up => write!(f, "Up"),
-            WireGuardStatus::Down => write!(f, "Down"),
-            WireGuardStatus::ManuallyManaged => write!(f, "Manually Managed"),
+            RunMode::Init => write!(f, "Initializing..."),
+            RunMode::ValueingTicket => write!(f, "Valueing Ticket..."),
+            RunMode::PreparingSafe {
+                node_address,
+                node_xdai,
+                node_wxhopr,
+                funding_tool,
+            } => {
+                write!(
+                    f,
+                    "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
+                )
+            }
+            RunMode::Warmup {
+                sync_progress,
+                hopr_state,
+            } => write!(f, "Hopr: {hopr_state}, Syncing... {:.2}%", sync_progress * 100.0),
+            RunMode::Running {
+                connection,
+                funding,
+                hopr_state,
+            } => write!(f, "Hopr: {hopr_state}, Connection: {connection}, Funding: {funding}"),
         }
     }
 }
 
-impl fmt::Display for Status {
+impl fmt::Display for ConnectionState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Status::Connecting(dest) => write!(f, "Connecting to {}", dest),
-            Status::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
-            Status::Connected(dest) => write!(f, "Connected to {}", dest),
-            Status::Disconnected => write!(f, "Disconnected"),
+            ConnectionState::Connecting(dest) => write!(f, "Connecting to {}", dest),
+            ConnectionState::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
+            ConnectionState::Connected(dest) => write!(f, "Connected to {}", dest),
+            ConnectionState::Disconnected => write!(f, "Disconnected"),
+        }
+    }
+}
+
+impl fmt::Display for FundingState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FundingState::Unknown => write!(f, "Unknown"),
+            FundingState::TopIssue(issue) => write!(f, "Issue: {}", issue),
+            FundingState::WellFunded => write!(f, "Well Funded"),
         }
     }
 }

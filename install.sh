@@ -2,16 +2,16 @@
 
 set -euo pipefail
 
+# inputs
 NON_INTERACTIVE=""
-INSTALL_FOLDER="${INSTALL_FOLDER:-./gnosis_vpn}"
-HOPRD_API_ENDPOINT="${HOPRD_API_ENDPOINT:-}"
-HOPRD_API_TOKEN="${HOPRD_API_TOKEN:-}"
-HOPRD_SESSION_PORT="${HOPRD_SESSION_PORT:-1422}"
+INSTALL_FOLDER="./gnosis_vpn"
+WG_PRIVATE_KEY=""
+VERSION_TAG=""
+
+# internals
 PLATFORM=""
 HOPR_NETWORK=""
-VERSION_TAG=""
 IS_MACOS=""
-WG_PUBLIC_KEY="${WG_PUBLIC_KEY:-}"
 
 # taken from https://stackoverflow.com/a/28938235
 BPurple='\033[1;35m'
@@ -25,14 +25,12 @@ usage() {
     echo -e "Usage: ${GLOBAL_NAME} [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --non-interactive          Run the script in non-interactive mode."
-    echo "  -i, --install-folder       Specify the installation folder (default: ./gnosis_vpn)."
-    echo "  --api-endpoint             hoprd API endpoint (default: empty, will prompt)."
-    echo "  --api-token                hoprd API token (default: empty, will prompt)."
-    echo "  --session-port             hoprd session port (default: 1422, will prompt)."
-    echo "  --wireguard-public-key     WireGuard public key (required for macOS, optional otherwise)."
-    echo "  --version-tag              Specify a specific version tag to install."
-    echo "  --help                     Show this help message and exit."
+    echo "  --non-interactive              run the script in non-interactive mode"
+    echo "  -i, --install-folder <string>  installation folder (default: ./gnosis_vpn)"
+    echo "  --expert-wg <string>           use Gnosis VPN without WireGuard key rotation (not recommended) - expects WireGuard private key"
+    echo "  --expert-channels              ignore Gnosis VPN relayer channels (not recommended)"
+    echo "  --version-tag <string>         specific version tag to install"
+    echo "  --help                         show this help message and exit"
     exit 0
 }
 
@@ -45,22 +43,6 @@ trim() {
     printf '%s' "$str"
 }
 
-check_reqs() {
-    required_cmds=(curl grep sed cat uname)
-    if [[ -n ${IS_MACOS} ]]; then
-        required_cmds+=(xattr)
-    fi
-
-    for cmd in "${required_cmds[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            echo ""
-            echo "${BRed}Error:${Color_Off} $cmd is required to run this script. Please install $cmd and try again."
-            exit 1
-        fi
-    done
-
-}
-
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -71,43 +53,16 @@ parse_arguments() {
                 INSTALL_FOLDER="$2"
                 shift
             else
-                echo "Error: --install-folder requires a non-empty argument."
+                echo "${BRed}Error:${Color_Off} --install-folder requires a non-empty argument."
                 exit 1
             fi
             ;;
-        --api-endpoint)
+        --expert-wg)
             if [[ -n ${2:-} ]]; then
-                HOPRD_API_ENDPOINT="$2"
+                WG_PRIVATE_KEY="$2"
                 shift
             else
-                echo "Error: --api-endpoint requires a non-empty argument."
-                exit 1
-            fi
-            ;;
-        --api-token)
-            if [[ -n ${2:-} ]]; then
-                HOPRD_API_TOKEN="$2"
-                shift
-            else
-                echo "Error: --api-token requires a non-empty argument."
-                exit 1
-            fi
-            ;;
-        --session-port)
-            if [[ -n ${2:-} ]]; then
-                HOPRD_SESSION_PORT="$2"
-                shift
-            else
-                echo "Error: --session-port requires a non-empty argument."
-                exit 1
-            fi
-            ;;
-        --wireguard-public-key)
-            if [[ -n ${2:-} ]]; then
-                WG_PUBLIC_KEY="$2"
-                shift
-            else
-                echo "Error: --wireguard-public-key requires a non-empty argument."
+                echo "${BRed}Error:${Color_Off} --expert-wg requires a non-empty argument."
                 exit 1
             fi
             ;;
@@ -116,7 +71,7 @@ parse_arguments() {
                 VERSION_TAG="$2"
                 shift
             else
-                echo "Error: --version-tag requires a non-empty argument."
+                echo "${BRed}Error:${Color_Off} --version-tag requires a non-empty argument."
                 exit 1
             fi
             ;;
@@ -135,17 +90,12 @@ print_intro() {
     echo "This script will help you install and configure the Gnosis VPN client on your system."
     echo ""
     echo "Requirements:"
-    echo "  - A running hoprd node that will act as your entry node."
+    echo "  - Open channels to the Gnosis VPN relayer nodes."
     echo "  - WireGuard tools installed on your system."
-    echo "  - An additional open port on your node for Gnosis VPN to connect to."
     echo ""
-    echo "Note:"
-    echo "  Gnosis VPN uses a port called 'internal_connection_port' for both TCP and UDP connections."
     echo ""
     echo "This installer will:"
     echo "  - Download the Gnosis VPN client and control application."
-    echo "  - Prompt you for API access to your hoprd node."
-    echo "  - Prompt you for the 'internal_connection_port'."
     echo "  - Generate a configuration file based on your input."
 
     echo ""
@@ -155,7 +105,7 @@ print_intro() {
             printf "\rProceeding in %d seconds..." "$i"
             sleep 1
         done
-        printf "\rProceeding in 1 second..."
+        printf "\rProceeding in 1 second...\n"
         sleep 1
     else
         read -r -n 1 -s -p "Press any key to continue or Ctrl+C to exit..."
@@ -164,7 +114,6 @@ print_intro() {
 
 prompt_install_dir() {
     echo ""
-    declare install_dir
     if [[ -n ${NON_INTERACTIVE} ]]; then
         echo "[NON-INTERACTIVE] Using installation directory: ${INSTALL_FOLDER}"
         sleep 1
@@ -174,6 +123,7 @@ prompt_install_dir() {
     echo "Please specify the installation directory for Gnosis VPN."
     echo "Downloaded binaries will be placed in this directory."
     echo "The configuration file will also be created in this directory."
+    declare install_dir
     read -r -p "Enter installation directory [${INSTALL_FOLDER:-<blank>}]: " install_dir
     install_dir=$(trim "${install_dir:-$INSTALL_FOLDER}")
     # do not rely on realpath as it is unstable on macOS
@@ -192,90 +142,9 @@ urldecode() {
     echo -e "${_//%/\\x}"
 }
 
-prompt_api_access() {
-    echo ""
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        echo "[NON-INTERACTIVE] Using hoprd API endpoint: ${HOPRD_API_ENDPOINT:-}"
-        sleep 1
-        echo "[NON-INTERACTIVE] Using hoprd API token: ${HOPRD_API_TOKEN:-}"
-        sleep 1
-        return
-    fi
-
-    echo "Gnosis VPN uses your hoprd node as entry connection point."
-    echo "Therefore, you need to provide the API endpoint and token for your hoprd node."
-    echo -e "If you are connected to your hoprd node via ${BCyan}HOPR Admin UI${Color_Off}, paste its full URL."
-    echo "The script will try to parse the required values from the URL."
-    declare admin_url
-    read -r -p "Enter full hoprd admin interface URL [or leave blank to provide API_ENDPOINT and API_TOKEN separately]: " admin_url
-    admin_url=$(trim "${admin_url}")
-
-    declare api_endpoint api_token
-    api_endpoint=""
-    api_token=""
-    if [[ -n ${admin_url} ]]; then
-        echo ""
-        echo "Parsing admin URL..."
-        declare decoded_url
-        decoded_url=$(urldecode "$admin_url")
-        api_endpoint=$(echo "$decoded_url" | grep -o 'apiEndpoint=[^&]*' | sed 's/apiEndpoint=//' || true)
-        api_token=$(echo "$decoded_url" | grep -o 'apiToken=[^&]*' | sed 's/apiToken=//' || true)
-    fi
-
-    echo ""
-    if [[ -z ${api_endpoint} ]]; then
-        if [[ -n ${admin_url} ]]; then
-            echo "Warning: Could not parse API endpoint from the provided URL. Please provide it manually."
-        fi
-        read -r -p "Enter hoprd API endpoint [${HOPRD_API_ENDPOINT:-<blank>}]: " api_endpoint
-        api_endpoint=$(trim "${api_endpoint}")
-    else
-        echo "Using parsed API endpoint: ${api_endpoint}"
-    fi
-    if [[ -z ${api_token} ]]; then
-        if [[ -n ${admin_url} ]]; then
-            echo "Warning: Could not parse API token from the provided URL. Please provide it manually."
-        fi
-        read -r -p "Enter hoprd API token [${HOPRD_API_TOKEN:-<blank>}]: " api_token
-        api_token=$(trim "${api_token}")
-    else
-        echo "Using parsed API token: ${api_token}"
-    fi
-
-    HOPRD_API_ENDPOINT="${api_endpoint:-$HOPRD_API_ENDPOINT}"
-    HOPRD_API_TOKEN="${api_token:-$HOPRD_API_TOKEN}"
-}
-
-prompt_session_port() {
-    echo ""
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        echo "[NON-INTERACTIVE] Using hoprd session port: ${HOPRD_SESSION_PORT}"
-        sleep 1
-        return
-    fi
-
-    echo "Gnosis VPN requires a port for internal connections."
-    echo "This port will be used for both TCP and UDP connections."
-    read -r -p "Enter hoprd session port [${HOPRD_SESSION_PORT:-<blank>}]: " session_port
-    HOPRD_SESSION_PORT=$(trim "${session_port:-$HOPRD_SESSION_PORT}")
-}
-
-fetch_network() {
-    echo ""
-    echo "Accessing hoprd API to determine network"
-    HOPR_NETWORK=$(curl --fail -L --progress-bar \
-        -H "Content-Type: application/json" \
-        -H "x-auth-token: $HOPRD_API_TOKEN" \
-        "${HOPRD_API_ENDPOINT}/api/v3/node/info" |
-        grep '"network":' |
-        sed -E 's/.*"network": *"([^"]*)".*/\1/')
-    echo ""
-    echo "Detected network: $HOPR_NETWORK"
-}
-
 fetch_version_tag() {
-    echo ""
     if [[ -n ${VERSION_TAG} ]]; then
+        echo ""
         echo "Verifying provided version tag: ${VERSION_TAG}"
         curl --fail --head -L --progress-bar \
             "https://codeload.github.com/gnosis/gnosis_vpn-client/tar.gz/${VERSION_TAG}" &>/dev/null ||
@@ -287,6 +156,7 @@ fetch_version_tag() {
         return
     fi
 
+    echo ""
     echo "Fetching the latest Gnosis VPN release tag from GitHub..."
 
     VERSION_TAG=$(curl --fail -L --progress-bar https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/main/LATEST)
@@ -295,12 +165,14 @@ fetch_version_tag() {
 }
 
 check_platform() {
-    declare os arch arch_tag
+    declare os
     os="$(uname | tr '[:upper:]' '[:lower:]')"
+    declare arch
     arch="$(uname -m)"
     if [[ ${os} == "darwin" ]]; then IS_MACOS="yes"; fi
 
     echo ""
+    declare arch_tag
     case "$arch" in
     x86_64 | amd64) arch_tag="x86_64" ;;
     aarch64 | arm64) arch_tag="aarch64" ;;
@@ -315,66 +187,84 @@ check_platform() {
     PLATFORM="$arch_tag-$os"
 }
 
-prompt_wireguard() {
-    declare wg_fail
-    wg_fail=""
-    if ! command -v wg &>/dev/null; then
-        echo ""
-        echo "Warning: Probing for wg command failed."
-        wg_fail="yes"
-    fi
-    if [[ -z $wg_fail ]] && ! command -v wg-quick &>/dev/null; then
-        echo ""
-        echo "Warning: Probing for wg-quick command failed."
-        wg_fail="yes"
+check_reqs() {
+    declare required_cmds=(curl grep sed cat uname)
+    if [[ -n ${IS_MACOS} ]]; then
+        required_cmds+=(xattr)
     fi
 
-    if [[ -n ${NON_INTERACTIVE} ]]; then
-        if [[ -n ${WG_PUBLIC_KEY} ]]; then
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
             echo ""
-            echo "[NON-INTERACTIVE] Using provided WireGuard public key: ${WG_PUBLIC_KEY}"
+            echo "${BRed}Error:${Color_Off} $cmd is required to run this script. Please install $cmd and try again."
+            exit 1
+        fi
+    done
+
+}
+
+check_wg_commands() {
+    declare required_cmds=(wg wg-quick)
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo ""
+            echo "Warning: $cmd command is not available."
+            return 1
+        fi
+    done
+}
+
+check_wireguard() {
+    if [[ -n ${NON_INTERACTIVE} ]]; then
+        if ! check_wg_commands; then
+            echo ""
+            echo "[NON-INTERACTIVE] WireGuard tools are not installed."
+            echo "[NON-INTERACTIVE] Cannot continue non-interactive installation."
+            exit 1
+        fi
+        if [[ -n ${WG_PRIVATE_KEY} ]]; then
+            echo ""
+            echo "[NON-INTERACTIVE] Using provided WireGuard private key: ${WG_PRIVATE_KEY}"
             sleep 1
             return
         fi
-        if [[ -n ${wg_fail} ]]; then
-            echo ""
-            echo "[NON-INTERACTIVE] WireGuard tools are not installed."
-            echo "[NON-INTERACTIVE] Cannot continue non interactive installation."
-            echo "[NON-INTERACTIVE] Please provide WG_PUBLIC_KEY environment variable or install WireGuard tools."
-            exit 1
-        fi
     fi
 
-    if [[ -n $wg_fail ]]; then
+    if ! check_wg_commands; then
         echo ""
-        echo "Warning: WireGuard tools are not installed."
+        echo -e "${BRed}Error:${Color_Off}: WireGuard tools are not installed."
+
         echo ""
-        echo "Gnosis VPN works best with WireGuard tools installed."
         if [[ -n ${IS_MACOS} ]]; then
-            echo "On macOS you can install WireGuard tools using Homebrew:"
-            echo -e "${BCyan}brew install wireguard-tools${Color_Off}"
+            if command -v brew &>/dev/null; then
+                echo "Executing 'brew install wireguard-tools' to install WireGuard tools."
+                read -r -p "Press [Enter] to proceed."
+                brew install wireguard-tools || {
+                    echo ""
+                    echo -e "${BRed}Failed to install WireGuard tools.${Color_Off}"
+                    exit 1
+                }
+            else
+                echo -e "${BRed}Error:${Color_Off} Homebrew (https://brew.sh) not found."
+                echo "Unable to install WireGuard tools on macOS."
+                echo -e "Please install Homebrew from ${BCyan}(https://brew.sh)${Color_Off}."
+                echo "Then restart this installer. Exiting."
+                exit 1
+            fi
         else
-            echo "On Linux you can install WireGuard tools using your package manager."
+            echo "You can install WireGuard tools using your package manager."
             echo "For example, on Debian/Ubuntu you can run:"
             echo -e "${BCyan}sudo apt install wireguard-tools${Color_Off}"
-            echo -e "See https://www.wireguard.com/install/ for more information."
-        fi
-        echo ""
-        echo "We strongly recommend installing WireGuard tools to use Gnosis VPN."
-        echo "However if you know what you are doing you can also continue with manual mode."
-        declare answer
-        read -r -p "Press [Enter] to recheck for WireGuard tools or type 'manual': " answer
-        answer=$(trim "${answer}")
-        if [[ $answer == "manual" ]]; then
+            echo "See https://www.wireguard.com/install/ for more information."
             echo ""
-            echo "You have chosen to continue in manual mode."
-            echo "You will need to provide your WireGuard public key."
-            read -r -p "Enter WireGuard public key [${WG_PUBLIC_KEY:-<blank>}]: " wg_pub_key
-            WG_PUBLIC_KEY=$(trim "${wg_pub_key:-$WG_PUBLIC_KEY}")
-        else
-            prompt_wireguard
+            read -r -p "Please install WireGuard tools - once installed press [Enter] to proceed."
         fi
+        check_wireguard
+        return
     fi
+
+    echo ""
+    echo "Successfully detected WireGuard tools."
 }
 
 enter_install_dir() {
@@ -391,9 +281,8 @@ exit_install_dir() {
 }
 
 download_binary() {
-    declare binary url
-    binary="$1"
-    url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${VERSION_TAG}/${binary}"
+    declare binary="$1"
+    declare url="https://github.com/gnosis/gnosis_vpn-client/releases/download/${VERSION_TAG}/${binary}"
 
     echo ""
     echo "Downloading ${binary} from ${url}..."
@@ -424,9 +313,9 @@ fetch_binaries() {
 
 backup_config() {
     if [[ -f "./config.toml" ]]; then
-        declare timestamp backup_name
+        declare timestamp
         timestamp=$(date +%Y%m%d-%H%M%S)
-        backup_name="config-${timestamp}.toml"
+        declare backup_name="config-${timestamp}.toml"
         cp "./config.toml" "./${backup_name}" || {
             echo ""
             echo -e "${BRed}Failed to back up config file:${Color_Off} ./config.toml to ./${backup_name}"
@@ -438,57 +327,53 @@ backup_config() {
 }
 
 generate_config() {
-    declare destinations wg_section
-    wg_section=""
-    if [[ -n ${WG_PUBLIC_KEY} ]]; then
+    declare wg_section=""
+    if [[ -n ${WG_PRIVATE_KEY} ]]; then
         wg_section="
-[wireguard.manual_mode]
-public_key = \"${WG_PUBLIC_KEY}\"
+[wireguard]
+force_private_key = \"${WG_PRIVATE_KEY}\"
         "
     fi
 
+    declare destinations
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        destinations='[destinations]
+        destinations='
+[destinations]
 
-[destinations.12D3KooWDNcj8phBXj9ZJkAxSmjbwNUzEWtSsg6K6BeuKCAyZuCU]
+[destinations.0x7220CfE91F369bfE79F883c2891e97407D7a4D48]
 meta = { location = "USA", state = "Iowa" }
-path = { intermediates = [ "12D3KooWRT74aKgHF36HwqvvxQiLCL1GVFRSv6eEFQ71wtY2vVvt" ] }
+path = { intermediates = [ "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" ] }
 
-[destinations.12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ]
+[destinations.0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA]
 meta = { location = "UK", city = "London" }
-path = { intermediates = [ "12D3KooWC69bPoKYzBYP95GXAumqeMKqxcrtb2vFYLuf4N16R2Lk" ] }
+path = { intermediates = [ "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" ] }
 '
     else
-        destinations='[destinations]
+        destinations='
+[destinations]
 
-[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 meta = { location = "Germany" }
-path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
+[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
 meta = { location = "USA" }
-path = { intermediates = [ "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ" ] }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
+[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
 meta = { location = "Spain" }
-path = { intermediates = [ "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr" ] }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
-[destinations.12D3KooWJVhifJNJQPDSYz5aC8hWEyFdgB3xdJyKYQoPYLn4Svv8]
+[destinations.0x9454fc1F54DC7682124BA2d153345f4F6b404A79]
 meta = { location = "India" }
-path = { intermediates = [ "12D3KooWFcTznqz9wEvPFPsTTXDVtWXtPy8jo4AAUXHUqTW8fP2h" ] }
+path = { intermediates = [ "0x652cDe234ec643De0E70Fb3a4415345D42bAc7B2" ] }
 '
     fi
 
     cat <<EOF >./config.toml
 # Generated by Gnosis VPN install script
 
-version = 2
-
-[hoprd_node]
-endpoint = "${HOPRD_API_ENDPOINT}"
-api_token = "${HOPRD_API_TOKEN}"
-
-internal_connection_port = ${HOPRD_SESSION_PORT}
+version = 4
 
 ${destinations}
 ${wg_section}
@@ -506,23 +391,18 @@ print_outro() {
     echo -e "  - Check client status: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl status${Color_Off}"
     echo "You can connect to any of those locations:"
     if [[ $HOPR_NETWORK == "rotsee" ]]; then
-        echo -e "  - Connect to London: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWRKoZGSHR53rhK83omuomvFjUCV4hL3MwnkurU8C58SGQ${Color_Off}"
-        echo -e "  - Connect to Iowa: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWDNcj8phBXj9ZJkAxSmjbwNUzEWtSsg6K6BeuKCAyZuCU${Color_Off}"
+        echo -e "  - Connect to London: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA${Color_Off}"
+        echo -e "  - Connect to Iowa: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0x7220CfE91F369bfE79F883c2891e97407D7a4D48${Color_Off}"
     else
-        echo -e "  - Connect to Spain: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL${Color_Off}"
-        echo -e "  - Connect to USA: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5${Color_Off}"
-        echo -e "  - Connect to Germany: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7${Color_Off}"
+        echo -e "  - Connect to Spain: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254${Color_Off}"
+        echo -e "  - Connect to USA: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0xa5Ca174Ef94403d6162a969341a61baeA48F57F8${Color_Off}"
+        echo -e "  - Connect to Germany: ${BCyan}${INSTALL_FOLDER}/gnosis_vpn-ctl connect 0xD9c11f07BfBC1914877d7395459223aFF9Dc2739${Color_Off}"
     fi
     echo ""
     echo "Configuration file is located at: ${INSTALL_FOLDER}/config.toml"
     echo "You can edit this file to change settings as needed."
     echo ""
-    if [[ -n $WG_PUBLIC_KEY ]]; then
-        echo "Your configuration was set up for WireGuard manual mode."
-        echo "Check the client's log output after connecting to get a template for your tunnel configuration."
-        echo ""
-    fi
-    echo "After establishing a VPN connection you can browse anonymously by using this HTTP proxy:"
+    echo "After establishing a VPN connection you can browse anonymously by using this HTTPS proxy:"
     echo -e "${BCyan}HTTP(s) Proxy: 10.128.0.1:3128${Color_Off}"
     echo ""
 }
@@ -532,14 +412,10 @@ main() {
 
     check_platform
     check_reqs
+    check_wireguard
+    fetch_version_tag
 
     prompt_install_dir
-    prompt_api_access
-    prompt_session_port
-
-    fetch_network
-    fetch_version_tag
-    prompt_wireguard
 
     enter_install_dir
     fetch_binaries

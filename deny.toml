@@ -1,0 +1,44 @@
+[bans]
+multiple-versions = 'allow'
+
+[sources]
+# Allow git sources for HOPR dependencies
+allow-git = [
+  "https://github.com/hoprnet/edge-client.git",
+  "https://github.com/hoprnet/hoprnet",
+]
+
+[licenses]
+private = { ignore = true }
+allow = [
+  # unmatched in deps but allowed
+  # "AFL-3.0",
+  # "BSD-2-Clause-Patent",
+  # "BSD-3-Clause-Clear",
+  # "FTL",
+  # "NCSA",
+  # "OpenSSL",
+  # "PostgreSQL",
+  # "Python-2.0",
+  # "WTFPL",
+  # "X11",
+  "0BSD",
+  "Apache-2.0",
+  "BSD-1-Clause",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+  # need to allow our own license
+  "LGPL-3.0",
+  # HOPR dependencies use GPL-3.0 and GPL-3.0-only
+  "GPL-3.0",
+  "GPL-3.0-only",
+]

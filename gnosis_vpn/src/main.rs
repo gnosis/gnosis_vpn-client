@@ -16,6 +16,13 @@ use gnosis_vpn_lib::socket;
 mod cli;
 mod core;
 mod event;
+mod hopr_params;
+
+// Avoid musl's default allocator due to degraded performance
+// https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn ctrlc_channel() -> Result<crossbeam_channel::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = crossbeam_channel::bounded(2);
@@ -112,6 +119,16 @@ fn socket_channel(socket_path: &Path) -> Result<crossbeam_channel::Receiver<net:
             return Err(exitcode::IOERR);
         }
     };
+
+    let socket_dir = socket_path.parent().ok_or_else(|| {
+        tracing::error!("socket path has no parent");
+        exitcode::UNAVAILABLE
+    })?;
+
+    fs::create_dir_all(socket_dir).map_err(|e| {
+        tracing::error!(error = %e, "error creating socket directory");
+        exitcode::IOERR
+    })?;
 
     let stream = net::UnixListener::bind(socket_path).map_err(|e| {
         tracing::error!(error = ?e, "error binding socket");
@@ -231,20 +248,30 @@ fn incoming_config_fs_event(
         }
     };
 
-    tracing::debug!(event = ?event, "incoming config event");
+    tracing::debug!(?event, ?config_path, "incoming config event");
 
     match event {
-        Ok(notify::Event { kind, paths, attrs: _ })
-            if (kind == notify::event::EventKind::Create(notify::event::CreateKind::File)
-                || kind
-                    == notify::event::EventKind::Modify(notify::event::ModifyKind::Data(
-                        notify::event::DataChange::Any,
-                    ))
-                || kind == notify::event::EventKind::Remove(notify::event::RemoveKind::File))
-                && paths == vec![config_path] =>
-        {
-            tracing::debug!(?kind, "config file change detected");
-            Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
+        Ok(notify::Event {
+            kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
+            paths,
+            attrs: _,
+        })
+        | Ok(notify::Event {
+            kind: kind @ notify::event::EventKind::Remove(notify::event::RemoveKind::File),
+            paths,
+            attrs: _,
+        })
+        | Ok(notify::Event {
+            kind: kind @ notify::event::EventKind::Modify(notify::event::ModifyKind::Data(_)),
+            paths,
+            attrs: _,
+        }) => {
+            if paths == vec![config_path] {
+                tracing::debug!(?kind, "config file change detected");
+                Some(crossbeam_channel::after(CONFIG_GRACE_PERIOD))
+            } else {
+                None
+            }
         }
         Ok(_) => None,
         Err(e) => {
@@ -254,14 +281,23 @@ fn incoming_config_fs_event(
     }
 }
 
-fn daemon(socket_path: &Path, config_path: &Path) -> Result<(), exitcode::ExitCode> {
+fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    let config_path = match args.config_path.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(error = %e, "error canonicalizing config path");
+            return Err(exitcode::IOERR);
+        }
+    };
     let ctrlc_receiver = ctrlc_channel()?;
     // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, config_receiver) = config_channel(config_path)?;
-    let socket_receiver = socket_channel(socket_path)?;
+    let (_config_watcher, config_receiver) = config_channel(&config_path)?;
+    let socket_path = args.socket_path.clone();
 
-    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, config_path);
-    match fs::remove_file(socket_path) {
+    let socket_receiver = socket_channel(&args.socket_path)?;
+
+    let exit_code = loop_daemon(&ctrlc_receiver, &config_receiver, &socket_receiver, args);
+    match fs::remove_file(&socket_path) {
         Ok(_) => (),
         Err(e) => {
             tracing::error!(error = %e, "failed removing socket");
@@ -274,10 +310,12 @@ fn loop_daemon(
     ctrlc_receiver: &crossbeam_channel::Receiver<()>,
     config_receiver: &crossbeam_channel::Receiver<notify::Result<notify::Event>>,
     socket_receiver: &crossbeam_channel::Receiver<net::UnixStream>,
-    config_path: &Path,
+    args: cli::Cli,
 ) -> exitcode::ExitCode {
     let (sender, core_receiver) = crossbeam_channel::unbounded::<event::Event>();
-    let mut core = match core::Core::init(config_path, sender) {
+    let hopr_params = hopr_params::HoprParams::from(args.clone());
+    let config_path = args.config_path.clone();
+    let mut core = match core::Core::init(&config_path, sender, hopr_params) {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");
@@ -308,13 +346,13 @@ fn loop_daemon(
             recv(socket_receiver) -> stream => incoming_stream(&mut core, stream),
             recv(core_receiver) -> event => incoming_event(&mut core, event),
             recv(config_receiver) -> event => {
-                let resp = incoming_config_fs_event(event, config_path);
+                let resp = incoming_config_fs_event(event, &config_path);
                 if let Some(r) = resp {
                     read_config_receiver = r
                 }
             },
             recv(read_config_receiver) -> _ => {
-                match core.update_config(config_path) {
+                match core.update_config(&config_path) {
                     Ok(_) => {
                         tracing::info!("updated configuration - resetting application");
                     }
@@ -338,7 +376,7 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    match daemon(&args.socket_path, &args.config_path) {
+    match daemon(args) {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {

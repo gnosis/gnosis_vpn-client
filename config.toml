@@ -6,7 +6,7 @@
 ###
 
 # general config file version
-version = 2
+version = 3
 
 [hoprd_node]
 # URL pointing to the API access of your hoprd node with scheme and port (e.g., `http://192.168.0.89:3001`)
@@ -24,28 +24,21 @@ internal_connection_port = 1422
 ## destinations section - configure available target destinations
 [destinations]
 
-[destinations.12D3KooWMEXkxWMitwu9apsHmjgDZ7imVHgEsjXfcyZfrqYMYjW7]
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 meta = { location = "Germany" }
-path = { intermediates = [
-  "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP",
-] }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.12D3KooWBRB3y81TmtqC34JSd61uS8BVeUqWxCSBijD5nLhL6HU5]
+[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
 meta = { location = "USA" }
-path = { intermediates = [
-  "12D3KooWQLTR4zdLyXToQGx3YKs9LJmeL4MKJ3KMp4rfVibhbqPQ",
-] }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.12D3KooWGdcnCwJ3645cFgo4drvSN3TKmxQFYEZK7HMPA6wx1bjL]
+[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
 meta = { location = "Spain" }
-path = { intermediates = [
-  "12D3KooWFnMnefPQp2k3XA3yNViBH4hnUCXcs9LasLUSv6WAgKSr",
-] }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 ###
 ## wireguard section - specific VPN-related settings
 
 # [wireguard]
-# If you manually handle the WireGuard interface, you need to specify a public_key here
-# [wireguard.manual_mode]
-# public_key = "<your WireGuard public key>"
+# If you want to disable WireGuard key rotation, provide a static private key here.
+# force_private_key = "<your WireGuard private key>"

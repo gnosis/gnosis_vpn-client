@@ -1,22 +1,26 @@
-use gnosis_vpn_lib::connection;
 use std::fmt;
+
+use gnosis_vpn_lib::{channel_funding, connection, metrics, node, onboarding, valueing_ticket};
 
 #[derive(Debug)]
 pub enum Event {
-    ConnectWg(connection::ConnectInfo),
-    /// Event indicating that the connection has been established and is ready for use.
-    /// Boolean flag indicates if it has ever worked before, true meaning it has worked at least once.
-    Disconnected(bool),
-    DropConnection,
+    Connection(connection::Event),
+    Node(node::Event),
+    Onboarding(onboarding::Event),
+    ChannelFunding(channel_funding::Event),
+    Metrics(metrics::Event),
+    ValueingTicket(valueing_ticket::Event),
 }
 
 impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Event::ConnectWg(..) => write!(f, "ConnectWg"),
-            Event::Disconnected(true) => write!(f, "Disconnected (ping has worked)"),
-            Event::Disconnected(false) => write!(f, "Disconnected (ping never worked)"),
-            Event::DropConnection => write!(f, "DropConnection"),
+            Event::Connection(event) => write!(f, "ConnectionEvent: {event}"),
+            Event::Node(event) => write!(f, "NodeEvent: {event}"),
+            Event::Onboarding(event) => write!(f, "OnboardingEvent: {event}"),
+            Event::ChannelFunding(event) => write!(f, "ChannelFundingEvent: {event}"),
+            Event::Metrics(event) => write!(f, "MetricsEvent: {event}"),
+            Event::ValueingTicket(event) => write!(f, "ValueingTicket: {event}"),
         }
     }
 }

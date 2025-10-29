@@ -21,12 +21,8 @@ jobs:
         binary:
           - architecture: x86_64-linux
             runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: armv7l-linux
-            runner: ubuntu-24.04
           - architecture: aarch64-darwin
-            runner: macos-14
+            runner: macos-15
           - architecture: x86_64-darwin
             runner: macos-13
     name: Binary ${{ matrix.binary.architecture }}
@@ -44,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup GCP
         id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
@@ -60,7 +56,7 @@ jobs:
           echo "release_version=${release_version}" >> $GITHUB_OUTPUT
       - name: Create release and publish binaries
         run: |
-          architectures=("aarch64-linux" "x86_64-linux" "armv7l-linux" "aarch64-darwin" "x86_64-darwin" )
+          architectures=("x86_64-linux" "aarch64-darwin" "x86_64-darwin" )
           mkdir -p binaries
           echo "Generating release notes"
           gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
