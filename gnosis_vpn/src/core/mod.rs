@@ -200,6 +200,12 @@ impl Core {
             Event::Shutdown { resp } => {
                 tracing::debug!("shutting down core");
                 cancel_token.cancel();
+                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
+                    tracing::debug!("shutting down hopr");
+                    let (tx, rx) = oneshot::channel();
+                    let _ = cmd_sender.send(hopr_runner::Cmd::Shutdown { rsp: tx }).await;
+                    let _ = rx.await;
+                }
                 if resp.send(()).is_err() {
                     tracing::warn!("shutdown receiver dropped");
                 }
@@ -218,7 +224,7 @@ impl Core {
                 Ok(stats) => {
                     tracing::info!(%stats, "on ticket stats");
                     self.ticket_stats = Some(stats);
-                    self.spawn_hopr_runner(results_sender.clone());
+                    self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO).await;
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch ticket stats, retrying");
@@ -248,7 +254,7 @@ impl Core {
                         tracing::error!("Please fix file permissions or out of disk space issues");
                         time::sleep(Duration::from_secs(5)).await;
                     }
-                    self.spawn_hopr_runner(results_sender.clone());
+                    self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO).await;
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");
@@ -260,8 +266,9 @@ impl Core {
                     tracing::info!("hopr runner exited normally");
                 }
                 Err(err) => {
-                    tracing::error!(%err, "hopr runner exited with error - restarting");
-                    self.spawn_hopr_runner(results_sender.clone());
+                    tracing::error!(%err, "hopr runner failed to start - trying again in 10 seconds");
+                    self.spawn_hopr_runner(results_sender.clone(), Duration::from_secs(10))
+                        .await;
                 }
             },
             RunnerResults::Funding(res) => match res {
@@ -284,6 +291,12 @@ impl Core {
         match evt {
             Evt::Ready => {
                 tracing::info!("hopr runner is ready");
+                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
+                    tracing::debug!("requesting balances from hopr");
+                    let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
+                    tracing::debug!("requesting status from hopr");
+                    let _ = cmd_sender.send(hopr_runner::Cmd::Status).await;
+                }
             }
             Evt::FundChannel { address, res } => match res {
                 Ok(()) => {
@@ -311,11 +324,19 @@ impl Core {
                     tokio::spawn(async move {
                         cancel
                             .run_until_cancelled(async {
+                                tracing::debug!("waiting for next balances request");
                                 time::sleep(Duration::from_secs(60)).await;
+                                tracing::debug!("requesting balances from hopr");
                                 let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
                             })
                             .await;
                     });
+                }
+            }
+            Evt::Status(status) => {
+                tracing::debug!(%status, "received hopr status");
+                if status == HoprState::Running {
+                    tracing::info!("hopr is running");
                 }
             }
         }
@@ -392,7 +413,7 @@ impl Core {
         });
     }
 
-    async fn spawn_hopr_runner(&mut self, results_sender: mpsc::Sender<RunnerResults>) {
+    async fn spawn_hopr_runner(&mut self, results_sender: mpsc::Sender<RunnerResults>, delay: Duration) {
         if !hopr_config::has_safe() {
             tracing::debug!("safe not found - waiting for finished safe deployment");
             return;
@@ -419,6 +440,7 @@ impl Core {
         self.hopr_cmd_sender = Some(sender.clone());
         if let Some(evt_sender) = self.hopr_evt_sender.clone() {
             tokio::spawn(async move {
+                time::sleep(delay).await;
                 let res = runner.start(&mut receiver, evt_sender).await;
                 if res.is_err() {
                     let _ = results_sender
