@@ -109,7 +109,8 @@ jobs:
           rm Cargo.toml.bak
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
-          #nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
+
+          # nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
           mkdir -p result/bin
           echo "Gnosis VPN Build" > ./result/bin/gnosis_vpn
           echo "Gnosis VPN Control Build" > ./result/bin/gnosis_vpn-ctl
@@ -146,7 +147,7 @@ jobs:
           codesign --verify --deep --strict --verbose=4 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
 
       - name: Sign binary on ${{ steps.vars.outputs.architecture}}
-        if: ! endsWith(steps.vars.outputs.architecture, '-darwin')
+        if: endsWith(steps.vars.outputs.architecture, '-linux')
         # inputs.version_type == 'release' &&
         run: |
           set -o errexit -o nounset -o pipefail
