@@ -88,14 +88,10 @@ pub struct Core {
     balances: Option<balance::Balances>,
 
     // results from onboarding
-    presafe_balance: Option<balance::PreSafe>,
     funding_status: funding_runner::Status,
 
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
-
-    // results from metrics
-    metrics: Option<HoprTelemetry>,
 
     // results from ticket stats
     ticket_stats: Option<TicketStats>,
@@ -160,10 +156,8 @@ impl Core {
             target_destination: None,
             balances: None,
             hopr_params,
-            presafe_balance: None,
             funding_status: funding_runner::Status::NotStarted,
             funded_channels: Vec::new(),
-            metrics: None,
             ticket_stats: None,
         })
     }
@@ -273,12 +267,36 @@ impl Core {
                         let _ = resp.send(res);
                         return true;
                     }
-                    Command::Connect(addr) => {
-                        unimplemented!()
+                    Command::Connect(address) => {
+                        match self.config.destinations.get(&address) {
+                            Some(dest) => {
+                                self.target_destination = Some(dest.clone());
+                                // self.act_on_target()?;
+                                let _ =
+                                    resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
+                            }
+                            None => {
+                                tracing::info!(address = %address, "cannot connect to destination - address not configured");
+                                let _ = resp.send(Response::connect(command::ConnectResponse::address_not_found()));
+                            }
+                        }
+                        return true;
                     }
                     Command::Disconnect => {
-                        unimplemented!()
+                        self.target_destination = None;
+                        // self.act_on_target()?;
+                        let dest = self.connection.as_ref().map(|c| c.destination());
+                        match dest {
+                            Some(d) => {
+                                let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(d.into())));
+                            }
+                            None => {
+                                let _ = resp.send(Response::disconnect(command::DisconnectResponse::not_connected()));
+                            }
+                        }
+                        return true;
                     }
+
                     Command::Balance => {
                         if let (Some(cmd_sender), Some(balances), Some(Ok(ticket_value))) = (
                             self.hopr_cmd_sender.clone(),
