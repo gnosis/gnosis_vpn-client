@@ -10,6 +10,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::fs;
 use std::path::Path;
@@ -40,6 +41,7 @@ mod runner_results;
 mod safe_deployment_runner;
 mod ticket_stats_runner;
 
+use hopr_runner::Evt;
 use runner_results::RunnerResults;
 
 #[derive(Debug, Error)]
@@ -81,8 +83,7 @@ pub struct Core {
     hopr_params: HoprParams,
 
     // results from node
-    balance: Option<balance::Balances>,
-    info: Option<info::Info>,
+    balances: Option<balance::Balances>,
 
     // results from onboarding
     presafe_balance: Option<balance::PreSafe>,
@@ -97,7 +98,9 @@ pub struct Core {
     // results from ticket stats
     ticket_stats: Option<TicketStats>,
     // command sender to hopr
-    cmd_sender: Option<mpsc::Sender<hopr_runner::Cmd>>,
+    hopr_cmd_sender: Option<mpsc::Sender<hopr_runner::Cmd>>,
+    // event receiver from hopr
+    hopr_evt_sender: Option<mpsc::Sender<hopr_runner::Evt>>,
 }
 
 #[derive(Clone)]
@@ -146,13 +149,13 @@ impl Core {
         Ok(Core {
             config,
             cancel_token: CancellationToken::new(),
-            cmd_sender: None,
+            hopr_cmd_sender: None,
+            hopr_evt_sender: None,
             connection: None,
             run_mode: RunMode::Initializing,
             session_connected: false,
             target_destination: None,
-            balance: None,
-            info: None,
+            balances: None,
             hopr_params,
             presafe_balance: None,
             funding_status: funding_runner::Status::NotStarted,
@@ -163,6 +166,8 @@ impl Core {
     }
 
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
+        let (evt_sender, mut hopr_evt_receiver) = mpsc::channel(32);
+        self.hopr_evt_sender = Some(evt_sender);
         let cancel_token = CancellationToken::new();
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
@@ -177,6 +182,9 @@ impl Core {
                 }
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
+                }
+                Some(evt) = hopr_evt_receiver.recv() => {
+                    self.on_hopr_evt(evt).await;
                 }
                 else => {
                     tracing::warn!("event receiver closed");
@@ -269,6 +277,47 @@ impl Core {
                     self.funding_status = funding_runner::Status::Failed;
                 }
             },
+        }
+    }
+
+    async fn on_hopr_evt(&mut self, evt: hopr_runner::Evt) {
+        match evt {
+            Evt::Ready => {
+                tracing::info!("hopr runner is ready");
+            }
+            Evt::FundChannel { address, res } => match res {
+                Ok(()) => {
+                    tracing::info!(%address, "channel funded");
+                    self.funded_channels.push(address);
+                }
+                Err(err) => {
+                    tracing::error!(%err, %address, "failed to ensure channel funding");
+                }
+            },
+            Evt::Balances(res) => {
+                match res {
+                    Ok(balances) => {
+                        tracing::info!(%balances, "received hopr balances");
+                        self.balances = Some(balances);
+                    }
+                    Err(err) => {
+                        tracing::error!(%err, "failed to fetch hopr balances");
+                        self.balances = None;
+                    }
+                }
+                // reschedule next balance fetch
+                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
+                    let cancel = self.cancel_token.clone();
+                    tokio::spawn(async move {
+                        cancel
+                            .run_until_cancelled(async {
+                                time::sleep(Duration::from_secs(60)).await;
+                                let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
+                            })
+                            .await;
+                    });
+                }
+            }
         }
     }
 
@@ -367,45 +416,18 @@ impl Core {
         tracing::debug!("starting hopr runner");
         let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
         let (sender, mut receiver) = mpsc::channel(32);
-        self.cmd_sender = Some(sender.clone());
-        tokio::spawn(async move {
-            let res = runner.start(&mut receiver).await;
-            if res.is_err() {
-                let _ = results_sender
-                    .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
-                    .await;
-            }
-        });
+        self.hopr_cmd_sender = Some(sender.clone());
+        if let Some(evt_sender) = self.hopr_evt_sender.clone() {
+            tokio::spawn(async move {
+                let res = runner.start(&mut receiver, evt_sender).await;
+                if res.is_err() {
+                    let _ = results_sender
+                        .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
+                        .await;
+                }
+            });
+        }
     }
-
-    async fn spawn_hopr_status(&mut self, delay: Duration) {
-        let sender = match self.cmd_sender.clone() {
-            Some(s) => s,
-            None => {
-                tracing::warn!("hopr runner not started - cannot request status");
-                return;
-            }
-        };
-        let (request, recv) = oneshot::channel();
-        tokio::spawn(async move {
-            time::sleep(delay).await;
-            sender.send(hopr_runner::Cmd::Status { rsp: request });
-        });
-        let state = match recv.await {
-            Ok(s) => s,
-            Err(_) => {
-                tracing::error!("hopr response sender dropped unexpectedly");
-                return;
-            }
-        };
-        self.on_hopr_status(state).await;
-    }
-
-    async fn on_hopr_status(&mut self, state: HoprState) {
-        tracing::info!(%state, "received hopr status");
-    }
-
-    async fn on_hopr_resp(&mut self) {}
 
     /*
             match event {
