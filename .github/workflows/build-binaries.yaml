@@ -157,7 +157,7 @@ jobs:
           shasum -a 256 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
 
       - name: Setup GCP
-        if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
+        ## if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
         with:
           google-credentials: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
