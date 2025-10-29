@@ -86,7 +86,7 @@ pub struct Core {
 
     // results from onboarding
     presafe_balance: Option<balance::PreSafe>,
-    funding_tool: balance::FundingTool,
+    funding_status: funding_runner::Status,
 
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
@@ -155,7 +155,7 @@ impl Core {
             info: None,
             hopr_params,
             presafe_balance: None,
-            funding_tool: balance::FundingTool::NotStarted,
+            funding_status: funding_runner::Status::NotStarted,
             funded_channels: Vec::new(),
             metrics: None,
             ticket_stats: None,
@@ -183,6 +183,92 @@ impl Core {
                     break;
                 }
             }
+        }
+    }
+
+    async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
+        tracing::debug!(%event, "handling outside event");
+        match event {
+            Event::Shutdown { resp } => {
+                tracing::debug!("shutting down core");
+                cancel_token.cancel();
+                if resp.send(()).is_err() {
+                    tracing::warn!("shutdown receiver dropped");
+                }
+                false
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
+
+    async fn on_results(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
+        tracing::debug!(?results, "handling event results");
+        match results {
+            RunnerResults::TicketStats(res) => match res {
+                Ok(stats) => {
+                    tracing::info!(%stats, "on ticket stats");
+                    self.ticket_stats = Some(stats);
+                    self.spawn_hopr_runner(results_sender.clone());
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch ticket stats, retrying");
+                    self.spawn_ticket_stats_runner(results_sender.clone());
+                }
+            },
+            RunnerResults::PreSafe(res) => match res {
+                Ok(presafe) => {
+                    tracing::info!(%presafe, "on presafe balance");
+                    if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
+                        tracing::warn!("insufficient funds to start safe deployment - waiting");
+                        self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
+                    } else {
+                        self.spawn_safe_deployment_runner(results_sender.clone(), presafe);
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch presafe balance, retrying");
+                    self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
+                }
+            },
+            RunnerResults::SafeDeployment(res) => match res {
+                Ok(deployment) => {
+                    let safe_module: hopr_config::SafeModule = deployment.into();
+                    while let Err(err) = hopr_config::store_safe(&safe_module) {
+                        tracing::error!(%err, "critical error storing safe module after deployment");
+                        tracing::error!("Please fix file permissions or out of disk space issues");
+                        time::sleep(Duration::from_secs(5)).await;
+                    }
+                    self.spawn_hopr_runner(results_sender.clone());
+                }
+                Err(err) => {
+                    tracing::error!(%err, "error deploying safe module - rechecking balance");
+                    self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
+                }
+            },
+            RunnerResults::Hopr(res) => match res {
+                Ok(_) => {
+                    tracing::info!("hopr runner exited normally");
+                }
+                Err(err) => {
+                    tracing::error!(%err, "hopr runner exited with error - restarting");
+                    self.spawn_hopr_runner(results_sender.clone());
+                }
+            },
+            RunnerResults::Funding(res) => match res {
+                Ok(success) => {
+                    self.funding_status = if success {
+                        funding_runner::Status::Success
+                    } else {
+                        funding_runner::Status::Failed
+                    };
+                }
+                Err(err) => {
+                    tracing::error!(%err, "funding runner exited with error");
+                    self.funding_status = funding_runner::Status::Failed;
+                }
+            },
         }
     }
 
@@ -317,79 +403,6 @@ impl Core {
 
     async fn on_hopr_status(&mut self, state: HoprState) {
         tracing::info!(%state, "received hopr status");
-    }
-
-    async fn on_event(&mut self, event: Event, cancel_token: CancellationToken) -> bool {
-        tracing::debug!(%event, "handling outside event");
-        match event {
-            Event::Shutdown { resp } => {
-                tracing::debug!("shutting down core");
-                cancel_token.cancel();
-                if resp.send(()).is_err() {
-                    tracing::warn!("shutdown receiver dropped");
-                }
-                false
-            }
-            _ => {
-                unimplemented!()
-            }
-        }
-    }
-
-    async fn on_results(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
-        tracing::debug!(?results, "handling event results");
-        match results {
-            RunnerResults::TicketStats(res) => match res {
-                Ok(stats) => {
-                    tracing::info!(%stats, "on ticket stats");
-                    self.ticket_stats = Some(stats);
-                    self.spawn_hopr_runner(results_sender.clone());
-                }
-                Err(err) => {
-                    tracing::error!(%err, "failed to fetch ticket stats, retrying");
-                    self.spawn_ticket_stats_runner(results_sender.clone());
-                }
-            },
-            RunnerResults::PreSafe(res) => match res {
-                Ok(presafe) => {
-                    tracing::info!(%presafe, "on presafe balance");
-                    if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                        tracing::warn!("insufficient funds to start safe deployment - waiting");
-                        self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
-                    } else {
-                        self.spawn_safe_deployment_runner(results_sender.clone(), presafe);
-                    }
-                }
-                Err(err) => {
-                    tracing::error!(%err, "failed to fetch presafe balance, retrying");
-                    self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
-                }
-            },
-            RunnerResults::SafeDeployment(res) => match res {
-                Ok(deployment) => {
-                    let safe_module: hopr_config::SafeModule = deployment.into();
-                    while let Err(err) = hopr_config::store_safe(&safe_module) {
-                        tracing::error!(%err, "critical error storing safe module after deployment");
-                        tracing::error!("Please fix file permissions or out of disk space issues");
-                        time::sleep(Duration::from_secs(5)).await;
-                    }
-                    self.spawn_hopr_runner(results_sender.clone());
-                }
-                Err(err) => {
-                    tracing::error!(%err, "error deploying safe module - rechecking balance");
-                    self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
-                }
-            },
-            RunnerResults::Hopr(res) => match res {
-                Ok(_) => {
-                    tracing::info!("hopr runner exited normally");
-                }
-                Err(err) => {
-                    tracing::error!(%err, "hopr runner exited with error - restarting");
-                    self.spawn_hopr_runner(results_sender.clone());
-                }
-            },
-        }
     }
 
     async fn on_hopr_resp(&mut self) {}

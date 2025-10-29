@@ -101,7 +101,8 @@ impl HoprRunner {
                 }
                 Cmd::Balances => {
                     let hoprd = hoprd.clone();
-                    tokio::spawn(async {
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
                         let res = hoprd.balances().await.map_err(Error::from);
                         let _ = evt_sender.send(Evt::Balances(res)).await;
                     });
@@ -112,7 +113,8 @@ impl HoprRunner {
                     threshold,
                 } => {
                     let hoprd = hoprd.clone();
-                    tokio::spawn(async {
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
                         let res = fund_channel(&hoprd, address, amount, threshold).await;
                         let _ = evt_sender.send(Evt::FundChannel { address, res }).await;
                     });
