@@ -15,6 +15,14 @@ pub struct FundingRunner {
     secret_key: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Status {
+    NotStarted,
+    InProgress,
+    Success,
+    Failed,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
