@@ -12,6 +12,7 @@ pub enum RunnerResults {
     PreSafe(Result<balance::PreSafe, Error>),
     SafeDeployment(Result<SafeModuleDeploymentResult, Error>),
     Hopr(Result<(), Error>),
+    Funding(Result<bool, Error>),
 }
 
 #[derive(Debug, Error)]
@@ -24,4 +25,6 @@ pub enum Error {
     SafeDeployment(#[from] safe_deployment_runner::Error),
     #[error(transparent)]
     Hopr(#[from] hopr_runner::Error),
+    #[error(transparent)]
+    Funding(#[from] funding_runner::Error),
 }

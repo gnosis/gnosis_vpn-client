@@ -282,7 +282,6 @@ impl Core {
         let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
         let (sender, mut receiver) = mpsc::channel(32);
         self.cmd_sender = Some(sender.clone());
-        let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             let res = runner.start(&mut receiver).await;
             if res.is_err() {
@@ -290,11 +289,7 @@ impl Core {
                     .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
                     .await;
             }
-            tx.send(());
         });
-
-        let _ = rx.await;
-        self.spawn_hopr_status(Duration::from_secs(3)).await;
     }
 
     async fn spawn_hopr_status(&mut self, delay: Duration) {
