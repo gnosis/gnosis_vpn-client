@@ -1,14 +1,16 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::api::ChannelError;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR};
-use serde_json::json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config};
+use gnosis_vpn_lib::balance::{self, Balances};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
+use gnosis_vpn_lib::info::{self, Info};
+
+use std::sync::Arc;
 
 use crate::hopr_params::{self, HoprParams};
 
@@ -26,6 +28,10 @@ pub enum Cmd {
     Status {
         rsp: oneshot::Sender<HoprState>,
     },
+    Info {
+        rsp: oneshot::Sender<Info>,
+    },
+    Balances,
     FundChannel {
         address: Address,
         amount: Balance<WxHOPR>,
@@ -36,7 +42,8 @@ pub enum Cmd {
 #[derive(Debug)]
 pub enum Evt {
     Ready,
-    ChannelFunded(Address),
+    FundChannel { address: Address, res: Result<(), Error> },
+    Balances(Result<Balances, Error>),
 }
 
 #[derive(Debug, Error)]
@@ -48,7 +55,7 @@ pub enum Error {
     #[error(transparent)]
     Hopr(#[from] HoprError),
     #[error(transparent)]
-    Channel(#[from] ChannelError),
+    Channel(#[from] hopr_api::ChannelError),
 }
 
 impl HoprRunner {
@@ -75,20 +82,39 @@ impl HoprRunner {
             )?,
         };
         let keys = self.hopr_params.calc_keys()?;
-        let mut hoprd = Hopr::new(cfg, keys).await?;
+        let edgli = Hopr::new(cfg, keys).await?;
+        let hoprd = Arc::new(edgli);
         let _ = evt_sender.send(Evt::Ready).await;
         while let Some(cmd) = cmd_receiver.recv().await {
             match cmd {
                 Cmd::Shutdown { rsp } => {
                     hoprd.shutdown().await;
-                    let _ = rsp.send(()).map_err(|err| {
-                        tracing::warn!(?err, "failed to send shutdown response");
-                    });
+                    let _ = rsp.send(());
                     break;
                 }
                 Cmd::Status { rsp } => {
-                    let _ = rsp.send(hoprd.status()).map_err(|err| {
-                        tracing::warn!(?err, "failed responding to status request");
+                    let _ = rsp.send(hoprd.status());
+                }
+                Cmd::Info { rsp } => {
+                    let info = hoprd.info();
+                    let _ = rsp.send(info);
+                }
+                Cmd::Balances => {
+                    let hoprd = hoprd.clone();
+                    tokio::spawn(async {
+                        let res = hoprd.balances().await.map_err(Error::from);
+                        let _ = evt_sender.send(Evt::Balances(res)).await;
+                    });
+                }
+                Cmd::FundChannel {
+                    address,
+                    amount,
+                    threshold,
+                } => {
+                    let hoprd = hoprd.clone();
+                    tokio::spawn(async {
+                        let res = fund_channel(&hoprd, address, amount, threshold).await;
+                        let _ = evt_sender.send(Evt::FundChannel { address, res }).await;
                     });
                 }
             }
