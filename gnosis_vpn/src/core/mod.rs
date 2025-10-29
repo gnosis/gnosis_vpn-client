@@ -327,6 +327,7 @@ impl Core {
                         let _ = resp.send(Response::Empty);
                     }
                     Command::FundingTool(secret) => {
+                        self.funding_status = funding_runner::Status::InProgress;
                         self.spawn_funding_runner(results_sender.clone(), secret);
                         let _ = resp.send(Response::Empty);
                     }
@@ -493,11 +494,11 @@ impl Core {
     }
 
     fn spawn_funding_runner(&self, results_sender: mpsc::Sender<RunnerResults>, secret: String) {
-        tracing::debug!("starting funding runner");
         let runner = funding_runner::FundingRunner::new(self.hopr_params.clone(), secret);
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
+            tracing::debug!("starting funding runner");
             let res = cancel.run_until_cancelled(runner.start()).await;
             if let Some(res) = res {
                 let _ = results_sender
