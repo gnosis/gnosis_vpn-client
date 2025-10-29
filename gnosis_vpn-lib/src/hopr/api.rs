@@ -363,7 +363,7 @@ impl Hopr {
         self.hopr.status()
     }
 
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         let open_listeners = self.open_listeners.clone();
 
         let open_listeners = open_listeners.write_arc().await;
