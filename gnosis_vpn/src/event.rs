@@ -16,14 +16,6 @@ pub enum Event {
     ConfigReload {
         path: PathBuf,
     },
-    /*
-    Connection(connection::Event),
-    Node(node::Event),
-    Onboarding(onboarding::Event),
-    ChannelFunding(channel_funding::Event),
-    Metrics(metrics::Event),
-    TicketStats(Result<TicketStats, ChainError>),
-    */
 }
 
 impl Display for Event {

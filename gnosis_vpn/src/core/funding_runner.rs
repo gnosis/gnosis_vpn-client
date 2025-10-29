@@ -1,6 +1,7 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use edgli::hopr_lib::Address;
+use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use serde_json::json;
 use thiserror::Error;
 use url::Url;
@@ -9,9 +10,11 @@ use gnosis_vpn_lib::remote_data;
 
 use std::time::Duration;
 
+use crate::hopr_params::{self, HoprParams};
+
 #[derive(Debug)]
 pub struct FundingRunner {
-    node_address: Address,
+    hopr_params: HoprParams,
     secret_key: String,
 }
 
@@ -26,32 +29,35 @@ pub enum Status {
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
+    HoprParams(#[from] hopr_params::Error),
+    #[error(transparent)]
     UrlParse(#[from] url::ParseError),
     #[error(transparent)]
     Request(#[from] reqwest::Error),
 }
 
 impl FundingRunner {
-    pub fn new(node_address: Address, secret_key: String) -> Self {
+    pub fn new(hopr_params: HoprParams, secret_key: String) -> Self {
         Self {
-            node_address,
+            hopr_params,
             secret_key,
         }
     }
 
     pub async fn start(&self) -> Result<bool, Error> {
         let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
-        let address = self.node_address.to_string();
+        let keys = self.hopr_params.calc_keys()?;
+        let node_address = keys.chain_key.public().to_address();
         let code = self.secret_key.to_string();
-        post_funding_tool(url, address, code).await
+        post_funding_tool(url, node_address, code).await
     }
 }
 
-async fn post_funding_tool(url: Url, address: String, code: String) -> Result<bool, Error> {
+async fn post_funding_tool(url: Url, address: Address, code: String) -> Result<bool, Error> {
     retry(ExponentialBackoff::default(), || async {
         let client = reqwest::Client::new();
         let headers = remote_data::json_headers();
-        let body = json!({ "address": address, "code": code, });
+        let body = json!({ "address": address.to_string(), "code": code, });
 
         tracing::debug!(%url, ?headers, %body, "Posting funding tool");
 
