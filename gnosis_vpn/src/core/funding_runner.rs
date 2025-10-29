@@ -15,7 +15,7 @@ pub struct FundingRunner {
     secret_key: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum Status {
     NotStarted,
     InProgress,
