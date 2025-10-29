@@ -111,8 +111,8 @@ jobs:
         run: |
           #nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
           mkdir -p result/bin
-          echo "Gnosis VPN Build" > result/bin/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-          echo "Gnosis VPN Control Build" > result/bin/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
+          echo "Gnosis VPN Build" > ./result/bin/gnosis_vpn
+          echo "Gnosis VPN Control Build" > ./result/bin/gnosis_vpn-ctl
           mkdir -p binaries
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
