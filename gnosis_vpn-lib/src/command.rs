@@ -15,6 +15,7 @@ use crate::network::Network;
 pub enum Command {
     Status,
     Connect(Address),
+    Metrics,
     Disconnect,
     Balance,
     Ping,
@@ -28,6 +29,7 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
+    Metrics(String),
     Pong,
     Empty,
 }
