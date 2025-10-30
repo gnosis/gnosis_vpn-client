@@ -1,4 +1,5 @@
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
+use edgli::hopr_lib::SessionClientConfig ;
 use crossbeam_channel;
 use edgli::hopr_lib::IpProtocol;
 use rand::Rng;
@@ -333,6 +334,18 @@ impl Connection {
         format!("(entry){}", self.destination.pretty_print_path())
     }
 
+    pub async fn connect(&mut self) {
+    let cfg = SessionClientConfig {
+        capabilities: self.options.sessions.bridge.capabilities,
+        forward_path_options: self.destination.routing,
+        return_path_options: self.destination.routing,
+        surb_management: Some(to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge)),
+        ..Default::default()
+    };
+    self.e.open_session(self.destination.address, self.options.sessions.bridge.target, Some(1), Some(1), cfg).await;
+
+    }
+
     fn act_up(&mut self) -> crossbeam_channel::Receiver<InternalEvent> {
         tracing::debug!(phase = %self.phase_up, "Establishing connection");
         match self.phase_up.clone() {
@@ -546,7 +559,17 @@ impl Connection {
         r
     }
 
-    fn open_session(&mut self, params: session::OpenSession) -> crossbeam_channel::Receiver<InternalEvent> {
+    fn async open_session(&mut self, params: session::OpenSession) -> crossbeam_channel::Receiver<InternalEvent> {
+        let session_client_metadata = open_session
+            .edgli
+            .open_session(
+                open_session.destination,
+                open_session.target.clone(),
+                open_session.session_pool.map(|v| v as usize),
+                open_session.max_client_sessions.map(|v| v as usize),
+                open_session.into(),
+            )
+            .await?;
         let (s, r) = crossbeam_channel::bounded(1);
         if let BackoffState::Inactive = self.backoff {
             self.backoff = BackoffState::Active(ExponentialBackoff::default());

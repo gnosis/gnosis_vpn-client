@@ -139,16 +139,17 @@ impl UpdateSessionConfig {
 }
 
 impl Session {
-    pub fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
-        unimplemented!()
-        /*
-        let session_client_metadata = open_session.edgli.open_session(
-            open_session.destination,
-            open_session.target.clone(),
-            open_session.session_pool.map(|v| v as usize),
-            open_session.max_client_sessions.map(|v| v as usize),
-            open_session.into(),
-        )?;
+    pub async fn open(open_session: &OpenSession) -> Result<Self, HoprError> {
+        let session_client_metadata = open_session
+            .edgli
+            .open_session(
+                open_session.destination,
+                open_session.target.clone(),
+                open_session.session_pool.map(|v| v as usize),
+                open_session.max_client_sessions.map(|v| v as usize),
+                open_session.into(),
+            )
+            .await?;
 
         Ok(Self {
             destination: session_client_metadata.destination,
@@ -165,7 +166,6 @@ impl Session {
             session_pool: session_client_metadata.session_pool.map(|v| v as u16),
             active_clients: session_client_metadata.active_clients,
         })
-            */
     }
 
     pub fn close(&self, close_session: &CloseSession) -> Result<(), HoprError> {

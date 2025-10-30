@@ -34,6 +34,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod connection_runner;
 mod funding_runner;
 mod hopr_runner;
 mod presafe_runner;
