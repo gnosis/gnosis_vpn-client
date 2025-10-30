@@ -26,6 +26,8 @@ use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
 mod conn;
+mod conn_down;
+mod conn_up;
 mod funding_runner;
 mod hopr_runner;
 mod presafe_runner;
@@ -33,6 +35,8 @@ mod runner_results;
 mod safe_deployment_runner;
 mod ticket_stats_runner;
 
+use conn_down::ConnDown;
+use conn_up::ConnUp;
 use hopr_runner::Evt;
 use runner_results::RunnerResults;
 
@@ -103,8 +107,8 @@ enum Phase {
     HoprSyncing,
     HoprReady,
     HoprReadyAndFunded,
-    Connecting(conn::Conn),
-    Disconnecting(conn::Conn),
+    Connecting(ConnUp),
+    Disconnecting(ConnDown),
     ShuttingDown,
 }
 
@@ -520,6 +524,17 @@ impl Core {
                     }
                 }
             }
+            Evt::OpenSession(res) => match self.phase {
+                Phase::Connecting(conn_up) => {
+                    let next_cmd = conn_up.on_open_session_result(res);
+                }
+                Phase::Disconnecting(conn_down) => {
+                    let next_cmd = conn_down.on_open_session_result(res);
+                }
+                _ => {
+                    tracing::warn!("received open session event in invalid phase");
+                }
+            },
         }
     }
 
@@ -661,7 +676,7 @@ impl Core {
             (Phase::HoprReadyAndFunded, Some(dest)) => {
                 tracing::info!(destination = %dest, "establishing new connection");
                 let config_connection = self.config.connection.clone();
-                let conn = conn::Conn::new(dest.clone(), config_connection);
+                let conn = ConnUp::new(dest.clone(), config_connection);
                 let cmd = conn.init_cmd();
                 self.phase = Phase::Connecting(conn);
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
