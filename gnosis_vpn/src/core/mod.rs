@@ -1,31 +1,22 @@
-use edgli::EdgliProcesses;
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::{ChainKeypair, Keypair};
 use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
+use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
-use std::collections::HashSet;
 use std::fmt::{self, Display};
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
-use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, Connection, destination::Destination};
+use gnosis_vpn_lib::connection::{self, Connection as LibConn, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
 use gnosis_vpn_lib::metrics::{self, Metrics};
-use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
@@ -99,6 +90,26 @@ pub struct Core {
     hopr_cmd_sender: Option<mpsc::Sender<hopr_runner::Cmd>>,
     // event receiver from hopr
     hopr_evt_sender: Option<mpsc::Sender<hopr_runner::Evt>>,
+
+    phase: Phase,
+}
+
+#[derive(Debug, Clone)]
+enum Phase {
+    Initial,
+    StartingWithoutSafe,
+    Starting,
+    HoprSyncing,
+    HoprReady,
+    HoprReadyAndFunded,
+    Connecting(Connection),
+    Disconnecting(Connection),
+    ShuttingDown,
+}
+
+#[derive(Debug, Clone)]
+struct Connection {
+    destination: Destination,
 }
 
 #[derive(Clone)]
@@ -159,6 +170,7 @@ impl Core {
             funding_status: funding_runner::Status::NotStarted,
             funded_channels: Vec::new(),
             ticket_stats: None,
+            phase: Phase::Initial,
         })
     }
 
@@ -190,11 +202,13 @@ impl Core {
         }
     }
 
+    #[tracing::instrument(skip(self), level = "debug", ret)]
     async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<RunnerResults>) -> bool {
-        tracing::debug!(%event, "handling outside event");
+        tracing::debug!(phase = ?self.phase, "on outside event");
         match event {
             Event::Shutdown { resp } => {
                 tracing::debug!("shutting down core");
+                self.phase = Phase::ShuttingDown;
                 self.cancel_token.cancel();
                 self.balances_cancel_token.cancel();
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
@@ -271,7 +285,7 @@ impl Core {
                         match self.config.destinations.get(&address) {
                             Some(dest) => {
                                 self.target_destination = Some(dest.clone());
-                                self.act_on_target()?;
+                                self.act_on_target();
                                 let _ =
                                     resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
                             }
@@ -284,7 +298,7 @@ impl Core {
                     }
                     Command::Disconnect => {
                         self.target_destination = None;
-                        self.act_on_target()?;
+                        self.act_on_target();
                         let dest = self.connection.as_ref().map(|c| c.destination());
                         match dest {
                             Some(d) => {
@@ -345,21 +359,27 @@ impl Core {
                         let _ = resp.send(Response::Empty);
                     }
                     Command::FundingTool(secret) => {
-                        self.funding_status = funding_runner::Status::InProgress;
-                        self.spawn_funding_runner(results_sender.clone(), secret);
-                        let _ = resp.send(Response::Empty);
+                        if matches!(self.phase, Phase::StartingWithoutSafe) {
+                            self.funding_status = funding_runner::Status::InProgress;
+                            self.spawn_funding_runner(results_sender.clone(), secret);
+                            let _ = resp.send(Response::Empty);
+                        } else {
+                            tracing::warn!("cannot start funding tool - safe already deployed");
+                            let _ = resp.send(Response::Empty);
+                        }
                     }
                 }
                 true
             }
-            _ => {
-                unimplemented!()
+            evt => {
+                unimplemented!("unhandled event: {evt:?}");
             }
         }
     }
 
+    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     async fn on_results(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
-        tracing::debug!(?results, "handling event results");
+        tracing::debug!(phase = ?self.phase, "on runner results");
         match results {
             RunnerResults::TicketStats(res) => match res {
                 Ok(stats) => {
@@ -395,6 +415,7 @@ impl Core {
                         tracing::error!("Please fix file permissions or out of disk space issues");
                         time::sleep(Duration::from_secs(5)).await;
                     }
+                    self.phase = Phase::Starting;
                     self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO).await;
                 }
                 Err(err) => {
@@ -428,10 +449,13 @@ impl Core {
         }
     }
 
+    #[tracing::instrument(skip(self), level = "debug", ret)]
     async fn on_hopr_evt(&mut self, evt: hopr_runner::Evt) {
+        tracing::debug!(phase = ?self.phase, "on hopr event");
         match evt {
             Evt::Ready => {
-                tracing::info!("hopr runner is ready");
+                self.phase = Phase::HoprSyncing;
+                tracing::info!("hopr runner is syncing");
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
                     tracing::debug!("requesting balances from hopr");
                     let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
@@ -443,6 +467,11 @@ impl Core {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
                     self.funded_channels.push(address);
+                    if self.funded_channels.len() == self.config.channel_targets().len() {
+                        self.phase = Phase::HoprReadyAndFunded;
+                        tracing::info!("all channels funded - hopr is ready");
+                    }
+                    self.act_on_target();
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
@@ -478,6 +507,7 @@ impl Core {
             Evt::Status(status) => {
                 tracing::debug!(%status, "received hopr status");
                 if status == HoprState::Running {
+                    self.phase = Phase::HoprReady;
                     tracing::info!("hopr is running");
                     for c in self.config.channel_targets() {
                         self.spawn_channel_funding(c, Duration::ZERO).await;
@@ -488,10 +518,13 @@ impl Core {
     }
 
     fn initial_runner(&mut self, results_sender: &mpsc::Sender<RunnerResults>) {
-        self.spawn_ticket_stats_runner(results_sender.clone());
-        if !hopr_config::has_safe() {
+        if hopr_config::has_safe() {
+            self.phase = Phase::Starting;
+        } else {
+            self.phase = Phase::StartingWithoutSafe;
             self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
         }
+        self.spawn_ticket_stats_runner(results_sender.clone());
     }
 
     fn spawn_ticket_stats_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
@@ -1046,8 +1079,23 @@ pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
 }
 */
 
-/*
-fn act_on_target(&mut self) -> Result<(), Error> {
+fn act_on_target(&mut self) {
+    match (self.phase.clone(), self.target_destination.clone()) {
+        (Phase::HoprReady, Some(dest)) => {
+            if self.funded_channels.contains(&dest.address) {
+                tracing::info!(destination = %dest, "ready to act on target destination");
+            } else {
+                tracing::info!(destination = %dest, "channels not yet funded for target destination - deferring action");
+                return;
+            }
+
+            tracing::info!("ready to act on target destination");
+        }
+        Phase::Connecting => {
+            tracing::info!("currently connecting - deferring action on target destination");
+            return;
+        }
+    }
     match (self.target_destination.clone(), &mut self.connection) {
         (Some(dest), Some(conn)) => {
             if conn.has_destination(&dest) {
@@ -1072,6 +1120,7 @@ fn act_on_target(&mut self) -> Result<(), Error> {
     Ok(())
 }
 
+/*
 fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
     match &self.run_mode {
         RunMode::Initializing => {
