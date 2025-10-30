@@ -154,10 +154,8 @@ impl HoprRunner {
                     let hoprd = hoprd.clone();
                     let evt_sender = evt_sender.clone();
                     tokio::spawn(async move {
-                        let res = hoprd
-                            .open_session(destination, target, session_pool, max_client_sessions, cfg)
-                            .await
-                            .map_err(Error::from);
+                        let res =
+                            open_session(&hoprd, destination, &target, session_pool, max_client_sessions, &cfg).await;
                         let _ = evt_sender.send(Evt::OpenSession(res)).await;
                     });
                 }
@@ -206,6 +204,30 @@ async fn fund_channel(
             .await
             .map_err(Error::from)?;
         Ok(())
+    })
+    .await
+}
+
+async fn open_session(
+    hoprd: &Hopr,
+    destination: Address,
+    target: &SessionTarget,
+    session_pool: Option<usize>,
+    max_client_sessions: Option<usize>,
+    cfg: &SessionClientConfig,
+) -> Result<SessionClientMetadata, Error> {
+    retry(ExponentialBackoff::default(), || async {
+        let res = hoprd
+            .open_session(
+                destination,
+                target.clone(),
+                session_pool,
+                max_client_sessions,
+                cfg.clone(),
+            )
+            .await
+            .map_err(Error::from)?;
+        Ok(res)
     })
     .await
 }
