@@ -1,15 +1,15 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
-use edgli::hopr_lib::Address;
 use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Balance, WxHOPR};
+use edgli::hopr_lib::{Address, Balance, IpProtocol, SessionClientConfig, SessionTarget, SurbBalancerConfig, WxHOPR};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
 use gnosis_vpn_lib::balance::Balances;
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config, types::SessionClientMetadata};
 use gnosis_vpn_lib::info::Info;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::hopr_params::{self, HoprParams};
@@ -35,6 +35,24 @@ pub enum Cmd {
         amount: Balance<WxHOPR>,
         threshold: Balance<WxHOPR>,
     },
+    OpenSession {
+        destination: Address,
+        target: SessionTarget,
+        session_pool: Option<usize>,
+        max_client_sessions: Option<usize>,
+        cfg: SessionClientConfig,
+    },
+    CloseSession {
+        bound_session: SocketAddr,
+        protocol: IpProtocol,
+    },
+    ListSessions {
+        protocol: IpProtocol,
+    },
+    AdjustSession {
+        balancer_cfg: SurbBalancerConfig,
+        client: String,
+    },
 }
 
 #[derive(Debug)]
@@ -43,6 +61,10 @@ pub enum Evt {
     FundChannel { address: Address, res: Result<(), Error> },
     Balances(Result<Balances, Error>),
     Status(HoprState),
+    OpenSession(Result<SessionClientMetadata, Error>),
+    CloseSession(Result<(), Error>),
+    ListSessions(Vec<SessionClientMetadata>),
+    AdjustSession(Result<(), Error>),
 }
 
 #[derive(Debug, Error)]
@@ -120,6 +142,50 @@ impl HoprRunner {
                     tokio::spawn(async move {
                         let res = fund_channel(&hoprd, address, amount, threshold).await;
                         let _ = evt_sender.send(Evt::FundChannel { address, res }).await;
+                    });
+                }
+                Cmd::OpenSession {
+                    destination,
+                    target,
+                    session_pool,
+                    max_client_sessions,
+                    cfg,
+                } => {
+                    let hoprd = hoprd.clone();
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
+                        let res = hoprd
+                            .open_session(destination, target, session_pool, max_client_sessions, cfg)
+                            .await
+                            .map_err(Error::from);
+                        let _ = evt_sender.send(Evt::OpenSession(res)).await;
+                    });
+                }
+                Cmd::CloseSession {
+                    bound_session,
+                    protocol,
+                } => {
+                    let hoprd = hoprd.clone();
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
+                        let res = hoprd.close_session(bound_session, protocol).await.map_err(Error::from);
+                        let _ = evt_sender.send(Evt::CloseSession(res)).await;
+                    });
+                }
+                Cmd::ListSessions { protocol } => {
+                    let hoprd = hoprd.clone();
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
+                        let sessions = hoprd.list_sessions(protocol).await;
+                        let _ = evt_sender.send(Evt::ListSessions(sessions)).await;
+                    });
+                }
+                Cmd::AdjustSession { balancer_cfg, client } => {
+                    let hoprd = hoprd.clone();
+                    let evt_sender = evt_sender.clone();
+                    tokio::spawn(async move {
+                        let res = hoprd.adjust_session(balancer_cfg, client).await.map_err(Error::from);
+                        let _ = evt_sender.send(Evt::AdjustSession(res)).await;
                     });
                 }
             }
