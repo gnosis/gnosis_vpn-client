@@ -14,7 +14,7 @@ use std::time::Duration;
 use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, Connection as LibConn, destination::Destination};
+use gnosis_vpn_lib::connection::{self, Connection as LibCon, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
 use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::node::{self, Node};
@@ -25,6 +25,7 @@ use gnosis_vpn_lib::{balance, info, wg_tooling};
 use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
+mod conn;
 mod funding_runner;
 mod hopr_runner;
 mod presafe_runner;
@@ -102,14 +103,9 @@ enum Phase {
     HoprSyncing,
     HoprReady,
     HoprReadyAndFunded,
-    Connecting(Connection),
-    Disconnecting(Connection),
+    Connecting(conn::Conn),
+    Disconnecting(conn::Conn),
     ShuttingDown,
-}
-
-#[derive(Debug, Clone)]
-struct Connection {
-    destination: Destination,
 }
 
 #[derive(Clone)]
@@ -282,12 +278,12 @@ impl Core {
                         return true;
                     }
                     Command::Connect(address) => {
-                        match self.config.destinations.get(&address) {
+                        match self.config.destinations.clone().get(&address) {
                             Some(dest) => {
                                 self.target_destination = Some(dest.clone());
-                                self.act_on_target();
                                 let _ =
                                     resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
+                                self.act_on_target().await;
                             }
                             None => {
                                 tracing::info!(address = %address, "cannot connect to destination - address not configured");
@@ -298,7 +294,6 @@ impl Core {
                     }
                     Command::Disconnect => {
                         self.target_destination = None;
-                        self.act_on_target();
                         let dest = self.connection.as_ref().map(|c| c.destination());
                         match dest {
                             Some(d) => {
@@ -308,6 +303,7 @@ impl Core {
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::not_connected()));
                             }
                         }
+                        self.act_on_target().await;
                         return true;
                     }
 
@@ -470,8 +466,8 @@ impl Core {
                     if self.funded_channels.len() == self.config.channel_targets().len() {
                         self.phase = Phase::HoprReadyAndFunded;
                         tracing::info!("all channels funded - hopr is ready");
+                        self.act_on_target().await;
                     }
-                    self.act_on_target();
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
@@ -647,6 +643,24 @@ impl Core {
                     })
                     .await;
             });
+        }
+    }
+
+    async fn act_on_target(&mut self) {
+        match (self.phase.clone(), self.target_destination.clone()) {
+            (Phase::HoprReadyAndFunded, Some(dest)) => {
+                tracing::info!(destination = %dest, "establishing new connection");
+                let config_connection = self.config.connection.clone();
+                let conn = conn::Conn::new(dest.clone(), config_connection);
+                let cmd = conn.init_cmd();
+                self.phase = Phase::Connecting(conn);
+                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
+                    let _ = cmd_sender.send(cmd).await;
+                }
+            }
+            _ => {
+                unimplemented!()
+            }
         }
     }
 }
@@ -1078,47 +1092,6 @@ pub fn update_config(&mut self, config_path: &Path) -> Result<(), Error> {
     }
 }
 */
-
-fn act_on_target(&mut self) {
-    match (self.phase.clone(), self.target_destination.clone()) {
-        (Phase::HoprReady, Some(dest)) => {
-            if self.funded_channels.contains(&dest.address) {
-                tracing::info!(destination = %dest, "ready to act on target destination");
-            } else {
-                tracing::info!(destination = %dest, "channels not yet funded for target destination - deferring action");
-                return;
-            }
-
-            tracing::info!("ready to act on target destination");
-        }
-        Phase::Connecting => {
-            tracing::info!("currently connecting - deferring action on target destination");
-            return;
-        }
-    }
-    match (self.target_destination.clone(), &mut self.connection) {
-        (Some(dest), Some(conn)) => {
-            if conn.has_destination(&dest) {
-                tracing::info!(destination = %dest, "already connecting to target destination");
-            } else {
-                tracing::info!(current = %conn.destination(), target = %dest, "disconnecting from current destination to connect to target destination");
-                conn.dismantle();
-            }
-            Ok(())
-        }
-        (None, Some(conn)) => {
-            tracing::info!(current = %conn.destination(), "disconnecting from current destination");
-            conn.dismantle();
-            Ok(())
-        }
-        (Some(dest), None) => {
-            tracing::info!(destination = %dest, "establishing new connection");
-            // self.check_connect(&dest)
-        }
-        (None, None) => Ok(()),
-    }
-    Ok(())
-}
 
 /*
 fn check_connect(&mut self, destination: &Destination) -> Result<(), Error> {
