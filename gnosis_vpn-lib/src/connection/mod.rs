@@ -553,7 +553,7 @@ impl Connection {
         }
         thread::spawn(move || {
             let res = Session::open(&params);
-            _ = s.send(InternalEvent::OpenSession(res));
+            // _ = s.send(InternalEvent::OpenSession(res));
         });
         r
     }
