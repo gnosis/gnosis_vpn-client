@@ -25,6 +25,8 @@ tracing-subscriber.workspace = true
 url.workspace = true
 backoff.workspace = true
 rand.workspace = true
+human-bandwidth = { workspace = true, features = ["serde"] }
+bytesize = { workspace = true, features = ["serde"] }
 alloy.workspace = true
 uuid.workspace = true
 
