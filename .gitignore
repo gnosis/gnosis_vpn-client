@@ -21,3 +21,5 @@ gnosisvpn-ctl.log.*
 # ci test
 cluster.log
 gpg-ed25519.conf
+gcp-sa-*.json
+*.p12
