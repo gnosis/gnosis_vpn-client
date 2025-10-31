@@ -35,9 +35,6 @@ on:
           - x86_64-darwin
         required: true
         description: "Architecture to build for"
-concurrency:
-  group: ${{ github.ref }}-build-binary-${{ inputs.architecture }}
-  cancel-in-progress: true
 jobs:
   binary:
     if: >-
@@ -128,6 +125,7 @@ jobs:
           security default-keychain -s build.keychain
           security set-keychain-settings -lut 21600 build.keychain
           security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security list-keychains -d user -s build.keychain
           security import gnosisvpn-developer.p12 -k build.keychain -P "${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
           security find-identity -v -p codesigning build.keychain
@@ -167,7 +165,6 @@ jobs:
               gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.asc
             fi
           fi
-
       - name: Upload ${{ steps.vars.outputs.architecture }} binaries
         if: steps.version.outputs.publish_type == 'workflow'
         uses: actions/upload-artifact@v5
