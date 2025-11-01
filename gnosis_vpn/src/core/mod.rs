@@ -29,6 +29,7 @@ mod conn;
 mod conn_down;
 mod conn_up;
 mod funding_runner;
+mod gvpn_client_runner;
 mod hopr_runner;
 mod presafe_runner;
 mod runner_results;

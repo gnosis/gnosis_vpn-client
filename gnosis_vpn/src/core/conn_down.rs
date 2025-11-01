@@ -1,6 +1,7 @@
 use bytesize::ByteSize;
 use edgli::hopr_lib::{SessionClientConfig, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
+use uuid::{self, Uuid};
 
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::connection::options::Options;
@@ -12,6 +13,7 @@ pub struct ConnDown {
     destination: Destination,
     options: Options,
     phase: Phase,
+    id: Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -21,9 +23,10 @@ enum Phase {
 
 impl ConnDown {
     pub fn new(destination: Destination, options: Options) -> Self {
-        Conn {
+        ConnDown {
             destination,
             phase: Phase::Init,
+            id: Uuid::new_v4(),
             options,
         }
     }
@@ -40,6 +43,7 @@ impl ConnDown {
             ..Default::default()
         };
         Cmd::OpenSession {
+            id: self.id,
             destination: self.destination.address,
             target: self.options.sessions.bridge.target.clone(),
             session_pool: Some(1),

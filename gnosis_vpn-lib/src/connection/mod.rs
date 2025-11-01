@@ -529,6 +529,8 @@ impl Connection {
     }
 
     fn register_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
+        unimplemented!();
+        /*
         let ri = gvpn_client::Input::new(
             self.wg.key_pair.public_key.clone(),
             session.clone(),
@@ -544,6 +546,7 @@ impl Connection {
             _ = s.send(InternalEvent::RegisterWg(res));
         });
         r
+        */
     }
 
     fn open_session(&mut self, params: session::OpenSession) -> crossbeam_channel::Receiver<InternalEvent> {
@@ -591,6 +594,8 @@ impl Connection {
     }
 
     fn unregister_wg(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
+        unimplemented!();
+        /*
         let params = gvpn_client::Input::new(
             self.wg.key_pair.public_key.clone(),
             session.clone(),
@@ -606,6 +611,7 @@ impl Connection {
             _ = s.send(InternalEvent::UnregisterWg(res));
         });
         r
+        */
     }
 
     fn close_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
