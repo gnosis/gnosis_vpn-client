@@ -28,7 +28,7 @@ rand.workspace = true
 human-bandwidth = { workspace = true, features = ["serde"] }
 bytesize = { workspace = true, features = ["serde"] }
 alloy.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -4,6 +4,7 @@ use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, IpProtocol, SessionClientConfig, SessionTarget, SurbBalancerConfig, WxHOPR};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
+use uuid::Uuid;
 
 use gnosis_vpn_lib::balance::Balances;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config, types::SessionClientMetadata};
@@ -36,6 +37,7 @@ pub enum Cmd {
         threshold: Balance<WxHOPR>,
     },
     OpenSession {
+        id: Uuid,
         destination: Address,
         target: SessionTarget,
         session_pool: Option<usize>,
@@ -43,6 +45,7 @@ pub enum Cmd {
         cfg: SessionClientConfig,
     },
     CloseSession {
+        id: Uuid,
         bound_session: SocketAddr,
         protocol: IpProtocol,
     },
@@ -50,6 +53,7 @@ pub enum Cmd {
         protocol: IpProtocol,
     },
     AdjustSession {
+        id: Uuid,
         balancer_cfg: SurbBalancerConfig,
         client: String,
     },
@@ -58,13 +62,25 @@ pub enum Cmd {
 #[derive(Debug)]
 pub enum Evt {
     Ready,
-    FundChannel { address: Address, res: Result<(), Error> },
+    FundChannel {
+        address: Address,
+        res: Result<(), Error>,
+    },
     Balances(Result<Balances, Error>),
     Status(HoprState),
-    OpenSession(Result<SessionClientMetadata, Error>),
-    CloseSession(Result<(), Error>),
+    OpenSession {
+        id: Uuid,
+        res: Result<SessionClientMetadata, Error>,
+    },
+    CloseSession {
+        id: Uuid,
+        res: Result<(), Error>,
+    },
     ListSessions(Vec<SessionClientMetadata>),
-    AdjustSession(Result<(), Error>),
+    AdjustSession {
+        id: Uuid,
+        res: Result<(), Error>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -145,6 +161,7 @@ impl HoprRunner {
                     });
                 }
                 Cmd::OpenSession {
+                    id,
                     destination,
                     target,
                     session_pool,
@@ -156,10 +173,11 @@ impl HoprRunner {
                     tokio::spawn(async move {
                         let res =
                             open_session(&hoprd, destination, &target, session_pool, max_client_sessions, &cfg).await;
-                        let _ = evt_sender.send(Evt::OpenSession(res)).await;
+                        let _ = evt_sender.send(Evt::OpenSession { id, res }).await;
                     });
                 }
                 Cmd::CloseSession {
+                    id,
                     bound_session,
                     protocol,
                 } => {
@@ -167,7 +185,7 @@ impl HoprRunner {
                     let evt_sender = evt_sender.clone();
                     tokio::spawn(async move {
                         let res = hoprd.close_session(bound_session, protocol).await.map_err(Error::from);
-                        let _ = evt_sender.send(Evt::CloseSession(res)).await;
+                        let _ = evt_sender.send(Evt::CloseSession { id, res }).await;
                     });
                 }
                 Cmd::ListSessions { protocol } => {
@@ -178,12 +196,16 @@ impl HoprRunner {
                         let _ = evt_sender.send(Evt::ListSessions(sessions)).await;
                     });
                 }
-                Cmd::AdjustSession { balancer_cfg, client } => {
+                Cmd::AdjustSession {
+                    id,
+                    balancer_cfg,
+                    client,
+                } => {
                     let hoprd = hoprd.clone();
                     let evt_sender = evt_sender.clone();
                     tokio::spawn(async move {
                         let res = hoprd.adjust_session(balancer_cfg, client).await.map_err(Error::from);
-                        let _ = evt_sender.send(Evt::AdjustSession(res)).await;
+                        let _ = evt_sender.send(Evt::AdjustSession { id, res }).await;
                     });
                 }
             }
