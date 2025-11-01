@@ -195,12 +195,14 @@ impl WireGuard {
             .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
 
+        // WireGuard has differnently sized packets not exactly adhering to MTU
+        // so we postpone optimizing on this level for now
+        // MTU = {mtu}
         format!(
             "[Interface]
 PrivateKey = {private_key}
 Address = {address}
 {listen_port_line}
-MTU = {mtu}
 
 [Peer]
 PublicKey = {public_key}
@@ -215,7 +217,7 @@ AllowedIPs = {allowed_ips}
             listen_port_line = listen_port_line,
             // WireGuard has differnently sized packets not exactly adhering to MTU
             // so we postpone optimizing on this level for now
-            mtu = interface.mtu,
+            // mtu = interface.mtu,
         )
     }
 }

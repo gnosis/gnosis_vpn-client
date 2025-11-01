@@ -1,4 +1,4 @@
-use reqwest::blocking;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -9,7 +9,6 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use crate::remote_data;
-use crate::session::Session;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Registration {
@@ -21,7 +20,7 @@ pub struct Registration {
 
 pub struct Input {
     public_key: String,
-    session: Session,
+    port: u16,
     timeout: Duration,
 }
 
@@ -42,10 +41,10 @@ pub enum Error {
 }
 
 impl Input {
-    pub fn new(public_key: String, session: Session, timeout: Duration) -> Self {
+    pub fn new(public_key: String, port: u16, timeout: Duration) -> Self {
         Input {
             public_key,
-            session,
+            port,
             timeout,
         }
     }
@@ -61,13 +60,13 @@ impl Registration {
     }
 }
 
-pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration, Error> {
+pub async fn register(client: &Client, input: &Input) -> Result<Registration, Error> {
     let headers = remote_data::json_headers();
     let mut url = Url::parse("http://localhost/api/v1/clients/register")?;
-    url.set_port(Some(input.session.bound_host.port()))
-        .map_err(|_| Error::InvalidPort)?;
-    let mut json = serde_json::Map::new();
-    json.insert("public_key".to_string(), json!(input.public_key));
+    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
+    let json = json!({
+        "public_key": input.public_key,
+    });
     tracing::debug!(?headers, body = ?json, ?url, "post register client");
     let resp = client
         .post(url)
@@ -75,19 +74,20 @@ pub fn register(client: &blocking::Client, input: &Input) -> Result<Registration
         .timeout(input.timeout)
         .headers(headers)
         .send()
+        .await
         // connection error checks happen before response
         .map_err(connect_errors)?
         .error_for_status()?
-        .json::<Registration>()?;
+        .json::<Registration>()
+        .await?;
 
     Ok(resp)
 }
 
-pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error> {
+pub async fn unregister(client: &Client, input: &Input) -> Result<(), Error> {
     let headers = remote_data::json_headers();
     let mut url = Url::parse("http://localhost/api/v1/clients/unregister")?;
-    url.set_port(Some(input.session.bound_host.port()))
-        .map_err(|_| Error::InvalidPort)?;
+    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post unregister client");
@@ -97,6 +97,7 @@ pub fn unregister(client: &blocking::Client, input: &Input) -> Result<(), Error>
         .timeout(input.timeout)
         .headers(headers)
         .send()
+        .await
         // connection error checks happen before response
         .map_err(connect_errors)?
         .error_for_status()

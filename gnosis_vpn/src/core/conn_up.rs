@@ -1,8 +1,10 @@
-use edgli::hopr_lib::{SessionClientConfig, SessionClientMetadata};
+use edgli::hopr_lib::SessionClientConfig;
+use uuid::{self, Uuid};
 
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::connection::options::Options;
 use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
+use gnosis_vpn_lib::wg_tooling;
 
 use crate::core::conn;
 use crate::core::hopr_runner::{self, Cmd};
@@ -12,6 +14,8 @@ pub struct ConnUp {
     destination: Destination,
     options: Options,
     phase: Phase,
+    id: Uuid,
+    wg: wg_tooling::WireGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -20,11 +24,13 @@ enum Phase {
 }
 
 impl ConnUp {
-    pub fn new(destination: Destination, options: Options) -> Self {
+    pub fn new(destination: Destination, options: Options, wg: wg_tooling::WireGuard) -> Self {
         ConnUp {
             destination,
             phase: Phase::Init,
             options,
+            id: Uuid::new_v4(),
+            wg,
         }
     }
 
@@ -40,6 +46,7 @@ impl ConnUp {
             ..Default::default()
         };
         Cmd::OpenSession {
+            id: self.id,
             destination: self.destination.address,
             target: self.options.sessions.bridge.target.clone(),
             session_pool: Some(1),
@@ -48,5 +55,9 @@ impl ConnUp {
         }
     }
 
-    pub fn on_open_session_result(&mut self, res: Result<SessionClientMetadata, hopr_runner::Error>) {}
+    pub fn on_open_session_result(&mut self, id: Uuid, res: Result<SessionClientMetadata, hopr_runner::Error>) {
+        if (id != self.id) {
+            return;
+        }
+    }
 }
