@@ -56,7 +56,7 @@ impl ConnUp {
     }
 
     pub fn on_open_session_result(&mut self, id: Uuid, res: Result<SessionClientMetadata, hopr_runner::Error>) {
-        if (id != self.id) {
+        if id != self.id {
             return;
         }
     }
