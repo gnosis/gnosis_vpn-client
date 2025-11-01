@@ -109,6 +109,7 @@ enum Phase {
     HoprReady,
     HoprReadyAndFunded,
     Connecting(ConnUp),
+    ConnectingFailed(String),
     Disconnecting(ConnDown),
     ShuttingDown,
 }
@@ -525,17 +526,33 @@ impl Core {
                     }
                 }
             }
-            Evt::OpenSession(res) => match self.phase {
-                Phase::Connecting(conn_up) => {
-                    let next_cmd = conn_up.on_open_session_result(res);
+            Evt::OpenSession { id, res } => {
+                tracing::debug!(%id, "open session");
+                match self.phase {
+                    Phase::Connecting(conn_up) => {
+                        let res = conn_up.on_open_session_result(id, res);
+                        match res {
+                            Ok(input) => {
+                                self.spawn_gvpn_register(input);
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "failed to open session");
+                                // TODO make this hopr ready and funded and store error elsewhere
+                                self.phase = Phase::ConnectingFailed(
+                                    "Unable to establish communication channel to exit".to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Phase::Disconnecting(conn_down) => {
+                        unimplemented!();
+                        //let next_cmd = conn_down.on_open_session_result(res);
+                    }
+                    _ => {
+                        tracing::warn!("received open session event in invalid phase");
+                    }
                 }
-                Phase::Disconnecting(conn_down) => {
-                    let next_cmd = conn_down.on_open_session_result(res);
-                }
-                _ => {
-                    tracing::warn!("received open session event in invalid phase");
-                }
-            },
+            }
         }
     }
 

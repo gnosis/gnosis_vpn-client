@@ -56,27 +56,19 @@ impl ConnUp {
         }
     }
 
-    pub async fn on_open_session_result(&mut self, id: Uuid, res: Result<SessionClientMetadata, hopr_runner::Error>) {
+    pub fn on_open_session_result(
+        &mut self,
+        id: Uuid,
+        res: Result<SessionClientMetadata, hopr_runner::Error>,
+    ) -> Result<gvpn_client::Input, hopr_runner::Error> {
         if id != self.id {
             return;
         }
-        let session = match res {
-            Ok(s) => s,
-            Err(error) => {
-                tracing::error!(%error, "Failed to open session - retrying");
-                return;
-            }
-        };
-
         let input = gvpn_client::Input::new(
-            self.destination.public_key.clone(),
-            self.destination.port,
-            self.options.http_timeout,
-        );
-        let ri = gvpn_client::Input::new(
             self.wg.key_pair.public_key.clone(),
-            session.clone(),
+            res?.bound_host.port(),
             self.options.timeouts.http,
         );
+        Ok(input)
     }
 }
