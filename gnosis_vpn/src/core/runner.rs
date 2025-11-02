@@ -1,8 +1,8 @@
 use alloy::primitives::U256;
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
-use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use rand::Rng;
 use serde_json::json;
 use thiserror::Error;
@@ -16,13 +16,12 @@ use gnosis_vpn_lib::chain::client::GnosisRpcClient;
 use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use gnosis_vpn_lib::chain::errors::ChainError;
-use gnosis_vpn_lib::hopr::api as hopr_api;
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use gnosis_vpn_lib::remote_data;
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 
 use crate::hopr_params::{self, HoprParams};
 
-#[derive(Debug)]
 pub enum Results {
     FundChannel {
         address: Address,
@@ -40,6 +39,9 @@ pub enum Results {
     FundingTool {
         res: Result<bool, Error>,
     },
+    Hopr {
+        res: Result<Hopr, Error>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -54,6 +56,10 @@ enum Error {
     Chain(#[from] ChainError),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    HoprConfig(#[from] hopr_config::Error),
+    #[error(transparent)]
+    Hopr(#[from] HoprError),
 }
 
 pub async fn presafe(hopr_params: &HoprParams, results_sender: &mpsc::Sender<Results>) {
@@ -78,6 +84,11 @@ pub async fn safe_deployment(
 pub async fn funding_tool(url: &Url, address: Address, code: &str, results_sender: &mpsc::Sender<Results>) {
     let res = run_funding_tool(url, address, code).await;
     let _ = results_sender.send(Results::FundingTool { res }).await;
+}
+
+pub async fn hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>, results_sender: &mpsc::Sender<Results>) {
+    let res = run_hopr(hopr_params, ticket_value).await;
+    let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
 async fn run_presafe(hopr_params: &HoprParams) -> Result<balance::PreSafe, Error> {
@@ -181,4 +192,19 @@ async fn run_funding_tool(url: &Url, address: Address, code: &str) -> Result<boo
         Ok(status.is_success())
     })
     .await
+}
+
+async fn run_hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
+    let cfg = match hopr_params.config_mode.clone() {
+        // use user provided configuration path
+        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
+        // check status of config generation
+        hopr_params::ConfigFileMode::Generated => hopr_config::generate(
+            hopr_params.network.clone(),
+            hopr_params.rpc_provider.clone(),
+            ticket_value,
+        )?,
+    };
+    let keys = hopr_params.calc_keys()?;
+    Hopr::new(cfg, keys).await.map_err(Error::from)
 }
