@@ -43,7 +43,6 @@ mod ticket_stats_runner;
 use conn_down::ConnDown;
 use conn_up::ConnUp;
 use hopr_runner::Evt;
-use runner::Results;
 use runner_results::RunnerResults;
 
 #[derive(Debug, Error)]
@@ -178,7 +177,7 @@ impl Core {
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
         let (rrresults_sender, mut rrresults_receiver) = mpsc::channel(32);
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.initial_runner(&rrresults_sender);
+        self.initial_runner(&results_sender);
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
@@ -555,12 +554,12 @@ impl Core {
         }
     }
 
-    fn initial_runner(&mut self, results_sender: &mpsc::Sender<RunnerResults>) {
+    fn initial_runner(&mut self, results_sender: &mpsc::Sender<runner::Results>) {
         if hopr_config::has_safe() {
             self.phase = Phase::Starting;
         } else {
             self.phase = Phase::StartingWithoutSafe;
-            self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
+            self.spawn_presafe_runner(&results_sender.clone(), Duration::ZERO);
         }
         self.spawn_ticket_stats_runner(results_sender.clone());
     }
@@ -597,7 +596,7 @@ impl Core {
         });
     }
 
-    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<runner::Results>, delay: Duration) {
         let hopr_params = self.hopr_params.clone();
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();

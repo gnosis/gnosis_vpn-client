@@ -14,6 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
@@ -35,16 +36,21 @@ pub enum Results {
         res: Result<(), hopr_api::ChannelError>,
     },
     PreSafe {
-        res: Result<balance::PreSafe, PreSafeError>,
+        res: Result<balance::PreSafe, Error>,
+    },
+    TicketStats {
+        res: Result<ticket_stats::TicketStats, Error>,
     },
 }
 
 #[derive(Debug, Error)]
-enum PreSafeError {
+enum Error {
     #[error(transparent)]
     HoprParams(#[from] hopr_params::Error),
     #[error(transparent)]
     PreSafe(#[from] balance::Error),
+    #[error(transparent)]
+    TicketStats(#[from] ticket_stats::Error),
 }
 
 pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
@@ -52,18 +58,41 @@ pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Resul
     let _ = results_sender.send(Results::PreSafe { res }).await;
 }
 
-async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, PreSafeError> {
+pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
+    let res = run_ticket_stats(hopr_params).await;
+    let _ = results_sender.send(Results::TicketStats { res }).await;
+}
+
+async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
     tracing::debug!("starting presafe balance runner");
     let keys = hopr_params.calc_keys()?;
     let private_key = keys.chain_key.clone();
     let rpc_provider = hopr_params.rpc_provider.clone();
     let node_address = keys.chain_key.public().to_address();
-    let res = retry(ExponentialBackoff::default(), || async {
+    retry(ExponentialBackoff::default(), || async {
         let presafe = balance::PreSafe::fetch(&private_key, rpc_provider.as_str(), node_address)
             .await
-            .map_err(PreSafeError::from)?;
+            .map_err(Error::from)?;
         Ok(presafe)
     })
-    .await;
-    res
+    .await
+}
+
+async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::TicketStats, Error> {
+    tracing::debug!("starting ticket stats runner");
+    let keys = hopr_params.calc_keys()?;
+    let private_key = keys.chain_key;
+    let rpc_provider = hopr_params.rpc_provider.clone();
+    let network = hopr_params.network.clone();
+    retry(ExponentialBackoff::default(), || async {
+        let stats = TicketStats::fetch(
+            &private_key,
+            rpc_provider.as_str(),
+            &NetworkSpecifications::from_network(&network),
+        )
+        .await
+        .map_err(Error::from)?;
+        Ok(stats)
+    })
+    .await
 }
