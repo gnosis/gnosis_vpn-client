@@ -4,8 +4,12 @@ use backoff::future::retry;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use rand::Rng;
+use serde_json::json;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use url::Url;
+
+use std::time::Duration;
 
 use gnosis_vpn_lib::balance;
 use gnosis_vpn_lib::chain::client::GnosisRpcClient;
@@ -13,6 +17,7 @@ use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use gnosis_vpn_lib::chain::errors::ChainError;
 use gnosis_vpn_lib::hopr::api as hopr_api;
+use gnosis_vpn_lib::remote_data;
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 
 use crate::hopr_params::{self, HoprParams};
@@ -32,6 +37,9 @@ pub enum Results {
     SafeDeployment {
         res: Result<SafeModuleDeploymentResult, Error>,
     },
+    FundingTool {
+        res: Result<bool, Error>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -44,6 +52,8 @@ enum Error {
     TicketStats(#[from] ticket_stats::Error),
     #[error(transparent)]
     Chain(#[from] ChainError),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
 }
 
 pub async fn presafe(hopr_params: &HoprParams, results_sender: &mpsc::Sender<Results>) {
@@ -63,6 +73,11 @@ pub async fn safe_deployment(
 ) {
     let res = run_safe_deployment(hopr_params, presafe).await;
     let _ = results_sender.send(Results::SafeDeployment { res }).await;
+}
+
+pub async fn funding_tool(url: &Url, address: Address, code: &str, results_sender: &mpsc::Sender<Results>) {
+    let res = run_funding_tool(url, address, code).await;
+    let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
 async fn run_presafe(hopr_params: &HoprParams) -> Result<balance::PreSafe, Error> {
@@ -126,6 +141,44 @@ async fn run_safe_deployment(
             .await
             .map_err(Error::from)?;
         Ok(res)
+    })
+    .await
+}
+
+async fn run_funding_tool(url: &Url, address: Address, code: &str) -> Result<bool, Error> {
+    let client = reqwest::Client::new();
+    let headers = remote_data::json_headers();
+    let body = json!({ "address": address.to_string(), "code": code, });
+    let url = url.clone();
+    tracing::debug!(%url, ?headers, %body, "Posting funding tool");
+    retry(ExponentialBackoff::default(), || async {
+        let res = client
+            .post(url)
+            .json(&body)
+            .timeout(Duration::from_secs(5 * 60)) // 5 minutes
+            .headers(headers)
+            .send()
+            .await;
+
+        let resp = res
+            .map_err(|err| {
+                tracing::error!(?err, "Funding tool connect request failed");
+                err
+            })
+            .map_err(Error::from)?;
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|err| {
+                tracing::error!(?err, "Funding tool read response failed");
+                err
+            })
+            .map_err(Error::from)?;
+
+        tracing::debug!(%status, ?text, "Funding tool response");
+        Ok(status.is_success())
     })
     .await
 }
