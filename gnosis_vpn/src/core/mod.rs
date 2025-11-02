@@ -385,7 +385,22 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {}
+    async fn on_results(&mut self, results: runner::Results, results_sender: &mpsc::Sender<runner::Results>) {
+        tracing::debug!(phase = ?self.phase, "on runner results");
+        match results {
+            runner::Results::TicketStats { res } => match res {
+                Ok(stats) => {
+                    tracing::info!(%stats, "on ticket stats");
+                    self.ticket_stats = Some(stats);
+                    self.check_hopr_runner(results_sender.clone());
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch ticket stats, retrying");
+                    self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                }
+            },
+        }
+    }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     async fn on_rrresults(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
@@ -559,26 +574,9 @@ impl Core {
             self.phase = Phase::Starting;
         } else {
             self.phase = Phase::StartingWithoutSafe;
-            self.spawn_presafe_runner(&results_sender.clone(), Duration::ZERO);
+            self.spawn_presafe_runner(results_sender, Duration::ZERO);
         }
-        self.spawn_ticket_stats_runner(results_sender.clone());
-    }
-
-    fn spawn_ticket_stats_runner(&self, results_sender: mpsc::Sender<RunnerResults>) {
-        let runner = ticket_stats_runner::TicketStatsRunner::new(self.hopr_params.clone());
-        let cancel = self.cancel_token.clone();
-        tokio::spawn(async move {
-            tracing::debug!("starting ticket stats runner");
-            let res: Option<Result<TicketStats, ticket_stats_runner::Error>> =
-                cancel.run_until_cancelled(runner.start()).await;
-            if let Some(res) = res {
-                let _ = results_sender
-                    .send(RunnerResults::TicketStats(
-                        res.map_err(runner_results::Error::TicketStats),
-                    ))
-                    .await;
-            }
-        });
+        self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
     }
 
     fn spawn_funding_runner(&self, results_sender: mpsc::Sender<RunnerResults>, secret: String) {
@@ -605,6 +603,20 @@ impl Core {
                 .run_until_cancelled(async move {
                     time::sleep(delay);
                     runner::presafe(hopr_params, results_sender)
+                })
+                .await
+        });
+    }
+
+    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<runner::Results>, delay: Duration) {
+        let hopr_params = self.hopr_params.clone();
+        let cancel = self.cancel_token.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay);
+                    runner::ticket_stats(hopr_params, results_sender);
                 })
                 .await
         });
