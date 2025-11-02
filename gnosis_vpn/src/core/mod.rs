@@ -1,4 +1,7 @@
+use backoff::ExponentialBackoff;
+use backoff::future::retry;
 use edgli::hopr_lib::Address;
+use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
@@ -28,10 +31,11 @@ use crate::hopr_params::{self, HoprParams};
 mod conn;
 mod conn_down;
 mod conn_up;
+mod connection_runner;
 mod funding_runner;
 mod gvpn_client_runner;
 mod hopr_runner;
-mod presafe_runner;
+mod runner;
 mod runner_results;
 mod safe_deployment_runner;
 mod ticket_stats_runner;
@@ -39,6 +43,7 @@ mod ticket_stats_runner;
 use conn_down::ConnDown;
 use conn_up::ConnUp;
 use hopr_runner::Evt;
+use runner::Results;
 use runner_results::RunnerResults;
 
 #[derive(Debug, Error)]
@@ -92,12 +97,8 @@ pub struct Core {
 
     // results from ticket stats
     ticket_stats: Option<TicketStats>,
-    // command sender to hopr
-    hopr_cmd_sender: Option<mpsc::Sender<hopr_runner::Cmd>>,
-    // event receiver from hopr
-    hopr_evt_sender: Option<mpsc::Sender<hopr_runner::Evt>>,
-
     phase: Phase,
+    hopr: Option<Arc<Hopr>>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,8 +162,6 @@ impl Core {
             config,
             cancel_token: CancellationToken::new(),
             balances_cancel_token: CancellationToken::new(),
-            hopr_cmd_sender: None,
-            hopr_evt_sender: None,
             connection: None,
             run_mode: RunMode::Initializing,
             session_connected: false,
@@ -177,24 +176,23 @@ impl Core {
     }
 
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
-        let (evt_sender, mut hopr_evt_receiver) = mpsc::channel(32);
-        self.hopr_evt_sender = Some(evt_sender);
+        let (rrresults_sender, mut rrresults_receiver) = mpsc::channel(32);
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.initial_runner(&results_sender);
+        self.initial_runner(&rrresults_sender);
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
-                    if self.on_event(event, &results_sender).await {
+                    if self.on_event(event, &rrresults_sender).await {
                         continue;
                     } else {
                         break;
                     }
                 }
+                Some(results) = rrresults_receiver.recv() => {
+                    self.on_rrresults(results, &rrresults_sender).await;
+                }
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
-                }
-                Some(evt) = hopr_evt_receiver.recv() => {
-                    self.on_hopr_evt(evt).await;
                 }
                 else => {
                     tracing::warn!("event receiver closed");
@@ -213,11 +211,9 @@ impl Core {
                 self.phase = Phase::ShuttingDown;
                 self.cancel_token.cancel();
                 self.balances_cancel_token.cancel();
-                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
+                if let Some(hopr) = self.hopr {
                     tracing::debug!("shutting down hopr");
-                    let (tx, rx) = oneshot::channel();
-                    let _ = cmd_sender.send(hopr_runner::Cmd::Shutdown { rsp: tx }).await;
-                    let _ = rx.await;
+                    hopr.shutdown().await;
                 }
                 if resp.send(()).is_err() {
                     tracing::warn!("shutdown receiver dropped");
@@ -390,7 +386,10 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_results(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
+    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {}
+
+    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
+    async fn on_rrresults(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
         tracing::debug!(phase = ?self.phase, "on runner results");
         match results {
             RunnerResults::TicketStats(res) => match res {
@@ -465,7 +464,7 @@ impl Core {
     async fn on_hopr_evt(&mut self, evt: hopr_runner::Evt) {
         tracing::debug!(phase = ?self.phase, "on hopr event");
         match evt {
-            Evt::Ready => {
+            Evt::Ready(hoprd) => {
                 self.phase = Phase::HoprSyncing;
                 tracing::info!("hopr runner is syncing");
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
@@ -598,7 +597,21 @@ impl Core {
         });
     }
 
-    fn spawn_presafe_runner(&self, results_sender: mpsc::Sender<RunnerResults>, delay: Duration) {
+    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let hopr_params = self.hopr_params.clone();
+        let cancel = self.cancel_token.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay);
+                    runner::presafe(hopr_params, results_sender)
+                })
+                .await
+        });
+    }
+
+    /*
         let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
         let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
@@ -613,6 +626,7 @@ impl Core {
             }
         });
     }
+    */
 
     fn spawn_safe_deployment_runner(&self, results_sender: mpsc::Sender<RunnerResults>, presafe: balance::PreSafe) {
         tracing::debug!("starting safe deployment runner");
@@ -669,22 +683,20 @@ impl Core {
         }
     }
 
-    async fn spawn_channel_funding(&self, channel: Address, delay: Duration) {
-        if let (Some(cmd_sender), Some(Ok(ticket_value))) = (
-            self.hopr_cmd_sender.clone(),
-            self.ticket_stats.map(|ts| ts.ticket_value()),
-        ) {
+    async fn spawn_channel_funding(&self, address: Address, delay: Duration, results_sender: mpsc::Sender<Results>) {
+        if let (Some(hopr), Some(Ok(ticket_value))) = (self.hopr.clone(), self.ticket_stats.map(|ts| ts.ticket_value()))
+        {
             let threshold = balance::min_stake_threshold(ticket_value);
             tokio::spawn(async move {
                 time::sleep(delay).await;
-                tracing::debug!(%channel, %threshold, %ticket_value, "requesting channel funding");
-                let _ = cmd_sender
-                    .send(hopr_runner::Cmd::FundChannel {
-                        address: channel,
-                        amount: ticket_value,
-                        threshold,
-                    })
-                    .await;
+                tracing::debug!(channel = %address, %threshold, %ticket_value, "requesting channel funding");
+                let res = retry(ExponentialBackoff::default(), || async {
+                    hopr.ensure_channel_open_and_funded(address, ticket_value, threshold)
+                        .await?;
+                    Ok(())
+                })
+                .await;
+                let _ = results_sender.send(Results::FundChannel { address, res }).await;
             });
         }
     }
@@ -693,6 +705,8 @@ impl Core {
         match (self.phase.clone(), self.target_destination.clone()) {
             (Phase::HoprReadyAndFunded, Some(dest)) => {
                 tracing::info!(destination = %dest, "establishing new connection");
+                unimplemented!()
+                /*
                 let config_connection = self.config.connection.clone();
                 let conn = ConnUp::new(dest.clone(), config_connection);
                 let cmd = conn.init_cmd();
@@ -700,6 +714,7 @@ impl Core {
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
                     let _ = cmd_sender.send(cmd).await;
                 }
+                */
             }
             _ => {
                 unimplemented!()

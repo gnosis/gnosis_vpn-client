@@ -21,66 +21,8 @@ pub struct HoprRunner {
     ticket_value: Balance<WxHOPR>,
 }
 
-#[derive(Debug)]
-pub enum Cmd {
-    Shutdown {
-        rsp: oneshot::Sender<()>,
-    },
-    Status,
-    Info {
-        rsp: oneshot::Sender<Info>,
-    },
-    Balances,
-    FundChannel {
-        address: Address,
-        amount: Balance<WxHOPR>,
-        threshold: Balance<WxHOPR>,
-    },
-    OpenSession {
-        id: Uuid,
-        destination: Address,
-        target: SessionTarget,
-        session_pool: Option<usize>,
-        max_client_sessions: Option<usize>,
-        cfg: SessionClientConfig,
-    },
-    CloseSession {
-        id: Uuid,
-        bound_session: SocketAddr,
-        protocol: IpProtocol,
-    },
-    ListSessions {
-        protocol: IpProtocol,
-    },
-    AdjustSession {
-        id: Uuid,
-        balancer_cfg: SurbBalancerConfig,
-        client: String,
-    },
-}
-
-#[derive(Debug)]
 pub enum Evt {
-    Ready,
-    FundChannel {
-        address: Address,
-        res: Result<(), Error>,
-    },
-    Balances(Result<Balances, Error>),
-    Status(HoprState),
-    OpenSession {
-        id: Uuid,
-        res: Result<SessionClientMetadata, Error>,
-    },
-    CloseSession {
-        id: Uuid,
-        res: Result<(), Error>,
-    },
-    ListSessions(Vec<SessionClientMetadata>),
-    AdjustSession {
-        id: Uuid,
-        res: Result<(), Error>,
-    },
+    Ready(Arc<Hopr>),
 }
 
 #[derive(Debug, Error)]
@@ -103,11 +45,7 @@ impl HoprRunner {
         }
     }
 
-    pub async fn start(
-        &self,
-        cmd_receiver: &mut mpsc::Receiver<Cmd>,
-        evt_sender: mpsc::Sender<Evt>,
-    ) -> Result<(), Error> {
+    pub async fn start(&self, evt_sender: mpsc::Sender<Evt>) -> Result<Arc<Hopr>, Error> {
         let cfg = match self.hopr_params.config_mode.clone() {
             // use user provided configuration path
             hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
@@ -119,9 +57,10 @@ impl HoprRunner {
             )?,
         };
         let keys = self.hopr_params.calc_keys()?;
-        let edgli = Hopr::new(cfg, keys).await?;
-        let hoprd = Arc::new(edgli);
-        let _ = evt_sender.send(Evt::Ready).await;
+        Hopr::new(cfg, keys).await
+    }
+    /*
+        let _ = evt_sender.send(Evt::Ready(hoprd.clone())).await;
         while let Some(cmd) = cmd_receiver.recv().await {
             match cmd {
                 Cmd::Shutdown { rsp } => {
@@ -212,6 +151,7 @@ impl HoprRunner {
         }
         Ok(())
     }
+            */
 }
 
 async fn fund_channel(
