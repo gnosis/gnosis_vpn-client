@@ -61,6 +61,7 @@ impl ConnectionRunner {
         evt_sender.send(Evt::Register(self.id)).await;
         let registration = self.register(&session_client_metadata).await?;
         evt_sender.send(Evt::CloseBridge(self.id)).await;
+        self.close_bridge_session(&session_client_metadata).await?;
         Ok(())
     }
 
@@ -106,5 +107,20 @@ impl ConnectionRunner {
             Ok(res)
         })
         .await
+    }
+
+    async fn close_bridge_session(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
+        let res = self
+            .hoprd
+            .close_session(session_client_metadata.bound_host, session_client_metadata.protocol)
+            .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(HoprError::SessionNotFound) => {
+                tracing::warn!("attempted to close bridge session but it was not found, possibly already closed");
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 }
