@@ -3,8 +3,8 @@ use edgli::hopr_lib::{Address, GeneralError};
 use thiserror::Error;
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
+use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
 use crate::wg_tooling::Config as WireGuardConfig;
@@ -52,8 +52,8 @@ impl Config {
     }
 }
 
-pub fn read(path: &Path) -> Result<Config, Error> {
-    let content = fs::read_to_string(path).map_err(|e| {
+pub async fn read(path: &Path) -> Result<Config, Error> {
+    let content = fs::read_to_string(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
         } else {

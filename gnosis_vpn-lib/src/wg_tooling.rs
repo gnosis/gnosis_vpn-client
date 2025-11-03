@@ -1,8 +1,8 @@
-use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Command, Stdio};
 use thiserror::Error;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 use crate::dirs;
 
@@ -70,13 +70,14 @@ impl Config {
     }
 }
 
-pub fn available() -> Result<(), Error> {
+pub async fn available() -> Result<(), Error> {
     let code = Command::new("which")
         .arg("wg-quick")
         // suppress log output
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await?;
     if code.success() {
         Ok(())
     } else {
@@ -86,8 +87,8 @@ pub fn available() -> Result<(), Error> {
 
 const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 
-fn generate_key() -> Result<String, Error> {
-    let output = Command::new("wg").arg("genkey").output()?;
+async fn generate_key() -> Result<String, Error> {
+    let output = Command::new("wg").arg("genkey").output().await?;
 
     if output.status.success() {
         let key = String::from_utf8(output.stdout).map(|s| s.trim().to_string())?;
@@ -100,18 +101,18 @@ fn generate_key() -> Result<String, Error> {
     }
 }
 
-fn public_key(priv_key: &str) -> Result<String, Error> {
+async fn public_key(priv_key: &str) -> Result<String, Error> {
     let mut command = Command::new("wg")
         .arg("pubkey")
-        .stdin(Stdio::piped()) // Enable piping to stdin
-        .stdout(Stdio::piped()) // Capture stdout
+        .stdin(std::process::Stdio::piped()) // Enable piping to stdin
+        .stdout(std::process::Stdio::piped()) // Capture stdout
         .spawn()?;
 
     if let Some(stdin) = command.stdin.as_mut() {
-        stdin.write_all(priv_key.as_bytes())?
+        stdin.write_all(priv_key.as_bytes()).await?
     }
 
-    let output = command.wait_with_output()?;
+    let output = command.wait_with_output().await?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -125,24 +126,24 @@ fn public_key(priv_key: &str) -> Result<String, Error> {
 }
 
 impl WireGuard {
-    pub fn from_config(config: Config) -> Result<Self, Error> {
+    pub async fn from_config(config: Config) -> Result<Self, Error> {
         let priv_key = match config.force_private_key.clone() {
             Some(key) => key,
-            None => generate_key()?,
+            None => generate_key().await?,
         };
-        let public_key = public_key(&priv_key)?;
+        let public_key = public_key(&priv_key).await?;
         let key_pair = KeyPair { priv_key, public_key };
         Ok(WireGuard { config, key_pair })
     }
 
-    pub fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
+    pub async fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
         let config = self.to_file_string(interface, peer);
         let content = config.as_bytes();
-        fs::write(&conf_file, content)?;
-        fs::set_permissions(&conf_file, fs::Permissions::from_mode(0o600))?;
+        fs::write(&conf_file, content).await?;
+        fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
 
-        let output = Command::new("wg-quick").arg("up").arg(conf_file).output()?;
+        let output = Command::new("wg-quick").arg("up").arg(conf_file).output().await?;
         if !output.stdout.is_empty() {
             tracing::info!("wg-quick up stdout: {}", String::from_utf8_lossy(&output.stdout));
         }
@@ -161,10 +162,10 @@ impl WireGuard {
         }
     }
 
-    pub fn close_session(&self) -> Result<(), Error> {
+    pub async fn close_session(&self) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
 
-        let output = Command::new("wg-quick").arg("down").arg(conf_file).output()?;
+        let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
         if !output.stdout.is_empty() {
             tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
         }

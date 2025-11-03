@@ -1,15 +1,15 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::process;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
-use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process;
 
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::socket;
@@ -79,7 +79,7 @@ async fn config_channel(
         }
     };
 
-    let config_path = match fs::canonicalize(param_config_path) {
+    let config_path = match fs::canonicalize(param_config_path).await {
         Ok(path) => path,
         Err(e) => {
             tracing::error!(error = ?e, "error canonicalizing config path");
@@ -132,7 +132,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
                     tracing::debug!(warn = ?e, "done probing for running instance");
                 }
             };
-            fs::remove_file(socket_path).map_err(|e| {
+            fs::remove_file(socket_path).await.map_err(|e| {
                 tracing::error!(error = ?e, "error removing stale socket file");
                 exitcode::IOERR
             })?;
@@ -148,7 +148,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
         tracing::error!("socket path has no parent");
         exitcode::UNAVAILABLE
     })?;
-    fs::create_dir_all(socket_dir).map_err(|e| {
+    fs::create_dir_all(socket_dir).await.map_err(|e| {
         tracing::error!(error = %e, "error creating socket directory");
         exitcode::IOERR
     })?;
@@ -159,10 +159,12 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
     })?;
 
     // update permissions to allow unprivileged access
-    fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666)).map_err(|e| {
-        tracing::error!(error = ?e, "error setting socket permissions");
-        exitcode::NOPERM
-    })?;
+    fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+        .map_err(|e| {
+            tracing::error!(error = ?e, "error setting socket permissions");
+            exitcode::NOPERM
+        })
+        .await?;
 
     let (sender, receiver) = mpsc::channel(32);
 
@@ -281,7 +283,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut socket_receiver = socket_channel(&args.socket_path).await?;
 
     let exit_code = loop_daemon(&mut ctrlc_receiver, &mut config_receiver, &mut socket_receiver, args).await;
-    match fs::remove_file(&socket_path) {
+    match fs::remove_file(&socket_path).await {
         Ok(_) => (),
         Err(e) => {
             tracing::error!(error = %e, "failed removing socket");

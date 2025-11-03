@@ -31,9 +31,9 @@ pub enum Evt {
     Register(Uuid),
     CloseBridge(Uuid),
     OpenPing(Uuid),
+    WgTunnel(Uuid),
     Ping(Uuid),
-    AdjustMain(Uuid),
-    TunnelWg(Uuid),
+    AdjustToMain(Uuid),
 }
 
 #[derive(Debug, Error)]
@@ -57,11 +57,19 @@ impl ConnectionRunner {
 
     pub async fn connect(&self, evt_sender: mpsc::Sender<Evt>) -> Result<(), Error> {
         evt_sender.send(Evt::OpenBridge(self.id)).await;
-        let session_client_metadata = self.open_bridge_session().await?;
+        let bridge_session = self.open_bridge_session().await?;
         evt_sender.send(Evt::Register(self.id)).await;
-        let registration = self.register(&session_client_metadata).await?;
+        let registration = self.register(&bridge_session).await?;
         evt_sender.send(Evt::CloseBridge(self.id)).await;
-        self.close_bridge_session(&session_client_metadata).await?;
+        self.close_bridge_session(&bridge_session).await?;
+        evt_sender.send(Evt::OpenPing(self.id)).await;
+        let ping_session = self.open_ping_session().await?;
+        evt_sender.send(Evt::WgTunnel(self.id)).await;
+        self.wg_tunnel(&registration, &ping_session).await?;
+        evt_sender.send(Evt::Ping(self.id)).await;
+        self.ping(&ping_session, &registration).await?;
+        evt_sender.send(Evt::AdjustToMain(self.id)).await;
+        self.adjust_to_main_session(&ping_session).await?;
         Ok(())
     }
 
@@ -123,4 +131,60 @@ impl ConnectionRunner {
             Err(e) => Err(e),
         }
     }
+
+    async fn open_ping_session(&self) -> Result<SessionClientMetadata, HoprError> {
+        let cfg = SessionClientConfig {
+            capabilities: self.options.sessions.wg.capabilities,
+            forward_path_options: self.destination.routing.clone(),
+            return_path_options: self.destination.routing.clone(),
+            surb_management: Some(conn::to_surb_balancer_config(
+                self.options.buffer_sizes.ping,
+                self.options.max_surb_upstream.ping,
+            )),
+            ..Default::default()
+        };
+        retry(ExponentialBackoff::default(), || async {
+            let res = self
+                .hoprd
+                .open_session(
+                    self.destination.address,
+                    self.options.sessions.wg.target.clone(),
+                    None,
+                    None,
+                    cfg.clone(),
+                )
+                .await?;
+            Ok(res)
+        })
+        .await
+    }
+
+    async fn wg_tunnel(
+        &self,
+        registration: &Registration,
+        session_client_metadata: &SessionClientMetadata,
+    ) -> Result<(), wg_tooling::Error> {
+        // run wg-quick down once to ensure no dangling state
+        _ = self.wg.close_session().await;
+
+        let interface_info = wg_tooling::InterfaceInfo {
+            address: registration.address(),
+            mtu: session_client_metadata.hopr_mtu,
+        };
+
+        let peer_info = wg_tooling::PeerInfo {
+            public_key: registration.server_public_key(),
+            endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
+        };
+
+        wg.connect_session(&interface_info, &peer_info).await
+    }
+
+    async fn ping(&self) -> Result<(), ping::Error> {
+        let opts = self.options.ping_options.clone();
+        let timeout = self.options.timeouts.ping_retries;
+        ping::ping(&opts)
+    }
+
+    async fn adjust_to_main_session(&self) {}
 }

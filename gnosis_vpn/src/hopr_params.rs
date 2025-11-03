@@ -2,8 +2,8 @@ use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
 use url::Url;
 
-use std::fs;
 use std::path::PathBuf;
+use tokio::fs;
 
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
 use gnosis_vpn_lib::network::Network;
