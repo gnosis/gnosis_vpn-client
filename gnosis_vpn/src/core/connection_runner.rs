@@ -186,5 +186,14 @@ impl ConnectionRunner {
         ping::ping(&opts)
     }
 
-    async fn adjust_to_main_session(&self) {}
+    async fn adjust_to_main_session(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
+        let active_client = match session_client_metadata.active_clients.as_slice() {
+            [] => return Err(HoprError::SessionNotFound),
+            [client] => client.clone(),
+            _ => return Err(HoprError::SessionAmbiguousClient),
+        };
+        let surb_management =
+            conn::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main);
+        self.hoprd.adjust_session(surb_management, active_client).await
+    }
 }
