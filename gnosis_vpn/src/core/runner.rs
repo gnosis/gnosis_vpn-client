@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use url::Url;
 
+use std::fmt::{self, Display};
 use std::time::Duration;
 
 use gnosis_vpn_lib::balance;
@@ -142,13 +143,13 @@ async fn run_safe_deployment(
         let mut bytes = [0u8; 32];
         rand::rng().fill(&mut bytes);
         let nonce = U256::from_be_bytes(bytes);
-        let client = GnosisRpcClient::with_url(private_key, rpc_provider.as_str())
+        let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
             .await
             .map_err(Error::from)?;
         let safe_module_deployment_inputs =
             SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
         let res = safe_module_deployment_inputs
-            .deploy(&client.provider, network)
+            .deploy(&client.provider, network.clone())
             .await
             .map_err(Error::from)?;
         Ok(res)
@@ -160,14 +161,13 @@ async fn run_funding_tool(url: &Url, address: Address, code: &str) -> Result<boo
     let client = reqwest::Client::new();
     let headers = remote_data::json_headers();
     let body = json!({ "address": address.to_string(), "code": code, });
-    let url = url.clone();
     tracing::debug!(%url, ?headers, %body, "Posting funding tool");
     retry(ExponentialBackoff::default(), || async {
         let res = client
-            .post(url)
+            .post(url.clone())
             .json(&body)
             .timeout(Duration::from_secs(5 * 60)) // 5 minutes
-            .headers(headers)
+            .headers(headers.clone())
             .send()
             .await;
 
@@ -210,4 +210,35 @@ async fn run_hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>) -> Re
     };
     let keys = hopr_params.calc_keys().await?;
     Hopr::new(cfg, keys).await.map_err(Error::from)
+}
+
+impl Display for Results {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Results::FundChannel { address, res } => match res {
+                Ok(_) => write!(f, "FundChannel to {}: Success", address),
+                Err(err) => write!(f, "FundChannel to {}: Error({})", address, err),
+            },
+            Results::PreSafe { res } => match res {
+                Ok(presafe) => write!(f, "PreSafe: {}", presafe),
+                Err(err) => write!(f, "PreSafe: Error({})", err),
+            },
+            Results::TicketStats { res } => match res {
+                Ok(stats) => write!(f, "TicketStats: {}", stats),
+                Err(err) => write!(f, "TicketStats: Error({})", err),
+            },
+            Results::SafeDeployment { res } => match res {
+                Ok(deployment) => write!(f, "SafeDeployment: {:?}", deployment),
+                Err(err) => write!(f, "SafeDeployment: Error({})", err),
+            },
+            Results::FundingTool { res } => match res {
+                Ok(success) => write!(f, "FundingTool: Success({})", success),
+                Err(err) => write!(f, "FundingTool: Error({})", err),
+            },
+            Results::Hopr { res } => match res {
+                Ok(_) => write!(f, "Hopr: Initialized Successfully"),
+                Err(err) => write!(f, "Hopr: Error({})", err),
+            },
+        }
+    }
 }

@@ -32,14 +32,10 @@ mod conn;
 mod conn_down;
 mod conn_up;
 mod connection_runner;
-mod hopr_runner;
 mod runner;
-mod runner_results;
 
 use conn_down::ConnDown;
 use conn_up::ConnUp;
-use hopr_runner::Evt;
-use runner_results::RunnerResults;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -85,7 +81,7 @@ pub struct Core {
     balances: Option<balance::Balances>,
 
     // results from onboarding
-    funding_status: funding_runner::Status,
+    funding_tool: balance::FundingTool,
 
     // supposedly working channels (funding was ok)
     funded_channels: Vec<Address>,
@@ -149,9 +145,9 @@ enum Cancel {
 }
 
 impl Core {
-    pub fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
-        let config = config::read(config_path)?;
-        wg_tooling::available()?;
+    pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
+        let config = config::read(config_path).await?;
+        wg_tooling::available().await?;
 
         Ok(Core {
             config,
@@ -163,7 +159,8 @@ impl Core {
             target_destination: None,
             balances: None,
             hopr_params,
-            funding_status: funding_runner::Status::NotStarted,
+            hopr: None,
+            funding_tool: balance::FundingTool::NotStarted,
             funded_channels: Vec::new(),
             ticket_stats: None,
             phase: Phase::Initial,
@@ -171,20 +168,16 @@ impl Core {
     }
 
     pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
-        let (rrresults_sender, mut rrresults_receiver) = mpsc::channel(32);
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
                 Some(event) = event_receiver.recv() => {
-                    if self.on_event(event, &rrresults_sender).await {
+                    if self.on_event(event, &results_sender).await {
                         continue;
                     } else {
                         break;
                     }
-                }
-                Some(results) = rrresults_receiver.recv() => {
-                    self.on_rrresults(results, &rrresults_sender).await;
                 }
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
@@ -198,7 +191,7 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<RunnerResults>) -> bool {
+    async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<runner::Results>) -> bool {
         tracing::debug!(phase = ?self.phase, "on outside event");
         match event {
             Event::Shutdown { resp } => {
@@ -272,23 +265,18 @@ impl Core {
                             network,
                         ));
                         let _ = resp.send(res);
-                        return true;
                     }
-                    Command::Connect(address) => {
-                        match self.config.destinations.clone().get(&address) {
-                            Some(dest) => {
-                                self.target_destination = Some(dest.clone());
-                                let _ =
-                                    resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
-                                self.act_on_target().await;
-                            }
-                            None => {
-                                tracing::info!(address = %address, "cannot connect to destination - address not configured");
-                                let _ = resp.send(Response::connect(command::ConnectResponse::address_not_found()));
-                            }
+                    Command::Connect(address) => match self.config.destinations.clone().get(&address) {
+                        Some(dest) => {
+                            self.target_destination = Some(dest.clone());
+                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
+                            self.act_on_target().await;
                         }
-                        return true;
-                    }
+                        None => {
+                            tracing::info!(address = %address, "cannot connect to destination - address not configured");
+                            let _ = resp.send(Response::connect(command::ConnectResponse::address_not_found()));
+                        }
+                    },
                     Command::Disconnect => {
                         self.target_destination = None;
                         let dest = self.connection.as_ref().map(|c| c.destination());
@@ -301,47 +289,17 @@ impl Core {
                             }
                         }
                         self.act_on_target().await;
-                        return true;
                     }
 
                     Command::Balance => {
-                        if let (Some(cmd_sender), Some(balances), Some(Ok(ticket_value))) = (
-                            self.hopr_cmd_sender.clone(),
-                            self.balances.clone(),
-                            self.ticket_stats.map(|ts| ts.ticket_value()),
-                        ) {
-                            let (tx, rx) = oneshot::channel();
-                            let _ = cmd_sender.send(hopr_runner::Cmd::Info { rsp: tx }).await;
-                            let info = match rx.await {
-                                Ok(info) => info,
-                                Err(err) => {
-                                    tracing::error!(%err, "failed to get hopr info for balance command");
-                                    let _ = resp.send(Response::Balance(None));
-                                    return true;
-                                }
-                            };
-                            let issues: Vec<balance::FundingIssue> =
-                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
-
-                            let res = command::BalanceResponse::new(
-                                format!("{} xDai", balances.node_xdai),
-                                format!("{} wxHOPR", balances.safe_wxhopr),
-                                format!("{} wxHOPR", balances.channels_out_wxhopr),
-                                issues,
-                                command::Addresses {
-                                    node: info.node_address,
-                                    safe: info.safe_address,
-                                },
-                            );
-                            let _ = resp.send(Response::Balance(Some(res)));
-                        } else {
-                            let _ = resp.send(Response::Balance(None));
-                        }
+                        self.spawn_balance_response(&resp);
                     }
                     Command::Ping => {
                         let _ = resp.send(Response::Pong);
                     }
                     Command::RefreshNode => {
+                        unimplemented!();
+                        /*
                         // immediately request balances and cancel existing balance loop
                         self.balances_cancel_token.cancel();
                         self.balances_cancel_token = CancellationToken::new();
@@ -350,8 +308,11 @@ impl Core {
                             let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
                         }
                         let _ = resp.send(Response::Empty);
+                        */
                     }
                     Command::FundingTool(secret) => {
+                        unimplemented!();
+                        /*
                         if matches!(self.phase, Phase::StartingWithoutSafe) {
                             self.funding_status = funding_runner::Status::InProgress;
                             self.spawn_funding_runner(results_sender.clone(), secret);
@@ -360,6 +321,7 @@ impl Core {
                             tracing::warn!("cannot start funding tool - safe already deployed");
                             let _ = resp.send(Response::Empty);
                         }
+                        */
                     }
                     Command::Metrics => {
                         let metrics = match edgli::hopr_lib::Hopr::collect_hopr_metrics() {
@@ -380,58 +342,40 @@ impl Core {
         }
     }
 
-    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
+    #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
     async fn on_results(&mut self, results: runner::Results, results_sender: &mpsc::Sender<runner::Results>) {
-        tracing::debug!(phase = ?self.phase, "on runner results");
+        tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
             runner::Results::TicketStats { res } => match res {
                 Ok(stats) => {
                     tracing::info!(%stats, "on ticket stats");
                     self.ticket_stats = Some(stats);
-                    self.check_hopr_runner(results_sender.clone());
+                    self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO);
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch ticket stats, retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                 }
             },
-        }
-    }
-
-    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_rrresults(&mut self, results: RunnerResults, results_sender: &mpsc::Sender<RunnerResults>) {
-        tracing::debug!(phase = ?self.phase, "on runner results");
-        match results {
-            RunnerResults::TicketStats(res) => match res {
-                Ok(stats) => {
-                    tracing::info!(%stats, "on ticket stats");
-                    self.ticket_stats = Some(stats);
-                    self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO).await;
-                }
-                Err(err) => {
-                    tracing::error!(%err, "failed to fetch ticket stats, retrying");
-                    self.spawn_ticket_stats_runner(results_sender.clone());
-                }
-            },
-            RunnerResults::PreSafe(res) => match res {
+            runner::Results::PreSafe { res } => match res {
                 Ok(presafe) => {
                     tracing::info!(%presafe, "on presafe balance");
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
                         tracing::warn!("insufficient funds to start safe deployment - waiting");
-                        self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
+                        self.spawn_presafe_runner(&results_sender, Duration::from_secs(10));
                     } else {
-                        self.spawn_safe_deployment_runner(results_sender.clone(), presafe);
+                        self.spawn_safe_deployment_runner(&results_sender, &presafe);
                     }
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch presafe balance, retrying");
-                    self.spawn_presafe_runner(results_sender.clone(), Duration::from_secs(10));
+                    self.spawn_presafe_runner(&results_sender, Duration::from_secs(10));
                 }
             },
-            RunnerResults::SafeDeployment(res) => match res {
+            runner::Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
                     let safe_module: hopr_config::SafeModule = deployment.into();
-                    while let Err(err) = hopr_config::store_safe(&safe_module) {
+                    while let Err(err) = hopr_config::store_safe(&safe_module).await {
                         tracing::error!(%err, "critical error storing safe module after deployment");
                         tracing::error!("Please fix file permissions or out of disk space issues");
                         time::sleep(Duration::from_secs(5)).await;
@@ -441,30 +385,30 @@ impl Core {
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");
-                    self.spawn_presafe_runner(results_sender.clone(), Duration::ZERO);
+                    self.spawn_presafe_runner(&results_sender, Duration::from_secs(5));
                 }
             },
-            RunnerResults::Hopr(res) => match res {
-                Ok(_) => {
-                    tracing::info!("hopr runner exited normally");
+            runner::Results::Hopr { res } => match res {
+                Ok(hopr) => {
+                    tracing::info!("hopr runner started successfully");
+                    self.hopr = Some(Arc::new(hopr));
                 }
                 Err(err) => {
                     tracing::error!(%err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.spawn_hopr_runner(results_sender.clone(), Duration::from_secs(10))
-                        .await;
+                    self.spawn_hopr_runner(&results_sender, Duration::from_secs(10)).await;
                 }
             },
-            RunnerResults::Funding(res) => match res {
+            runner::Results::FundingTool { res } => match res {
                 Ok(success) => {
-                    self.funding_status = if success {
-                        funding_runner::Status::Success
+                    self.funding_tool = if success {
+                        balance::FundingTool::CompletedSuccess
                     } else {
-                        funding_runner::Status::Failed
+                        balance::FundingTool::CompletedError
                     };
                 }
                 Err(err) => {
                     tracing::error!(%err, "funding runner exited with error");
-                    self.funding_status = funding_runner::Status::Failed;
+                    self.funding_tool = balance::FundingTool::CompletedError;
                 }
             },
         }
@@ -616,6 +560,44 @@ impl Core {
                 })
                 .await
         });
+    }
+
+    fn spawn_balance_response(&self, resp: &oneshot::Sender<Response>) {
+        unimplemented!();
+        /*
+                        if let (Some(cmd_sender), Some(balances), Some(Ok(ticket_value))) = (
+                            self.hopr_cmd_sender.clone(),
+                            self.balances.clone(),
+                            self.ticket_stats.map(|ts| ts.ticket_value()),
+                        ) {
+                            let (tx, rx) = oneshot::channel();
+                            let _ = cmd_sender.send(hopr_runner::Cmd::Info { rsp: tx }).await;
+                            let info = match rx.await {
+                                Ok(info) => info,
+                                Err(err) => {
+                                    tracing::error!(%err, "failed to get hopr info for balance command");
+                                    let _ = resp.send(Response::Balance(None));
+                                    return true;
+                                }
+                            };
+                            let issues: Vec<balance::FundingIssue> =
+                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
+
+                            let res = command::BalanceResponse::new(
+                                format!("{} xDai", balances.node_xdai),
+                                format!("{} wxHOPR", balances.safe_wxhopr),
+                                format!("{} wxHOPR", balances.channels_out_wxhopr),
+                                issues,
+                                command::Addresses {
+                                    node: info.node_address,
+                                    safe: info.safe_address,
+                                },
+                            );
+                            let _ = resp.send(Response::Balance(Some(res)));
+                        } else {
+                            let _ = resp.send(Response::Balance(None));
+                        }
+        */
     }
 
     /*
