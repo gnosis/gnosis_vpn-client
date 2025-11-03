@@ -115,8 +115,8 @@ jobs:
             cp binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
             cp binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
           fi
-      - name: Sign binary on ${{ steps.vars.outputs.architecture}}
-        if: inputs.version_type == 'release' && endsWith(steps.vars.outputs.architecture, '-darwin')
+      - name: Sign binary on darwin architectures
+        if: endsWith(steps.vars.outputs.architecture, '-darwin')
         run: |
           set -o errexit -o nounset -o pipefail
           echo "${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}" | base64 --decode > gnosisvpn-developer.p12
@@ -137,8 +137,8 @@ jobs:
           codesign --verify --deep --strict --verbose=4 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
           shasum -a 256 binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.sha256
           shasum -a 256 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
-      - name: Sign binary on ${{ steps.vars.outputs.architecture}}
-        if: inputs.version_type == 'release' && endsWith(steps.vars.outputs.architecture, '-linux')
+      - name: Sign binary on linux architectures
+        if: endsWith(steps.vars.outputs.architecture, '-linux')
         run: |
           set -o errexit -o nounset -o pipefail
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
