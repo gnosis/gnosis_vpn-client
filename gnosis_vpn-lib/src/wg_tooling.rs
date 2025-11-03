@@ -33,8 +33,6 @@ pub struct WireGuard {
 #[derive(Clone, Debug)]
 pub struct InterfaceInfo {
     pub address: String,
-    pub allowed_ips: Option<String>,
-    pub listen_port: Option<u16>,
     pub mtu: u16,
 }
 
@@ -186,11 +184,12 @@ impl WireGuard {
     }
 
     fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
-        let allowed_ips = match &interface.allowed_ips {
+        let allowed_ips = match &self.config.allowed_ips {
             Some(allowed_ips) => allowed_ips.clone(),
             None => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
         };
-        let listen_port_line = interface
+        let listen_port_line = self
+            .config
             .listen_port
             .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
