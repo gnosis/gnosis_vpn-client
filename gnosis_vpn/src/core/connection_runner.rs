@@ -5,17 +5,16 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use uuid::{self, Uuid};
 
+use std::sync::Arc;
+
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::connection::options::Options;
 use gnosis_vpn_lib::gvpn_client::{self, Registration};
 use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError};
-use gnosis_vpn_lib::wg_tooling;
+use gnosis_vpn_lib::{ping, wg_tooling};
 
 use crate::core::conn;
-
-use crate::hopr_params::{self, HoprParams};
-use std::sync::Arc;
 
 pub struct ConnectionRunner {
     hoprd: Arc<Hopr>,
@@ -42,6 +41,10 @@ pub enum Error {
     Hopr(#[from] HoprError),
     #[error(transparent)]
     GvpnClient(#[from] gvpn_client::Error),
+    #[error(transparent)]
+    WgTooling(#[from] wg_tooling::Error),
+    #[error(transparent)]
+    Ping(#[from] ping::Error),
 }
 
 impl ConnectionRunner {
@@ -78,7 +81,7 @@ impl ConnectionRunner {
 
         // 6. check ping
         evt_sender.send(Evt::Ping(self.id)).await;
-        self.ping(&ping_session, &registration).await?;
+        self.ping().await?;
 
         // 7. adjust to main session
         evt_sender.send(Evt::AdjustToMain(self.id)).await;
@@ -191,13 +194,11 @@ impl ConnectionRunner {
             endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
         };
 
-        wg.connect_session(&interface_info, &peer_info).await
+        self.wg.connect_session(&interface_info, &peer_info).await
     }
 
     async fn ping(&self) -> Result<(), ping::Error> {
-        let opts = self.options.ping_options.clone();
-        let timeout = self.options.timeouts.ping_retries;
-        ping::ping(&opts)
+        ping::ping(&self.options.ping_options)
     }
 
     async fn adjust_to_main_session(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {

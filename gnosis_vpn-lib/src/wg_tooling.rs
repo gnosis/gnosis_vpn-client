@@ -33,7 +33,7 @@ pub struct WireGuard {
 #[derive(Clone, Debug)]
 pub struct InterfaceInfo {
     pub address: String,
-    pub mtu: u16,
+    pub mtu: usize,
 }
 
 #[derive(Clone, Debug)]
