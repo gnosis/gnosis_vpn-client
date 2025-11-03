@@ -2,6 +2,7 @@ use alloy::primitives::U256;
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use rand::Rng;
 use serde_json::json;
@@ -11,6 +12,7 @@ use tokio::time;
 use url::Url;
 
 use std::fmt::{self, Display};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gnosis_vpn_lib::balance;
@@ -46,6 +48,10 @@ pub enum Results {
     Hopr {
         res: Result<Hopr, Error>,
     },
+    Balances {
+        res: Result<balance::Balances, Error>,
+    },
+    HoprRunning,
 }
 
 #[derive(Debug, Error)]
@@ -66,6 +72,13 @@ enum Error {
     Hopr(#[from] HoprError),
     #[error(transparent)]
     Url(#[from] url::ParseError),
+    #[error(transparent)]
+    ChannelError(#[from] hopr_api::ChannelError),
+}
+
+pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
+    let res = run_ticket_stats(hopr_params).await;
+    let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
 pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
@@ -73,9 +86,9 @@ pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Resul
     let _ = results_sender.send(Results::PreSafe { res }).await;
 }
 
-pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_ticket_stats(hopr_params).await;
-    let _ = results_sender.send(Results::TicketStats { res }).await;
+pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
+    let res = run_funding_tool(hopr_params, code).await;
+    let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
 pub async fn safe_deployment(
@@ -87,9 +100,12 @@ pub async fn safe_deployment(
     let _ = results_sender.send(Results::SafeDeployment { res }).await;
 }
 
-pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
-    let res = run_funding_tool(hopr_params, code).await;
-    let _ = results_sender.send(Results::FundingTool { res }).await;
+pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: mpsc::Sender<Results>) {
+    while let Err(err) = hopr_config::store_safe(&safe_module).await {
+        log_output::print_safe_module_storage_error(err);
+        time::sleep(Duration::from_secs(5)).await;
+    }
+    let _ = results_sender.send(Results::SafePersisted).await;
 }
 
 pub async fn hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>, results_sender: mpsc::Sender<Results>) {
@@ -97,12 +113,27 @@ pub async fn hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>, result
     let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
-pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: mpsc::Sender<Results>) {
-    while let Err(err) = hopr_config::store_safe(&safe_module).await {
-        log_output::print_safe_module_storage_error(err);
-        time::sleep(Duration::from_secs(5)).await;
+pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting balances runner");
+    let res = hopr.balances().await.map_err(Error::from);
+    let _ = results_sender.send(Results::Balances { res }).await;
+}
+
+pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    while hopr.status() != HoprState::Running {
+        time::sleep(Duration::from_secs(1)).await;
     }
-    let _ = results_sender.send(Results::SafePersisted).await;
+    let _ = results_sender.send(Results::HoprRunning).await;
+}
+
+pub async fn fund_channel(
+    hopr: Arc<Hopr>,
+    address: Address,
+    ticket_value: Balance<WxHOPR>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_fund_channel(hopr, address, ticket_value).await;
+    let _ = results_sender.send(Results::FundChannel { address, res }).await;
 }
 
 async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
@@ -228,6 +259,21 @@ async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Res
     Hopr::new(cfg, keys).await.map_err(Error::from)
 }
 
+async fn run_fund_channel(
+    hopr: Arc<Hopr>,
+    address: Address,
+    ticket_value: Balance<WxHOPR>,
+) -> Result<(), hopr_api::ChannelError> {
+    let amount = balance::funding_amount(ticket_value);
+    let threshold = balance::min_stake_threshold(ticket_value);
+    tracing::debug!(%address, %amount, %threshold, "starting fund channel runner");
+    retry(ExponentialBackoff::default(), || async {
+        hopr.ensure_channel_open_and_funded(address, amount, threshold).await?;
+        Ok(())
+    })
+    .await
+}
+
 impl Display for Results {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -256,6 +302,11 @@ impl Display for Results {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
             },
+            Results::Balances { res } => match res {
+                Ok(balances) => write!(f, "Balances: {}", balances),
+                Err(err) => write!(f, "Balances: Error({})", err),
+            },
+            Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
         }
     }
 }

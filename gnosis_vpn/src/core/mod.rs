@@ -100,7 +100,7 @@ enum Phase {
     CreatingSafe,
     Starting,
     HoprSyncing,
-    HoprReady,
+    HoprRunning,
     HoprChannelsFunded,
     Connecting(ConnUp),
     ConnectingFailed(String),
@@ -352,7 +352,7 @@ impl Core {
                     Ok(tv) => {
                         tracing::info!(%stats, %tv, "determined ticket value from stats");
                         self.ticket_value = Some(tv);
-                        self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO);
+                        self.spawn_hopr_runner(&results_sender, Duration::ZERO);
                     }
                     Err(err) => {
                         tracing::error!(%stats, %err, "failed to determine ticket value from stats - retrying");
@@ -391,16 +391,19 @@ impl Core {
             Results::SafePersisted => {
                 tracing::info!("safe module persisted - starting hopr runner");
                 self.phase = Phase::Starting;
-                self.spawn_hopr_runner(&results_sender, Duration::ZERO).await;
+                self.spawn_hopr_runner(&results_sender, Duration::ZERO);
             }
             Results::Hopr { res } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
+                    self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
+                    self.spawn_balances_runner(&results_sender, Duration::ZERO);
+                    self.spawn_wait_for_running(&results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
                     tracing::error!(%err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.spawn_hopr_runner(&results_sender, Duration::from_secs(10)).await;
+                    self.spawn_hopr_runner(&results_sender, Duration::from_secs(10));
                 }
             },
             Results::FundingTool { res } => match res {
@@ -416,101 +419,38 @@ impl Core {
                     self.funding_tool = balance::FundingTool::CompletedError;
                 }
             },
-        }
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    async fn on_hopr_evt(&mut self, evt: hopr_runner::Evt) {
-        tracing::debug!(phase = ?self.phase, "on hopr event");
-        match evt {
-            Evt::Ready(hoprd) => {
-                self.phase = Phase::HoprSyncing;
-                tracing::info!("hopr runner is syncing");
-                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
-                    tracing::debug!("requesting balances from hopr");
-                    let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
-                    tracing::debug!("requesting status from hopr");
-                    let _ = cmd_sender.send(hopr_runner::Cmd::Status).await;
+            Results::Balances { res } => match res {
+                Ok(balances) => {
+                    tracing::info!(%balances, "received balances from hopr");
+                    self.balances = Some(balances);
+                    self.spawn_balances_runner(&results_sender, Duration::from_secs(60));
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch balances from hopr");
+                    self.spawn_balances_runner(&results_sender, Duration::from_secs(10));
+                }
+            },
+            Results::HoprRunning => {
+                self.phase = Phase::HoprRunning;
+                for c in self.config.channel_targets() {
+                    self.spawn_channel_funding(c, &results_sender, Duration::ZERO);
                 }
             }
-            Evt::FundChannel { address, res } => match res {
+            Results::FundChannel { address, res } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
                     self.funded_channels.push(address);
                     if self.funded_channels.len() == self.config.channel_targets().len() {
-                        self.phase = Phase::HoprReadyAndFunded;
+                        self.phase = Phase::HoprChannelsFunded;
                         tracing::info!("all channels funded - hopr is ready");
                         self.act_on_target().await;
                     }
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
-                    self.spawn_channel_funding(address, Duration::from_secs(60)).await;
+                    self.spawn_channel_funding(address, &results_sender, Duration::from_secs(60));
                 }
             },
-            Evt::Balances(res) => {
-                match res {
-                    Ok(balances) => {
-                        tracing::info!(%balances, "received hopr balances");
-                        self.balances = Some(balances);
-                    }
-                    Err(err) => {
-                        tracing::error!(%err, "failed to fetch hopr balances");
-                        self.balances = None;
-                    }
-                }
-                // reschedule next balance fetch
-                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
-                    let cancel = self.balances_cancel_for_shutdown_token.clone();
-                    tokio::spawn(async move {
-                        cancel
-                            .run_until_cancelled(async {
-                                tracing::debug!("waiting for next balances request");
-                                time::sleep(Duration::from_secs(60)).await;
-                                tracing::debug!("requesting balances from hopr");
-                                let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
-                            })
-                            .await;
-                    });
-                }
-            }
-            Evt::Status(status) => {
-                tracing::debug!(%status, "received hopr status");
-                if status == HoprState::Running {
-                    self.phase = Phase::HoprReady;
-                    tracing::info!("hopr is running");
-                    for c in self.config.channel_targets() {
-                        self.spawn_channel_funding(c, Duration::ZERO).await;
-                    }
-                }
-            }
-            Evt::OpenSession { id, res } => {
-                tracing::debug!(%id, "open session");
-                match self.phase {
-                    Phase::Connecting(conn_up) => {
-                        let res = conn_up.on_open_session_result(id, res);
-                        match res {
-                            Ok(input) => {
-                                self.spawn_gvpn_register(input);
-                            }
-                            Err(error) => {
-                                tracing::error!(%error, "failed to open session");
-                                // TODO make this hopr ready and funded and store error elsewhere
-                                self.phase = Phase::ConnectingFailed(
-                                    "Unable to establish communication channel to exit".to_string(),
-                                );
-                            }
-                        }
-                    }
-                    Phase::Disconnecting(conn_down) => {
-                        unimplemented!();
-                        //let next_cmd = conn_down.on_open_session_result(res);
-                    }
-                    _ => {
-                        tracing::warn!("received open session event in invalid phase");
-                    }
-                }
-            }
         }
     }
 
@@ -558,7 +498,7 @@ impl Core {
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
-                .run_until_cancelled(async move { runner::funding_tool(hopr_params, results_sender.clone()) })
+                .run_until_cancelled(async move { runner::funding_tool(hopr_params, secret, results_sender.clone()) })
                 .await;
         });
     }
@@ -577,7 +517,7 @@ impl Core {
         });
     }
 
-    async fn spawn_store_safe(&mut self, safe_module: hopr_config::SafeModule, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_store_safe(&mut self, safe_module: hopr_config::SafeModule, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_for_shutdown_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -589,27 +529,64 @@ impl Core {
         });
     }
 
-    async fn spawn_hopr_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_hopr_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         // check if we are ready: safe available(Phase::Starting) and ticket value
-        if let (Phase::Starting, Some(ticket_value)) = (self.phase, self.ticket_value) {
-            self.phase = Phase::HoprSyncing;
-        } else {
-            return;
-        }
-
-        let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
-        let (sender, mut receiver) = mpsc::channel(32);
-        self.hopr_cmd_sender = Some(sender.clone());
-        if let Some(evt_sender) = self.hopr_evt_sender.clone() {
+        if let (Phase::Starting, Some(ticket_value)) = (self.phase.clone(), self.ticket_value) {
+            let cancel = self.cancel_for_shutdown_token.clone();
+            let hopr_params = self.hopr_params.clone();
+            let results_sender = results_sender.clone();
             tokio::spawn(async move {
-                time::sleep(delay).await;
-                tracing::debug!("starting hopr runner");
-                let res = runner.start(&mut receiver, evt_sender).await;
-                if res.is_err() {
-                    let _ = results_sender
-                        .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
-                        .await;
-                }
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::hopr(hopr_params, ticket_value, results_sender.clone()).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_balances_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_balances_token.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::balances(hopr, results_sender.clone()).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_wait_for_running(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_for_shutdown_token.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::wait_for_running(hopr, results_sender.clone()).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_channel_funding(&self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
+            let cancel = self.cancel_for_shutdown_token.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::fund_channel(hopr, address, ticket_value, results_sender.clone()).await;
+                    })
+                    .await
             });
         }
     }
@@ -668,24 +645,6 @@ impl Core {
         });
     }
     */
-
-    async fn spawn_channel_funding(&self, address: Address, delay: Duration, results_sender: mpsc::Sender<Results>) {
-        if let (Some(hopr), Some(Ok(ticket_value))) = (self.hopr.clone(), self.ticket_stats.map(|ts| ts.ticket_value()))
-        {
-            let threshold = balance::min_stake_threshold(ticket_value);
-            tokio::spawn(async move {
-                time::sleep(delay).await;
-                tracing::debug!(channel = %address, %threshold, %ticket_value, "requesting channel funding");
-                let res = retry(ExponentialBackoff::default(), || async {
-                    hopr.ensure_channel_open_and_funded(address, ticket_value, threshold)
-                        .await?;
-                    Ok(())
-                })
-                .await;
-                let _ = results_sender.send(Results::FundChannel { address, res }).await;
-            });
-        }
-    }
 
     async fn act_on_target(&mut self) {
         match (self.phase.clone(), self.target_destination.clone()) {
