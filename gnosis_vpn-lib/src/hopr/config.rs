@@ -107,7 +107,7 @@ strategy:
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-fn safe_file() -> Result<PathBuf, Error> {
+pub fn safe_file() -> Result<PathBuf, Error> {
     dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)
 }
 

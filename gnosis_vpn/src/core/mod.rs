@@ -99,7 +99,7 @@ enum Phase {
     Starting,
     HoprSyncing,
     HoprReady,
-    HoprReadyAndFunded,
+    HoprChannelsFunded,
     Connecting(ConnUp),
     ConnectingFailed(String),
     Disconnecting(ConnDown),
@@ -374,14 +374,7 @@ impl Core {
             },
             runner::Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
-                    let safe_module: hopr_config::SafeModule = deployment.into();
-                    while let Err(err) = hopr_config::store_safe(&safe_module).await {
-                        tracing::error!(%err, "critical error storing safe module after deployment");
-                        tracing::error!("Please fix file permissions or out of disk space issues");
-                        time::sleep(Duration::from_secs(5)).await;
-                    }
-                    self.phase = Phase::Starting;
-                    self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO).await;
+                    self.spawn_store_safe(deployment.into(), &results_sender);
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");

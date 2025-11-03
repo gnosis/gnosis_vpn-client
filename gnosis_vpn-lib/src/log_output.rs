@@ -1,10 +1,11 @@
+use edgli::hopr_lib::Address;
 use humantime::format_duration;
 use serde::ser::Serialize;
 
 use std::time::SystemTime;
 
+use crate::hopr::config as hopr_config;
 use crate::session;
-use edgli::hopr_lib::Address;
 
 pub fn serialize<T>(v: &T) -> String
 where
@@ -62,6 +63,55 @@ pub fn print_node_port_instructions() {
     );
 }
 
+pub fn print_safe_module_storage_error(main_error: hopr_config::Error) {
+    let file = match hopr_config::safe_file() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::error!(
+                r#"
+
+>>!!>> Critical error storing safe module after safe deployment:
+>>!!>>
+>>!!>> {main_error:?}.
+>>!!>>
+>>!!>> Cannot determine safe file path: {error:?}.
+"#,
+            );
+            return;
+        }
+    };
+    let parent = match file.parent() {
+        Some(p) => p,
+        None => {
+            tracing::error!(
+                r#"
+
+>>!!>> Critical error storing safe module after safe deployment:
+>>!!>>
+>>!!>> {main_error:?}.
+>>!!>>
+>>!!>> Cannot determine safe file parent folder path.
+"#,
+            );
+            return;
+        }
+    };
+    tracing::error!(
+        r#"
+
+>>!!>> Critical error storing safe module after safe deployment:
+>>!!>>
+>>!!>> {main_error:?}.
+>>!!>>
+>>!!>> If this is a permission problem, please fix permissions on folder "{parent}".
+>>!!>> So that writing the safe file "{file}" will work.
+>>!!>> Otherwise check for out of disk space issues or other IO related problems.
+"#,
+        parent = parent.display(),
+        file = file.display()
+    );
+}
+
 pub fn print_node_timeout_instructions() {
     tracing::error!(
         r#"
@@ -76,7 +126,7 @@ pub fn print_node_timeout_instructions() {
 }
 
 pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
-    let prot_str = match protocol {
+    let port_str = match protocol {
         session::Protocol::Udp => "UDP",
         session::Protocol::Tcp => "TCP",
     };
@@ -89,7 +139,7 @@ pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
 >>!!>> Alternatively, update your configuration file to use a different port.
 "#,
         port,
-        prot_str,
+        port_str,
     );
 }
 
