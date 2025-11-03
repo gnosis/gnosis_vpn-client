@@ -19,6 +19,7 @@ use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, Connection as LibCon, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
+use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
@@ -36,6 +37,7 @@ mod runner;
 
 use conn_down::ConnDown;
 use conn_up::ConnUp;
+use runner::Results;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -65,9 +67,9 @@ pub struct Core {
     // depending on safe creation state
     run_mode: RunMode,
     // enable cancellation of tasks
-    cancel_token: CancellationToken,
+    cancel_for_shutdown_token: CancellationToken,
     // enable balance loop cancellation separately
-    balances_cancel_token: CancellationToken,
+    cancel_balances_token: CancellationToken,
 
     // connection to exit node
     connection: Option<connection::Connection>,
@@ -87,7 +89,7 @@ pub struct Core {
     funded_channels: Vec<Address>,
 
     // results from ticket stats
-    ticket_stats: Option<TicketStats>,
+    ticket_value: Option<Balance<WxHOPR>>,
     phase: Phase,
     hopr: Option<Arc<Hopr>>,
 }
@@ -95,7 +97,7 @@ pub struct Core {
 #[derive(Debug, Clone)]
 enum Phase {
     Initial,
-    StartingWithoutSafe,
+    CreatingSafe,
     Starting,
     HoprSyncing,
     HoprReady,
@@ -151,8 +153,8 @@ impl Core {
 
         Ok(Core {
             config,
-            cancel_token: CancellationToken::new(),
-            balances_cancel_token: CancellationToken::new(),
+            cancel_for_shutdown_token: CancellationToken::new(),
+            cancel_balances_token: CancellationToken::new(),
             connection: None,
             run_mode: RunMode::Initializing,
             session_connected: false,
@@ -162,7 +164,7 @@ impl Core {
             hopr: None,
             funding_tool: balance::FundingTool::NotStarted,
             funded_channels: Vec::new(),
-            ticket_stats: None,
+            ticket_value: None,
             phase: Phase::Initial,
         })
     }
@@ -172,6 +174,7 @@ impl Core {
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
+                // React to an incoming outside event
                 Some(event) = event_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
@@ -179,6 +182,7 @@ impl Core {
                         break;
                     }
                 }
+                // React to internal results from longer lasting runner computations
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
                 }
@@ -191,15 +195,15 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<runner::Results>) -> bool {
+    async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, "on outside event");
         match event {
             Event::Shutdown { resp } => {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
-                self.cancel_token.cancel();
-                self.balances_cancel_token.cancel();
-                if let Some(hopr) = self.hopr {
+                self.cancel_for_shutdown_token.cancel();
+                self.cancel_balances_token.cancel();
+                if let Some(hopr) = self.hopr.clone() {
                     tracing::debug!("shutting down hopr");
                     hopr.shutdown().await;
                 }
@@ -301,8 +305,8 @@ impl Core {
                         unimplemented!();
                         /*
                         // immediately request balances and cancel existing balance loop
-                        self.balances_cancel_token.cancel();
-                        self.balances_cancel_token = CancellationToken::new();
+                        self.balances_cancel_for_shutdown_token.cancel();
+                        self.balances_cancel_for_shutdown_token = CancellationToken::new();
                         if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
                             tracing::debug!("requesting balances from hopr");
                             let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
@@ -311,17 +315,14 @@ impl Core {
                         */
                     }
                     Command::FundingTool(secret) => {
-                        unimplemented!();
-                        /*
-                        if matches!(self.phase, Phase::StartingWithoutSafe) {
-                            self.funding_status = funding_runner::Status::InProgress;
-                            self.spawn_funding_runner(results_sender.clone(), secret);
+                        if matches!(self.phase, Phase::CreatingSafe) {
+                            self.funding_tool = balance::FundingTool::InProgress;
+                            self.spawn_funding_runner(secret, results_sender);
                             let _ = resp.send(Response::Empty);
                         } else {
                             tracing::warn!("cannot start funding tool - safe already deployed");
                             let _ = resp.send(Response::Empty);
                         }
-                        */
                     }
                     Command::Metrics => {
                         let metrics = match edgli::hopr_lib::Hopr::collect_hopr_metrics() {
@@ -343,36 +344,42 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
-    async fn on_results(&mut self, results: runner::Results, results_sender: &mpsc::Sender<runner::Results>) {
+    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
-            runner::Results::TicketStats { res } => match res {
-                Ok(stats) => {
-                    tracing::info!(%stats, "on ticket stats");
-                    self.ticket_stats = Some(stats);
-                    self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO);
-                }
+            Results::TicketStats { res } => match res {
+                Ok(stats) => match stats.ticket_value() {
+                    Ok(tv) => {
+                        tracing::info!(%stats, %tv, "determined ticket value from stats");
+                        self.ticket_value = Some(tv);
+                        self.spawn_hopr_runner(results_sender.clone(), Duration::ZERO);
+                    }
+                    Err(err) => {
+                        tracing::error!(%stats, %err, "failed to determine ticket value from stats - retrying");
+                        self.spawn_ticket_stats_runner(&results_sender, Duration::from_secs(10));
+                    }
+                },
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch ticket stats, retrying");
-                    self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                    tracing::error!(%err, "failed to fetch ticket stats - retrying");
+                    self.spawn_ticket_stats_runner(&results_sender, Duration::from_secs(10));
                 }
             },
-            runner::Results::PreSafe { res } => match res {
+            Results::PreSafe { res } => match res {
                 Ok(presafe) => {
                     tracing::info!(%presafe, "on presafe balance");
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
                         tracing::warn!("insufficient funds to start safe deployment - waiting");
                         self.spawn_presafe_runner(&results_sender, Duration::from_secs(10));
                     } else {
-                        self.spawn_safe_deployment_runner(&results_sender, &presafe);
+                        self.spawn_safe_deployment_runner(&presafe, &results_sender);
                     }
                 }
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch presafe balance, retrying");
+                    tracing::error!(%err, "failed to fetch presafe balance - retrying");
                     self.spawn_presafe_runner(&results_sender, Duration::from_secs(10));
                 }
             },
-            runner::Results::SafeDeployment { res } => match res {
+            Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
                     self.spawn_store_safe(deployment.into(), &results_sender);
                 }
@@ -381,7 +388,12 @@ impl Core {
                     self.spawn_presafe_runner(&results_sender, Duration::from_secs(5));
                 }
             },
-            runner::Results::Hopr { res } => match res {
+            Results::SafePersisted => {
+                tracing::info!("safe module persisted - starting hopr runner");
+                self.phase = Phase::Starting;
+                self.spawn_hopr_runner(&results_sender, Duration::ZERO).await;
+            }
+            Results::Hopr { res } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
                     self.hopr = Some(Arc::new(hopr));
@@ -391,7 +403,7 @@ impl Core {
                     self.spawn_hopr_runner(&results_sender, Duration::from_secs(10)).await;
                 }
             },
-            runner::Results::FundingTool { res } => match res {
+            Results::FundingTool { res } => match res {
                 Ok(success) => {
                     self.funding_tool = if success {
                         balance::FundingTool::CompletedSuccess
@@ -449,7 +461,7 @@ impl Core {
                 }
                 // reschedule next balance fetch
                 if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
-                    let cancel = self.balances_cancel_token.clone();
+                    let cancel = self.balances_cancel_for_shutdown_token.clone();
                     tokio::spawn(async move {
                         cancel
                             .run_until_cancelled(async {
@@ -502,48 +514,19 @@ impl Core {
         }
     }
 
-    fn initial_runner(&mut self, results_sender: &mpsc::Sender<runner::Results>) {
+    fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
         if hopr_config::has_safe() {
             self.phase = Phase::Starting;
         } else {
-            self.phase = Phase::StartingWithoutSafe;
+            self.phase = Phase::CreatingSafe;
             self.spawn_presafe_runner(results_sender, Duration::ZERO);
         }
         self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
     }
 
-    fn spawn_funding_runner(&self, results_sender: mpsc::Sender<RunnerResults>, secret: String) {
-        let runner = funding_runner::FundingRunner::new(self.hopr_params.clone(), secret);
-        let cancel = self.cancel_token.clone();
-        let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            tracing::debug!("starting funding runner");
-            let res = cancel.run_until_cancelled(runner.start()).await;
-            if let Some(res) = res {
-                let _ = results_sender
-                    .send(RunnerResults::Funding(res.map_err(runner_results::Error::Funding)))
-                    .await;
-            }
-        });
-    }
-
-    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<runner::Results>, delay: Duration) {
+    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_for_shutdown_token.clone();
         let hopr_params = self.hopr_params.clone();
-        let cancel = self.cancel_token.clone();
-        let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay);
-                    runner::presafe(hopr_params, results_sender)
-                })
-                .await
-        });
-    }
-
-    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<runner::Results>, delay: Duration) {
-        let hopr_params = self.hopr_params.clone();
-        let cancel = self.cancel_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
@@ -553,6 +536,82 @@ impl Core {
                 })
                 .await
         });
+    }
+
+    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_for_shutdown_token.clone();
+        let hopr_params = self.hopr_params.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay);
+                    runner::presafe(hopr_params, results_sender.clone())
+                })
+                .await
+        });
+    }
+
+    fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
+        let cancel = self.cancel_for_shutdown_token.clone();
+        let hopr_params = self.hopr_params.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move { runner::funding_tool(hopr_params, results_sender.clone()) })
+                .await;
+        });
+    }
+
+    fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
+        let cancel = self.cancel_for_shutdown_token.clone();
+        let hopr_params = self.hopr_params.clone();
+        let presafe = presafe.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    runner::safe_deployment(hopr_params, presafe, results_sender.clone()).await;
+                })
+                .await
+        });
+    }
+
+    async fn spawn_store_safe(&mut self, safe_module: hopr_config::SafeModule, results_sender: &mpsc::Sender<Results>) {
+        let cancel = self.cancel_for_shutdown_token.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    runner::persist_safe(safe_module, results_sender.clone()).await;
+                })
+                .await
+        });
+    }
+
+    async fn spawn_hopr_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        // check if we are ready: safe available(Phase::Starting) and ticket value
+        if let (Phase::Starting, Some(ticket_value)) = (self.phase, self.ticket_value) {
+            self.phase = Phase::HoprSyncing;
+        } else {
+            return;
+        }
+
+        let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
+        let (sender, mut receiver) = mpsc::channel(32);
+        self.hopr_cmd_sender = Some(sender.clone());
+        if let Some(evt_sender) = self.hopr_evt_sender.clone() {
+            tokio::spawn(async move {
+                time::sleep(delay).await;
+                tracing::debug!("starting hopr runner");
+                let res = runner.start(&mut receiver, evt_sender).await;
+                if res.is_err() {
+                    let _ = results_sender
+                        .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
+                        .await;
+                }
+            });
+        }
     }
 
     fn spawn_balance_response(&self, resp: &oneshot::Sender<Response>) {
@@ -595,7 +654,7 @@ impl Core {
 
     /*
         let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
-        let cancel = self.cancel_token.clone();
+        let cancel = self.cancel_for_shutdown_token.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             time::sleep(delay).await;
@@ -609,61 +668,6 @@ impl Core {
         });
     }
     */
-
-    fn spawn_safe_deployment_runner(&self, results_sender: mpsc::Sender<RunnerResults>, presafe: balance::PreSafe) {
-        tracing::debug!("starting safe deployment runner");
-        let runner = safe_deployment_runner::SafeDeploymentRunner::new(self.hopr_params.clone(), presafe);
-        let cancel = self.cancel_token.clone();
-        let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            let res = cancel.run_until_cancelled(runner.start()).await;
-            if let Some(res) = res {
-                let _ = results_sender
-                    .send(RunnerResults::SafeDeployment(
-                        res.map_err(runner_results::Error::SafeDeployment),
-                    ))
-                    .await;
-            }
-        });
-    }
-
-    async fn spawn_hopr_runner(&mut self, results_sender: mpsc::Sender<RunnerResults>, delay: Duration) {
-        if !hopr_config::has_safe() {
-            tracing::debug!("safe not found - waiting for finished safe deployment");
-            return;
-        }
-        let ts = match self.ticket_stats {
-            Some(ts) => ts,
-            None => {
-                tracing::debug!("ticket stats not found - waiting for ticket stats");
-                return;
-            }
-        };
-        let ticket_value = match ts.ticket_value() {
-            Ok(tv) => tv,
-            Err(err) => {
-                tracing::error!(%err, "cannot calculate ticket value - requesting new ticket stats");
-                self.spawn_ticket_stats_runner(results_sender.clone());
-                return;
-            }
-        };
-
-        let runner = hopr_runner::HoprRunner::new(self.hopr_params.clone(), ticket_value);
-        let (sender, mut receiver) = mpsc::channel(32);
-        self.hopr_cmd_sender = Some(sender.clone());
-        if let Some(evt_sender) = self.hopr_evt_sender.clone() {
-            tokio::spawn(async move {
-                time::sleep(delay).await;
-                tracing::debug!("starting hopr runner");
-                let res = runner.start(&mut receiver, evt_sender).await;
-                if res.is_err() {
-                    let _ = results_sender
-                        .send(RunnerResults::Hopr(res.map_err(runner_results::Error::Hopr)))
-                        .await;
-                }
-            });
-        }
-    }
 
     async fn spawn_channel_funding(&self, address: Address, delay: Duration, results_sender: mpsc::Sender<Results>) {
         if let (Some(hopr), Some(Ok(ticket_value))) = (self.hopr.clone(), self.ticket_stats.map(|ts| ts.ticket_value()))
@@ -721,7 +725,7 @@ impl Core {
                     continue;
                 }
                 self.config = config;
-                self.cancel_token.cancel();
+                self.cancel_for_shutdown_token.cancel();
                 self.run_mode = RunMode::Initializing;
             }
             evt => {
@@ -1699,7 +1703,7 @@ async fn act_on_run_mode(run_mode: RunMode, hopr_params: HoprParams) -> Result<R
             unimplemented!("TODO cancel token");
             /*
             let res = self
-                .cancel_token
+                .cancel_for_shutdown_token
                 .run_until_cancelled(TicketStats::fetch(
                     &private_key,
                     rpc_provider.as_str(),

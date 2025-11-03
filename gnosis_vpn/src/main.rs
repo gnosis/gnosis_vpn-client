@@ -2,7 +2,6 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::process;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, sleep};
@@ -10,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process;
 
 use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::socket;
@@ -160,11 +160,11 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net:
 
     // update permissions to allow unprivileged access
     fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+        .await
         .map_err(|e| {
             tracing::error!(error = ?e, "error setting socket permissions");
             exitcode::NOPERM
-        })
-        .await?;
+        })?;
 
     let (sender, receiver) = mpsc::channel(32);
 
@@ -301,7 +301,7 @@ async fn loop_daemon(
     let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
     let (mut event_sender, mut event_receiver) = mpsc::channel(32);
-    let core = match core::Core::init(&config_path, hopr_params) {
+    let core = match core::Core::init(&config_path, hopr_params).await {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");

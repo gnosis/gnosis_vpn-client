@@ -7,6 +7,7 @@ use rand::Rng;
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tokio::time;
 use url::Url;
 
 use std::fmt::{self, Display};
@@ -18,6 +19,7 @@ use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
 use gnosis_vpn_lib::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use gnosis_vpn_lib::chain::errors::ChainError;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
+use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::remote_data;
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 
@@ -37,6 +39,7 @@ pub enum Results {
     SafeDeployment {
         res: Result<SafeModuleDeploymentResult, Error>,
     },
+    SafePersisted,
     FundingTool {
         res: Result<bool, Error>,
     },
@@ -61,38 +64,48 @@ enum Error {
     HoprConfig(#[from] hopr_config::Error),
     #[error(transparent)]
     Hopr(#[from] HoprError),
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
 }
 
-pub async fn presafe(hopr_params: &HoprParams, results_sender: &mpsc::Sender<Results>) {
+pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
     let res = run_presafe(hopr_params).await;
     let _ = results_sender.send(Results::PreSafe { res }).await;
 }
 
-pub async fn ticket_stats(hopr_params: &HoprParams, results_sender: &mpsc::Sender<Results>) {
+pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
     let res = run_ticket_stats(hopr_params).await;
     let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
 pub async fn safe_deployment(
-    hopr_params: &HoprParams,
-    presafe: &balance::PreSafe,
-    results_sender: &mpsc::Sender<Results>,
+    hopr_params: HoprParams,
+    presafe: balance::PreSafe,
+    results_sender: mpsc::Sender<Results>,
 ) {
     let res = run_safe_deployment(hopr_params, presafe).await;
     let _ = results_sender.send(Results::SafeDeployment { res }).await;
 }
 
-pub async fn funding_tool(url: &Url, address: Address, code: &str, results_sender: &mpsc::Sender<Results>) {
-    let res = run_funding_tool(url, address, code).await;
+pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
+    let res = run_funding_tool(hopr_params, code).await;
     let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
-pub async fn hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>, results_sender: &mpsc::Sender<Results>) {
+pub async fn hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>, results_sender: mpsc::Sender<Results>) {
     let res = run_hopr(hopr_params, ticket_value).await;
     let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
-async fn run_presafe(hopr_params: &HoprParams) -> Result<balance::PreSafe, Error> {
+pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: mpsc::Sender<Results>) {
+    while let Err(err) = hopr_config::store_safe(&safe_module).await {
+        log_output::print_safe_module_storage_error(err);
+        time::sleep(Duration::from_secs(5)).await;
+    }
+    let _ = results_sender.send(Results::SafePersisted).await;
+}
+
+async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
     tracing::debug!("starting presafe balance runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
@@ -107,7 +120,7 @@ async fn run_presafe(hopr_params: &HoprParams) -> Result<balance::PreSafe, Error
     .await
 }
 
-async fn run_ticket_stats(hopr_params: &HoprParams) -> Result<ticket_stats::TicketStats, Error> {
+async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
@@ -127,8 +140,8 @@ async fn run_ticket_stats(hopr_params: &HoprParams) -> Result<ticket_stats::Tick
 }
 
 async fn run_safe_deployment(
-    hopr_params: &HoprParams,
-    presafe: &balance::PreSafe,
+    hopr_params: HoprParams,
+    presafe: balance::PreSafe,
 ) -> Result<SafeModuleDeploymentResult, Error> {
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
@@ -157,10 +170,13 @@ async fn run_safe_deployment(
     .await
 }
 
-async fn run_funding_tool(url: &Url, address: Address, code: &str) -> Result<bool, Error> {
+async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool, Error> {
+    let keys = hopr_params.calc_keys().await?;
+    let node_address = keys.chain_key.public().to_address();
+    let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
     let client = reqwest::Client::new();
     let headers = remote_data::json_headers();
-    let body = json!({ "address": address.to_string(), "code": code, });
+    let body = json!({ "address": node_address.to_string(), "code": code, });
     tracing::debug!(%url, ?headers, %body, "Posting funding tool");
     retry(ExponentialBackoff::default(), || async {
         let res = client
@@ -194,7 +210,7 @@ async fn run_funding_tool(url: &Url, address: Address, code: &str) -> Result<boo
     .await
 }
 
-async fn run_hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
+async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
     let cfg = match hopr_params.config_mode.clone() {
         // use user provided configuration path
         hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref()).await?,
@@ -231,6 +247,7 @@ impl Display for Results {
                 Ok(deployment) => write!(f, "SafeDeployment: {:?}", deployment),
                 Err(err) => write!(f, "SafeDeployment: Error({})", err),
             },
+            Results::SafePersisted => write!(f, "SafePersisted: Success"),
             Results::FundingTool { res } => match res {
                 Ok(success) => write!(f, "FundingTool: Success({})", success),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
