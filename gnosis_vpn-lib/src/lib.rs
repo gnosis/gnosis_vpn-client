@@ -1,6 +1,5 @@
 pub mod balance;
 pub mod chain;
-pub mod channel_funding;
 pub mod command;
 pub mod config;
 pub mod connection;

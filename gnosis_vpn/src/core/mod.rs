@@ -1,8 +1,5 @@
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
 use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
-use edgli::hopr_lib::state::HoprState;
+// use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -14,16 +11,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gnosis_vpn_lib::channel_funding::{self, ChannelFunding};
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, Connection as LibCon, destination::Destination};
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, api::HoprTelemetry, config as hopr_config, identity};
-use gnosis_vpn_lib::log_output;
+use gnosis_vpn_lib::connection::{self, destination::Destination};
+use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use gnosis_vpn_lib::metrics::{self, Metrics};
 use gnosis_vpn_lib::node::{self, Node};
 use gnosis_vpn_lib::onboarding::{self, Onboarding};
-use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 use gnosis_vpn_lib::{balance, info, wg_tooling};
 
 use crate::event::Event;
@@ -57,15 +51,13 @@ pub enum Error {
     Balance(#[from] balance::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
-    #[error(transparent)]
-    TicketStats(#[from] ticket_stats::Error),
 }
 
 pub struct Core {
     // configuration data
     config: Config,
     // depending on safe creation state
-    run_mode: RunMode,
+    // run_mode: RunMode,
     // enable cancellation of tasks
     cancel_for_shutdown_token: CancellationToken,
     // enable balance loop cancellation separately
@@ -110,6 +102,7 @@ enum Phase {
 
 #[derive(Clone)]
 enum RunMode {
+    /*
     Initializing,
     PreSafe {
         node_address: Address,
@@ -135,6 +128,7 @@ enum RunMode {
         #[allow(dead_code)]
         channel_funding: Box<ChannelFunding>,
     },
+    */
 }
 
 enum Cancel {
@@ -156,7 +150,7 @@ impl Core {
             cancel_for_shutdown_token: CancellationToken::new(),
             cancel_balances_token: CancellationToken::new(),
             connection: None,
-            run_mode: RunMode::Initializing,
+            // run_mode: RunMode::Initializing,
             session_connected: false,
             target_destination: None,
             balances: None,
@@ -648,7 +642,7 @@ impl Core {
 
     async fn act_on_target(&mut self) {
         match (self.phase.clone(), self.target_destination.clone()) {
-            (Phase::HoprReadyAndFunded, Some(dest)) => {
+            (Phase::HoprChannelsFunded, Some(dest)) => {
                 tracing::info!(destination = %dest, "establishing new connection");
                 unimplemented!()
                 /*
@@ -1626,6 +1620,7 @@ fn fetch_ticket_stats(
 }
 */
 
+/*
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1638,7 +1633,6 @@ impl Display for RunMode {
     }
 }
 
-/*
 async fn act_on_run_mode(run_mode: RunMode, hopr_params: HoprParams) -> Result<RunMode, Error> {
     match run_mode.clone() {
         RunMode::Initializing => {
