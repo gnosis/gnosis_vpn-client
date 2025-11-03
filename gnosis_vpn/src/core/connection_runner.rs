@@ -56,20 +56,34 @@ impl ConnectionRunner {
     }
 
     pub async fn connect(&self, evt_sender: mpsc::Sender<Evt>) -> Result<(), Error> {
+        // 1. open bridge session
         evt_sender.send(Evt::OpenBridge(self.id)).await;
         let bridge_session = self.open_bridge_session().await?;
+
+        // 2. register wg public key
         evt_sender.send(Evt::Register(self.id)).await;
         let registration = self.register(&bridge_session).await?;
+
+        // 3. close bridge session
         evt_sender.send(Evt::CloseBridge(self.id)).await;
         self.close_bridge_session(&bridge_session).await?;
+
+        // 4. open ping session
         evt_sender.send(Evt::OpenPing(self.id)).await;
         let ping_session = self.open_ping_session().await?;
+
+        // 5. setup wg tunnel
         evt_sender.send(Evt::WgTunnel(self.id)).await;
         self.wg_tunnel(&registration, &ping_session).await?;
+
+        // 6. check ping
         evt_sender.send(Evt::Ping(self.id)).await;
         self.ping(&ping_session, &registration).await?;
+
+        // 7. adjust to main session
         evt_sender.send(Evt::AdjustToMain(self.id)).await;
         self.adjust_to_main_session(&ping_session).await?;
+
         Ok(())
     }
 

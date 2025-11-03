@@ -633,6 +633,8 @@ impl Connection {
         session: &Session,
         registration: &Registration,
     ) -> crossbeam_channel::Receiver<InternalEvent> {
+        unimplemented!();
+        /*
         let session = session.clone();
         let registration = registration.clone();
         let wg = self.wg.clone();
@@ -663,13 +665,17 @@ impl Connection {
             }
         });
         r
+            */
     }
 
     fn close_wg_session(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {
+        unimplemented!();
+        /*
         _ = self.wg.close_session().map_err(|error| {
             tracing::warn!(warn = %error, "Failed closing WireGuard tunnel");
         });
         self.close_session(session)
+        */
     }
 
     fn set_main_config(&mut self, session: &Session) -> crossbeam_channel::Receiver<InternalEvent> {

@@ -93,7 +93,7 @@ pub async fn hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>, resul
 
 async fn run_presafe(hopr_params: &HoprParams) -> Result<balance::PreSafe, Error> {
     tracing::debug!("starting presafe balance runner");
-    let keys = hopr_params.calc_keys()?;
+    let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
     let rpc_provider = hopr_params.rpc_provider.clone();
     let node_address = keys.chain_key.public().to_address();
@@ -108,7 +108,7 @@ async fn run_presafe(hopr_params: &HoprParams) -> Result<balance::PreSafe, Error
 
 async fn run_ticket_stats(hopr_params: &HoprParams) -> Result<ticket_stats::TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
-    let keys = hopr_params.calc_keys()?;
+    let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
     let rpc_provider = hopr_params.rpc_provider.clone();
     let network = hopr_params.network.clone();
@@ -130,7 +130,7 @@ async fn run_safe_deployment(
     presafe: &balance::PreSafe,
 ) -> Result<SafeModuleDeploymentResult, Error> {
     tracing::debug!("starting safe deployment runner");
-    let keys = hopr_params.calc_keys()?;
+    let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
     let rpc_provider = hopr_params.rpc_provider.clone();
     let node_address = keys.chain_key.public().to_address();
@@ -197,14 +197,17 @@ async fn run_funding_tool(url: &Url, address: Address, code: &str) -> Result<boo
 async fn run_hopr(hopr_params: &HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
     let cfg = match hopr_params.config_mode.clone() {
         // use user provided configuration path
-        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref())?,
+        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref()).await?,
         // check status of config generation
-        hopr_params::ConfigFileMode::Generated => hopr_config::generate(
-            hopr_params.network.clone(),
-            hopr_params.rpc_provider.clone(),
-            ticket_value,
-        )?,
+        hopr_params::ConfigFileMode::Generated => {
+            hopr_config::generate(
+                hopr_params.network.clone(),
+                hopr_params.rpc_provider.clone(),
+                ticket_value,
+            )
+            .await?
+        }
     };
-    let keys = hopr_params.calc_keys()?;
+    let keys = hopr_params.calc_keys().await?;
     Hopr::new(cfg, keys).await.map_err(Error::from)
 }

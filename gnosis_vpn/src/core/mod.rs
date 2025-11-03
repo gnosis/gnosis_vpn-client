@@ -32,13 +32,9 @@ mod conn;
 mod conn_down;
 mod conn_up;
 mod connection_runner;
-mod funding_runner;
-mod gvpn_client_runner;
 mod hopr_runner;
 mod runner;
 mod runner_results;
-mod safe_deployment_runner;
-mod ticket_stats_runner;
 
 use conn_down::ConnDown;
 use conn_up::ConnUp;
