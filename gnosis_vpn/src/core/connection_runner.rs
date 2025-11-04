@@ -92,6 +92,8 @@ impl ConnectionRunner {
             .await;
         let registration = self.register(&bridge_session, &wg).await?;
 
+        pr
+
         // 3. close bridge session
         let _ = results_sender
             .send(Results::ConnectionEvent {
@@ -130,6 +132,19 @@ impl ConnectionRunner {
 
         Ok(())
     }
+
+    async fn run_disconnect(&self, conn: Conn, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
+        match conn.phase {
+        }
+        let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
+        wg.close_session().await?;
+
+        // No need to close hopr session as it will timeout automatically
+
+        Ok(())
+    }
+
+    async fn run_connect(&self, id: Uuid, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
 
     async fn open_bridge_session(&self) -> Result<SessionClientMetadata, HoprError> {
         let cfg = SessionClientConfig {
