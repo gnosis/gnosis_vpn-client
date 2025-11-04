@@ -456,8 +456,8 @@ impl Core {
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    time::sleep(delay);
-                    runner::ticket_stats(hopr_params, results_sender);
+                    time::sleep(delay).await;
+                    runner::ticket_stats(hopr_params, results_sender).await;
                 })
                 .await
         });
@@ -470,8 +470,8 @@ impl Core {
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    time::sleep(delay);
-                    runner::presafe(hopr_params, results_sender.clone())
+                    time::sleep(delay).await;
+                    runner::presafe(hopr_params, results_sender.clone()).await
                 })
                 .await
         });
@@ -483,7 +483,9 @@ impl Core {
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
-                .run_until_cancelled(async move { runner::funding_tool(hopr_params, secret, results_sender.clone()) })
+                .run_until_cancelled(
+                    async move { runner::funding_tool(hopr_params, secret, results_sender.clone()).await },
+                )
                 .await;
         });
     }
