@@ -337,16 +337,16 @@ impl Core {
                     Ok(tv) => {
                         tracing::info!(%stats, %tv, "determined ticket value from stats");
                         self.ticket_value = Some(tv);
-                        self.spawn_hopr_runner(&results_sender, Duration::ZERO);
+                        self.spawn_hopr_runner(results_sender, Duration::ZERO);
                     }
                     Err(err) => {
                         tracing::error!(%stats, %err, "failed to determine ticket value from stats - retrying");
-                        self.spawn_ticket_stats_runner(&results_sender, Duration::from_secs(10));
+                        self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                     }
                 },
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch ticket stats - retrying");
-                    self.spawn_ticket_stats_runner(&results_sender, Duration::from_secs(10));
+                    self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                 }
             },
             Results::PreSafe { res } => match res {
@@ -354,41 +354,41 @@ impl Core {
                     tracing::info!(%presafe, "on presafe balance");
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
                         tracing::warn!("insufficient funds to start safe deployment - waiting");
-                        self.spawn_presafe_runner(&results_sender, Duration::from_secs(10));
+                        self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
                     } else {
-                        self.spawn_safe_deployment_runner(&presafe, &results_sender);
+                        self.spawn_safe_deployment_runner(&presafe, results_sender);
                     }
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch presafe balance - retrying");
-                    self.spawn_presafe_runner(&results_sender, Duration::from_secs(10));
+                    self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
                 }
             },
             Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
-                    self.spawn_store_safe(deployment.into(), &results_sender);
+                    self.spawn_store_safe(deployment.into(), results_sender);
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");
-                    self.spawn_presafe_runner(&results_sender, Duration::from_secs(5));
+                    self.spawn_presafe_runner(results_sender, Duration::from_secs(5));
                 }
             },
             Results::SafePersisted => {
                 tracing::info!("safe module persisted - starting hopr runner");
                 self.phase = Phase::Starting;
-                self.spawn_hopr_runner(&results_sender, Duration::ZERO);
+                self.spawn_hopr_runner(results_sender, Duration::ZERO);
             }
             Results::Hopr { res } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
-                    self.spawn_balances_runner(&results_sender, Duration::ZERO);
-                    self.spawn_wait_for_running(&results_sender, Duration::from_secs(1));
+                    self.spawn_balances_runner(results_sender, Duration::ZERO);
+                    self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
                     tracing::error!(%err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.spawn_hopr_runner(&results_sender, Duration::from_secs(10));
+                    self.spawn_hopr_runner(results_sender, Duration::from_secs(10));
                 }
             },
             Results::FundingTool { res } => match res {
@@ -408,17 +408,17 @@ impl Core {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
                     self.balances = Some(balances);
-                    self.spawn_balances_runner(&results_sender, Duration::from_secs(60));
+                    self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch balances from hopr");
-                    self.spawn_balances_runner(&results_sender, Duration::from_secs(10));
+                    self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
             Results::HoprRunning => {
                 self.phase = Phase::HoprRunning;
                 for c in self.config.channel_targets() {
-                    self.spawn_channel_funding(c, &results_sender, Duration::ZERO);
+                    self.spawn_channel_funding(c, results_sender, Duration::ZERO);
                 }
             }
             Results::FundChannel { address, res } => match res {
@@ -433,7 +433,7 @@ impl Core {
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
-                    self.spawn_channel_funding(address, &results_sender, Duration::from_secs(60));
+                    self.spawn_channel_funding(address, results_sender, Duration::from_secs(60));
                 }
             },
         }
