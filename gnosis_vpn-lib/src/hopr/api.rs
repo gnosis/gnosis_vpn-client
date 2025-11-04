@@ -265,7 +265,6 @@ impl Hopr {
 
         for bound_addr in to_remove {
             let entry = open_listeners.remove(&bound_addr).ok_or(HoprError::SessionNotFound)?;
-
             entry.abort_handle.abort();
         }
 

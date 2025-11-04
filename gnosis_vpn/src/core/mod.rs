@@ -227,7 +227,25 @@ impl Core {
                     },
                     Command::Disconnect => {
                         self.target_destination = None;
-                        unimplemented!();
+                        match self.phase {
+                            Phase::Connected(id) | Phase::Connecting(id) => {
+                                if let Some(conn) = self.connections.get(&id) {
+                                    tracing::info!(current = %conn.destination(), "disconnecting");
+                                    let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(conn.destination().into())));
+                                } else {
+                                    tracing::warn!(%id, "unable to find connected");
+                                }
+                            }
+                            _ => {
+                                tracing::debug!("no active connection to disconnect");
+                            }
+                        }
+                                tracing::info!("disconnecting from current destination");
+                            let _ = resp.send(Response::disconnecting());
+
+                                self.phase = Phase::ShuttingDown;
+                            }
+                        }
                         /*
                         let dest = self.connection.as_ref().map(|c| c.destination());
                         match dest {
@@ -569,6 +587,7 @@ impl Core {
             let hopr = hopr.clone();
             let runner = ConnectionRunner::new(conn.clone(), config_connection, config_wireguard, hopr);
             let results_sender = results_sender.clone();
+            self.phase = Phase::Connecting(conn.id);
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {

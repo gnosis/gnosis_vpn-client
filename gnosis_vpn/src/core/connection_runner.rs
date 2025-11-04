@@ -6,6 +6,7 @@ use edgli::hopr_lib::SurbBalancerConfig;
 use human_bandwidth::re::bandwidth::Bandwidth;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
@@ -33,7 +34,6 @@ pub enum Error {
 
 pub struct ConnectionRunner {
     hoprd: Arc<Hopr>,
-    conn: Conn,
     options: Options,
     wg_config: wg_tooling::Config,
 }
@@ -50,30 +50,34 @@ pub enum Evt {
 }
 
 impl ConnectionRunner {
-    pub fn new(conn: Conn, options: Options, wg_config: wg_tooling::Config, hoprd: Arc<Hopr>) -> Self {
+    pub fn new(options: Options, wg_config: wg_tooling::Config, hoprd: Arc<Hopr>) -> Self {
         Self {
             hoprd,
-            conn,
             options,
             wg_config,
         }
     }
 
-    pub async fn connect(&self, results_sender: mpsc::Sender<Results>) {
-        let res = self.run(results_sender.clone()).await;
+    pub async fn connect(&self, id: Uuid, results_sender: mpsc::Sender<Results>) {
+        let res = self.run_connect(id, results_sender.clone()).await;
+        let _ = results_sender.send(Results::ConnectionResult { id, res }).await;
+    }
+
+    pub async fn disconnect(&self, conn: Conn, results_sender: mpsc::Sender<Results>) {
+        let res = self.run_disconnect(conn, results_sender.clone()).await;
         let _ = results_sender
-            .send(Results::ConnectionResult { id: self.conn.id, res })
+            .send(Results::DisconnectionResult { id: conn.id, res })
             .await;
     }
 
-    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
+    async fn run_connect(&self, id: Uuid, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
 
         // 1. open bridge session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                id: self.conn.id,
+                id,
                 evt: Evt::OpenBridge,
             })
             .await;
@@ -82,7 +86,7 @@ impl ConnectionRunner {
         // 2. register wg public key
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                id: self.conn.id,
+                id,
                 evt: Evt::Register(wg.key_pair.public_key.clone()),
             })
             .await;
@@ -91,7 +95,7 @@ impl ConnectionRunner {
         // 3. close bridge session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                id: self.conn.id,
+                id,
                 evt: Evt::CloseBridge,
             })
             .await;
@@ -99,35 +103,26 @@ impl ConnectionRunner {
 
         // 4. open ping session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::OpenPing,
-            })
+            .send(Results::ConnectionEvent { id, evt: Evt::OpenPing })
             .await;
         let ping_session = self.open_ping_session().await?;
 
         // 5. setup wg tunnel
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::WgTunnel,
-            })
+            .send(Results::ConnectionEvent { id, evt: Evt::WgTunnel })
             .await;
         self.wg_tunnel(&registration, &ping_session, &wg).await?;
 
         // 6. check ping
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::Ping,
-            })
+            .send(Results::ConnectionEvent { id, evt: Evt::Ping })
             .await;
         self.ping().await?;
 
         // 7. adjust to main session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                id: self.conn.id,
+                id,
                 evt: Evt::AdjustToMain,
             })
             .await;

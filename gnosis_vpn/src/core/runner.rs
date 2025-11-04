@@ -62,6 +62,10 @@ pub enum Results {
         id: Uuid,
         res: Result<(), connection_runner::Error>,
     },
+    DisconnectionResult {
+        id: Uuid,
+        res: Result<(), connection_runner::Error>,
+    },
 }
 
 #[derive(Debug, Error)]
