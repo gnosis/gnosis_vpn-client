@@ -374,7 +374,6 @@ async fn loop_daemon(
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
-    println!("Hello, world!");
 
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
