@@ -1,5 +1,3 @@
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
 use edgli::hopr_lib::UnitaryFloatOps;
 use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};

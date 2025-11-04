@@ -6,7 +6,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use std::fmt::{self, Display};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,13 +14,10 @@ use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::{self, destination::Destination};
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
-use gnosis_vpn_lib::metrics::{self, Metrics};
-use gnosis_vpn_lib::node::{self, Node};
-use gnosis_vpn_lib::onboarding::{self, Onboarding};
-use gnosis_vpn_lib::{balance, info, wg_tooling};
+use gnosis_vpn_lib::{balance, wg_tooling};
 
 use crate::event::Event;
-use crate::hopr_params::{self, HoprParams};
+use crate::hopr_params::HoprParams;
 
 mod conn;
 mod connection_runner;
