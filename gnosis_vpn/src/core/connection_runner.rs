@@ -1,40 +1,23 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
+use bytesize::ByteSize;
 use edgli::hopr_lib::SessionClientConfig;
+use edgli::hopr_lib::SurbBalancerConfig;
+use human_bandwidth::re::bandwidth::Bandwidth;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use uuid::{self, Uuid};
 
+use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::connection::options::Options;
 use gnosis_vpn_lib::gvpn_client::{self, Registration};
 use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError};
 use gnosis_vpn_lib::{ping, wg_tooling};
 
-use crate::core::conn;
-
-pub struct ConnectionRunner {
-    hoprd: Arc<Hopr>,
-    id: Uuid,
-    destination: Destination,
-    options: Options,
-    wg_config: wg_tooling::Config,
-}
-
-#[derive(Debug)]
-pub enum Evt {
-    OpenBridge(Uuid),
-    Register(Uuid),
-    CloseBridge(Uuid),
-    OpenPing(Uuid),
-    WgTunnel(Uuid),
-    Ping(Uuid),
-    AdjustToMain(Uuid),
-    Error(Uuid, Error),
-}
+use crate::core::conn::Conn;
+use crate::core::runner::Results;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -48,56 +31,106 @@ pub enum Error {
     Ping(#[from] ping::Error),
 }
 
+pub struct ConnectionRunner {
+    hoprd: Arc<Hopr>,
+    conn: Conn,
+    options: Options,
+    wg_config: wg_tooling::Config,
+}
+
+#[derive(Debug)]
+pub enum Evt {
+    OpenBridge,
+    Register(String),
+    CloseBridge,
+    OpenPing,
+    WgTunnel,
+    Ping,
+    AdjustToMain,
+}
+
 impl ConnectionRunner {
-    pub fn new(destination: Destination, options: Options, wg_config: wg_tooling::Config, hoprd: Arc<Hopr>) -> Self {
+    pub fn new(conn: Conn, options: Options, wg_config: wg_tooling::Config, hoprd: Arc<Hopr>) -> Self {
         Self {
             hoprd,
-            id: Uuid::new_v4(),
-            destination,
+            conn,
             options,
             wg_config,
         }
     }
 
-    pub async fn connect(&self, evt_sender: &mpsc::Sender<Evt>) {
-        match self.run(evt_sender.clone()).await {
-            Ok(_) => {}
-            Err(e) => {
-                let _ = evt_sender.send(Evt::Error(self.id, e)).await;
-            }
-        }
+    pub async fn connect(&self, results_sender: mpsc::Sender<Results>) {
+        let res = self.run(results_sender.clone()).await;
+        let _ = results_sender
+            .send(Results::ConnectionResult { id: self.conn.id, res })
+            .await;
     }
 
-    async fn run(&self, evt_sender: mpsc::Sender<Evt>) -> Result<(), Error> {
+    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
 
         // 1. open bridge session
-        evt_sender.send(Evt::OpenBridge(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::OpenBridge,
+            })
+            .await;
         let bridge_session = self.open_bridge_session().await?;
 
         // 2. register wg public key
-        evt_sender.send(Evt::Register(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::Register(wg.key_pair.public_key.clone()),
+            })
+            .await;
         let registration = self.register(&bridge_session, &wg).await?;
 
         // 3. close bridge session
-        evt_sender.send(Evt::CloseBridge(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::CloseBridge,
+            })
+            .await;
         self.close_bridge_session(&bridge_session).await?;
 
         // 4. open ping session
-        evt_sender.send(Evt::OpenPing(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::OpenPing,
+            })
+            .await;
         let ping_session = self.open_ping_session().await?;
 
         // 5. setup wg tunnel
-        evt_sender.send(Evt::WgTunnel(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::WgTunnel,
+            })
+            .await;
         self.wg_tunnel(&registration, &ping_session, &wg).await?;
 
         // 6. check ping
-        evt_sender.send(Evt::Ping(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::Ping,
+            })
+            .await;
         self.ping().await?;
 
         // 7. adjust to main session
-        evt_sender.send(Evt::AdjustToMain(self.id)).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                id: self.conn.id,
+                evt: Evt::AdjustToMain,
+            })
+            .await;
         self.adjust_to_main_session(&ping_session).await?;
 
         Ok(())
@@ -106,9 +139,9 @@ impl ConnectionRunner {
     async fn open_bridge_session(&self) -> Result<SessionClientMetadata, HoprError> {
         let cfg = SessionClientConfig {
             capabilities: self.options.sessions.bridge.capabilities,
-            forward_path_options: self.destination.routing.clone(),
-            return_path_options: self.destination.routing.clone(),
-            surb_management: Some(conn::to_surb_balancer_config(
+            forward_path_options: self.conn.destination.routing.clone(),
+            return_path_options: self.conn.destination.routing.clone(),
+            surb_management: Some(to_surb_balancer_config(
                 self.options.buffer_sizes.bridge,
                 self.options.max_surb_upstream.bridge,
             )),
@@ -118,7 +151,7 @@ impl ConnectionRunner {
             let res = self
                 .hoprd
                 .open_session(
-                    self.destination.address,
+                    self.conn.destination.address,
                     self.options.sessions.bridge.target.clone(),
                     Some(1),
                     Some(1),
@@ -166,9 +199,9 @@ impl ConnectionRunner {
     async fn open_ping_session(&self) -> Result<SessionClientMetadata, HoprError> {
         let cfg = SessionClientConfig {
             capabilities: self.options.sessions.wg.capabilities,
-            forward_path_options: self.destination.routing.clone(),
-            return_path_options: self.destination.routing.clone(),
-            surb_management: Some(conn::to_surb_balancer_config(
+            forward_path_options: self.conn.destination.routing.clone(),
+            return_path_options: self.conn.destination.routing.clone(),
+            surb_management: Some(to_surb_balancer_config(
                 self.options.buffer_sizes.ping,
                 self.options.max_surb_upstream.ping,
             )),
@@ -178,7 +211,7 @@ impl ConnectionRunner {
             let res = self
                 .hoprd
                 .open_session(
-                    self.destination.address,
+                    self.conn.destination.address,
                     self.options.sessions.wg.target.clone(),
                     None,
                     None,
@@ -223,7 +256,41 @@ impl ConnectionRunner {
             _ => return Err(HoprError::SessionAmbiguousClient),
         };
         let surb_management =
-            conn::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main);
+            to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main);
         self.hoprd.adjust_session(surb_management, active_client).await
+    }
+}
+
+impl Display for ConnectionRunner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ConnectionRunner {{ conn: {} }}", self.conn)
+    }
+}
+
+impl Display for Evt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Evt::OpenBridge => write!(f, "OpenBridge"),
+            Evt::Register(pk) => write!(f, "Register({})", pk),
+            Evt::CloseBridge => write!(f, "CloseBridge"),
+            Evt::OpenPing => write!(f, "OpenPing"),
+            Evt::WgTunnel => write!(f, "WgTunnel"),
+            Evt::Ping => write!(f, "Ping"),
+            Evt::AdjustToMain => write!(f, "AdjustToMain"),
+        }
+    }
+}
+
+fn to_surb_balancer_config(response_buffer: ByteSize, max_surb_upstream: Bandwidth) -> SurbBalancerConfig {
+    // Buffer worth at least 2 reply packets
+    if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+        SurbBalancerConfig {
+            target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+            max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+            ..Default::default()
+        }
+    } else {
+        // Use defaults otherwise
+        Default::default()
     }
 }

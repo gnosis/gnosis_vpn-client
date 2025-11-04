@@ -10,6 +10,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time;
 use url::Url;
+use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
@@ -25,6 +26,7 @@ use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::remote_data;
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 
+use crate::core::connection_runner;
 use crate::hopr_params::{self, HoprParams};
 
 pub enum Results {
@@ -52,6 +54,14 @@ pub enum Results {
         res: Result<balance::Balances, Error>,
     },
     HoprRunning,
+    ConnectionEvent {
+        id: Uuid,
+        evt: connection_runner::Evt,
+    },
+    ConnectionResult {
+        id: Uuid,
+        res: Result<(), connection_runner::Error>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -307,6 +317,11 @@ impl Display for Results {
                 Err(err) => write!(f, "Balances: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
+            Results::ConnectionEvent { id, evt } => write!(f, "ConnectionEvent ({}): {:?}", id, evt),
+            Results::ConnectionResult { id, res } => match res {
+                Ok(_) => write!(f, "ConnectionResult ({}): Success", id),
+                Err(err) => write!(f, "ConnectionResult ({}): Error({})", id, err),
+            },
         }
     }
 }

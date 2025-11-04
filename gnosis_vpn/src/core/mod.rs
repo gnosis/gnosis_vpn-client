@@ -1,18 +1,19 @@
 use edgli::hopr_lib::Address;
-// use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use uuid::{self, Uuid};
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::{self, destination::Destination};
+use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use gnosis_vpn_lib::{balance, wg_tooling};
 
@@ -23,6 +24,8 @@ mod conn;
 mod connection_runner;
 mod runner;
 
+use conn::Conn;
+use connection_runner::ConnectionRunner;
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -46,36 +49,25 @@ pub enum Error {
 }
 
 pub struct Core {
-    // configuration data
+    // config data
     config: Config,
-    // depending on safe creation state
-    // run_mode: RunMode,
-    // enable cancellation of tasks
-    cancel_for_shutdown_token: CancellationToken,
-    // enable balance loop cancellation separately
-    cancel_balances_token: CancellationToken,
-
-    // connection to exit node
-    connection: Option<connection::Connection>,
-    session_connected: bool,
-    target_destination: Option<Destination>,
-
-    // provided hopr params
     hopr_params: HoprParams,
 
-    // results from node
-    balances: Option<balance::Balances>,
+    // cancellation tokens
+    cancel_balances_token: CancellationToken,
+    cancel_for_shutdown_token: CancellationToken,
 
-    // results from onboarding
-    funding_tool: balance::FundingTool,
+    // user provided data
+    target_destination: Option<Destination>,
 
-    // supposedly working channels (funding was ok)
-    funded_channels: Vec<Address>,
-
-    // results from ticket stats
-    ticket_value: Option<Balance<WxHOPR>>,
+    // runtime data
     phase: Phase,
+    balances: Option<balance::Balances>,
+    connections: HashMap<Uuid, Conn>,
+    funded_channels: Vec<Address>,
+    funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
+    ticket_value: Option<Balance<WxHOPR>>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,50 +78,12 @@ enum Phase {
     HoprSyncing,
     HoprRunning,
     HoprChannelsFunded,
-    // Connecting(ConnUp),
+    Connecting(Uuid),
+    Connected(Uuid),
+    ConnectionError(Uuid, String),
     // ConnectingFailed(String),
     // Disconnecting(ConnDown),
     ShuttingDown,
-}
-
-#[derive(Clone)]
-enum RunMode {
-    /*
-    Initializing,
-    PreSafe {
-        node_address: Address,
-        onboarding: Box<Onboarding>,
-    },
-    ValueingTicket,
-    Syncing {
-        hopr: Arc<Hopr>,
-        ticket_value: Balance<WxHOPR>,
-        // thread loop around funding and general node
-        node: Box<Node>,
-        // thread loop around gathering metrics
-        metrics: Box<Metrics>,
-    },
-    Full {
-        hopr: Arc<Hopr>,
-        #[allow(dead_code)]
-        ticket_value: Balance<WxHOPR>,
-        // thread loop around funding and general node
-        #[allow(dead_code)]
-        node: Box<Node>,
-        // thread loop around channel funding
-        #[allow(dead_code)]
-        channel_funding: Box<ChannelFunding>,
-    },
-    */
-}
-
-enum Cancel {
-    Node,
-    Connection,
-    Onboarding,
-    ChannelFunding,
-    Metrics,
-    ValueingTicket,
 }
 
 impl Core {
@@ -137,20 +91,25 @@ impl Core {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
         Ok(Core {
+            // config data
             config,
-            cancel_for_shutdown_token: CancellationToken::new(),
-            cancel_balances_token: CancellationToken::new(),
-            connection: None,
-            // run_mode: RunMode::Initializing,
-            session_connected: false,
-            target_destination: None,
-            balances: None,
             hopr_params,
-            hopr: None,
-            funding_tool: balance::FundingTool::NotStarted,
-            funded_channels: Vec::new(),
-            ticket_value: None,
+
+            // cancellation tokens
+            cancel_balances_token: CancellationToken::new(),
+            cancel_for_shutdown_token: CancellationToken::new(),
+
+            // user provided data
+            target_destination: None,
+
+            // runtime data
             phase: Phase::Initial,
+            connections: HashMap::new(),
+            balances: None,
+            funded_channels: Vec::new(),
+            funding_tool: balance::FundingTool::NotStarted,
+            hopr: None,
+            ticket_value: None,
         })
     }
 
@@ -259,7 +218,7 @@ impl Core {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
                             let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
-                            self.act_on_target().await;
+                            self.act_on_target(results_sender).await;
                         }
                         None => {
                             tracing::info!(address = %address, "cannot connect to destination - address not configured");
@@ -268,6 +227,8 @@ impl Core {
                     },
                     Command::Disconnect => {
                         self.target_destination = None;
+                        unimplemented!();
+                        /*
                         let dest = self.connection.as_ref().map(|c| c.destination());
                         match dest {
                             Some(d) => {
@@ -278,6 +239,7 @@ impl Core {
                             }
                         }
                         self.act_on_target().await;
+                        */
                     }
 
                     Command::Balance => {
@@ -428,12 +390,33 @@ impl Core {
                     if self.funded_channels.len() == self.config.channel_targets().len() {
                         self.phase = Phase::HoprChannelsFunded;
                         tracing::info!("all channels funded - hopr is ready");
-                        self.act_on_target().await;
+                        self.act_on_target(results_sender).await;
                     }
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
                     self.spawn_channel_funding(address, results_sender, Duration::from_secs(60));
+                }
+            },
+            Results::ConnectionEvent { id, evt } => {
+                tracing::debug!(%id, %evt, "handling connection runner event");
+                if let Some(conn) = self.connections.get_mut(&id) {
+                    conn.on_evt(evt);
+                } else {
+                    tracing::warn!(%id, %evt, "received connection event for unhandled connection");
+                }
+            }
+            Results::ConnectionResult { id, res } => match (self.connections.get(&id), res) {
+                (Some(_), Ok(_)) => {
+                    tracing::info!(%id, "connection established successfully");
+                    self.phase = Phase::Connected(id);
+                }
+                (Some(_), Err(err)) => {
+                    tracing::error!(%id, %err, "connection failed");
+                    self.phase = Phase::ConnectionError(id, err.to_string());
+                }
+                (_, res) => {
+                    tracing::warn!(%id, ?res, "received connection result for unhandled connection");
                 }
             },
         }
@@ -471,7 +454,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::presafe(hopr_params, results_sender.clone()).await
+                    runner::presafe(hopr_params, results_sender).await
                 })
                 .await
         });
@@ -483,9 +466,7 @@ impl Core {
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
-                .run_until_cancelled(
-                    async move { runner::funding_tool(hopr_params, secret, results_sender.clone()).await },
-                )
+                .run_until_cancelled(async move { runner::funding_tool(hopr_params, secret, results_sender).await })
                 .await;
         });
     }
@@ -498,7 +479,7 @@ impl Core {
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::safe_deployment(hopr_params, presafe, results_sender.clone()).await;
+                    runner::safe_deployment(hopr_params, presafe, results_sender).await;
                 })
                 .await
         });
@@ -510,7 +491,7 @@ impl Core {
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::persist_safe(safe_module, results_sender.clone()).await;
+                    runner::persist_safe(safe_module, results_sender).await;
                 })
                 .await
         });
@@ -526,7 +507,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::hopr(hopr_params, ticket_value, results_sender.clone()).await;
+                        runner::hopr(hopr_params, ticket_value, results_sender).await;
                     })
                     .await
             });
@@ -541,7 +522,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::balances(hopr, results_sender.clone()).await;
+                        runner::balances(hopr, results_sender).await;
                     })
                     .await
             });
@@ -556,7 +537,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::wait_for_running(hopr, results_sender.clone()).await;
+                        runner::wait_for_running(hopr, results_sender).await;
                     })
                     .await
             });
@@ -571,41 +552,29 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::fund_channel(hopr, address, ticket_value, results_sender.clone()).await;
+                        runner::fund_channel(hopr, address, ticket_value, results_sender).await;
                     })
                     .await
             });
         }
     }
 
-    fn spawn_connection_runner(&self, destination: Destination) {
+    fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
-            let hopr = hopr.clone();
-            let config_wireguard = self.config.wireguard.clone();
+            let cancel = self.cancel_for_shutdown_token.clone();
+            let conn = Conn::new(destination.clone());
+            self.connections.insert(conn.id, conn.clone());
             let config_connection = self.config.connection.clone();
+            let config_wireguard = self.config.wireguard.clone();
+            let hopr = hopr.clone();
+            let runner = ConnectionRunner::new(conn.clone(), config_connection, config_wireguard, hopr);
+            let results_sender = results_sender.clone();
             tokio::spawn(async move {
-                let runner = connection_runner::ConnectionRunner::new(
-                    destination.clone(),
-                    config_connection,
-                    config_wireguard,
-                    hopr,
-                );
-                let (sender, mut receiver) = mpsc::channel(32);
-                tokio::spawn(async move {
-                    runner.connect(&sender).await;
-                });
-                while let Some(evt) = receiver.recv().await {
-                    tracing::debug!(?evt, "connection event");
-                    match evt {
-                        connection_runner::Evt::Error(id, err) => {
-                            tracing::error!(%id, %err, "connection runner error");
-                            break;
-                        }
-                        _ => {
-                            // TODO handle other events
-                        }
-                    }
-                }
+                cancel
+                    .run_until_cancelled(async move {
+                        runner.connect(results_sender).await;
+                    })
+                    .await;
             });
         }
     }
@@ -665,11 +634,11 @@ impl Core {
     }
     */
 
-    async fn act_on_target(&mut self) {
+    async fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
         match (self.phase.clone(), self.target_destination.clone()) {
             (Phase::HoprChannelsFunded, Some(dest)) => {
                 tracing::info!(destination = %dest, "establishing new connection");
-                self.spawn_connection_runner(dest.clone());
+                self.spawn_connection_runner(dest.clone(), results_sender);
             }
             _ => {
                 unimplemented!()
