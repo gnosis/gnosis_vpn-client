@@ -55,7 +55,7 @@ pub enum Results {
 }
 
 #[derive(Debug, Error)]
-enum Error {
+pub enum Error {
     #[error(transparent)]
     HoprParams(#[from] hopr_params::Error),
     #[error(transparent)]

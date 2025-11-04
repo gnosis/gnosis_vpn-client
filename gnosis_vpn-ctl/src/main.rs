@@ -100,6 +100,9 @@ fn pretty_print(resp: &Response) {
         Response::Empty => {
             println!();
         }
+        Response::Metrics(metrics) => {
+            println!("{metrics}");
+        }
     }
 }
 
@@ -113,5 +116,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
         Response::Empty => exitcode::OK,
+        Response::Metrics(..) => exitcode::OK,
     }
 }

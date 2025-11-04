@@ -24,13 +24,9 @@ use crate::event::Event;
 use crate::hopr_params::{self, HoprParams};
 
 mod conn;
-mod conn_down;
-mod conn_up;
 mod connection_runner;
 mod runner;
 
-use conn_down::ConnDown;
-use conn_up::ConnUp;
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -94,9 +90,9 @@ enum Phase {
     HoprSyncing,
     HoprRunning,
     HoprChannelsFunded,
-    Connecting(ConnUp),
-    ConnectingFailed(String),
-    Disconnecting(ConnDown),
+    // Connecting(ConnUp),
+    // ConnectingFailed(String),
+    // Disconnecting(ConnDown),
     ShuttingDown,
 }
 
@@ -144,8 +140,6 @@ impl Core {
     pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
-        let wg = wg_tooling::WireGuard::from_config(config.wireguard).await?;
-
         Ok(Core {
             config,
             cancel_for_shutdown_token: CancellationToken::new(),
@@ -161,7 +155,6 @@ impl Core {
             funded_channels: Vec::new(),
             ticket_value: None,
             phase: Phase::Initial,
-            wg,
         })
     }
 
@@ -591,11 +584,15 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let hopr = hopr.clone();
             let config_wireguard = self.config.wireguard.clone();
-            let wg = wg_tooling::WireGuard::from_config(config_wireguard)?;
             let config_connection = self.config.connection.clone();
             tokio::spawn(async move {
-                let runner = connection_runner::ConnectionRunner::new(destination.clone(), config_connection, wg, hopr);
-                let (sender, receiver) = mpsc::channel(32);
+                let runner = connection_runner::ConnectionRunner::new(
+                    destination.clone(),
+                    config_connection,
+                    config_wireguard,
+                    hopr,
+                );
+                let (sender, mut receiver) = mpsc::channel(32);
                 tokio::spawn(async move {
                     runner.connect(&sender).await;
                 });
