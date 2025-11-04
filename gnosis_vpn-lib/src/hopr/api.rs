@@ -44,7 +44,7 @@ pub enum ChannelError {
 }
 
 impl Hopr {
-    #[instrument(skip(keys), level = "debug", err)]
+    #[instrument(skip(keys, cfg), level = "debug", err)]
     pub async fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
@@ -70,14 +70,14 @@ impl Hopr {
     /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
     /// 2. AutoFunding making sure that once a channel is open, it will stay funded
-    #[instrument(skip(self), level = "info", err)]
+    #[instrument(skip(self), level = "debug", err)]
     pub async fn ensure_channel_open_and_funded(
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
         threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
     ) -> Result<(), ChannelError> {
-        tracing::debug!("querying my hopr channels");
+        tracing::debug!("ensure hopr channel funding");
         let channels_from_me = self.hopr.channels_from(&self.hopr.me_onchain()).await?;
 
         if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
@@ -123,7 +123,7 @@ impl Hopr {
     // --- session management ---
 
     /// Open a local port and return the configuration
-    #[tracing::instrument(skip(self), level = "info", ret, err)]
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn open_session(
         &self,
         destination: Address,
@@ -132,7 +132,7 @@ impl Hopr {
         max_client_sessions: Option<usize>,
         cfg: SessionClientConfig,
     ) -> Result<SessionClientMetadata, HoprError> {
-        tracing::debug!("hopr opening session");
+        tracing::debug!("open hopr session");
         let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
 
         let protocol = match target {
@@ -235,13 +235,13 @@ impl Hopr {
         })
     }
 
-    #[tracing::instrument(skip(self), level = "info", err)]
+    #[tracing::instrument(skip(self), level = "debug", err)]
     pub async fn close_session(
         &self,
         bound_session: SocketAddr,
         protocol: IpProtocol,
     ) -> std::result::Result<(), HoprError> {
-        tracing::debug!("hopr closing session");
+        tracing::debug!("close hopr session");
         let unspecified: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
 
         let mut open_listeners = self.open_listeners.write_arc().await;
@@ -271,9 +271,9 @@ impl Hopr {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self), level = "info", ret)]
+    #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
-        tracing::debug!("hopr list sessions");
+        tracing::debug!("list hopr sessions");
         self.open_listeners
             .read_arc()
             .await
@@ -299,7 +299,7 @@ impl Hopr {
 
     #[tracing::instrument(skip(self), level = "debug", err)]
     pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
-        tracing::debug!("hopr adjust session");
+        tracing::debug!("adjust hopr session");
         let session_id = HoprSessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
         self.hopr
@@ -310,7 +310,7 @@ impl Hopr {
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub fn info(&self) -> Info {
-        tracing::debug!("hopr info query");
+        tracing::debug!("query hopr info");
         Info {
             node_address: self.hopr.me_onchain(),
             safe_address: self.hopr.get_safe_config().safe_address,
@@ -320,7 +320,7 @@ impl Hopr {
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn balances(&self) -> Result<Balances, HoprError> {
-        tracing::debug!("hopr balances query");
+        tracing::debug!("query hopr balances");
         Ok(Balances {
             node_xdai: self.hopr.get_balance().await?,
             safe_wxhopr: self.hopr.get_safe_balance().await?,
@@ -345,7 +345,7 @@ impl Hopr {
 
     #[tracing::instrument(skip(self), level = "debug", err)]
     pub fn get_telemetry(&self) -> Result<HoprTelemetry, HoprError> {
-        tracing::debug!("hopr telemetry query");
+        tracing::debug!("query hopr telemetry");
         // Regex to match: hopr_indexer_sync_progress followed by optional labels and a float value
         // Handles cases like:
         // hopr_indexer_sync_progress 0.85
@@ -370,7 +370,7 @@ impl Hopr {
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
-        tracing::debug!("hopr ticket stats query");
+        tracing::debug!("query hopr ticket price");
         let ticket_price = self.hopr.get_ticket_price().await?;
         let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
         Ok(TicketStats::new(ticket_price, winning_probability.into()))
