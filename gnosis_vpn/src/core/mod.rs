@@ -383,6 +383,7 @@ impl Core {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
+                    self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -416,7 +417,6 @@ impl Core {
             },
             Results::HoprRunning => {
                 self.phase = Phase::HoprRunning;
-                self.spawn_balances_runner(results_sender, Duration::ZERO);
                 for c in self.config.channel_targets() {
                     self.spawn_channel_funding(c, results_sender, Duration::ZERO);
                 }

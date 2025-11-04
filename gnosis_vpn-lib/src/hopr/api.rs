@@ -57,7 +57,7 @@ impl Hopr {
         let processes = processes.await?;
         let open_listeners = Arc::new(async_lock::RwLock::new(HashMap::new()));
 
-        tracing::debug!("HOPR edge node created");
+        tracing::debug!("hopr edge node finished setup");
         Ok(Self {
             hopr,
             processes,
