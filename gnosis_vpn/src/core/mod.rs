@@ -144,6 +144,7 @@ impl Core {
     pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
+        let wg = wg_tooling::WireGuard::from_config(config.wireguard).await?;
 
         Ok(Core {
             config,
@@ -160,6 +161,7 @@ impl Core {
             funded_channels: Vec::new(),
             ticket_value: None,
             phase: Phase::Initial,
+            wg,
         })
     }
 
@@ -585,6 +587,34 @@ impl Core {
         }
     }
 
+    fn spawn_connection_runner(&self, destination: Destination) {
+        if let Some(hopr) = self.hopr.clone() {
+            let hopr = hopr.clone();
+            let config_wireguard = self.config.wireguard.clone();
+            let wg = wg_tooling::WireGuard::from_config(config_wireguard)?;
+            let config_connection = self.config.connection.clone();
+            tokio::spawn(async move {
+                let runner = connection_runner::ConnectionRunner::new(destination.clone(), config_connection, wg, hopr);
+                let (sender, receiver) = mpsc::channel(32);
+                tokio::spawn(async move {
+                    runner.connect(&sender).await;
+                });
+                while let Some(evt) = receiver.recv().await {
+                    tracing::debug!(?evt, "connection event");
+                    match evt {
+                        connection_runner::Evt::Error(id, err) => {
+                            tracing::error!(%id, %err, "connection runner error");
+                            break;
+                        }
+                        _ => {
+                            // TODO handle other events
+                        }
+                    }
+                }
+            });
+        }
+    }
+
     fn spawn_balance_response(&self, resp: &oneshot::Sender<Response>) {
         unimplemented!();
         /*
@@ -644,16 +674,7 @@ impl Core {
         match (self.phase.clone(), self.target_destination.clone()) {
             (Phase::HoprChannelsFunded, Some(dest)) => {
                 tracing::info!(destination = %dest, "establishing new connection");
-                unimplemented!()
-                /*
-                let config_connection = self.config.connection.clone();
-                let conn = ConnUp::new(dest.clone(), config_connection);
-                let cmd = conn.init_cmd();
-                self.phase = Phase::Connecting(conn);
-                if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
-                    let _ = cmd_sender.send(cmd).await;
-                }
-                */
+                self.spawn_connection_runner(dest.clone());
             }
             _ => {
                 unimplemented!()

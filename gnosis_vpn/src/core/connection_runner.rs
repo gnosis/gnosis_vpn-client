@@ -21,7 +21,7 @@ pub struct ConnectionRunner {
     id: Uuid,
     destination: Destination,
     options: Options,
-    wg: wg_tooling::WireGuard,
+    wg_config: wg_tooling::Config,
 }
 
 #[derive(Debug)]
@@ -33,6 +33,7 @@ pub enum Evt {
     WgTunnel(Uuid),
     Ping(Uuid),
     AdjustToMain(Uuid),
+    Error(Uuid, Error),
 }
 
 #[derive(Debug, Error)]
@@ -48,24 +49,36 @@ pub enum Error {
 }
 
 impl ConnectionRunner {
-    pub fn new(destination: Destination, options: Options, wg: wg_tooling::WireGuard, hoprd: Arc<Hopr>) -> Self {
+    pub fn new(destination: Destination, options: Options, wg_config: wg_tooling::Config, hoprd: Arc<Hopr>) -> Self {
         Self {
             hoprd,
             id: Uuid::new_v4(),
             destination,
             options,
-            wg,
+            wg_config,
         }
     }
 
-    pub async fn connect(&self, evt_sender: mpsc::Sender<Evt>) -> Result<(), Error> {
+    pub async fn connect(&self, evt_sender: &mpsc::Sender<Evt>) {
+        match self.run(evt_sender.clone()).await {
+            Ok(_) => {}
+            Err(e) => {
+                let _ = evt_sender.send(Evt::Error(self.id, e)).await;
+            }
+        }
+    }
+
+    async fn run(&self, evt_sender: mpsc::Sender<Evt>) -> Result<(), Error> {
+        // 0. generate wg keys
+        let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
+
         // 1. open bridge session
         evt_sender.send(Evt::OpenBridge(self.id)).await;
         let bridge_session = self.open_bridge_session().await?;
 
         // 2. register wg public key
         evt_sender.send(Evt::Register(self.id)).await;
-        let registration = self.register(&bridge_session).await?;
+        let registration = self.register(&bridge_session, &wg).await?;
 
         // 3. close bridge session
         evt_sender.send(Evt::CloseBridge(self.id)).await;
@@ -77,7 +90,7 @@ impl ConnectionRunner {
 
         // 5. setup wg tunnel
         evt_sender.send(Evt::WgTunnel(self.id)).await;
-        self.wg_tunnel(&registration, &ping_session).await?;
+        self.wg_tunnel(&registration, &ping_session, &wg).await?;
 
         // 6. check ping
         evt_sender.send(Evt::Ping(self.id)).await;
@@ -120,9 +133,10 @@ impl ConnectionRunner {
     async fn register(
         &self,
         session_client_metadata: &SessionClientMetadata,
+        wg: &wg_tooling::WireGuard,
     ) -> Result<Registration, gvpn_client::Error> {
         let input = gvpn_client::Input::new(
-            self.wg.key_pair.public_key.clone(),
+            wg.key_pair.public_key.clone(),
             session_client_metadata.bound_host.port(),
             self.options.timeouts.http,
         );
@@ -180,9 +194,10 @@ impl ConnectionRunner {
         &self,
         registration: &Registration,
         session_client_metadata: &SessionClientMetadata,
+        wg: &wg_tooling::WireGuard,
     ) -> Result<(), wg_tooling::Error> {
         // run wg-quick down once to ensure no dangling state
-        _ = self.wg.close_session().await;
+        _ = wg.close_session().await;
 
         let interface_info = wg_tooling::InterfaceInfo {
             address: registration.address(),
@@ -194,7 +209,7 @@ impl ConnectionRunner {
             endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
         };
 
-        self.wg.connect_session(&interface_info, &peer_info).await
+        wg.connect_session(&interface_info, &peer_info).await
     }
 
     async fn ping(&self) -> Result<(), ping::Error> {
