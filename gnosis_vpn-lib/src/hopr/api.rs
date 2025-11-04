@@ -57,6 +57,7 @@ impl Hopr {
         let processes = processes.await?;
         let open_listeners = Arc::new(async_lock::RwLock::new(HashMap::new()));
 
+        tracing::debug!("HOPR edge node created");
         Ok(Self {
             hopr,
             processes,
@@ -70,7 +71,7 @@ impl Hopr {
     /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
     /// 2. AutoFunding making sure that once a channel is open, it will stay funded
-    #[instrument(skip(self), level = "debug", err)]
+    #[instrument(skip(self), level = "debug", ret, err)]
     pub async fn ensure_channel_open_and_funded(
         &self,
         target: Address,
@@ -235,7 +236,7 @@ impl Hopr {
         })
     }
 
-    #[tracing::instrument(skip(self), level = "debug", err)]
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn close_session(
         &self,
         bound_session: SocketAddr,
@@ -297,7 +298,7 @@ impl Hopr {
             .collect::<Vec<_>>()
     }
 
-    #[tracing::instrument(skip(self), level = "debug", err)]
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
         tracing::debug!("adjust hopr session");
         let session_id = HoprSessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
@@ -343,7 +344,7 @@ impl Hopr {
         })
     }
 
-    #[tracing::instrument(skip(self), level = "debug", err)]
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub fn get_telemetry(&self) -> Result<HoprTelemetry, HoprError> {
         tracing::debug!("query hopr telemetry");
         // Regex to match: hopr_indexer_sync_progress followed by optional labels and a float value
@@ -382,7 +383,7 @@ impl Hopr {
         self.hopr.status()
     }
 
-    #[tracing::instrument(skip(self), level = "debug")]
+    #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn shutdown(&self) {
         tracing::debug!("shutdown hopr session listeners");
         let open_listeners = self.open_listeners.clone();
