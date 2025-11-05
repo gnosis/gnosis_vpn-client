@@ -24,16 +24,16 @@ pub enum Phase {
     Disconnected,
 }
 
-impl TryFrom<Conn> for Disconn {
+impl TryFrom<&Conn> for Disconn {
     type Error = &'static str;
 
-    fn try_from(value: Conn) -> Result<Self, Self::Error> {
-        if let Some(wg_public_key) = value.wg_public_key {
+    fn try_from(value: &Conn) -> Result<Self, Self::Error> {
+        if let Some(wg_public_key) = value.wg_public_key.clone() {
             Ok(Self {
-                destination: value.destination,
+                destination: value.destination.clone(),
                 phase: Phase::Disconnecting,
                 wg_public_key,
-                wg: value.wg,
+                wg: value.wg.clone(),
             })
         } else {
             Err("Cannot convert Conn to Disconn: missing WireGuard public key")

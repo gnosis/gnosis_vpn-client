@@ -1,7 +1,7 @@
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -251,7 +251,27 @@ impl Core {
                     }
 
                     Command::Balance => {
-                        self.spawn_balance_response(&resp);
+                        if let (Some(hopr), Some(balances), Some(ticket_value)) =
+                            (self.hopr.clone(), self.balances.clone(), self.ticket_value)
+                        {
+                            let info = hopr.info();
+                            let issues: Vec<balance::FundingIssue> =
+                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
+
+                            let res = command::BalanceResponse::new(
+                                format!("{} xDai", balances.node_xdai),
+                                format!("{} wxHOPR", balances.safe_wxhopr),
+                                format!("{} wxHOPR", balances.channels_out_wxhopr),
+                                issues,
+                                command::Addresses {
+                                    node: info.node_address,
+                                    safe: info.safe_address,
+                                },
+                            );
+                            let _ = resp.send(Response::Balance(Some(res)));
+                        } else {
+                            let _ = resp.send(Response::Balance(None));
+                        }
                     }
 
                     Command::Ping => {
@@ -259,17 +279,11 @@ impl Core {
                     }
 
                     Command::RefreshNode => {
-                        unimplemented!();
-                        /*
                         // immediately request balances and cancel existing balance loop
-                        self.balances_cancel_for_shutdown_token.cancel();
-                        self.balances_cancel_for_shutdown_token = CancellationToken::new();
-                        if let Some(cmd_sender) = self.hopr_cmd_sender.clone() {
-                            tracing::debug!("requesting balances from hopr");
-                            let _ = cmd_sender.send(hopr_runner::Cmd::Balances).await;
-                        }
+                        self.cancel_balances_token.cancel();
+                        self.cancel_balances_token = CancellationToken::new();
+                        self.spawn_balances_runner(results_sender, Duration::ZERO);
                         let _ = resp.send(Response::Empty);
-                        */
                     }
 
                     Command::FundingTool(secret) => {
@@ -361,8 +375,7 @@ impl Core {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
-                    // TODO enable
-                    // self.spawn_balances_runner(results_sender, Duration::ZERO);
+                    self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -665,61 +678,6 @@ impl Core {
             });
         }
     }
-
-    fn spawn_balance_response(&self, resp: &oneshot::Sender<Response>) {
-        unimplemented!();
-        /*
-                        if let (Some(cmd_sender), Some(balances), Some(Ok(ticket_value))) = (
-                            self.hopr_cmd_sender.clone(),
-                            self.balances.clone(),
-                            self.ticket_stats.map(|ts| ts.ticket_value()),
-                        ) {
-                            let (tx, rx) = oneshot::channel();
-                            let _ = cmd_sender.send(hopr_runner::Cmd::Info { rsp: tx }).await;
-                            let info = match rx.await {
-                                Ok(info) => info,
-                                Err(err) => {
-                                    tracing::error!(%err, "failed to get hopr info for balance command");
-                                    let _ = resp.send(Response::Balance(None));
-                                    return true;
-                                }
-                            };
-                            let issues: Vec<balance::FundingIssue> =
-                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
-
-                            let res = command::BalanceResponse::new(
-                                format!("{} xDai", balances.node_xdai),
-                                format!("{} wxHOPR", balances.safe_wxhopr),
-                                format!("{} wxHOPR", balances.channels_out_wxhopr),
-                                issues,
-                                command::Addresses {
-                                    node: info.node_address,
-                                    safe: info.safe_address,
-                                },
-                            );
-                            let _ = resp.send(Response::Balance(Some(res)));
-                        } else {
-                            let _ = resp.send(Response::Balance(None));
-                        }
-        */
-    }
-
-    /*
-        let runner = presafe_runner::PreSafeRunner::new(self.hopr_params.clone());
-        let cancel = self.cancel_for_shutdown_token.clone();
-        let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            time::sleep(delay).await;
-            tracing::debug!("starting presafe balance runner");
-            let res = cancel.run_until_cancelled(runner.start()).await;
-            if let Some(res) = res {
-                let _ = results_sender
-                    .send(RunnerResults::PreSafe(res.map_err(runner_results::Error::PreSafe)))
-                    .await;
-            }
-        });
-    }
-    */
 
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
         match (self.target_destination.clone(), self.phase.clone()) {
