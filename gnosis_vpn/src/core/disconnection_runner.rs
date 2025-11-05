@@ -1,9 +1,4 @@
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
-use bytesize::ByteSize;
 use edgli::hopr_lib::SessionClientConfig;
-use edgli::hopr_lib::SurbBalancerConfig;
-use human_bandwidth::re::bandwidth::Bandwidth;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -16,7 +11,7 @@ use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError};
 use gnosis_vpn_lib::{ping, wg_tooling};
 
-use crate::core::conn::Conn;
+use crate::core::conn::{self, Conn};
 use crate::core::runner::Results;
 
 #[derive(Debug, Error)]
@@ -35,12 +30,13 @@ pub struct DisconnectionRunner {
     conn: Conn,
     hoprd: Arc<Hopr>,
     options: Options,
-    wg: Option<wg_tooling::WireGuard>,
-    wg_public_key: String,
+    wg: wg_tooling::WireGuard,
+    wg_public_key: Option<String>,
 }
 
 #[derive(Debug)]
 pub enum Evt {
+    DisconnectWg,
     OpenBridge,
     UnregisterWg,
     CloseBridge,
@@ -51,7 +47,7 @@ impl DisconnectionRunner {
         conn: Conn,
         hoprd: Arc<Hopr>,
         options: Options,
-        wg_public_key: String,
+        wg_public_key: Option<String>,
         wg: Option<wg_tooling::WireGuard>,
     ) -> Self {
         Self {
@@ -71,48 +67,54 @@ impl DisconnectionRunner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 0. disconnect wireguard
-        if let Some(wg) = self.wg.clone() {
+        if let Some(wg) = self.wg {
+            let _ = results_sender
+                .send(Results::DisconnectionEvent {
+                    id: self.conn.id,
+                    evt: Evt::DisconnectWg,
+                })
+                .await;
             let _ = wg
                 .close_session()
                 .await
                 .map_err(|err| tracing::warn!("disconnecting WireGuard failed: {}", err));
         }
 
-        // 1. open bridge session
-        let _ = results_sender
-            .send(Results::DisconnectionEvent {
-                id: self.conn.id,
-                evt: Evt::OpenBridge,
-            })
-            .await;
-        let bridge_session = self.open_bridge_session().await?;
+        if let Some(public_key) = self.wg_public_key {
+            let _ = results_sender
+                .send(Results::DisconnectionEvent {
+                    id: self.conn.id,
+                    evt: Evt::OpenBridge,
+                })
+                .await;
+            // 1. open bridge session
+            let bridge_session = self.open_bridge_session().await?;
 
-        // 2. unregister wg public key
-        let _ = results_sender
-            .send(Results::DisconnectionEvent {
-                id: self.conn.id,
-                evt: Evt::UnregisterWg,
-            })
-            .await;
-        match self.unregister(&bridge_session).await {
-            Ok(_) => (),
-            Err(gvpn_client::Error::RegistrationNotFound) => {
-                tracing::warn!("trying to unregister already removed registration");
+            // 2. unregister wg public key
+            let _ = results_sender
+                .send(Results::DisconnectionEvent {
+                    id: self.conn.id,
+                    evt: Evt::UnregisterWg,
+                })
+                .await;
+            match self.unregister(&bridge_session, public_key).await {
+                Ok(_) => (),
+                Err(gvpn_client::Error::RegistrationNotFound) => {
+                    tracing::warn!("trying to unregister already removed registration");
+                }
+                Err(error) => {
+                    tracing::error!(%error, "unregistering from gvpn server failed");
+                }
             }
-            Err(error) => {
-                tracing::error!(%error, "unregistering from gvpn server failed");
-            }
+            // 3. close bridge session
+            let _ = results_sender
+                .send(Results::DisconnectionEvent {
+                    id: self.conn.id,
+                    evt: Evt::CloseBridge,
+                })
+                .await;
+            self.close_bridge_session(&bridge_session).await?;
         }
-
-        // 3. close bridge session
-        let _ = results_sender
-            .send(Results::DisconnectionEvent {
-                id: self.conn.id,
-                evt: Evt::CloseBridge,
-            })
-            .await;
-        self.close_bridge_session(&bridge_session).await?;
 
         Ok(())
     }
@@ -122,37 +124,35 @@ impl DisconnectionRunner {
             capabilities: self.options.sessions.bridge.capabilities,
             forward_path_options: self.conn.destination.routing.clone(),
             return_path_options: self.conn.destination.routing.clone(),
-            surb_management: Some(to_surb_balancer_config(
+            surb_management: Some(conn::to_surb_balancer_config(
                 self.options.buffer_sizes.bridge,
                 self.options.max_surb_upstream.bridge,
             )),
             ..Default::default()
         };
-        retry(ExponentialBackoff::default(), || async {
-            let res = self
-                .hoprd
-                .open_session(
-                    self.conn.destination.address,
-                    self.options.sessions.bridge.target.clone(),
-                    Some(1),
-                    Some(1),
-                    cfg.clone(),
-                )
-                .await?;
-            Ok(res)
-        })
-        .await
+        self.hoprd
+            .open_session(
+                self.conn.destination.address,
+                self.options.sessions.bridge.target.clone(),
+                Some(1),
+                Some(1),
+                cfg.clone(),
+            )
+            .await
     }
 
-    async fn unregister(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), gvpn_client::Error> {
+    async fn unregister(
+        &self,
+        session_client_metadata: &SessionClientMetadata,
+        public_key: String,
+    ) -> Result<(), gvpn_client::Error> {
         let input = gvpn_client::Input::new(
-            self.wg_public_key.clone(),
+            public_key,
             session_client_metadata.bound_host.port(),
             self.options.timeouts.http,
         );
         let client = reqwest::Client::new();
-        let res = gvpn_client::unregister(&client, &input).await?;
-        Ok(res)
+        gvpn_client::unregister(&client, &input).await
     }
 
     async fn close_bridge_session(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
@@ -169,33 +169,6 @@ impl DisconnectionRunner {
             Err(e) => Err(e),
         }
     }
-
-    async fn open_ping_session(&self) -> Result<SessionClientMetadata, HoprError> {
-        let cfg = SessionClientConfig {
-            capabilities: self.options.sessions.wg.capabilities,
-            forward_path_options: self.conn.destination.routing.clone(),
-            return_path_options: self.conn.destination.routing.clone(),
-            surb_management: Some(to_surb_balancer_config(
-                self.options.buffer_sizes.ping,
-                self.options.max_surb_upstream.ping,
-            )),
-            ..Default::default()
-        };
-        retry(ExponentialBackoff::default(), || async {
-            let res = self
-                .hoprd
-                .open_session(
-                    self.conn.destination.address,
-                    self.options.sessions.wg.target.clone(),
-                    None,
-                    None,
-                    cfg.clone(),
-                )
-                .await?;
-            Ok(res)
-        })
-        .await
-    }
 }
 
 impl Display for DisconnectionRunner {
@@ -207,23 +180,9 @@ impl Display for DisconnectionRunner {
 impl Display for Evt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Evt::OpenBridge => write!(f, "Evt::OpenBridge"),
-            Evt::UnregisterWg => write!(f, "Evt::UnregisterWg"),
-            Evt::CloseBridge => write!(f, "Evt::CloseBridge"),
+            Evt::DisconnectedWg => write!(f, "DisconnectedWg"),
+            Evt::UnregisterWg => write!(f, "UnregisterWg"),
+            Evt::CloseBridge => write!(f, "CloseBridge"),
         }
-    }
-}
-
-fn to_surb_balancer_config(response_buffer: ByteSize, max_surb_upstream: Bandwidth) -> SurbBalancerConfig {
-    // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
-        SurbBalancerConfig {
-            target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-            max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
-            ..Default::default()
-        }
-    } else {
-        // Use defaults otherwise
-        Default::default()
     }
 }
