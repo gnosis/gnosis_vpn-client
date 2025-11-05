@@ -13,7 +13,7 @@ use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
-use gnosis_vpn_lib::{balance, wg_tooling};
+use gnosis_vpn_lib::{balance, log_output, wg_tooling};
 
 use crate::event::Event;
 use crate::hopr_params::HoprParams;
@@ -499,8 +499,9 @@ impl Core {
                 (Ok(_), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
-                    self.phase = Phase::Connected(conn);
+                    self.phase = Phase::Connected(conn.clone());
                     self.last_connection_error = None;
+                    log_output::print_session_established(conn.destination.pretty_print_path().as_str());
                 }
                 (Ok(_), phase) => {
                     tracing::info!(?phase, "unawaited connection established successfully");
@@ -509,10 +510,11 @@ impl Core {
                     tracing::error!(%conn, %err, "connection failed");
                     self.last_connection_error = Some(format!("connection failed: {}", err));
                     if let Some(dest) = self.target_destination.clone()
-                        && dest == conn.destination {
-                            tracing::info!(%dest, "removing target destination due to connection error");
-                            self.target_destination = None;
-                        }
+                        && dest == conn.destination
+                    {
+                        tracing::info!(%dest, "removing target destination due to connection error");
+                        self.target_destination = None;
+                    }
                 }
                 (Err(err), phase) => {
                     tracing::warn!(?phase, %err, "connection failed in unexpecting state");

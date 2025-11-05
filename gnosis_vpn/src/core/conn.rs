@@ -59,14 +59,6 @@ impl Conn {
     pub fn connected(&mut self) {
         self.phase = Phase::ConnectionEstablished;
     }
-
-    pub fn wg_public_key(&self) -> Option<String> {
-        self.wg_public_key.clone()
-    }
-
-    pub fn wg(&self) -> Option<wg_tooling::WireGuard> {
-        self.wg.clone()
-    }
 }
 
 impl Display for Conn {

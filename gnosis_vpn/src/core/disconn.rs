@@ -21,7 +21,6 @@ pub enum Phase {
     DiscOpeningBridge,
     UnregisterWg,
     DiscClosingBridge,
-    Disconnected,
 }
 
 impl TryFrom<&Conn> for Disconn {
@@ -53,10 +52,6 @@ impl Disconn {
             disconnection_runner::Evt::UnregisterWg => self.phase = Phase::UnregisterWg,
             disconnection_runner::Evt::CloseBridge => self.phase = Phase::DiscClosingBridge,
         }
-    }
-
-    pub fn disconnected(&mut self) {
-        self.phase = Phase::Disconnected;
     }
 }
 

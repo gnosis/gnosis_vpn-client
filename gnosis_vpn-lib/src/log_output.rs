@@ -5,7 +5,6 @@ use serde::ser::Serialize;
 use std::time::SystemTime;
 
 use crate::hopr::config as hopr_config;
-use crate::session;
 
 pub fn serialize<T>(v: &T) -> String
 where
@@ -36,31 +35,6 @@ fn truncate_after_second_space(s: &str) -> &str {
     } else {
         s
     }
-}
-
-pub fn print_node_access_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> Unable to access hoprd node API.
->>!!>> It seems you provided an invalid access token.
->>!!>> Please update your API token in the configuration file:
->>!!>> [hoprd_node]
->>!!>> api_token = "<your API token>"
-"#
-    );
-}
-
-pub fn print_node_port_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> Unable to connect to hoprd node API due to invalid endpoint port.
->>!!>> Please update your endpoint with the correct API port in the configuration file:
->>!!>> [hoprd_node]
->>!!>> endpoint = "<your hoprd node endpoint>"
-"#
-    );
 }
 
 pub fn print_safe_module_storage_error(main_error: hopr_config::Error) {
@@ -109,48 +83,6 @@ pub fn print_safe_module_storage_error(main_error: hopr_config::Error) {
 "#,
         parent = parent.display(),
         file = file.display()
-    );
-}
-
-pub fn print_node_timeout_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> Unable to connect to hoprd node API due to invalid IP address or offline status.
->>!!>> Please ensure you are connected to the internet and that your hoprd node is online.
->>!!>> In case of an invalid IP address please update your endpoint with the correct API IP in the configuration file:
->>!!>> [hoprd_node]
->>!!>> endpoint = "<your hoprd node endpoint>"
-"#
-    );
-}
-
-pub fn print_port_instructions(port: u16, protocol: session::Protocol) {
-    let port_str = match protocol {
-        session::Protocol::Udp => "UDP",
-        session::Protocol::Tcp => "TCP",
-    };
-    tracing::error!(
-        r#"
-
->>!!>> It seems your node isn’t exposing the configured internal_connection_port ({}) on {}.
->>!!>> Please expose that port for both TCP and UDP.
->>!!>> Additionally add port mappings in your docker-compose.yml or to your docker run statement.
->>!!>> Alternatively, update your configuration file to use a different port.
-"#,
-        port,
-        port_str,
-    );
-}
-
-pub fn print_session_path_instructions() {
-    tracing::error!(
-        r#"
-
->>!!>> Cannot transport data through session.
->>!!>> This could mean you are missing channel connections to relayers.
->>!!>> Please check your hoprd node and open channels to relayers as specified here: https://github.com/gnosis/gnosis_vpn-client/blob/main/ONBOARDING.md#relayers.
-"#
     );
 }
 
