@@ -4,7 +4,6 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
-use uuid::{self, Uuid};
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,11 +20,13 @@ use crate::hopr_params::HoprParams;
 
 mod conn;
 mod connection_runner;
+mod disconn;
 mod disconnection_runner;
 mod runner;
 
 use conn::Conn;
 use connection_runner::ConnectionRunner;
+use disconn::Disconn;
 use disconnection_runner::DisconnectionRunner;
 use runner::Results;
 
@@ -69,7 +70,7 @@ pub struct Core {
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
-    disconnecting_connections: Vec<Conn>,
+    ongoing_disonnections: Vec<Disconn>,
     last_connection_error: Option<String>,
 }
 
@@ -110,7 +111,7 @@ impl Core {
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             ticket_value: None,
-            disconnecting_connections: Vec::new(),
+            ongoing_disonnections: Vec::new(),
             last_connection_error: None,
         })
     }
@@ -224,7 +225,7 @@ impl Core {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
                             let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
-                            self.act_on_target(results_sender).await;
+                            self.act_on_target(results_sender);
                         }
                         None => {
                             tracing::info!(address = %address, "cannot connect to destination - address not configured");
@@ -246,7 +247,7 @@ impl Core {
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::not_connected()));
                             }
                         }
-                        self.act_on_target(results_sender).await;
+                        self.act_on_target(results_sender);
                     }
 
                     Command::Balance => {
@@ -410,7 +411,7 @@ impl Core {
                     if self.funded_channels.len() == self.config.channel_targets().len() {
                         self.phase = Phase::HoprChannelsFunded;
                         tracing::info!("all channels funded - hopr is ready");
-                        self.act_on_target(results_sender).await;
+                        self.act_on_target(results_sender);
                     }
                 }
                 Err(err) => {
@@ -419,8 +420,8 @@ impl Core {
                 }
             },
 
-            Results::ConnectionEvent { id, evt } => {
-                tracing::debug!(%id, %evt, "handling connection runner event");
+            Results::ConnectionEvent { evt } => {
+                tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => {
                         conn.connect_evt(evt);
@@ -431,9 +432,13 @@ impl Core {
                 }
             }
 
-            Results::DisconnectionEvent { id, evt } => {
-                tracing::debug!(%id, %evt, "handling disconnection runner event");
-                if let Some(conn) = self.disconnecting_connections.iter_mut().find(|c| c.id == id) {
+            Results::DisconnectionEvent { wg_public_key, evt } => {
+                tracing::debug!(%wg_public_key, %evt, "handling disconnection runner event");
+                if let Some(conn) = self
+                    .ongoing_disonnections
+                    .iter_mut()
+                    .find(|c| c.wg_public_key == wg_public_key)
+                {
                     conn.disconnect_evt(evt);
                 } else {
                     tracing::warn!(?self.phase, %evt, "received disconnection event for unknown connection");
@@ -442,11 +447,11 @@ impl Core {
                 // this might only happen when reconnecting to a different destination after a
                 // connection established successfully
                 if matches!(evt, disconnection_runner::Evt::OpenBridge) {
-                    self.act_on_target(results_sender).await;
+                    self.act_on_target(results_sender);
                 }
             }
 
-            Results::ConnectionResult { id, res } => match (res, self.phase.clone()) {
+            Results::ConnectionResult { res } => match (res, self.phase.clone()) {
                 (Ok(_), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
@@ -471,17 +476,17 @@ impl Core {
                 }
             },
 
-            Results::DisconnectionResult { id, res } => {
+            Results::DisconnectionResult { wg_public_key, res } => {
                 match res {
                     Ok(_) => {
-                        tracing::info!(%id, "disconnected successful");
+                        tracing::info!(%wg_public_key, "disconnected successful");
                     }
                     Err(err) => {
-                        tracing::error!(%id, %err, "disconnection failed");
+                        tracing::error!(%wg_public_key, %err, "disconnection failed");
                     }
                 }
-                self.disconnecting_connections.retain(|c| c.id != id);
-                self.act_on_target(results_sender).await;
+                self.ongoing_disonnections.retain(|c| c.wg_public_key != wg_public_key);
+                self.act_on_target(results_sender);
             }
         }
     }
@@ -643,16 +648,14 @@ impl Core {
         }
     }
 
-    fn spawn_disconnection_runner(&mut self, conn: &Conn, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_disconnection_runner(&mut self, disconn: &Disconn, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_for_shutdown_token.clone();
             let config_connection = self.config.connection.clone();
             let hopr = hopr.clone();
-            let mut conn = conn.clone();
-            conn.disconnect();
-            let runner = DisconnectionRunner::new(conn.clone(), hopr, config_connection);
+            let runner = DisconnectionRunner::new(disconn.clone(), hopr, config_connection);
             let results_sender = results_sender.clone();
-            self.disconnecting_connections.push(conn.clone());
+            self.ongoing_disonnections.push(disconn.clone());
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
@@ -718,7 +721,7 @@ impl Core {
     }
     */
 
-    async fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
+    fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
         match (self.target_destination.clone(), self.phase.clone()) {
             // Connecting from ready
             (Some(dest), Phase::HoprChannelsFunded) => {
@@ -728,33 +731,44 @@ impl Core {
             // Connecting to different destination while already connected
             (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connected");
-                self.phase = Phase::HoprChannelsFunded;
-                self.spawn_disconnection_runner(&conn, results_sender);
+                self.disconnect_from_connected(&conn, results_sender);
             }
             // Connecting to different destination while already connecting
             (Some(dest), Phase::Connecting(conn)) if dest != conn.destination => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connecting");
-                self.cancel_connection_token.cancel();
-                self.cancel_connection_token = CancellationToken::new();
-                self.phase = Phase::HoprChannelsFunded;
-                self.spawn_disconnection_runner(&conn, results_sender);
+                self.disconnect_from_connecting(&conn, results_sender);
             }
             // Disconnecting from established connection
             (None, Phase::Connected(conn)) => {
                 tracing::info!(current = %conn.destination, "disconnecting from destination");
-                self.phase = Phase::HoprChannelsFunded;
-                self.spawn_disconnection_runner(&conn, results_sender);
+                self.disconnect_from_connected(&conn, results_sender);
             }
             // Disconnecting while establishing connection
             (None, Phase::Connecting(conn)) => {
                 tracing::info!(current = %conn.destination, "disconnecting from ongoing connection attempt");
-                self.cancel_connection_token.cancel();
-                self.cancel_connection_token = CancellationToken::new();
-                self.phase = Phase::HoprChannelsFunded;
-                self.spawn_disconnection_runner(&conn, results_sender);
+                self.disconnect_from_connecting(&conn, results_sender);
             }
             // No action needed
             _ => {}
+        }
+    }
+
+    fn disconnect_from_connected(&mut self, conn: &Conn, results_sender: &mpsc::Sender<Results>) {
+        self.phase = Phase::HoprChannelsFunded;
+        match conn.try_into() {
+            Ok(disconn) => self.spawn_disconnection_runner(&disconn, results_sender),
+            Err(err) => {
+                tracing::error!(%err, "failed to create disconnection runner from connection");
+            }
+        }
+    }
+
+    fn disconnect_from_connecting(&mut self, conn: &Conn, results_sender: &mpsc::Sender<Results>) {
+        self.cancel_connection_token.cancel();
+        self.cancel_connection_token = CancellationToken::new();
+        self.phase = Phase::HoprChannelsFunded;
+        if let Some(disconn) = conn.try_into().ok() {
+            self.spawn_disconnection_runner(&disconn, results_sender);
         }
     }
 }

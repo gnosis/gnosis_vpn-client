@@ -11,8 +11,8 @@ use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError};
 use gnosis_vpn_lib::{ping, wg_tooling};
 
-use crate::core::conn::{self, Conn};
-use crate::core::runner::Results;
+use crate::core::disconn::Disconn;
+use crate::core::runner::{self, Results};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -27,7 +27,7 @@ pub enum Error {
 }
 
 pub struct DisconnectionRunner {
-    conn: Conn,
+    disconn: Disconn,
     hopr: Arc<Hopr>,
     options: Options,
 }
@@ -41,23 +41,26 @@ pub enum Evt {
 }
 
 impl DisconnectionRunner {
-    pub fn new(conn: Conn, hopr: Arc<Hopr>, options: Options) -> Self {
-        Self { conn, hopr, options }
+    pub fn new(disconn: Disconn, hopr: Arc<Hopr>, options: Options) -> Self {
+        Self { disconn, hopr, options }
     }
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender
-            .send(Results::DisconnectionResult { id: self.conn.id, res })
+            .send(Results::DisconnectionResult {
+                wg_public_key: self.disconn.wg_public_key.clone(),
+                res,
+            })
             .await;
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. disconnect wg tunnel if any
-        if let Some(wg) = self.conn.wg() {
+        if let Some(wg) = self.disconn.wg() {
             let _ = results_sender
                 .send(Results::DisconnectionEvent {
-                    id: self.conn.id,
+                    wg_public_key: self.disconn.wg_public_key.clone(),
                     evt: Evt::DisconnectWg,
                 })
                 .await;
@@ -67,60 +70,61 @@ impl DisconnectionRunner {
                 .map_err(|err| tracing::warn!("disconnecting WireGuard failed: {}", err));
         }
 
-        // run unregister flow if we have a public key
-        if let Some(public_key) = self.conn.wg_public_key() {
-            let _ = results_sender
-                .send(Results::DisconnectionEvent {
-                    id: self.conn.id,
-                    evt: Evt::OpenBridge,
-                })
-                .await;
-            // 1. open bridge session
-            let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options).await?;
+        let _ = results_sender
+            .send(Results::DisconnectionEvent {
+                wg_public_key: self.disconn.wg_public_key.clone(),
+                evt: Evt::OpenBridge,
+            })
+            .await;
+        // 1. open bridge session
+        let bridge_session = open_bridge_session(&self.hopr, &self.disconn, &self.options).await?;
 
-            // 2. unregister wg public key
-            let _ = results_sender
-                .send(Results::DisconnectionEvent {
-                    id: self.conn.id,
-                    evt: Evt::UnregisterWg,
-                })
-                .await;
-            match unregister(&self.options, &bridge_session, public_key).await {
-                Ok(_) => (),
-                Err(gvpn_client::Error::RegistrationNotFound) => {
-                    tracing::warn!("trying to unregister already removed registration");
-                }
-                Err(error) => {
-                    tracing::error!(%error, "unregistering from gvpn server failed");
-                }
+        // 2. unregister wg public key
+        let _ = results_sender
+            .send(Results::DisconnectionEvent {
+                wg_public_key: self.disconn.wg_public_key.clone(),
+                evt: Evt::UnregisterWg,
+            })
+            .await;
+        match unregister(&self.options, &bridge_session, self.disconn.wg_public_key.clone()).await {
+            Ok(_) => (),
+            Err(gvpn_client::Error::RegistrationNotFound) => {
+                tracing::warn!("trying to unregister already removed registration");
             }
-            // 3. close bridge session
-            let _ = results_sender
-                .send(Results::DisconnectionEvent {
-                    id: self.conn.id,
-                    evt: Evt::CloseBridge,
-                })
-                .await;
-            close_bridge_session(&self.hopr, &bridge_session).await?;
+            Err(error) => {
+                tracing::error!(%error, "unregistering from gvpn server failed");
+            }
         }
+        // 3. close bridge session
+        let _ = results_sender
+            .send(Results::DisconnectionEvent {
+                wg_public_key: self.disconn.wg_public_key.clone(),
+                evt: Evt::CloseBridge,
+            })
+            .await;
+        close_bridge_session(&self.hopr, &bridge_session).await?;
 
         Ok(())
     }
 }
 
-async fn open_bridge_session(hopr: &Hopr, conn: &Conn, options: &Options) -> Result<SessionClientMetadata, HoprError> {
+async fn open_bridge_session(
+    hopr: &Hopr,
+    disconn: &Disconn,
+    options: &Options,
+) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: conn.destination.routing.clone(),
-        return_path_options: conn.destination.routing.clone(),
-        surb_management: Some(conn::to_surb_balancer_config(
+        forward_path_options: disconn.destination.routing.clone(),
+        return_path_options: disconn.destination.routing.clone(),
+        surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.bridge,
             options.max_surb_upstream.bridge,
         )),
         ..Default::default()
     };
     hopr.open_session(
-        conn.destination.address,
+        disconn.destination.address,
         options.sessions.bridge.target.clone(),
         Some(1),
         Some(1),
@@ -159,7 +163,7 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
 
 impl Display for DisconnectionRunner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DisconnectionRunner {{ {} }}", self.conn)
+        write!(f, "DisconnectionRunner for {}", self.disconn)
     }
 }
 

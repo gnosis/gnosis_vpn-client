@@ -1,16 +1,18 @@
 use alloy::primitives::U256;
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
+use bytesize::ByteSize;
+use edgli::hopr_lib::SurbBalancerConfig;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
+use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::Rng;
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time;
 use url::Url;
-use uuid::Uuid;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
@@ -55,19 +57,17 @@ pub enum Results {
     },
     HoprRunning,
     ConnectionEvent {
-        id: Uuid,
         evt: connection_runner::Evt,
     },
     ConnectionResult {
-        id: Uuid,
         res: Result<(), connection_runner::Error>,
     },
     DisconnectionEvent {
-        id: Uuid,
+        wg_public_key: String,
         evt: disconnection_runner::Evt,
     },
     DisconnectionResult {
-        id: Uuid,
+        wg_public_key: String,
         res: Result<(), disconnection_runner::Error>,
     },
 }
@@ -325,16 +325,32 @@ impl Display for Results {
                 Err(err) => write!(f, "Balances: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
-            Results::ConnectionEvent { id, evt } => write!(f, "ConnectionEvent ({}): {:?}", id, evt),
-            Results::ConnectionResult { id, res } => match res {
-                Ok(_) => write!(f, "ConnectionResult ({}): Success", id),
-                Err(err) => write!(f, "ConnectionResult ({}): Error({})", id, err),
+            Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),
+            Results::ConnectionResult { res } => match res {
+                Ok(_) => write!(f, "ConnectionResult: Success"),
+                Err(err) => write!(f, "ConnectionResult: Error({})", err),
             },
-            Results::DisconnectionEvent { id, evt } => write!(f, "DisconnectionEvent ({}): {:?}", id, evt),
-            Results::DisconnectionResult { id, res } => match res {
-                Ok(_) => write!(f, "DisconnectionResult ({}): Success", id),
-                Err(err) => write!(f, "DisconnectionResult ({}): Error({})", id, err),
+            Results::DisconnectionEvent { wg_public_key, evt } => {
+                write!(f, "DisconnectionEvent ({}): {}", wg_public_key, evt)
+            }
+            Results::DisconnectionResult { wg_public_key, res } => match res {
+                Ok(_) => write!(f, "DisconnectionResult ({}): Success", wg_public_key),
+                Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
         }
+    }
+}
+
+pub fn to_surb_balancer_config(response_buffer: ByteSize, max_surb_upstream: Bandwidth) -> SurbBalancerConfig {
+    // Buffer worth at least 2 reply packets
+    if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+        SurbBalancerConfig {
+            target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+            max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+            ..Default::default()
+        }
+    } else {
+        // Use defaults otherwise
+        Default::default()
     }
 }

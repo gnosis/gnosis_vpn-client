@@ -13,8 +13,8 @@ use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError};
 use gnosis_vpn_lib::{ping, wg_tooling};
 
-use crate::core::conn::{self, Conn};
-use crate::core::runner::Results;
+use crate::core::conn::Conn;
+use crate::core::runner::{self, Results};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -59,34 +59,25 @@ impl ConnectionRunner {
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
-        let _ = results_sender
-            .send(Results::ConnectionResult { id: self.conn.id, res })
-            .await;
+        let _ = results_sender.send(Results::ConnectionResult { res }).await;
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::GenerateWg,
-            })
+            .send(Results::ConnectionEvent { evt: Evt::GenerateWg })
             .await;
         let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
 
         // 1. open bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::OpenBridge,
-            })
+            .send(Results::ConnectionEvent { evt: Evt::OpenBridge })
             .await;
         let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options).await?;
 
         // 2. register wg public key
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                id: self.conn.id,
                 evt: Evt::RegisterWg(wg.key_pair.public_key.clone()),
             })
             .await;
@@ -94,46 +85,31 @@ impl ConnectionRunner {
 
         // 3. close bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::CloseBridge,
-            })
+            .send(Results::ConnectionEvent { evt: Evt::CloseBridge })
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
 
         // 4. open ping session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::OpenPing,
-            })
+            .send(Results::ConnectionEvent { evt: Evt::OpenPing })
             .await;
         let ping_session = open_ping_session(&self.hopr, &self.conn, &self.options).await?;
 
         // 5. setup wg tunnel
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                id: self.conn.id,
                 evt: Evt::WgTunnel(wg.clone()),
             })
             .await;
         wg_tunnel(&registration, &ping_session, &wg).await?;
 
         // 6. check ping
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::Ping,
-            })
-            .await;
+        let _ = results_sender.send(Results::ConnectionEvent { evt: Evt::Ping }).await;
         ping(&self.options).await?;
 
         // 7. adjust to main session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::AdjustToMain,
-            })
+            .send(Results::ConnectionEvent { evt: Evt::AdjustToMain })
             .await;
         adjust_to_main_session(&self.hopr, &self.options, &ping_session).await?;
 
@@ -167,7 +143,7 @@ async fn open_bridge_session(hopr: &Hopr, conn: &Conn, options: &Options) -> Res
         capabilities: options.sessions.bridge.capabilities,
         forward_path_options: conn.destination.routing.clone(),
         return_path_options: conn.destination.routing.clone(),
-        surb_management: Some(conn::to_surb_balancer_config(
+        surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.bridge,
             options.max_surb_upstream.bridge,
         )),
@@ -225,7 +201,7 @@ async fn open_ping_session(hopr: &Hopr, conn: &Conn, options: &Options) -> Resul
         capabilities: options.sessions.wg.capabilities,
         forward_path_options: conn.destination.routing.clone(),
         return_path_options: conn.destination.routing.clone(),
-        surb_management: Some(conn::to_surb_balancer_config(
+        surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.ping,
             options.max_surb_upstream.ping,
         )),
@@ -281,6 +257,6 @@ async fn adjust_to_main_session(
         [client] => client.clone(),
         _ => return Err(HoprError::SessionAmbiguousClient),
     };
-    let surb_management = conn::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
+    let surb_management = runner::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
     hopr.adjust_session(surb_management, active_client).await
 }
