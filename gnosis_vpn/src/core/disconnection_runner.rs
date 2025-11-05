@@ -32,7 +32,7 @@ pub struct DisconnectionRunner {
     options: Options,
 }
 
-#[derive(Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Evt {
     DisconnectWg,
     OpenBridge,
