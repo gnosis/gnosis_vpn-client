@@ -1,13 +1,10 @@
-use bytesize::ByteSize;
-use edgli::hopr_lib::SurbBalancerConfig;
-use human_bandwidth::re::bandwidth::Bandwidth;
-
 use std::fmt::{self, Display};
 
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::wg_tooling;
 
-use crate::core::{conn, connection_runner, disconnection_runner};
+use crate::core::conn::Conn;
+use crate::core::disconnection_runner;
 
 #[derive(Clone, Debug)]
 pub struct Disconn {

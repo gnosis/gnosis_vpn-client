@@ -119,6 +119,7 @@ pub async fn safe_deployment(
 }
 
 pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("persisting safe module");
     while let Err(err) = hopr_config::store_safe(&safe_module).await {
         log_output::print_safe_module_storage_error(err);
         time::sleep(Duration::from_secs(5)).await;
@@ -260,6 +261,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool,
 }
 
 async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
+    tracing::debug!("starting hopr runner");
     let cfg = match hopr_params.config_mode.clone() {
         // use user provided configuration path
         hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref()).await?,
