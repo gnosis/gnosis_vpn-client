@@ -1,4 +1,4 @@
-use edgli::hopr_lib::exports::network::types::hopr_internal_types::NodeId;
+use edgli::hopr_lib::NodeId;
 use edgli::hopr_lib::exports::network::types::types::RoutingOptions;
 use edgli::hopr_lib::{Address, GeneralError};
 use thiserror::Error;

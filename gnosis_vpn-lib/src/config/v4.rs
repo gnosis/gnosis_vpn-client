@@ -1,6 +1,6 @@
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
-use edgli::hopr_lib::{Address, SessionCapabilities, SessionCapability, SessionTarget};
+use edgli::hopr_lib::{Address, NodeId, SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -399,7 +399,9 @@ pub fn convert_destinations(
     let mut result = HashMap::new();
     for (address, dest) in config_dests.iter() {
         let path = match dest.path.clone() {
-            Some(DestinationPath::Intermediates(p)) => RoutingOptions::IntermediatePath(p.try_into()?),
+            Some(DestinationPath::Intermediates(p)) => {
+                RoutingOptions::IntermediatePath(p.iter().map(|addr| NodeId::Chain(*addr)).collect())
+            }
             Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into()?),
             None => RoutingOptions::Hops(1.try_into()?),
         };
