@@ -1,3 +1,4 @@
+use edgli::hopr_lib::exports::network::types::hopr_internal_types::NodeId;
 use edgli::hopr_lib::exports::network::types::types::RoutingOptions;
 use edgli::hopr_lib::{Address, GeneralError};
 use thiserror::Error;
@@ -46,6 +47,10 @@ impl Config {
             .values()
             .filter_map(|d| match d.routing.clone() {
                 RoutingOptions::IntermediatePath(path) => path.into_iter().next(),
+                _ => None,
+            })
+            .filter_map(|node_id| match node_id {
+                NodeId::Chain(address) => Some(address),
                 _ => None,
             })
             .collect()
