@@ -1,5 +1,5 @@
 use edgli::hopr_lib::exports::network::types::types::RoutingOptions;
-use edgli::hopr_lib::{Address, GeneralError};
+use edgli::hopr_lib::{Address, GeneralError, NodeId};
 use thiserror::Error;
 
 use std::collections::HashMap;
@@ -46,6 +46,10 @@ impl Config {
             .values()
             .filter_map(|d| match d.routing.clone() {
                 RoutingOptions::IntermediatePath(path) => path.into_iter().next(),
+                _ => None,
+            })
+            .filter_map(|node_id| match node_id {
+                NodeId::Chain(address) => Some(address),
                 _ => None,
             })
             .collect()
