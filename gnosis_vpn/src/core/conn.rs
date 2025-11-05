@@ -6,6 +6,7 @@ use uuid::{self, Uuid};
 use std::fmt::{self, Display};
 
 use gnosis_vpn_lib::connection::destination::Destination;
+use gnosis_vpn_lib::wg_tooling;
 
 use crate::core::{connection_runner, disconnection_runner};
 
@@ -14,12 +15,14 @@ pub struct Conn {
     pub destination: Destination,
     pub id: Uuid,
     pub phase: Phase,
-    pub wg_pub_key: Option<String>,
+    pub wg_public_key: Option<String>,
+    pub wg: Option<wg_tooling::WireGuard>,
 }
 
 #[derive(Clone, Debug)]
 pub enum Phase {
     Init,
+    GeneratingWg,
     OpeningBridge,
     RegisterWg,
     ClosingBridge,
@@ -29,6 +32,7 @@ pub enum Phase {
     AdjustToMain,
     ConnectionEstablished,
     Disconnecting,
+    DisconnectingWg,
     DiscOpeningBridge,
     UnregisterWg,
     DiscClosingBridge,
@@ -41,20 +45,25 @@ impl Conn {
             destination,
             id: Uuid::new_v4(),
             phase: Phase::Init,
-            wg_pub_key: None,
+            wg_public_key: None,
+            wg: None,
         }
     }
 
     pub fn connect_evt(&mut self, evt: connection_runner::Evt) {
         match evt {
+            connection_runner::Evt::GenerateWg => self.phase = Phase::GeneratingWg,
             connection_runner::Evt::OpenBridge => self.phase = Phase::OpeningBridge,
-            connection_runner::Evt::RegisterWg(wg_pub_key) => {
+            connection_runner::Evt::RegisterWg(wg_public_key) => {
                 self.phase = Phase::RegisterWg;
-                self.wg_pub_key = Some(wg_pub_key);
+                self.wg_public_key = Some(wg_public_key);
             }
             connection_runner::Evt::CloseBridge => self.phase = Phase::ClosingBridge,
             connection_runner::Evt::OpenPing => self.phase = Phase::OpeningPing,
-            connection_runner::Evt::WgTunnel => self.phase = Phase::EstablishWgTunnel,
+            connection_runner::Evt::WgTunnel(wg) => {
+                self.wg = Some(wg);
+                self.phase = Phase::EstablishWgTunnel;
+            }
             connection_runner::Evt::Ping => self.phase = Phase::VerifyPing,
             connection_runner::Evt::AdjustToMain => self.phase = Phase::AdjustToMain,
         }
@@ -64,12 +73,14 @@ impl Conn {
         self.phase = Phase::ConnectionEstablished;
     }
 
-    pub fn to_disconnect(&mut self) {
-        match self.phase {}
+    pub fn disconnect(&mut self) -> (Option<String>, Option<wg_tooling::WireGuard>) {
+        self.phase = Phase::Disconnecting;
+        (self.wg_public_key.take(), self.wg.take())
     }
 
     pub fn disconnect_evt(&mut self, evt: disconnection_runner::Evt) {
         match evt {
+            disconnection_runner::Evt::DisconnectWg => self.phase = Phase::DisconnectingWg,
             disconnection_runner::Evt::OpenBridge => self.phase = Phase::DiscOpeningBridge,
             disconnection_runner::Evt::UnregisterWg => self.phase = Phase::UnregisterWg,
             disconnection_runner::Evt::CloseBridge => self.phase = Phase::DiscClosingBridge,
