@@ -56,6 +56,7 @@ pub struct Core {
 
     // cancellation tokens
     cancel_balances_token: CancellationToken,
+    cancel_connection_token: CancellationToken,
     cancel_for_shutdown_token: CancellationToken,
 
     // user provided data
@@ -96,6 +97,7 @@ impl Core {
 
             // cancellation tokens
             cancel_balances_token: CancellationToken::new(),
+            cancel_connection_token: CancellationToken::new(),
             cancel_for_shutdown_token: CancellationToken::new(),
 
             // user provided data
@@ -145,8 +147,9 @@ impl Core {
             Event::Shutdown { resp } => {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
-                self.cancel_for_shutdown_token.cancel();
                 self.cancel_balances_token.cancel();
+                self.cancel_connection_token.cancel();
+                self.cancel_for_shutdown_token.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     tracing::debug!("shutting down hopr");
                     hopr.shutdown().await;
@@ -435,6 +438,12 @@ impl Core {
                 } else {
                     tracing::warn!(?self.phase, %evt, "received disconnection event for unknown connection");
                 }
+                // potentially reconnect early after wg disconnected
+                // this might only happen when reconnecting to a different destination after a
+                // connection established successfully
+                if matches!(evt, disconnection_runner::Evt::OpenBridge) {
+                    self.act_on_target(results_sender).await;
+                }
             }
 
             Results::ConnectionResult { id, res } => match (res, self.phase.clone()) {
@@ -472,6 +481,7 @@ impl Core {
                     }
                 }
                 self.disconnecting_connections.retain(|c| c.id != id);
+                self.act_on_target(results_sender).await;
             }
         }
     }
@@ -615,7 +625,7 @@ impl Core {
 
     fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown_token.clone();
+            let cancel = self.cancel_connection_token.clone();
             let conn = Conn::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
@@ -709,14 +719,42 @@ impl Core {
     */
 
     async fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
-        match (self.phase.clone(), self.target_destination.clone()) {
-            (Phase::HoprChannelsFunded, Some(dest)) => {
-                tracing::info!(destination = %dest, "establishing new connection");
+        match (self.target_destination.clone(), self.phase.clone()) {
+            // Connecting from ready
+            (Some(dest), Phase::HoprChannelsFunded) => {
+                tracing::info!(destination = %dest, "establishing connection to new destination");
                 self.spawn_connection_runner(dest.clone(), results_sender);
             }
-            _ => {
-                unimplemented!()
+            // Connecting to different destination while already connected
+            (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
+                tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connected");
+                self.phase = Phase::HoprChannelsFunded;
+                self.spawn_disconnection_runner(&conn, results_sender);
             }
+            // Connecting to different destination while already connecting
+            (Some(dest), Phase::Connecting(conn)) if dest != conn.destination => {
+                tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connecting");
+                self.cancel_connection_token.cancel();
+                self.cancel_connection_token = CancellationToken::new();
+                self.phase = Phase::HoprChannelsFunded;
+                self.spawn_disconnection_runner(&conn, results_sender);
+            }
+            // Disconnecting from established connection
+            (None, Phase::Connected(conn)) => {
+                tracing::info!(current = %conn.destination, "disconnecting from destination");
+                self.phase = Phase::HoprChannelsFunded;
+                self.spawn_disconnection_runner(&conn, results_sender);
+            }
+            // Disconnecting while establishing connection
+            (None, Phase::Connecting(conn)) => {
+                tracing::info!(current = %conn.destination, "disconnecting from ongoing connection attempt");
+                self.cancel_connection_token.cancel();
+                self.cancel_connection_token = CancellationToken::new();
+                self.phase = Phase::HoprChannelsFunded;
+                self.spawn_disconnection_runner(&conn, results_sender);
+            }
+            // No action needed
+            _ => {}
         }
     }
 }
