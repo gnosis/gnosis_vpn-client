@@ -508,12 +508,11 @@ impl Core {
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
                     self.last_connection_error = Some(format!("connection failed: {}", err));
-                    if let Some(dest) = self.target_destination.clone() {
-                        if dest == conn.destination {
+                    if let Some(dest) = self.target_destination.clone()
+                        && dest == conn.destination {
                             tracing::info!(%dest, "removing target destination due to connection error");
                             self.target_destination = None;
                         }
-                    }
                 }
                 (Err(err), phase) => {
                     tracing::warn!(?phase, %err, "connection failed in unexpecting state");
@@ -756,7 +755,7 @@ impl Core {
         self.cancel_connecting.cancel();
         self.cancel_connecting = CancellationToken::new();
         self.phase = Phase::HoprChannelsFunded;
-        if let Some(disconn) = conn.try_into().ok() {
+        if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, results_sender);
         }
     }
