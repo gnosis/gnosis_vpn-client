@@ -630,7 +630,7 @@ impl Core {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
-                        runner.connect(results_sender).await;
+                        runner.start(results_sender).await;
                     })
                     .await;
             });

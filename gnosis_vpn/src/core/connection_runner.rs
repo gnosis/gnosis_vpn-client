@@ -83,7 +83,7 @@ impl ConnectionRunner {
         let _ = results_sender
             .send(Results::ConnectionEvent {
                 id: self.conn.id,
-                evt: Evt::Register(wg.key_pair.public_key.clone()),
+                evt: Evt::RegisterWg(wg.key_pair.public_key.clone()),
             })
             .await;
         let registration = self.register(&bridge_session, &wg).await?;
