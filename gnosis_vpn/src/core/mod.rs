@@ -6,7 +6,6 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use uuid::{self, Uuid};
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,11 +64,12 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    connections: HashMap<Uuid, Conn>,
     funded_channels: Vec<Address>,
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
+    disconnecting_connections: Vec<Conn>,
+    last_connection_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,11 +80,8 @@ enum Phase {
     HoprSyncing,
     HoprRunning,
     HoprChannelsFunded,
-    Connecting(Uuid),
-    Connected(Uuid),
-    ConnectionError(Uuid, String),
-    Disconnecting(Uuid),
-    DisconnectingError(Uuid, String),
+    Connecting(Conn),
+    Connected(Conn),
     ShuttingDown,
 }
 
@@ -106,12 +103,13 @@ impl Core {
 
             // runtime data
             phase: Phase::Initial,
-            connections: HashMap::new(),
             balances: None,
             funded_channels: Vec::new(),
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             ticket_value: None,
+            disconnecting_connections: Vec::new(),
+            last_connection_error: None,
         })
     }
 
@@ -198,24 +196,27 @@ impl Core {
                         //         command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
                         //     }
                         // };
+                        //
+                        unimplemented!();
 
-                        let available_destinations = self
-                            .config
-                            .destinations
-                            .values()
-                            .map(|v| {
-                                let dest = v.clone();
-                                dest.into()
-                            })
-                            .collect();
-                        let network = self.hopr_params.network.clone();
-                        let res = Response::status(command::StatusResponse::new(
-                            command::RunMode::initializing(),
-                            available_destinations,
-                            network,
-                        ));
-                        let _ = resp.send(res);
+                        // let available_destinations = self
+                        //     .config
+                        //     .destinations
+                        //     .values()
+                        //     .map(|v| {
+                        //         let dest = v.clone();
+                        //         dest.into()
+                        //     })
+                        //     .collect();
+                        // let network = self.hopr_params.network.clone();
+                        // let res = Response::status(command::StatusResponse::new(
+                        //     command::RunMode::initializing(),
+                        //     available_destinations,
+                        //     network,
+                        // ));
+                        // let _ = resp.send(res);
                     }
+
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
@@ -227,50 +228,32 @@ impl Core {
                             let _ = resp.send(Response::connect(command::ConnectResponse::address_not_found()));
                         }
                     },
+
                     Command::Disconnect => {
-                        unimplemented!();
-                        /*
                         self.target_destination = None;
-                        match self.phase {
-                            Phase::Connected(id) | Phase::Connecting(id) => {
-                                if let Some(conn) = self.connections.get(&id) {
-                                    tracing::info!(current = %conn.destination(), "disconnecting");
-                                    let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(conn.destination().into())));
-                                } else {
-                                    tracing::warn!(%id, "unable to find connected");
-                                }
+                        match self.phase.clone() {
+                            Phase::Connected(conn) | Phase::Connecting(conn) => {
+                                tracing::info!(current = %conn.destination, "disconnecting");
+                                let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(
+                                    conn.destination.into(),
+                                )));
                             }
                             _ => {
                                 tracing::debug!("no active connection to disconnect");
-                            }
-                        }
-                                tracing::info!("disconnecting from current destination");
-                            let _ = resp.send(Response::disconnecting());
-
-                                self.phase = Phase::ShuttingDown;
-                            }
-                        }
-                        */
-                        /*
-                        let dest = self.connection.as_ref().map(|c| c.destination());
-                        match dest {
-                            Some(d) => {
-                                let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(d.into())));
-                            }
-                            None => {
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::not_connected()));
                             }
                         }
-                        self.act_on_target().await;
-                        */
+                        self.act_on_target(results_sender).await;
                     }
 
                     Command::Balance => {
                         self.spawn_balance_response(&resp);
                     }
+
                     Command::Ping => {
                         let _ = resp.send(Response::Pong);
                     }
+
                     Command::RefreshNode => {
                         unimplemented!();
                         /*
@@ -284,6 +267,7 @@ impl Core {
                         let _ = resp.send(Response::Empty);
                         */
                     }
+
                     Command::FundingTool(secret) => {
                         if matches!(self.phase, Phase::CreatingSafe) {
                             self.funding_tool = balance::FundingTool::InProgress;
@@ -294,6 +278,7 @@ impl Core {
                             let _ = resp.send(Response::Empty);
                         }
                     }
+
                     Command::Metrics => {
                         let metrics = match edgli::hopr_lib::Hopr::collect_hopr_metrics() {
                             Ok(m) => m,
@@ -334,6 +319,7 @@ impl Core {
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                 }
             },
+
             Results::PreSafe { res } => match res {
                 Ok(presafe) => {
                     tracing::info!(%presafe, "on presafe balance");
@@ -349,6 +335,7 @@ impl Core {
                     self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
                 }
             },
+
             Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
                     self.spawn_store_safe(deployment.into(), results_sender);
@@ -358,17 +345,20 @@ impl Core {
                     self.spawn_presafe_runner(results_sender, Duration::from_secs(5));
                 }
             },
+
             Results::SafePersisted => {
                 tracing::info!("safe module persisted - starting hopr runner");
                 self.phase = Phase::Starting;
                 self.spawn_hopr_runner(results_sender, Duration::ZERO);
             }
+
             Results::Hopr { res } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
-                    self.spawn_balances_runner(results_sender, Duration::ZERO);
+                    // TODO enable
+                    // self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -376,6 +366,7 @@ impl Core {
                     self.spawn_hopr_runner(results_sender, Duration::from_secs(10));
                 }
             },
+
             Results::FundingTool { res } => match res {
                 Ok(success) => {
                     self.funding_tool = if success {
@@ -389,6 +380,7 @@ impl Core {
                     self.funding_tool = balance::FundingTool::CompletedError;
                 }
             },
+
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
@@ -400,12 +392,14 @@ impl Core {
                     self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
+
             Results::HoprRunning => {
                 self.phase = Phase::HoprRunning;
                 for c in self.config.channel_targets() {
                     self.spawn_channel_funding(c, results_sender, Duration::ZERO);
                 }
             }
+
             Results::FundChannel { address, res } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
@@ -421,60 +415,63 @@ impl Core {
                     self.spawn_channel_funding(address, results_sender, Duration::from_secs(60));
                 }
             },
+
             Results::ConnectionEvent { id, evt } => {
                 tracing::debug!(%id, %evt, "handling connection runner event");
-                if let Some(conn) = self.connections.get_mut(&id) {
-                    conn.connect_evt(evt);
-                } else {
-                    tracing::warn!(%id, %evt, "received connection event for unhandled connection");
+                match self.phase.clone() {
+                    Phase::Connecting(mut conn) => {
+                        conn.connect_evt(evt);
+                    }
+                    phase => {
+                        tracing::warn!(?phase, %evt, "received connection event in unexpected phase");
+                    }
                 }
             }
+
             Results::DisconnectionEvent { id, evt } => {
                 tracing::debug!(%id, %evt, "handling disconnection runner event");
-                if let Some(conn) = self.connections.get_mut(&id) {
+                if let Some(conn) = self.disconnecting_connections.iter_mut().find(|c| c.id == id) {
                     conn.disconnect_evt(evt);
                 } else {
-                    tracing::warn!(%id, %evt, "received disconnection event for unhandled connection");
+                    tracing::warn!(?self.phase, %evt, "received disconnection event for unknown connection");
                 }
             }
-            Results::ConnectionResult { id, res } => match (res, self.phase.clone(), self.connections.get_mut(&id)) {
-                (Ok(_), Phase::Connecting(conn_id), Some(conn)) if conn_id == id => {
+
+            Results::ConnectionResult { id, res } => match (res, self.phase.clone()) {
+                (Ok(_), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
-                    self.phase = Phase::Connected(id);
+                    self.phase = Phase::Connected(conn);
+                    self.last_connection_error = None;
                 }
-                (Err(err), Phase::Connecting(conn_id), Some(conn)) if conn_id == id => {
+                (Ok(_), phase) => {
+                    tracing::info!(?phase, "unawaited connection established successfully");
+                }
+                (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
-                    self.phase = Phase::ConnectionError(id, err.to_string());
+                    self.last_connection_error = Some(format!("connection failed: {}", err));
+                    if let Some(dest) = self.target_destination.clone() {
+                        if dest == conn.destination {
+                            tracing::info!(%dest, "removing target destination due to connection error");
+                            self.target_destination = None;
+                        }
+                    }
                 }
-                (res, phase, conn) => {
-                    tracing::warn!(?res, ?phase, ?conn, "received connection result in unexpecting state");
+                (Err(err), phase) => {
+                    tracing::warn!(?phase, %err, "connection failed in unexpecting state");
                 }
             },
+
             Results::DisconnectionResult { id, res } => {
-                match (res, self.phase.clone(), self.connections.get_mut(&id)) {
-                    (Ok(_), Phase::Disconnecting(conn_id), Some(conn)) if conn_id == id => {
-                        tracing::info!(%conn, "disconnect successful");
-                        conn.disconnected();
-                        self.phase = Phase::HoprChannelsFunded;
+                match res {
+                    Ok(_) => {
+                        tracing::info!(%id, "disconnected successful");
                     }
-                    (Ok(_), phase, Some(conn)) => {
-                        tracing::info!(%conn, ?phase, "unawaited disconnect successful");
-                        conn.disconnected();
-                    }
-                    (Err(err), Phase::Disconnecting(conn_id), Some(conn)) if conn_id == id => {
-                        tracing::error!(%conn, %err, "disconnection failed");
-                        self.phase = Phase::DisconnectingError(id, err.to_string());
-                    }
-                    (res, phase, conn) => {
-                        tracing::warn!(
-                            ?res,
-                            ?phase,
-                            ?conn,
-                            "received disconnection result in unexpecting state"
-                        );
+                    Err(err) => {
+                        tracing::error!(%id, %err, "disconnection failed");
                     }
                 }
+                self.disconnecting_connections.retain(|c| c.id != id);
             }
         }
     }
@@ -620,13 +617,32 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_for_shutdown_token.clone();
             let conn = Conn::new(destination.clone());
-            self.connections.insert(conn.id, conn.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
             let runner = ConnectionRunner::new(conn.clone(), config_connection, config_wireguard, hopr);
             let results_sender = results_sender.clone();
-            self.phase = Phase::Connecting(conn.id);
+            self.phase = Phase::Connecting(conn);
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner.start(results_sender).await;
+                    })
+                    .await;
+            });
+        }
+    }
+
+    fn spawn_disconnection_runner(&mut self, conn: &Conn, results_sender: &mpsc::Sender<Results>) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_for_shutdown_token.clone();
+            let config_connection = self.config.connection.clone();
+            let hopr = hopr.clone();
+            let mut conn = conn.clone();
+            conn.disconnect();
+            let runner = DisconnectionRunner::new(conn.clone(), hopr, config_connection);
+            let results_sender = results_sender.clone();
+            self.disconnecting_connections.push(conn.clone());
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {

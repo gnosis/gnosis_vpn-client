@@ -30,8 +30,6 @@ pub struct DisconnectionRunner {
     conn: Conn,
     hopr: Arc<Hopr>,
     options: Options,
-    wg: Option<wg_tooling::WireGuard>,
-    wg_public_key: Option<String>,
 }
 
 #[derive(Debug)]
@@ -43,20 +41,8 @@ pub enum Evt {
 }
 
 impl DisconnectionRunner {
-    pub fn new(
-        conn: Conn,
-        hopr: Arc<Hopr>,
-        options: Options,
-        wg_public_key: Option<String>,
-        wg: Option<wg_tooling::WireGuard>,
-    ) -> Self {
-        Self {
-            conn,
-            hopr,
-            options,
-            wg_public_key,
-            wg,
-        }
+    pub fn new(conn: Conn, hopr: Arc<Hopr>, options: Options) -> Self {
+        Self { conn, hopr, options }
     }
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
@@ -68,7 +54,7 @@ impl DisconnectionRunner {
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. disconnect wg tunnel if any
-        if let Some(wg) = self.wg.clone() {
+        if let Some(wg) = self.conn.wg() {
             let _ = results_sender
                 .send(Results::DisconnectionEvent {
                     id: self.conn.id,
@@ -82,7 +68,7 @@ impl DisconnectionRunner {
         }
 
         // run unregister flow if we have a public key
-        if let Some(public_key) = self.wg_public_key.clone() {
+        if let Some(public_key) = self.conn.wg_public_key() {
             let _ = results_sender
                 .send(Results::DisconnectionEvent {
                     id: self.conn.id,

@@ -73,9 +73,16 @@ impl Conn {
         self.phase = Phase::ConnectionEstablished;
     }
 
-    pub fn disconnect(&mut self) -> (Option<String>, Option<wg_tooling::WireGuard>) {
+    pub fn disconnect(&mut self) {
         self.phase = Phase::Disconnecting;
-        (self.wg_public_key.take(), self.wg.take())
+    }
+
+    pub fn wg_public_key(&self) -> Option<String> {
+        self.wg_public_key.clone()
+    }
+
+    pub fn wg(&self) -> Option<wg_tooling::WireGuard> {
+        self.wg.clone()
     }
 
     pub fn disconnect_evt(&mut self, evt: disconnection_runner::Evt) {
