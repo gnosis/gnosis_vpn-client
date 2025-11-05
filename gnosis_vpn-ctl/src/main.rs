@@ -12,11 +12,12 @@ mod cli;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = cli::parse();
 
     let cmd: Command = args.command.into();
-    let resp = match socket::process_cmd(&args.socket_path, &cmd) {
+    let resp = match socket::process_cmd(&args.socket_path, &cmd).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("Error processing {cmd}: {e}");

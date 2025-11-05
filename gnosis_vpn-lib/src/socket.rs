@@ -1,8 +1,8 @@
 use std::io;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
 
 use crate::command::{Command, Response};
 
@@ -10,16 +10,10 @@ use crate::command::{Command, Response};
 pub enum Error {
     #[error("service not running")]
     ServiceNotRunning,
-    #[error("error accessing socket at `{socket_path}`: {error}")]
-    SocketPathIO { socket_path: PathBuf, error: io::Error },
-    #[error("error connecting socket at `{socket_path:?}`: {error:?}")]
-    ConnectSocketIO { socket_path: PathBuf, error: io::Error },
     #[error("failed serializing command: {0}")]
     Serialization(#[from] serde_json::Error),
-    #[error("error writing to socket at: {0}")]
-    WriteSocketIO(io::Error),
-    #[error("error reading from socket: {0}")]
-    ReadSocketIO(io::Error),
+    #[error(transparent)]
+    IO(#[from] io::Error),
 }
 
 pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.sock";
@@ -30,17 +24,14 @@ pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 // PathBuf::from("//./pipe/Gnosis VPN")
 // }
 
-pub fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, Error> {
+pub async fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, Error> {
     check_path(socket_path)?;
 
-    let mut stream = UnixStream::connect(socket_path).map_err(|x| Error::ConnectSocketIO {
-        socket_path: socket_path.to_path_buf(),
-        error: x,
-    })?;
+    let mut stream = UnixStream::connect(socket_path).await?;
 
     let json_cmd = serde_json::to_string(cmd)?;
-    push_command(&mut stream, &json_cmd)?;
-    let str_resp = pull_response(&mut stream)?;
+    push_command(&mut stream, &json_cmd).await?;
+    let str_resp = pull_response(&mut stream).await?;
     serde_json::from_str::<Response>(&str_resp).map_err(Error::Serialization)
 }
 
@@ -48,27 +39,23 @@ fn check_path(socket_path: &Path) -> Result<(), Error> {
     match socket_path.try_exists() {
         Ok(true) => Ok(()),
         Ok(false) => Err(Error::ServiceNotRunning),
-        Err(x) => Err(Error::SocketPathIO {
-            socket_path: socket_path.to_path_buf(),
-            error: x,
-        }),
+        Err(x) => Err(x.into()),
     }
 }
 
-fn push_command(socket: &mut UnixStream, json_cmd: &str) -> Result<(), Error> {
+async fn push_command(socket: &mut UnixStream, json_cmd: &str) -> Result<(), Error> {
     // flush is not enough to push the command
     // we need to shutdown the write channel to signal the other side that all data was transferred
-    socket
-        .write_all(json_cmd.as_bytes())
-        .map(|_| socket.flush())
-        .and_then(|_| socket.shutdown(std::net::Shutdown::Write))
-        .map_err(Error::WriteSocketIO)
+    socket.write_all(json_cmd.as_bytes()).await?;
+    socket.flush().await?;
+    socket.shutdown().await.map_err(Error::from)
 }
 
-fn pull_response(socket: &mut UnixStream) -> Result<String, Error> {
+async fn pull_response(socket: &mut UnixStream) -> Result<String, Error> {
     let mut response = String::new();
     socket
         .read_to_string(&mut response)
+        .await
         .map(|_size| response)
-        .map_err(Error::ReadSocketIO)
+        .map_err(Error::from)
 }

@@ -119,11 +119,11 @@ async fn config_channel(
     Ok((watcher, receiver))
 }
 
-async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<tokio::net::UnixStream>, exitcode::ExitCode> {
+async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
-            match socket::process_cmd(socket_path, &Command::Ping) {
+            match socket::process_cmd(socket_path, &Command::Ping).await {
                 Ok(_) => {
                     tracing::error!("system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);

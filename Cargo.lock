@@ -4044,6 +4044,7 @@ dependencies = [
  "gnosis_vpn-lib",
  "mimalloc",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
