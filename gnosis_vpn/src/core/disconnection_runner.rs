@@ -11,7 +11,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use gnosis_vpn_lib::connection::options::Options;
-use gnosis_vpn_lib::gvpn_client::{self, Registration};
+use gnosis_vpn_lib::gvpn_client;
 use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
 use gnosis_vpn_lib::hopr::{Hopr, HoprError};
 use gnosis_vpn_lib::{ping, wg_tooling};
@@ -31,107 +31,88 @@ pub enum Error {
     Ping(#[from] ping::Error),
 }
 
-pub struct ConnectionRunner {
+pub struct DisconnectionRunner {
     conn: Conn,
     hoprd: Arc<Hopr>,
     options: Options,
-    wg_config: wg_tooling::Config,
+    wg: Option<wg_tooling::WireGuard>,
+    wg_public_key: String,
 }
 
 #[derive(Debug)]
 pub enum Evt {
     OpenBridge,
-    RegisterWg(String),
+    UnregisterWg,
     CloseBridge,
-    OpenPing,
-    WgTunnel,
-    Ping,
-    AdjustToMain,
 }
 
-impl ConnectionRunner {
-    pub fn new(conn: Conn, options: Options, wg_config: wg_tooling::Config, hoprd: Arc<Hopr>) -> Self {
+impl DisconnectionRunner {
+    pub fn new(
+        conn: Conn,
+        hoprd: Arc<Hopr>,
+        options: Options,
+        wg_public_key: String,
+        wg: Option<wg_tooling::WireGuard>,
+    ) -> Self {
         Self {
             conn,
             hoprd,
             options,
-            wg_config,
+            wg_public_key,
+            wg,
         }
     }
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender
-            .send(Results::ConnectionResult { id: self.conn.id, res })
+            .send(Results::DisconnectionResult { id: self.conn.id, res })
             .await;
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 0. generate wg keys
-        let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
+        // 0. disconnect wireguard
+        if let Some(wg) = self.wg.clone() {
+            let _ = wg
+                .close_session()
+                .await
+                .map_err(|err| tracing::warn!("disconnecting WireGuard failed: {}", err));
+        }
 
         // 1. open bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
+            .send(Results::DisconnectionEvent {
                 id: self.conn.id,
                 evt: Evt::OpenBridge,
             })
             .await;
         let bridge_session = self.open_bridge_session().await?;
 
-        // 2. register wg public key
+        // 2. unregister wg public key
         let _ = results_sender
-            .send(Results::ConnectionEvent {
+            .send(Results::DisconnectionEvent {
                 id: self.conn.id,
-                evt: Evt::Register(wg.key_pair.public_key.clone()),
+                evt: Evt::UnregisterWg,
             })
             .await;
-        let registration = self.register(&bridge_session, &wg).await?;
+        match self.unregister(&bridge_session).await {
+            Ok(_) => (),
+            Err(gvpn_client::Error::RegistrationNotFound) => {
+                tracing::warn!("trying to unregister already removed registration");
+            }
+            Err(error) => {
+                tracing::error!(%error, "unregistering from gvpn server failed");
+            }
+        }
 
         // 3. close bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
+            .send(Results::DisconnectionEvent {
                 id: self.conn.id,
                 evt: Evt::CloseBridge,
             })
             .await;
         self.close_bridge_session(&bridge_session).await?;
-
-        // 4. open ping session
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::OpenPing,
-            })
-            .await;
-        let ping_session = self.open_ping_session().await?;
-
-        // 5. setup wg tunnel
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::WgTunnel,
-            })
-            .await;
-        self.wg_tunnel(&registration, &ping_session, &wg).await?;
-
-        // 6. check ping
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::Ping,
-            })
-            .await;
-        self.ping().await?;
-
-        // 7. adjust to main session
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                id: self.conn.id,
-                evt: Evt::AdjustToMain,
-            })
-            .await;
-        self.adjust_to_main_session(&ping_session).await?;
 
         Ok(())
     }
@@ -163,22 +144,15 @@ impl ConnectionRunner {
         .await
     }
 
-    async fn register(
-        &self,
-        session_client_metadata: &SessionClientMetadata,
-        wg: &wg_tooling::WireGuard,
-    ) -> Result<Registration, gvpn_client::Error> {
+    async fn unregister(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), gvpn_client::Error> {
         let input = gvpn_client::Input::new(
-            wg.key_pair.public_key.clone(),
+            self.wg_public_key.clone(),
             session_client_metadata.bound_host.port(),
             self.options.timeouts.http,
         );
         let client = reqwest::Client::new();
-        retry(ExponentialBackoff::default(), || async {
-            let res = gvpn_client::register(&client, &input).await?;
-            Ok(res)
-        })
-        .await
+        let res = gvpn_client::unregister(&client, &input).await?;
+        Ok(res)
     }
 
     async fn close_bridge_session(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
@@ -222,61 +196,20 @@ impl ConnectionRunner {
         })
         .await
     }
-
-    async fn wg_tunnel(
-        &self,
-        registration: &Registration,
-        session_client_metadata: &SessionClientMetadata,
-        wg: &wg_tooling::WireGuard,
-    ) -> Result<(), wg_tooling::Error> {
-        // run wg-quick down once to ensure no dangling state
-        _ = wg.close_session().await;
-
-        let interface_info = wg_tooling::InterfaceInfo {
-            address: registration.address(),
-            mtu: session_client_metadata.hopr_mtu,
-        };
-
-        let peer_info = wg_tooling::PeerInfo {
-            public_key: registration.server_public_key(),
-            endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
-        };
-
-        wg.connect_session(&interface_info, &peer_info).await
-    }
-
-    async fn ping(&self) -> Result<(), ping::Error> {
-        ping::ping(&self.options.ping_options)
-    }
-
-    async fn adjust_to_main_session(&self, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
-        let active_client = match session_client_metadata.active_clients.as_slice() {
-            [] => return Err(HoprError::SessionNotFound),
-            [client] => client.clone(),
-            _ => return Err(HoprError::SessionAmbiguousClient),
-        };
-        let surb_management =
-            to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main);
-        self.hoprd.adjust_session(surb_management, active_client).await
-    }
 }
 
-impl Display for ConnectionRunner {
+impl Display for DisconnectionRunner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ConnectionRunner {{ {} }}", self.conn)
+        write!(f, "DisconnectionRunner {{ {} }}", self.conn)
     }
 }
 
 impl Display for Evt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Evt::OpenBridge => write!(f, "OpenBridge"),
-            Evt::RegisterWg(wg_pub_key) => write!(f, "RegisterWg({})", wg_pub_key),
-            Evt::CloseBridge => write!(f, "CloseBridge"),
-            Evt::OpenPing => write!(f, "OpenPing"),
-            Evt::WgTunnel => write!(f, "WgTunnel"),
-            Evt::Ping => write!(f, "Ping"),
-            Evt::AdjustToMain => write!(f, "AdjustToMain"),
+            Evt::OpenBridge => write!(f, "Evt::OpenBridge"),
+            Evt::UnregisterWg => write!(f, "Evt::UnregisterWg"),
+            Evt::CloseBridge => write!(f, "Evt::CloseBridge"),
         }
     }
 }

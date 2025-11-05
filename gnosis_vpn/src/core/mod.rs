@@ -22,10 +22,12 @@ use crate::hopr_params::HoprParams;
 
 mod conn;
 mod connection_runner;
+mod disconnection_runner;
 mod runner;
 
 use conn::Conn;
 use connection_runner::ConnectionRunner;
+use disconnection_runner::DisconnectionRunner;
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -81,8 +83,8 @@ enum Phase {
     Connecting(Uuid),
     Connected(Uuid),
     ConnectionError(Uuid, String),
-    // ConnectingFailed(String),
-    // Disconnecting(ConnDown),
+    Disconnecting(Uuid),
+    DisconnectingError(Uuid, String),
     ShuttingDown,
 }
 
@@ -422,26 +424,57 @@ impl Core {
             Results::ConnectionEvent { id, evt } => {
                 tracing::debug!(%id, %evt, "handling connection runner event");
                 if let Some(conn) = self.connections.get_mut(&id) {
-                    conn.on_evt(evt);
+                    conn.connect_evt(evt);
                 } else {
                     tracing::warn!(%id, %evt, "received connection event for unhandled connection");
                 }
             }
-            Results::ConnectionResult { id, res } => match (self.connections.get(&id), res) {
-                (Some(_), Ok(_)) => {
-                    tracing::info!(%id, "connection established successfully");
+            Results::DisconnectionEvent { id, evt } => {
+                tracing::debug!(%id, %evt, "handling disconnection runner event");
+                if let Some(conn) = self.connections.get_mut(&id) {
+                    conn.disconnect_evt(evt);
+                } else {
+                    tracing::warn!(%id, %evt, "received disconnection event for unhandled connection");
+                }
+            }
+            Results::ConnectionResult { id, res } => match (res, self.phase.clone(), self.connections.get_mut(&id)) {
+                (Ok(_), Phase::Connecting(conn_id), Some(conn)) if conn_id == id => {
+                    tracing::info!(%conn, "connection established successfully");
+                    conn.connected();
                     self.phase = Phase::Connected(id);
                 }
-                (Some(_), Err(err)) => {
-                    tracing::error!(%id, %err, "connection failed");
+                (Err(err), Phase::Connecting(conn_id), Some(conn)) if conn_id == id => {
+                    tracing::error!(%conn, %err, "connection failed");
                     self.phase = Phase::ConnectionError(id, err.to_string());
                 }
-                (_, res) => {
-                    tracing::warn!(%id, ?res, "received connection result for unhandled connection");
+                (res, phase, conn) => {
+                    tracing::warn!(?res, ?phase, ?conn, "received connection result in unexpecting state");
                 }
             },
             Results::DisconnectionResult { id, res } => {
-                unimplemented!();
+                match (res, self.phase.clone(), self.connections.get_mut(&id)) {
+                    (Ok(_), Phase::Disconnecting(conn_id), Some(conn)) if conn_id == id => {
+                        tracing::info!(%conn, "disconnect successful");
+                        conn.disconnected();
+                        self.phase = Phase::HoprChannelsFunded;
+                    }
+                    (Ok(_), phase, Some(conn)) => {
+                        tracing::info!(%conn, ?phase, "unawaited disconnect successful");
+                        conn.disconnected();
+                    }
+                    (Err(err), Phase::Disconnecting(conn_id), Some(conn)) if conn_id == id => {
+                        tracing::error!(%conn, %err, "disconnection failed");
+                        self.phase = Phase::DisconnectingError(id, err.to_string());
+                    }
+                    (res, phase, conn) => {
+                        tracing::warn!(
+                            ?res,
+                            ?phase,
+                            ?conn,
+                            "received disconnection result in unexpecting state"
+                        );
+                    }
+                }
             }
         }
     }

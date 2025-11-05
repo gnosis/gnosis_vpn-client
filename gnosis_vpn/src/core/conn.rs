@@ -1,10 +1,10 @@
-use uuid::{self, Uuid};
-
 use std::fmt::{self, Display};
 
 use gnosis_vpn_lib::connection::destination::Destination;
 
-use crate::core::connection_runner;
+use crate::core::{connection_runner, disconnection_runner};
+
+use uuid::{self, Uuid};
 
 #[derive(Clone, Debug)]
 pub struct Conn {
@@ -24,6 +24,12 @@ pub enum Phase {
     EstablishWgTunnel,
     VerifyPing,
     AdjustToMain,
+    ConnectionEstablished,
+    Disconnecting,
+    DiscOpeningBridge,
+    UnregisterWg,
+    DiscClosingBridge,
+    Disconnected,
 }
 
 impl Conn {
@@ -36,10 +42,10 @@ impl Conn {
         }
     }
 
-    pub fn on_evt(&mut self, evt: connection_runner::Evt) {
+    pub fn connect_evt(&mut self, evt: connection_runner::Evt) {
         match evt {
             connection_runner::Evt::OpenBridge => self.phase = Phase::OpeningBridge,
-            connection_runner::Evt::Register(wg_pub_key) => {
+            connection_runner::Evt::RegisterWg(wg_pub_key) => {
                 self.phase = Phase::RegisterWg;
                 self.wg_pub_key = Some(wg_pub_key);
             }
@@ -49,6 +55,22 @@ impl Conn {
             connection_runner::Evt::Ping => self.phase = Phase::VerifyPing,
             connection_runner::Evt::AdjustToMain => self.phase = Phase::AdjustToMain,
         }
+    }
+
+    pub fn connected(&mut self) {
+        self.phase = Phase::ConnectionEstablished;
+    }
+
+    pub fn disconnect_evt(&mut self, evt: disconnection_runner::Evt) {
+        match evt {
+            disconnection_runner::Evt::OpenBridge => self.phase = Phase::DiscOpeningBridge,
+            disconnection_runner::Evt::UnregisterWg => self.phase = Phase::UnregisterWg,
+            disconnection_runner::Evt::CloseBridge => self.phase = Phase::DiscClosingBridge,
+        }
+    }
+
+    pub fn disconnected(&mut self) {
+        self.phase = Phase::Disconnected;
     }
 }
 

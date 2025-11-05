@@ -26,7 +26,7 @@ use gnosis_vpn_lib::log_output;
 use gnosis_vpn_lib::remote_data;
 use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
 
-use crate::core::connection_runner;
+use crate::core::{connection_runner, disconnection_runner};
 use crate::hopr_params::{self, HoprParams};
 
 pub enum Results {
@@ -62,9 +62,13 @@ pub enum Results {
         id: Uuid,
         res: Result<(), connection_runner::Error>,
     },
+    DisconnectionEvent {
+        id: Uuid,
+        evt: disconnection_runner::Evt,
+    },
     DisconnectionResult {
         id: Uuid,
-        res: Result<(), connection_runner::Error>,
+        res: Result<(), disconnection_runner::Error>,
     },
 }
 
