@@ -326,6 +326,10 @@ impl Display for Results {
                 Ok(_) => write!(f, "ConnectionResult ({}): Success", id),
                 Err(err) => write!(f, "ConnectionResult ({}): Error({})", id, err),
             },
+            Results::DisconnectionResult { id, res } => match res {
+                Ok(_) => write!(f, "DisconnectionResult ({}): Success", id),
+                Err(err) => write!(f, "DisconnectionResult ({}): Error({})", id, err),
+            },
         }
     }
 }

@@ -226,6 +226,8 @@ impl Core {
                         }
                     },
                     Command::Disconnect => {
+                        unimplemented!();
+                        /*
                         self.target_destination = None;
                         match self.phase {
                             Phase::Connected(id) | Phase::Connecting(id) => {
@@ -246,6 +248,7 @@ impl Core {
                                 self.phase = Phase::ShuttingDown;
                             }
                         }
+                        */
                         /*
                         let dest = self.connection.as_ref().map(|c| c.destination());
                         match dest {
@@ -437,6 +440,9 @@ impl Core {
                     tracing::warn!(%id, ?res, "received connection result for unhandled connection");
                 }
             },
+            Results::DisconnectionResult { id, res } => {
+                unimplemented!();
+            }
         }
     }
 
