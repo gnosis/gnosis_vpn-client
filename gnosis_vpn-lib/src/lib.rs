@@ -20,6 +20,5 @@ mod ticket_stats;
 mod wg_tooling;
 
 pub mod prelude {
-    pub use edgli::hopr_lib;
     pub use edgli::hopr_lib::Address;
 }
