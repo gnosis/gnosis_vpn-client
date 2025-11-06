@@ -314,6 +314,7 @@ impl Hopr {
         tracing::debug!("query hopr info");
         Info {
             node_address: self.hopr.me_onchain(),
+            node_peer_id: self.hopr.me_peer_id().to_string(),
             safe_address: self.hopr.get_safe_config().safe_address,
             network: self.hopr.network(),
         }

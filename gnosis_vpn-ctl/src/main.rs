@@ -56,13 +56,8 @@ fn pretty_print(resp: &Response) {
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
         }
-        Response::Status(command::StatusResponse {
-            run_mode,
-            destinations,
-            network,
-        }) => {
+        Response::Status(command::StatusResponse { run_mode, destinations }) => {
             let mut str_resp = format!("Status: {run_mode}\n");
-            str_resp.push_str(&format!("Network: {network}\n"));
             str_resp.push_str("Destinations:\n");
             for dest in destinations {
                 str_resp.push_str(&format!("  {dest}\n"));
@@ -74,9 +69,12 @@ fn pretty_print(resp: &Response) {
             safe,
             channels_out,
             issues,
-            addresses,
+            info,
         })) => {
-            let mut str_resp = format!("Node Address: {}\nSafe Address: {}\n", addresses.node, addresses.safe);
+            let mut str_resp = format!(
+                "Network: {}\nNode Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
+                info.network, info.node_address, info.node_peer_id, info.safe_address
+            );
             str_resp.push_str(&format!(
                 "---\nNode Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n"
             ));

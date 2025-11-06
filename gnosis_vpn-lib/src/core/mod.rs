@@ -294,8 +294,7 @@ impl Core {
                                 }
                             })
                             .collect();
-                        let network = self.hopr_params.network.clone();
-                        let res = Response::status(command::StatusResponse::new(runmode, destinations, network));
+                        let res = Response::status(command::StatusResponse::new(runmode, destinations));
                         let _ = resp.send(res);
                     }
 
@@ -341,10 +340,7 @@ impl Core {
                                 format!("{} wxHOPR", balances.safe_wxhopr),
                                 format!("{} wxHOPR", balances.channels_out_wxhopr),
                                 issues,
-                                command::Addresses {
-                                    node: info.node_address,
-                                    safe: info.safe_address,
-                                },
+                                info,
                             );
                             let _ = resp.send(Response::Balance(Some(res)));
                         } else {

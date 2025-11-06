@@ -11,8 +11,8 @@ use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination as ConnectionDestination;
 use crate::core::conn;
 use crate::core::disconn;
+use crate::info::Info;
 use crate::log_output;
-use crate::network::Network;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
@@ -41,7 +41,6 @@ pub enum Response {
 pub struct StatusResponse {
     pub run_mode: RunMode,
     pub destinations: Vec<DestinationState>,
-    pub network: Network,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,14 +111,8 @@ pub struct BalanceResponse {
     pub node: String,
     pub safe: String,
     pub channels_out: String,
-    pub addresses: Addresses,
+    pub info: Info,
     pub issues: Vec<FundingIssue>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Addresses {
-    pub node: Address,
-    pub safe: Address,
 }
 
 impl RunMode {
@@ -173,29 +166,19 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(run_mode: RunMode, destinations: Vec<DestinationState>, network: Network) -> Self {
-        StatusResponse {
-            run_mode,
-            destinations,
-            network,
-        }
+    pub fn new(run_mode: RunMode, destinations: Vec<DestinationState>) -> Self {
+        StatusResponse { run_mode, destinations }
     }
 }
 
 impl BalanceResponse {
-    pub fn new(
-        node: String,
-        safe: String,
-        channels_out: String,
-        issues: Vec<FundingIssue>,
-        addresses: Addresses,
-    ) -> Self {
+    pub fn new(node: String, safe: String, channels_out: String, issues: Vec<FundingIssue>, info: Info) -> Self {
         BalanceResponse {
             node,
             safe,
             channels_out,
             issues,
-            addresses,
+            info,
         }
     }
 }

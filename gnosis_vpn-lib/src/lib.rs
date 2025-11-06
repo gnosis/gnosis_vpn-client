@@ -7,12 +7,12 @@ pub mod core;
 pub mod event;
 pub mod hopr;
 pub mod hopr_params;
+pub mod info;
 pub mod network;
 pub mod socket;
 
 mod dirs;
 mod gvpn_client;
-mod info;
 mod log_output;
 mod ping;
 mod remote_data;
