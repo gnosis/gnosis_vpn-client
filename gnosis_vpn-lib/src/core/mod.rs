@@ -1,15 +1,17 @@
 use edgli::hopr_lib::Address;
+use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::command::{self, Command, Response};
+use crate::command::{self, Command, Response, RunMode};
 use crate::config::{self, Config};
 use crate::connection::destination::Destination;
 use crate::event::Event;
@@ -72,13 +74,13 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     ongoing_disonnections: Vec<Disconn>,
-    last_connection_error: Option<String>,
+    last_connection_errors: HashMap<Address, String>,
 }
 
 #[derive(Debug, Clone)]
 enum Phase {
     Initial,
-    CreatingSafe,
+    CreatingSafe { presafe: Option<balance::PreSafe> },
     Starting,
     HoprSyncing,
     HoprRunning,
@@ -114,7 +116,7 @@ impl Core {
             hopr: None,
             ticket_value: None,
             ongoing_disonnections: Vec::new(),
-            last_connection_error: None,
+            last_connection_errors: HashMap::new(),
         })
     }
 
@@ -169,7 +171,7 @@ impl Core {
                     Phase::ShuttingDown => {
                         tracing::warn!("ignoring configuration reload - shutting down");
                     }
-                    Phase::Initial | Phase::CreatingSafe | Phase::Starting | Phase::HoprSyncing => {
+                    Phase::Initial | Phase::CreatingSafe { .. } | Phase::Starting | Phase::HoprSyncing => {
                         let config = match config::read(&path).await {
                             Ok(cfg) => cfg,
                             Err(err) => {
@@ -198,67 +200,110 @@ impl Core {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {
-                        // let run_mode = match &self.run_mode {
-                        //     RunMode::Initializing => command::RunMode::initializing(),
-                        //     RunMode::PreSafe { node_address, .. } => {
-                        //         let balance = self.presafe_balance.clone().unwrap_or_default();
-                        //         let funding_tool = self.funding_tool.clone();
-                        //         command::RunMode::preparing_safe(*node_address, balance, funding_tool)
-                        //     }
-                        //     RunMode::Syncing { hopr, .. } => {
-                        //         let syncing = self.metrics.clone().map(|m| m.sync_percentage).unwrap_or_default();
-                        //         command::RunMode::warmup(syncing, hopr.status().to_string())
-                        //     }
-                        //     RunMode::ValueingTicket { .. } => command::RunMode::valueing_ticket(),
-                        //     RunMode::Full { hopr, .. } => {
-                        //         let connection_state = match (
-                        //             self.target_destination.clone(),
-                        //             self.connection.clone().map(|c| c.destination()),
-                        //             self.session_connected,
-                        //         ) {
-                        //             (Some(dest), _, true) => command::ConnectionState::connected(dest.clone().into()),
-                        //             (Some(dest), _, false) => command::ConnectionState::connecting(dest.clone().into()),
-                        //             (None, Some(conn_dest), _) => command::ConnectionState::disconnecting(conn_dest.into()),
-                        //             (None, None, _) => command::ConnectionState::disconnected(),
-                        //         };
-                        //         let funding_state: command::FundingState =
-                        //             if let (Some(balance), Some(ticket_stats)) = (&self.balance, &self.ticket_stats) {
-                        //                 let ticket_value = ticket_stats.ticket_value()?;
-                        //                 balance
-                        //                     .to_funding_issues(self.config.channel_targets().len(), ticket_value)
-                        //                     .into()
-                        //             } else {
-                        //                 command::FundingState::Unknown
-                        //             };
+                        let runmode = match self.phase.clone() {
+                            Phase::Initial => RunMode::Init,
+                            Phase::CreatingSafe { presafe } => {
+                                let node_address = match self.hopr_params.calc_keys().await {
+                                    Ok(keys) => keys.chain_key.public().to_address().to_string(),
+                                    Err(err) => {
+                                        tracing::warn!(%err, "failed to calculate node address");
+                                        "unknown".to_string()
+                                    }
+                                };
+                                let (node_xdai, node_wxhopr) = match presafe {
+                                    Some(presafe) => (presafe.node_xdai, presafe.node_wxhopr),
+                                    None => (Balance::default(), Balance::default()),
+                                };
+                                RunMode::PreparingSafe {
+                                    node_address,
+                                    node_xdai,
+                                    node_wxhopr,
+                                    funding_tool: self.funding_tool.clone(),
+                                }
+                            }
+                            Phase::Starting => RunMode::ValueingTicket,
+                            Phase::HoprSyncing => {
+                                if let Some(hopr) = &self.hopr {
+                                    RunMode::Warmup {
+                                        hopr_state: hopr.status().to_string(),
+                                    }
+                                } else {
+                                    RunMode::Warmup {
+                                        hopr_state: "unknown".to_string(),
+                                    }
+                                }
+                            }
+                            Phase::HoprRunning
+                            | Phase::HoprChannelsFunded
+                            | Phase::Connecting(_)
+                            | Phase::Connected(_) => {
+                                let funding = if let (Some(balances), Some(ticket_value)) =
+                                    (&self.balances, &self.ticket_value)
+                                {
+                                    balances
+                                        .to_funding_issues(self.config.channel_targets().len(), ticket_value)
+                                        .into()
+                                } else {
+                                    command::FundingState::Unknown
+                                };
+                                if let Some(hopr) = &self.hopr {
+                                    RunMode::Running {
+                                        hopr_state: hopr.status().to_string(),
+                                        funding,
+                                    }
+                                } else {
+                                    RunMode::Running {
+                                        hopr_state: "unknown".to_string(),
+                                        funding,
+                                    }
+                                }
+                            }
+                            Phase::ShuttingDown => RunMode::Shutdown,
+                        };
 
-                        //         command::RunMode::running(connection_state, funding_state, hopr.status().to_string())
-                        //     }
-                        // };
-                        //
-                        unimplemented!();
-
-                        // let available_destinations = self
-                        //     .config
-                        //     .destinations
-                        //     .values()
-                        //     .map(|v| {
-                        //         let dest = v.clone();
-                        //         dest.into()
-                        //     })
-                        //     .collect();
-                        // let network = self.hopr_params.network.clone();
-                        // let res = Response::status(command::StatusResponse::new(
-                        //     command::RunMode::initializing(),
-                        //     available_destinations,
-                        //     network,
-                        // ));
-                        // let _ = resp.send(res);
+                        let destinations = self
+                            .config
+                            .destinations
+                            .values()
+                            .map(|v| {
+                                let destination: command::Destination = v.into();
+                                let connection_state = match &self.phase {
+                                    Phase::Connecting(conn) if &conn.destination == v => {
+                                        command::ConnectionState::Connecting(conn.phase.0, conn.phase.1.clone())
+                                    }
+                                    Phase::Connected(conn) if &conn.destination == v => {
+                                        command::ConnectionState::Connected(conn.phase.0)
+                                    }
+                                    _ => {
+                                        if let Some(disconn) =
+                                            self.ongoing_disonnections.iter().find(|d| &d.destination == v)
+                                        {
+                                            command::ConnectionState::Disconnecting(
+                                                disconn.phase.0,
+                                                disconn.phase.1.clone(),
+                                            )
+                                        } else {
+                                            command::ConnectionState::None
+                                        }
+                                    }
+                                };
+                                let last_connection_error = self.last_connection_errors.get(&v.address).cloned();
+                                command::DestinationState {
+                                    destination,
+                                    connection_state,
+                                    last_connection_error,
+                                }
+                            })
+                            .collect();
+                        let network = self.hopr_params.network.clone();
+                        let res = Response::status(command::StatusResponse::new(runmode, destinations, network));
+                        let _ = resp.send(res);
                     }
 
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
-                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone().into())));
+                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.into())));
                             self.act_on_target(results_sender);
                         }
                         None => {
@@ -273,7 +318,7 @@ impl Core {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(
-                                    conn.destination.into(),
+                                    (&conn.destination).into(),
                                 )));
                             }
                             _ => {
@@ -290,7 +335,7 @@ impl Core {
                         {
                             let info = hopr.info();
                             let issues: Vec<balance::FundingIssue> =
-                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
+                                balances.to_funding_issues(self.config.channel_targets().len(), &ticket_value);
 
                             let res = command::BalanceResponse::new(
                                 format!("{} xDai", balances.node_xdai),
@@ -321,7 +366,7 @@ impl Core {
                     }
 
                     Command::FundingTool(secret) => {
-                        if matches!(self.phase, Phase::CreatingSafe) {
+                        if matches!(self.phase, Phase::CreatingSafe { .. }) {
                             self.funding_tool = balance::FundingTool::InProgress;
                             self.spawn_funding_runner(secret, results_sender);
                             let _ = resp.send(Response::Empty);
@@ -500,7 +545,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.last_connection_error = None;
+                    self.last_connection_errors.remove(&conn.destination.address);
                     log_output::print_session_established(conn.destination.pretty_print_path().as_str());
                 }
                 (Ok(_), phase) => {
@@ -508,7 +553,8 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
-                    self.last_connection_error = Some(format!("connection failed: {}", err));
+                    self.last_connection_errors
+                        .insert(conn.destination.address, err.to_string());
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
@@ -540,7 +586,7 @@ impl Core {
         if hopr_config::has_safe() {
             self.phase = Phase::Starting;
         } else {
-            self.phase = Phase::CreatingSafe;
+            self.phase = Phase::CreatingSafe { presafe: None };
             self.spawn_presafe_runner(results_sender, Duration::ZERO);
         }
         self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
@@ -776,6 +822,7 @@ impl Core {
         self.cancel_channel_funding = CancellationToken::new();
         self.phase = Phase::HoprRunning;
         self.funded_channels.clear();
+        self.last_connection_errors.clear();
         for c in self.config.channel_targets() {
             self.spawn_channel_funding(c, results_sender, Duration::ZERO);
         }

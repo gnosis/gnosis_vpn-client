@@ -50,7 +50,7 @@ pub enum RunMode {
     Init,
     /// after creating safe this state will not be reached again
     PreparingSafe {
-        node_address: Address,
+        node_address: String,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
@@ -61,6 +61,8 @@ pub enum RunMode {
     Warmup { hopr_state: String },
     /// Normal operation where connections can be made
     Running { funding: FundingState, hopr_state: String },
+    /// Shutting down service
+    Shutdown,
 }
 
 // in order of priority
@@ -93,13 +95,15 @@ pub struct Destination {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
-    pub conn_state: ConnectionState,
+    pub connection_state: ConnectionState,
+    pub last_connection_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectionState {
     None,
     Connecting(SystemTime, conn::Phase),
+    Connected(SystemTime),
     Disconnecting(SystemTime, disconn::Phase),
 }
 
@@ -123,7 +127,7 @@ impl RunMode {
         RunMode::Init
     }
     pub fn preparing_safe(
-        node_address: Address,
+        node_address: String,
         pre_safe: balance::PreSafe,
         funding_tool: balance::FundingTool,
     ) -> Self {
@@ -225,12 +229,12 @@ impl FromStr for Command {
     }
 }
 
-impl From<ConnectionDestination> for Destination {
-    fn from(destination: ConnectionDestination) -> Self {
+impl From<&ConnectionDestination> for Destination {
+    fn from(destination: &ConnectionDestination) -> Self {
         Destination {
             address: destination.address,
-            meta: destination.meta,
-            path: destination.routing,
+            meta: destination.meta.clone(),
+            path: destination.routing.clone(),
         }
     }
 }
@@ -296,6 +300,7 @@ impl fmt::Display for RunMode {
             RunMode::Running { funding, hopr_state } => {
                 write!(f, "Hopr: {hopr_state}, Funding: {funding}")
             }
+            RunMode::Shutdown => write!(f, "Shutting down..."),
         }
     }
 }
@@ -307,6 +312,9 @@ impl fmt::Display for ConnectionState {
             ConnectionState::Connecting(since, phase) => {
                 write!(f, "Connecting (since {}): {:?}", log_output::elapsed(since), phase)
             }
+            ConnectionState::Connected(since) => {
+                write!(f, "Connected (since {})", log_output::elapsed(since))
+            }
             ConnectionState::Disconnecting(since, phase) => {
                 write!(f, "Disconnecting (since {}): {:?}", log_output::elapsed(since), phase)
             }
@@ -316,7 +324,12 @@ impl fmt::Display for ConnectionState {
 
 impl fmt::Display for DestinationState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} - {}", self.destination, self.conn_state)
+        let output = format!("{} - {}", self.destination, self.connection_state);
+        if let Some(err) = self.last_connection_error.clone() {
+            write!(f, "{} (Last error: {})", output, err)
+        } else {
+            write!(f, "{}", output)
+        }
     }
 }
 
