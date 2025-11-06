@@ -54,6 +54,7 @@ impl Hopr {
             .await
             .map_err(|e| HoprError::Construction(e.to_string()))?;
 
+        tracing::debug!("awaiting hopr processes");
         let processes = processes.await?;
         let open_listeners = Arc::new(async_lock::RwLock::new(HashMap::new()));
 
