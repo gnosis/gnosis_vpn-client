@@ -1,10 +1,9 @@
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 
 use crate::command::{Command, Response};
 
-#[derive(Debug)]
 pub enum Event {
     Command {
         cmd: Command,
@@ -38,4 +37,14 @@ pub fn shutdown(resp: oneshot::Sender<()>) -> Event {
 
 pub fn config_reload(path: PathBuf) -> Event {
     Event::ConfigReload { path }
+}
+
+impl Debug for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Event::Command { cmd, .. } => f.debug_struct("Event::Command").field("cmd", cmd).finish(),
+            Event::Shutdown { .. } => f.debug_struct("Event::Shutdown").finish(),
+            Event::ConfigReload { path } => f.debug_struct("Event::ConfigReload").field("path", path).finish(),
+        }
+    }
 }

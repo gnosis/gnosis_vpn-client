@@ -145,7 +145,7 @@ impl Core {
         }
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
+    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, "on outside event");
         match event {
