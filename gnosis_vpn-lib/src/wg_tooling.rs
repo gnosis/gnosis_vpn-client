@@ -198,7 +198,7 @@ impl WireGuard {
             .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
 
-        // WireGuard has differnently sized packets not exactly adhering to MTU
+        // WireGuard has differently sized packets not exactly adhering to MTU
         // so we postpone optimizing on this level for now
         // MTU = {mtu}
         format!(

@@ -73,7 +73,7 @@ pub struct Core {
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
-    ongoing_disonnections: Vec<Disconn>,
+    ongoing_disconnections: Vec<Disconn>,
     last_connection_errors: HashMap<Address, String>,
 }
 
@@ -115,7 +115,7 @@ impl Core {
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             ticket_value: None,
-            ongoing_disonnections: Vec::new(),
+            ongoing_disconnections: Vec::new(),
             last_connection_errors: HashMap::new(),
         })
     }
@@ -275,7 +275,7 @@ impl Core {
                                     }
                                     _ => {
                                         if let Some(disconn) =
-                                            self.ongoing_disonnections.iter().find(|d| &d.destination == v)
+                                            self.ongoing_disconnections.iter().find(|d| &d.destination == v)
                                         {
                                             command::ConnectionState::Disconnecting(
                                                 disconn.phase.0,
@@ -523,7 +523,7 @@ impl Core {
             Results::DisconnectionEvent { wg_public_key, evt } => {
                 tracing::debug!(%wg_public_key, %evt, "handling disconnection runner event");
                 if let Some(conn) = self
-                    .ongoing_disonnections
+                    .ongoing_disconnections
                     .iter_mut()
                     .find(|c| c.wg_public_key == wg_public_key)
                 {
@@ -575,7 +575,7 @@ impl Core {
                         tracing::error!(%wg_public_key, %err, "disconnection failed");
                     }
                 }
-                self.ongoing_disonnections.retain(|c| c.wg_public_key != wg_public_key);
+                self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
                 self.act_on_target(results_sender);
             }
         }
@@ -745,7 +745,7 @@ impl Core {
             let hopr = hopr.clone();
             let runner = DisconnectionRunner::new(disconn.clone(), hopr, config_connection);
             let results_sender = results_sender.clone();
-            self.ongoing_disonnections.push(disconn.clone());
+            self.ongoing_disconnections.push(disconn.clone());
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {

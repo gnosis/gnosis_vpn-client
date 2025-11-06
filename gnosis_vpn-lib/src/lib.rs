@@ -1,6 +1,8 @@
+pub mod balance;
 pub mod chain;
 pub mod command;
 pub mod config;
+pub mod connection;
 pub mod core;
 pub mod event;
 pub mod hopr;
@@ -8,8 +10,6 @@ pub mod hopr_params;
 pub mod network;
 pub mod socket;
 
-mod balance;
-mod connection;
 mod dirs;
 mod gvpn_client;
 mod info;
