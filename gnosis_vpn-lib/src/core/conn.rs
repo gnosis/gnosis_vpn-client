@@ -75,3 +75,21 @@ impl Display for Conn {
         )
     }
 }
+
+impl Display for Phase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let phase_str = match self {
+            Phase::Init => "Init",
+            Phase::GeneratingWg => "Generating WireGuard keypairs",
+            Phase::OpeningBridge => "Opening bridge connection",
+            Phase::RegisterWg => "Registering WireGuard public key",
+            Phase::ClosingBridge => "Closing bridge connection",
+            Phase::OpeningPing => "Opening main connection",
+            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
+            Phase::VerifyPing => "Verifying established connection",
+            Phase::AdjustToMain => "Upgrading for general traffic",
+            Phase::ConnectionEstablished => "Connection established",
+        };
+        write!(f, "{}", phase_str)
+    }
+}

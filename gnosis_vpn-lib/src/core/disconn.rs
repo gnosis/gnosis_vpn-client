@@ -20,9 +20,9 @@ pub struct Disconn {
 pub enum Phase {
     Disconnecting,
     DisconnectingWg,
-    DiscOpeningBridge,
+    OpeningBridge,
     UnregisterWg,
-    DiscClosingBridge,
+    ClosingBridge,
 }
 
 impl TryFrom<&Conn> for Disconn {
@@ -51,9 +51,9 @@ impl Disconn {
         let now = SystemTime::now();
         match evt {
             disconnection_runner::Evt::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
-            disconnection_runner::Evt::OpenBridge => self.phase = (now, Phase::DiscOpeningBridge),
+            disconnection_runner::Evt::OpenBridge => self.phase = (now, Phase::OpeningBridge),
             disconnection_runner::Evt::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
-            disconnection_runner::Evt::CloseBridge => self.phase = (now, Phase::DiscClosingBridge),
+            disconnection_runner::Evt::CloseBridge => self.phase = (now, Phase::ClosingBridge),
         }
     }
 }
@@ -67,5 +67,18 @@ impl Display for Disconn {
             self.phase.1,
             log_output::elapsed(&self.phase.0)
         )
+    }
+}
+
+impl Display for Phase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let phase_str = match self {
+            Phase::Disconnecting => "Disconnecting",
+            Phase::DisconnectingWg => "Disconnecting WireGuard tunnel",
+            Phase::OpeningBridge => "Opening bridge connection",
+            Phase::UnregisterWg => "Unregistering WireGuard public key",
+            Phase::ClosingBridge => "Closing bridge connection",
+        };
+        write!(f, "{}", phase_str)
     }
 }
