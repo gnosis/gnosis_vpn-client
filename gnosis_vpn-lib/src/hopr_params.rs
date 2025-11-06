@@ -5,10 +5,8 @@ use url::Url;
 
 use std::path::PathBuf;
 
-use gnosis_vpn_lib::hopr::identity;
-use gnosis_vpn_lib::network::Network;
-
-use crate::cli::Cli;
+use crate::hopr::identity;
+use crate::network::Network;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -31,25 +29,6 @@ pub struct HoprParams {
 pub enum ConfigFileMode {
     Manual(PathBuf),
     Generated,
-}
-
-impl From<Cli> for HoprParams {
-    fn from(cli: Cli) -> Self {
-        let network = cli.hopr_network;
-        let rpc_provider = cli.hopr_rpc_provider;
-        let config_mode = match cli.hopr_config_path {
-            Some(path) => ConfigFileMode::Manual(path),
-            None => ConfigFileMode::Generated,
-        };
-
-        HoprParams {
-            config_mode,
-            identity_file: cli.hopr_identity_file,
-            identity_pass: cli.hopr_identity_pass,
-            network,
-            rpc_provider,
-        }
-    }
 }
 
 impl HoprParams {

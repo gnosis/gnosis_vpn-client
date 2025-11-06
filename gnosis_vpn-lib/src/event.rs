@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 
-use gnosis_vpn_lib::command::{Command, Response};
+use crate::command::{Command, Response};
 
 #[derive(Debug)]
 pub enum Event {

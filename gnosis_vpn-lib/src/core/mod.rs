@@ -9,14 +9,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{self, Command, Response};
-use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::destination::Destination;
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, config as hopr_config, identity};
-use gnosis_vpn_lib::{balance, log_output, wg_tooling};
-
+use crate::command::{self, Command, Response};
+use crate::config::{self, Config};
+use crate::connection::destination::Destination;
 use crate::event::Event;
+use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
+use crate::{balance, log_output, wg_tooling};
 
 mod conn;
 mod connection_runner;

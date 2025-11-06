@@ -18,8 +18,10 @@ pub enum Error {
     Toml(#[from] toml::ser::Error),
     #[error("Monitoring error: {0}")]
     Monitoring(String),
-    #[error("WireGuard error [status: {0}]: {1}")]
-    WgError(i32, String),
+    #[error("WG generate key error [status: {0}]: {1}")]
+    WgGenKey(i32, String),
+    #[error("WG quick error [status: {0}]: {1}")]
+    WgQuick(i32, String),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
 }
@@ -33,6 +35,7 @@ pub struct WireGuard {
 #[derive(Clone, Debug)]
 pub struct InterfaceInfo {
     pub address: String,
+    #[allow(dead_code)]
     pub mtu: usize,
 }
 
@@ -94,7 +97,7 @@ async fn generate_key() -> Result<String, Error> {
         let key = String::from_utf8(output.stdout).map(|s| s.trim().to_string())?;
         Ok(key)
     } else {
-        Err(Error::WgError(
+        Err(Error::WgGenKey(
             output.status.code().unwrap_or_default(),
             format!("wg genkey failed: {}", String::from_utf8_lossy(&output.stderr)),
         ))
@@ -118,7 +121,7 @@ async fn public_key(priv_key: &str) -> Result<String, Error> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout.trim().to_string())
     } else {
-        Err(Error::WgError(
+        Err(Error::WgGenKey(
             output.status.code().unwrap_or_default(),
             format!("wg pubkey failed: {}", String::from_utf8_lossy(&output.stderr)),
         ))
@@ -155,7 +158,7 @@ impl WireGuard {
             }
             Ok(())
         } else {
-            Err(Error::WgError(
+            Err(Error::WgQuick(
                 output.status.code().unwrap_or_default(),
                 format!("wg-quick up failed: {}", String::from_utf8_lossy(&output.stderr)),
             ))
@@ -177,7 +180,7 @@ impl WireGuard {
             }
             Ok(())
         } else {
-            Err(Error::WgError(
+            Err(Error::WgQuick(
                 output.status.code().unwrap_or_default(),
                 format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
             ))

@@ -1,10 +1,9 @@
 use std::fmt::{self, Display};
 use std::time::SystemTime;
 
-use gnosis_vpn_lib::connection::destination::Destination;
-use gnosis_vpn_lib::{log_output, wg_tooling};
-
+use crate::connection::destination::Destination;
 use crate::core::connection_runner;
+use crate::{log_output, wg_tooling};
 
 #[derive(Clone, Debug)]
 pub struct Conn {

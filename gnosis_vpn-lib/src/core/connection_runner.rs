@@ -7,14 +7,13 @@ use tokio::sync::mpsc;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use gnosis_vpn_lib::connection::options::Options;
-use gnosis_vpn_lib::gvpn_client::{self, Registration};
-use gnosis_vpn_lib::hopr::types::SessionClientMetadata;
-use gnosis_vpn_lib::hopr::{Hopr, HoprError};
-use gnosis_vpn_lib::{ping, wg_tooling};
-
+use crate::connection::options::Options;
 use crate::core::conn::Conn;
 use crate::core::runner::{self, Results};
+use crate::gvpn_client::{self, Registration};
+use crate::hopr::types::SessionClientMetadata;
+use crate::hopr::{Hopr, HoprError};
+use crate::{ping, wg_tooling};
 
 #[derive(Debug, Error)]
 pub enum Error {

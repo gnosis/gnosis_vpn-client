@@ -12,13 +12,9 @@ use std::path::Path;
 use std::process;
 
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::socket;
+use gnosis_vpn_lib::{core, event, hopr_params, socket};
 
 mod cli;
-mod core;
-mod event;
-mod hopr_params;
-
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]

@@ -18,18 +18,17 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gnosis_vpn_lib::balance;
-use gnosis_vpn_lib::chain::client::GnosisRpcClient;
-use gnosis_vpn_lib::chain::contracts::NetworkSpecifications;
-use gnosis_vpn_lib::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
-use gnosis_vpn_lib::chain::errors::ChainError;
-use gnosis_vpn_lib::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
-use gnosis_vpn_lib::log_output;
-use gnosis_vpn_lib::remote_data;
-use gnosis_vpn_lib::ticket_stats::{self, TicketStats};
-
+use crate::balance;
+use crate::chain::client::GnosisRpcClient;
+use crate::chain::contracts::NetworkSpecifications;
+use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
+use crate::chain::errors::ChainError;
 use crate::core::{connection_runner, disconnection_runner};
+use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
+use crate::log_output;
+use crate::remote_data;
+use crate::ticket_stats::{self, TicketStats};
 
 pub enum Results {
     FundChannel {
