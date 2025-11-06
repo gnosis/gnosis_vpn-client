@@ -21,4 +21,3 @@ url.workspace = true
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
 mimalloc = { workspace = true }
-tikv-jemallocator = { workspace = true }
