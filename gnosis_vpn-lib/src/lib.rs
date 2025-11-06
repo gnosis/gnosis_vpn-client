@@ -22,4 +22,3 @@ mod wg_tooling;
 pub mod prelude {
     pub use edgli::hopr_lib::Address;
 }
-//pub use edgli::hopr_lib::{Address, Hopr, HoprKeys, config::HoprLibConfig};

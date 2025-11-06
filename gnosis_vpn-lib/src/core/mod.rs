@@ -17,9 +17,10 @@ use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
 use crate::{balance, log_output, wg_tooling};
 
-mod conn;
+pub mod conn;
+pub mod disconn;
+
 mod connection_runner;
-mod disconn;
 mod disconnection_runner;
 mod runner;
 
