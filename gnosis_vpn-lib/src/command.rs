@@ -9,8 +9,8 @@ use std::time::SystemTime;
 
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination as ConnectionDestination;
-use crate::core::conn::Conn;
-use crate::core::disconn::Disconn;
+use crate::core::conn;
+use crate::core::disconn;
 use crate::log_output;
 use crate::network::Network;
 
@@ -99,8 +99,8 @@ pub struct DestinationState {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectionState {
     None,
-    Connecting(SystemTime, Conn::Phase),
-    Disconnecting(SystemTime, Disconn::Phase),
+    Connecting(SystemTime, conn::Phase),
+    Disconnecting(SystemTime, disconn::Phase),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -257,7 +257,7 @@ impl fmt::Display for Destination {
         let path = match self.path.clone() {
             RoutingOptions::Hops(hops) => {
                 let nr: u8 = hops.into();
-                (0..nr).into_iter().map(|_| "()").collect::<Vec<&str>>().join("->")
+                (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->")
             }
             RoutingOptions::IntermediatePath(nodes) => nodes
                 .into_iter()
@@ -265,10 +265,9 @@ impl fmt::Display for Destination {
                 .collect::<Vec<String>>()
                 .join("->"),
         };
-
         write!(
             f,
-            "Address: {address}, Route: (entry){path:?}({short_addr}), {meta}",
+            "Address: {address}, Route: (entry)->{path}->({short_addr}), {meta}",
             meta = meta,
             path = path,
             address = self.address,
@@ -293,9 +292,9 @@ impl fmt::Display for RunMode {
                     "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
                 )
             }
-            RunMode::Warmup { hopr_state } => write!(f, "Hopr: {hopr_state}, Syncing... {:.2}%", sync_progress * 100.0),
+            RunMode::Warmup { hopr_state } => write!(f, "Hopr: {hopr_state}"),
             RunMode::Running { funding, hopr_state } => {
-                write!(f, "Hopr: {hopr_state}, Connection: {connection}, Funding: {funding}")
+                write!(f, "Hopr: {hopr_state}, Funding: {funding}")
             }
         }
     }
@@ -304,10 +303,13 @@ impl fmt::Display for RunMode {
 impl fmt::Display for ConnectionState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ConnectionState::Connecting(dest) => write!(f, "Connecting to {}", dest),
-            ConnectionState::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
-            ConnectionState::Connected(dest) => write!(f, "Connected to {}", dest),
-            ConnectionState::Disconnected => write!(f, "Disconnected"),
+            ConnectionState::None => write!(f, "Not Connected"),
+            ConnectionState::Connecting(since, phase) => {
+                write!(f, "Connecting (since {}): {:?}", log_output::elapsed(since), phase)
+            }
+            ConnectionState::Disconnecting(since, phase) => {
+                write!(f, "Disconnecting (since {}): {:?}", log_output::elapsed(since), phase)
+            }
         }
     }
 }

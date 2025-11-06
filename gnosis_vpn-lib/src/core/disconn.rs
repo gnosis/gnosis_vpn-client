@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use std::fmt::{self, Display};
 use std::time::SystemTime;
 
@@ -14,7 +16,7 @@ pub struct Disconn {
     wg: Option<wg_tooling::WireGuard>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Phase {
     Disconnecting,
     DisconnectingWg,
