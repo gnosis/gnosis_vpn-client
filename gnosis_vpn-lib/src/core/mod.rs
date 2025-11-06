@@ -487,6 +487,10 @@ impl Core {
 
             Results::HoprRunning => {
                 self.phase = Phase::HoprRunning;
+                tracing::debug!(
+                    channel_targets = ?self.config.channel_targets(),
+                    "hopr is running - ensuring channel funding"
+                );
                 for c in self.config.channel_targets() {
                     self.spawn_channel_funding(c, results_sender, Duration::ZERO);
                 }
@@ -703,7 +707,9 @@ impl Core {
         }
     }
 
+    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn spawn_channel_funding(&self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
             let cancel = self.cancel_channel_funding.clone();
             let results_sender = results_sender.clone();
