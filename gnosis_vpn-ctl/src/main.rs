@@ -58,18 +58,14 @@ fn pretty_print(resp: &Response) {
         }
         Response::Status(command::StatusResponse {
             run_mode,
-            available_destinations,
+            destinations,
             network,
         }) => {
             let mut str_resp = format!("Status: {run_mode}\n");
             str_resp.push_str(&format!("Network: {network}\n"));
-            if available_destinations.is_empty() {
-                str_resp.push_str("No destinations available.\n")
-            } else {
-                str_resp.push_str("Available destinations:\n");
-                for dest in available_destinations {
-                    str_resp.push_str(&format!("  - {dest}\n"));
-                }
+            str_resp.push_str("Destinations:\n");
+            for dest in destinations {
+                str_resp.push_str(&format!("  {dest}\n"));
             }
             println!("{str_resp}");
         }

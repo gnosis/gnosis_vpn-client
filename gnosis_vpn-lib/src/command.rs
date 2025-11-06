@@ -314,6 +314,12 @@ impl fmt::Display for ConnectionState {
     }
 }
 
+impl fmt::Display for DestinationState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} - {}", self.destination, self.conn_state)
+    }
+}
+
 impl fmt::Display for FundingState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
