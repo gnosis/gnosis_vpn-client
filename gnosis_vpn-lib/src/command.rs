@@ -1,4 +1,4 @@
-use edgli::hopr_lib::{Address, RoutingOptions};
+use edgli::hopr_lib::{Address, NodeId, RoutingOptions};
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
@@ -248,7 +248,10 @@ impl fmt::Display for Destination {
             }
             RoutingOptions::IntermediatePath(nodes) => nodes
                 .into_iter()
-                .map(|node_id| format!("({node_id})"))
+                .map(|node_id| match node_id {
+                    NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
+                    NodeId::Chain(address) => format!("({})", log_output::address(&address)),
+                })
                 .collect::<Vec<String>>()
                 .join("->"),
         };
