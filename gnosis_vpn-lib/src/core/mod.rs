@@ -237,15 +237,14 @@ impl Core {
                             | Phase::HoprChannelsFunded
                             | Phase::Connecting(_)
                             | Phase::Connected(_) => {
-                                let funding = if let (Some(balances), Some(ticket_value)) =
-                                    (&self.balances, &self.ticket_value)
-                                {
-                                    balances
-                                        .to_funding_issues(self.config.channel_targets().len(), ticket_value)
-                                        .into()
-                                } else {
-                                    command::FundingState::Unknown
-                                };
+                                let funding =
+                                    if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
+                                        balances
+                                            .to_funding_issues(self.config.channel_targets().len(), ticket_value)
+                                            .into()
+                                    } else {
+                                        command::FundingState::Unknown
+                                    };
                                 if let Some(hopr) = &self.hopr {
                                     RunMode::Running {
                                         hopr_state: hopr.status().to_string(),
@@ -335,7 +334,7 @@ impl Core {
                         {
                             let info = hopr.info();
                             let issues: Vec<balance::FundingIssue> =
-                                balances.to_funding_issues(self.config.channel_targets().len(), &ticket_value);
+                                balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
 
                             let res = command::BalanceResponse::new(
                                 format!("{} xDai", balances.node_xdai),
