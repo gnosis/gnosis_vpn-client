@@ -1,3 +1,6 @@
+//! The runner module for `core::connection::up` struct.
+//! It handles all state transitions and forwards transition events though its channel.
+//! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use edgli::hopr_lib::SessionClientConfig;

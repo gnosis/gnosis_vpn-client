@@ -8,6 +8,10 @@ use crate::{log_output, wg_tooling};
 
 mod runner;
 
+/// Contains stateful data of establishing a VPN connection to a destination.
+/// The state transition runner for this struct is in `core::connection::up::runner`.
+/// This decision was made to keep all relevant application state accessible in `core`.
+/// And avoid duplicating structs in both `core` and `connection` modules.
 #[derive(Clone, Debug)]
 pub struct Up {
     pub destination: Destination,
