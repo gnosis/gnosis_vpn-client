@@ -823,6 +823,9 @@ impl Core {
         self.phase = Phase::HoprChannelsFunded;
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, results_sender);
+        } else {
+            // connection did not even generate a wg pub key - so we can immediately try to connect again
+            self.act_on_target(results_sender);
         }
     }
 
