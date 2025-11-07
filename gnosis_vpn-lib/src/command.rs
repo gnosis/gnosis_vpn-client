@@ -244,7 +244,12 @@ impl fmt::Display for Destination {
         let path = match self.path.clone() {
             RoutingOptions::Hops(hops) => {
                 let nr: u8 = hops.into();
-                (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->")
+                let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
+                if nr > 0 {
+                    format!("->{}->", path).to_string()
+                } else {
+                    "->".to_string()
+                }
             }
             RoutingOptions::IntermediatePath(nodes) => nodes
                 .into_iter()
@@ -257,7 +262,7 @@ impl fmt::Display for Destination {
         };
         write!(
             f,
-            "Address: {address}, Route: (entry)->{path}->({short_addr}), {meta}",
+            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
             meta = meta,
             path = path,
             address = self.address,
