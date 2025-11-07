@@ -222,7 +222,7 @@ impl Core {
                                 }
                             }
                             Phase::Starting => RunMode::ValueingTicket,
-                            Phase::HoprSyncing => {
+                            Phase::HoprRunning | Phase::HoprSyncing => {
                                 if let Some(hopr) = &self.hopr {
                                     RunMode::Warmup {
                                         hopr_state: hopr.status().to_string(),
@@ -233,10 +233,7 @@ impl Core {
                                     }
                                 }
                             }
-                            Phase::HoprRunning
-                            | Phase::HoprChannelsFunded
-                            | Phase::Connecting(_)
-                            | Phase::Connected(_) => {
+                            Phase::HoprChannelsFunded | Phase::Connecting(_) | Phase::Connected(_) => {
                                 let funding =
                                     if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
                                         balances
@@ -758,7 +755,9 @@ impl Core {
         }
     }
 
+    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
+        tracing::debug!(target = ?self.target_destination, phase = ?self.phase, "acting on target destination");
         match (self.target_destination.clone(), self.phase.clone()) {
             // Connecting from ready
             (Some(dest), Phase::HoprChannelsFunded) => {

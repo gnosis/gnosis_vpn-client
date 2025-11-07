@@ -274,8 +274,8 @@ impl fmt::Display for Destination {
 impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RunMode::Init => write!(f, "Initializing..."),
-            RunMode::ValueingTicket => write!(f, "Valueing Ticket..."),
+            RunMode::Init => write!(f, "Initializing"),
+            RunMode::ValueingTicket => write!(f, "Determine ticket value"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
@@ -284,14 +284,20 @@ impl fmt::Display for RunMode {
             } => {
                 write!(
                     f,
-                    "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
+                    "Waiting for funding on {node_address}({node_xdai}, {node_wxhopr}) - {funding_tool}"
                 )
             }
-            RunMode::Warmup { hopr_state } => write!(f, "Hopr: {hopr_state}"),
-            RunMode::Running { funding, hopr_state } => {
-                write!(f, "Hopr: {hopr_state}, Funding: {funding}")
+            RunMode::Warmup { hopr_state } => {
+                if hopr_state == "Running" {
+                    write!(f, "Checking channel funding (Hopr {})", hopr_state)
+                } else {
+                    write!(f, "Warmup (Hopr {})", hopr_state)
+                }
             }
-            RunMode::Shutdown => write!(f, "Shutting down..."),
+            RunMode::Running { funding, hopr_state } => {
+                write!(f, "Ready (Hopr {hopr_state}), {funding}")
+            }
+            RunMode::Shutdown => write!(f, "Shutting down"),
         }
     }
 }
