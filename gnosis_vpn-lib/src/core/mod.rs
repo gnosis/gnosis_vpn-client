@@ -1,5 +1,6 @@
-use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::hopr_lib::exports::types::primitive::bounded::BoundedSize;
+use edgli::hopr_lib::{Address, RoutingOptions};
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -487,6 +488,14 @@ impl Core {
                 for c in self.config.channel_targets() {
                     self.spawn_channel_funding(c, results_sender, Duration::ZERO);
                 }
+                // only for testing purposes
+                if self.config.channel_targets().is_empty() && self.hopr_params.allow_insecure() {
+                    tracing::warn!(
+                        "no channel targets configured and insecure mode enabled - operating without channels"
+                    );
+                    self.phase = Phase::HoprChannelsFunded;
+                    self.act_on_target(results_sender);
+                }
             }
 
             Results::FundChannel { address, res } => match res {
@@ -762,7 +771,16 @@ impl Core {
             // Connecting from ready
             (Some(dest), Phase::HoprChannelsFunded) => {
                 tracing::info!(destination = %dest, "establishing connection to new destination");
-                self.spawn_connection_runner(dest.clone(), results_sender);
+                if matches!(dest.routing, RoutingOptions::Hops(n) if <BoundedSize<3> as Into<u8>>::into(n) == 0) {
+                    if self.hopr_params.allow_insecure() {
+                        tracing::warn!("connecting to destination with insecure 0 hops route");
+                        self.spawn_connection_runner(dest.clone(), results_sender);
+                    } else {
+                        tracing::warn!(%dest, route = ?dest.routing, "refusing to connect to via insecure route to target destination");
+                    }
+                } else {
+                    self.spawn_connection_runner(dest.clone(), results_sender);
+                }
             }
             // Connecting to different destination while already connected
             (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
