@@ -1,11 +1,12 @@
+//! This module holds indicates external events that will be sent from outside the core application loop into it.
+
 use std::fmt::{self, Debug, Display};
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 
 use crate::command::{Command, Response};
 
-/// These events indicate outside requests to the core application loop.
-pub enum ExternalEvent {
+pub enum Event {
     Command {
         cmd: Command,
         resp: oneshot::Sender<Response>,
@@ -18,37 +19,34 @@ pub enum ExternalEvent {
     },
 }
 
-impl Display for ExternalEvent {
+impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ExternalEvent::Command { cmd, .. } => write!(f, "CommandEvent: {cmd}"),
-            ExternalEvent::Shutdown { .. } => write!(f, "ShutdownEvent"),
-            ExternalEvent::ConfigReload { path } => write!(f, "ConfigReloadEvent: {:?}", path),
+            Event::Command { cmd, .. } => write!(f, "CommandEvent: {cmd}"),
+            Event::Shutdown { .. } => write!(f, "ShutdownEvent"),
+            Event::ConfigReload { path } => write!(f, "ConfigReloadEvent: {:?}", path),
         }
     }
 }
 
-pub fn command(cmd: Command, resp: oneshot::Sender<Response>) -> ExternalEvent {
-    ExternalEvent::Command { cmd, resp }
+pub fn command(cmd: Command, resp: oneshot::Sender<Response>) -> Event {
+    Event::Command { cmd, resp }
 }
 
-pub fn shutdown(resp: oneshot::Sender<()>) -> ExternalEvent {
-    ExternalEvent::Shutdown { resp }
+pub fn shutdown(resp: oneshot::Sender<()>) -> Event {
+    Event::Shutdown { resp }
 }
 
-pub fn config_reload(path: PathBuf) -> ExternalEvent {
-    ExternalEvent::ConfigReload { path }
+pub fn config_reload(path: PathBuf) -> Event {
+    Event::ConfigReload { path }
 }
 
-impl Debug for ExternalEvent {
+impl Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExternalEvent::Command { cmd, .. } => f.debug_struct("ExternalEvent::Command").field("cmd", cmd).finish(),
-            ExternalEvent::Shutdown { .. } => f.debug_struct("ExternalEvent::Shutdown").finish(),
-            ExternalEvent::ConfigReload { path } => f
-                .debug_struct("ExternalEvent::ConfigReload")
-                .field("path", path)
-                .finish(),
+            Event::Command { cmd, .. } => f.debug_struct("Event::Command").field("cmd", cmd).finish(),
+            Event::Shutdown { .. } => f.debug_struct("Event::Shutdown").finish(),
+            Event::ConfigReload { path } => f.debug_struct("Event::ConfigReload").field("path", path).finish(),
         }
     }
 }

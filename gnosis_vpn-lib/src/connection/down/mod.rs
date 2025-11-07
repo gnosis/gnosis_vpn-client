@@ -5,10 +5,9 @@ use std::time::SystemTime;
 
 use crate::connection;
 use crate::connection::destination::Destination;
-use crate::core::disconnection_runner;
 use crate::{log_output, wg_tooling};
 
-mod runner;
+pub mod runner;
 
 /// Contains stateful data of dismantling a VPN connection from a destination.
 /// The state transition runner for this struct is in `core::connection::down::runner`.
@@ -31,10 +30,13 @@ pub enum Phase {
     ClosingBridge,
 }
 
-impl TryFrom<&Conn> for Down {
+/// Depending on how far a connection was already established,
+/// different steps for dismantling need to be taken.
+/// If no wg pubkey was generated, nothing needs to be done to rewind a connection attempt.
+impl TryFrom<&connection::up::Up> for Down {
     type Error = &'static str;
 
-    fn try_from(value: &connection::Up) -> Result<Self, Self::Error> {
+    fn try_from(value: &connection::up::Up) -> Result<Self, Self::Error> {
         if let Some(wg_public_key) = value.wg_public_key.clone() {
             Ok(Self {
                 destination: value.destination.clone(),

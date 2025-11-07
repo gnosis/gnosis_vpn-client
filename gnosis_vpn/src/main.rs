@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process;
 
 use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::{core, event, hopr_params, socket};
+use gnosis_vpn_lib::{core, external_event, hopr_params, socket};
 
 mod cli;
 // Avoid musl's default allocator due to degraded performance
@@ -182,7 +182,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>
     Ok(receiver)
 }
 
-async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sender<event::Event>) {
+async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sender<external_event::Event>) {
     let mut msg = String::new();
     if let Err(e) = stream.read_to_string(&mut msg).await {
         tracing::error!(error = ?e, "error reading message");
@@ -200,7 +200,7 @@ async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sende
     tracing::debug!(command = %cmd, "incoming command");
 
     let (resp_sender, resp_receiver) = oneshot::channel();
-    match event_sender.send(event::command(cmd, resp_sender)).await {
+    match event_sender.send(external_event::command(cmd, resp_sender)).await {
         Ok(()) => (),
         Err(e) => {
             tracing::error!(error = ?e, "error handling command");
@@ -324,7 +324,7 @@ async fn loop_daemon(
                     tracing::info!("initiate shutdown");
                     match shutdown_sender_opt.take() {
                         Some(sender) => {
-                            if event_sender.send(event::shutdown(sender)).await.is_err() {
+                            if event_sender.send(external_event::shutdown(sender)).await.is_err() {
                                 tracing::warn!("event receiver already closed");
                             }
                         }
@@ -352,7 +352,7 @@ async fn loop_daemon(
                     tokio::spawn(async move {
                         cancel_token.run_until_cancelled(async move {
                             sleep(CONFIG_GRACE_PERIOD).await;
-                            if evt_sender.send(event::config_reload(path)).await.is_err() {
+                            if evt_sender.send(external_event::config_reload(path)).await.is_err() {
                                 tracing::warn!("event receiver already closed");
                             }
                         }).await;

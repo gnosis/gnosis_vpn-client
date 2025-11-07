@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use crate::connection::destination::Destination;
 use crate::{log_output, wg_tooling};
 
-mod runner;
+pub mod runner;
 
 /// Contains stateful data of establishing a VPN connection to a destination.
 /// The state transition runner for this struct is in `core::connection::up::runner`.

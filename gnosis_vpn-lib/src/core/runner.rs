@@ -26,13 +26,15 @@ use crate::chain::client::GnosisRpcClient;
 use crate::chain::contracts::NetworkSpecifications;
 use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use crate::chain::errors::ChainError;
-use crate::core::{connection_runner, disconnection_runner};
+use crate::connection;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
 use crate::log_output;
 use crate::remote_data;
 use crate::ticket_stats::{self, TicketStats};
 
+/// Results indicate events that arise from concurrent runners.
+/// These runners are usually spawned and want to report data or progress back to the core application loop.
 pub enum Results {
     FundChannel {
         address: Address,
@@ -59,18 +61,18 @@ pub enum Results {
     },
     HoprRunning,
     ConnectionEvent {
-        evt: connection_runner::Evt,
+        evt: connection::up::runner::Event,
     },
     ConnectionResult {
-        res: Result<(), connection_runner::Error>,
+        res: Result<(), connection::up::runner::Error>,
     },
     DisconnectionEvent {
         wg_public_key: String,
-        evt: disconnection_runner::Evt,
+        evt: connection::down::runner::Event,
     },
     DisconnectionResult {
         wg_public_key: String,
-        res: Result<(), disconnection_runner::Error>,
+        res: Result<(), connection::down::runner::Error>,
     },
 }
 

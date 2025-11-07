@@ -28,8 +28,8 @@ pub enum Error {
     Ping(#[from] ping::Error),
 }
 
-pub struct DisconnectionRunner {
-    disconn: connection::Down,
+pub struct Runner {
+    disconn: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
 }
@@ -42,8 +42,8 @@ pub enum Event {
     CloseBridge,
 }
 
-impl DisconnectionRunner {
-    pub fn new(disconn: connection::Down, hopr: Arc<Hopr>, options: Options) -> Self {
+impl Runner {
+    pub fn new(disconn: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
         Self { disconn, hopr, options }
     }
 
@@ -112,7 +112,7 @@ impl DisconnectionRunner {
 
 async fn open_bridge_session(
     hopr: &Hopr,
-    disconn: &connection::Down,
+    disconn: &connection::down::Down,
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
@@ -163,7 +163,7 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
     }
 }
 
-impl Display for DisconnectionRunner {
+impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "DisconnectionRunner for {}", self.disconn)
     }

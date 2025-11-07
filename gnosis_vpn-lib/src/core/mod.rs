@@ -14,23 +14,15 @@ use std::time::Duration;
 
 use crate::command::{self, Command, Response, RunMode};
 use crate::config::{self, Config};
+use crate::connection;
 use crate::connection::destination::Destination;
-use crate::event::Event;
+use crate::external_event::Event as ExternalEvent;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
 use crate::{balance, log_output, wg_tooling};
 
-pub mod conn;
-pub mod disconn;
+pub mod runner;
 
-mod connection_runner;
-mod disconnection_runner;
-mod runner;
-
-use conn::Conn;
-use connection_runner::ConnectionRunner;
-use disconn::Disconn;
-use disconnection_runner::DisconnectionRunner;
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -74,7 +66,7 @@ pub struct Core {
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
-    ongoing_disconnections: Vec<Disconn>,
+    ongoing_disconnections: Vec<connection::down::Down>,
     last_connection_errors: HashMap<Address, String>,
 }
 
@@ -86,8 +78,8 @@ enum Phase {
     HoprSyncing,
     HoprRunning,
     HoprChannelsFunded,
-    Connecting(Conn),
-    Connected(Conn),
+    Connecting(connection::up::Up),
+    Connected(connection::up::Up),
     ShuttingDown,
 }
 
@@ -121,7 +113,7 @@ impl Core {
         })
     }
 
-    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Event>) {
+    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<ExternalEvent>) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
@@ -147,10 +139,10 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_event(&mut self, event: Event, results_sender: &mpsc::Sender<Results>) -> bool {
+    async fn on_event(&mut self, event: ExternalEvent, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, "on outside event");
         match event {
-            Event::Shutdown { resp } => {
+            ExternalEvent::Shutdown { resp } => {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
@@ -167,7 +159,7 @@ impl Core {
                 false
             }
 
-            Event::ConfigReload { path } => {
+            ExternalEvent::ConfigReload { path } => {
                 match self.phase {
                     Phase::ShuttingDown => {
                         tracing::warn!("ignoring configuration reload - shutting down");
@@ -197,7 +189,7 @@ impl Core {
                 true
             }
 
-            Event::Command { cmd, resp } => {
+            ExternalEvent::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {
@@ -540,7 +532,7 @@ impl Core {
                 // potentially reconnect early after wg disconnected
                 // this might only happen when reconnecting to a different destination after a
                 // connection established successfully
-                if matches!(evt, disconnection_runner::Evt::OpenBridge) {
+                if matches!(evt, connection::down::runner::Event::OpenBridge) {
                     self.act_on_target(results_sender);
                 }
             }
@@ -729,11 +721,11 @@ impl Core {
     fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connecting.clone();
-            let conn = Conn::new(destination.clone());
+            let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            let runner = ConnectionRunner::new(conn.clone(), config_connection, config_wireguard, hopr);
+            let runner = connection::up::runner::Runner::new(conn.clone(), config_connection, config_wireguard, hopr);
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
@@ -746,12 +738,12 @@ impl Core {
         }
     }
 
-    fn spawn_disconnection_runner(&mut self, disconn: &Disconn, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_disconnection_runner(&mut self, disconn: &connection::down::Down, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_for_shutdown.clone();
             let config_connection = self.config.connection.clone();
             let hopr = hopr.clone();
-            let runner = DisconnectionRunner::new(disconn.clone(), hopr, config_connection);
+            let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
             let results_sender = results_sender.clone();
             self.ongoing_disconnections.push(disconn.clone());
             tokio::spawn(async move {
@@ -807,7 +799,7 @@ impl Core {
         }
     }
 
-    fn disconnect_from_connected(&mut self, conn: &Conn, results_sender: &mpsc::Sender<Results>) {
+    fn disconnect_from_connected(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprChannelsFunded;
         match conn.try_into() {
             Ok(disconn) => self.spawn_disconnection_runner(&disconn, results_sender),
@@ -817,7 +809,7 @@ impl Core {
         }
     }
 
-    fn disconnect_from_connecting(&mut self, conn: &Conn, results_sender: &mpsc::Sender<Results>) {
+    fn disconnect_from_connecting(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.cancel_connecting.cancel();
         self.cancel_connecting = CancellationToken::new();
         self.phase = Phase::HoprChannelsFunded;

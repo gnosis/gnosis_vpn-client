@@ -8,9 +8,8 @@ use std::str::FromStr;
 use std::time::SystemTime;
 
 use crate::balance::{self, FundingIssue};
+use crate::connection;
 use crate::connection::destination::Destination as ConnectionDestination;
-use crate::core::conn;
-use crate::core::disconn;
 use crate::info::Info;
 use crate::log_output;
 
@@ -101,9 +100,9 @@ pub struct DestinationState {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectionState {
     None,
-    Connecting(SystemTime, conn::Phase),
+    Connecting(SystemTime, connection::up::Phase),
     Connected(SystemTime),
-    Disconnecting(SystemTime, disconn::Phase),
+    Disconnecting(SystemTime, connection::down::Phase),
 }
 
 #[derive(Debug, Serialize, Deserialize)]

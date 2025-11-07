@@ -31,7 +31,7 @@ pub enum Error {
 }
 
 pub struct Runner {
-    conn: connection::Up,
+    conn: connection::up::Up,
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wg_tooling::Config,
@@ -50,7 +50,7 @@ pub enum Event {
 }
 
 impl Runner {
-    pub fn new(conn: connection::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(conn: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
         Self {
             conn,
             hopr,
@@ -144,7 +144,11 @@ impl Display for Event {
     }
 }
 
-async fn open_bridge_session(hopr: &Hopr, conn: &Conn, options: &Options) -> Result<SessionClientMetadata, HoprError> {
+async fn open_bridge_session(
+    hopr: &Hopr,
+    conn: &connection::up::Up,
+    options: &Options,
+) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path_options: conn.destination.routing.clone(),
@@ -202,7 +206,11 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
     }
 }
 
-async fn open_ping_session(hopr: &Hopr, conn: &Conn, options: &Options) -> Result<SessionClientMetadata, HoprError> {
+async fn open_ping_session(
+    hopr: &Hopr,
+    conn: &connection::up::Up,
+    options: &Options,
+) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
         forward_path_options: conn.destination.routing.clone(),
