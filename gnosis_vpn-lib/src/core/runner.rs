@@ -158,7 +158,7 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     tracing::debug!("starting presafe balance runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider.clone();
+    let rpc_provider = hopr_params.rpc_provider();
     let node_address = keys.chain_key.public().to_address();
     retry(ExponentialBackoff::default(), || async {
         let presafe = balance::PreSafe::fetch(&private_key, rpc_provider.as_str(), node_address)
@@ -173,8 +173,8 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::Ticke
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
-    let rpc_provider = hopr_params.rpc_provider.clone();
-    let network = hopr_params.network.clone();
+    let rpc_provider = hopr_params.rpc_provider();
+    let network = hopr_params.network();
     retry(ExponentialBackoff::default(), || async {
         let stats = TicketStats::fetch(
             &private_key,
@@ -195,12 +195,12 @@ async fn run_safe_deployment(
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider.clone();
+    let rpc_provider = hopr_params.rpc_provider();
     let node_address = keys.chain_key.public().to_address();
     let token_u256 = presafe.node_wxhopr.amount();
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
     let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
-    let network = hopr_params.network.clone();
+    let network = hopr_params.network();
     retry(ExponentialBackoff::default(), || async {
         let mut bytes = [0u8; 32];
         rand::rng().fill(&mut bytes);
@@ -261,19 +261,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool,
 
 async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = match hopr_params.config_mode.clone() {
-        // use user provided configuration path
-        hopr_params::ConfigFileMode::Manual(path) => hopr_config::from_path(path.as_ref()).await?,
-        // check status of config generation
-        hopr_params::ConfigFileMode::Generated => {
-            hopr_config::generate(
-                hopr_params.network.clone(),
-                hopr_params.rpc_provider.clone(),
-                ticket_value,
-            )
-            .await?
-        }
-    };
+    let cfg = hopr_params.to_config(ticket_value).await?;
     let keys = hopr_params.calc_keys().await?;
     Hopr::new(cfg, keys).await.map_err(Error::from)
 }

@@ -48,6 +48,10 @@ pub struct Cli {
     /// Hopr edge client identity pass
     #[arg( long, env = hopr::ID_PASS_ENV, default_value = None)]
     pub hopr_identity_pass: Option<String>,
+
+    /// Allow insecure non-private connections (only for testing purposes)
+    #[arg(long)]
+    pub allow_insecure: bool,
 }
 
 pub fn parse() -> Cli {
@@ -62,13 +66,15 @@ impl From<Cli> for HoprParams {
             Some(path) => hopr_params::ConfigFileMode::Manual(path),
             None => hopr_params::ConfigFileMode::Generated,
         };
+        let allow_insecure = cli.allow_insecure;
 
-        HoprParams {
+        HoprParams::new(
+            cli.hopr_identity_file,
+            cli.hopr_identity_pass,
             config_mode,
-            identity_file: cli.hopr_identity_file,
-            identity_pass: cli.hopr_identity_pass,
             network,
             rpc_provider,
-        }
+            allow_insecure,
+        )
     }
 }

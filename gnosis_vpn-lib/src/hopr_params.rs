@@ -1,11 +1,12 @@
-use edgli::hopr_lib::HoprKeys;
+use edgli::hopr_lib::config::HoprLibConfig;
+use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
 use tokio::fs;
 use url::Url;
 
 use std::path::PathBuf;
 
-use crate::hopr::identity;
+use crate::hopr::{config, identity};
 use crate::network::Network;
 
 #[derive(Debug, Error)]
@@ -14,15 +15,18 @@ pub enum Error {
     HoprIdentity(#[from] identity::Error),
     #[error(transparent)]
     IO(#[from] std::io::Error),
+    #[error(transparent)]
+    Config(#[from] config::Error),
 }
 
 #[derive(Clone, Debug)]
 pub struct HoprParams {
-    pub identity_file: Option<PathBuf>,
-    pub identity_pass: Option<String>,
-    pub config_mode: ConfigFileMode,
-    pub network: Network,
-    pub rpc_provider: Url,
+    identity_file: Option<PathBuf>,
+    identity_pass: Option<String>,
+    config_mode: ConfigFileMode,
+    network: Network,
+    rpc_provider: Url,
+    allow_insecure: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +36,24 @@ pub enum ConfigFileMode {
 }
 
 impl HoprParams {
+    pub fn new(
+        identity_file: Option<PathBuf>,
+        identity_pass: Option<String>,
+        config_mode: ConfigFileMode,
+        network: Network,
+        rpc_provider: Url,
+        allow_insecure: bool,
+    ) -> Self {
+        Self {
+            identity_file,
+            identity_pass,
+            config_mode,
+            network,
+            rpc_provider,
+            allow_insecure,
+        }
+    }
+
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
         let identity_file = match &self.identity_file {
             Some(path) => {
@@ -68,5 +90,28 @@ impl HoprParams {
         };
 
         identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
+    }
+
+    pub async fn to_config(&self, ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
+        match self.config_mode.clone() {
+            // use user provided configuration path
+            ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
+            // check status of config generation
+            ConfigFileMode::Generated => config::generate(self.network(), self.rpc_provider(), ticket_value)
+                .await
+                .map_err(Error::from),
+        }
+    }
+
+    pub fn rpc_provider(&self) -> Url {
+        self.rpc_provider.clone()
+    }
+
+    pub fn network(&self) -> Network {
+        self.network.clone()
+    }
+
+    pub fn allow_insecure(&self) -> bool {
+        self.allow_insecure
     }
 }
