@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process;
 
 use gnosis_vpn_lib::command::Command;
+use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::{core, external_event, hopr_params, socket};
 
 mod cli;
@@ -367,8 +368,19 @@ async fn loop_daemon(
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    match hopr_lib::prepare_tokio_runtime() {
+        Ok(rt) => {
+            rt.block_on(main_inner());
+        }
+        Err(e) => {
+            eprintln!("error preparing tokio runtime: {}", e);
+            process::exit(exitcode::IOERR);
+        }
+    }
+}
+
+async fn main_inner() {
     let args = cli::parse();
 
     // install global collector configured based on RUST_LOG env var.
