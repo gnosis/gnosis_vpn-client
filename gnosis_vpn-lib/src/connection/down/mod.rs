@@ -3,13 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
 use std::time::SystemTime;
 
+use crate::connection;
 use crate::connection::destination::Destination;
-use crate::core::conn::Conn;
 use crate::core::disconnection_runner;
 use crate::{log_output, wg_tooling};
 
+mod runner;
+
 #[derive(Clone, Debug)]
-pub struct Disconn {
+pub struct Down {
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
     pub wg_public_key: String,
@@ -25,10 +27,10 @@ pub enum Phase {
     ClosingBridge,
 }
 
-impl TryFrom<&Conn> for Disconn {
+impl TryFrom<&Conn> for Down {
     type Error = &'static str;
 
-    fn try_from(value: &Conn) -> Result<Self, Self::Error> {
+    fn try_from(value: &connection::Up) -> Result<Self, Self::Error> {
         if let Some(wg_public_key) = value.wg_public_key.clone() {
             Ok(Self {
                 destination: value.destination.clone(),
@@ -37,32 +39,32 @@ impl TryFrom<&Conn> for Disconn {
                 wg: value.wg.clone(),
             })
         } else {
-            Err("Cannot convert Conn to Disconn: missing WireGuard public key")
+            Err("Cannot convert Up to Down: missing WireGuard public key")
         }
     }
 }
 
-impl Disconn {
+impl Down {
     pub fn wg(&self) -> Option<wg_tooling::WireGuard> {
         self.wg.clone()
     }
 
-    pub fn disconnect_evt(&mut self, evt: disconnection_runner::Evt) {
+    pub fn disconnect_evt(&mut self, evt: runner::Event) {
         let now = SystemTime::now();
         match evt {
-            disconnection_runner::Evt::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
-            disconnection_runner::Evt::OpenBridge => self.phase = (now, Phase::OpeningBridge),
-            disconnection_runner::Evt::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
-            disconnection_runner::Evt::CloseBridge => self.phase = (now, Phase::ClosingBridge),
+            runner::Event::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
+            runner::Event::OpenBridge => self.phase = (now, Phase::OpeningBridge),
+            runner::Event::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
+            runner::Event::CloseBridge => self.phase = (now, Phase::ClosingBridge),
         }
     }
 }
 
-impl Display for Disconn {
+impl Display for Down {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Disconn from {} ({:?} since {})",
+            "Disconnection from {} ({:?} since {})",
             self.destination,
             self.phase.1,
             log_output::elapsed(&self.phase.0)

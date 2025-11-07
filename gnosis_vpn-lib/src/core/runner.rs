@@ -1,3 +1,6 @@
+//! Various runner tasks that might get extracted into their own modules once applicable.
+//! These function expect to be spawn and will deliver their result or progress via channels.
+
 use alloy::primitives::U256;
 use backoff::ExponentialBackoff;
 use backoff::future::retry;

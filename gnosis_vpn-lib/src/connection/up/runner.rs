@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
+use crate::connection;
 use crate::connection::options::Options;
-use crate::core::conn::Conn;
 use crate::core::runner::{self, Results};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
@@ -27,15 +27,15 @@ pub enum Error {
     Ping(#[from] ping::Error),
 }
 
-pub struct ConnectionRunner {
-    conn: Conn,
+pub struct Runner {
+    conn: connection::Up,
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wg_tooling::Config,
 }
 
 #[derive(Debug)]
-pub enum Evt {
+pub enum Event {
     GenerateWg,
     OpenBridge,
     RegisterWg(String),
@@ -46,8 +46,8 @@ pub enum Evt {
     AdjustToMain,
 }
 
-impl ConnectionRunner {
-    pub fn new(conn: Conn, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+impl Runner {
+    pub fn new(conn: connection::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
         Self {
             conn,
             hopr,
@@ -64,51 +64,55 @@ impl ConnectionRunner {
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Evt::GenerateWg })
+            .send(Results::ConnectionEvent { evt: Event::GenerateWg })
             .await;
         let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
 
         // 1. open bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Evt::OpenBridge })
+            .send(Results::ConnectionEvent { evt: Event::OpenBridge })
             .await;
         let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options).await?;
 
         // 2. register wg public key
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: Evt::RegisterWg(wg.key_pair.public_key.clone()),
+                evt: Event::RegisterWg(wg.key_pair.public_key.clone()),
             })
             .await;
         let registration = register(&self.options, &bridge_session, &wg).await?;
 
         // 3. close bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Evt::CloseBridge })
+            .send(Results::ConnectionEvent {
+                evt: Event::CloseBridge,
+            })
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
 
         // 4. open ping session
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Evt::OpenPing })
+            .send(Results::ConnectionEvent { evt: Event::OpenPing })
             .await;
         let ping_session = open_ping_session(&self.hopr, &self.conn, &self.options).await?;
 
         // 5. setup wg tunnel
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: Evt::WgTunnel(wg.clone()),
+                evt: Event::WgTunnel(wg.clone()),
             })
             .await;
         wg_tunnel(&registration, &ping_session, &wg).await?;
 
         // 6. check ping
-        let _ = results_sender.send(Results::ConnectionEvent { evt: Evt::Ping }).await;
+        let _ = results_sender.send(Results::ConnectionEvent { evt: Event::Ping }).await;
         ping(&self.options).await?;
 
         // 7. adjust to main session
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Evt::AdjustToMain })
+            .send(Results::ConnectionEvent {
+                evt: Event::AdjustToMain,
+            })
             .await;
         adjust_to_main_session(&self.hopr, &self.options, &ping_session).await?;
 
@@ -116,23 +120,23 @@ impl ConnectionRunner {
     }
 }
 
-impl Display for ConnectionRunner {
+impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConnectionRunner {{ {} }}", self.conn)
     }
 }
 
-impl Display for Evt {
+impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Evt::GenerateWg => write!(f, "GenerateWg"),
-            Evt::OpenBridge => write!(f, "OpenBridge"),
-            Evt::RegisterWg(_) => write!(f, "RegisterWg"),
-            Evt::CloseBridge => write!(f, "CloseBridge"),
-            Evt::OpenPing => write!(f, "OpenPing"),
-            Evt::WgTunnel(_) => write!(f, "WgTunnel"),
-            Evt::Ping => write!(f, "Ping"),
-            Evt::AdjustToMain => write!(f, "AdjustToMain"),
+            Event::GenerateWg => write!(f, "GenerateWg"),
+            Event::OpenBridge => write!(f, "OpenBridge"),
+            Event::RegisterWg(_) => write!(f, "RegisterWg"),
+            Event::CloseBridge => write!(f, "CloseBridge"),
+            Event::OpenPing => write!(f, "OpenPing"),
+            Event::WgTunnel(_) => write!(f, "WgTunnel"),
+            Event::Ping => write!(f, "Ping"),
+            Event::AdjustToMain => write!(f, "AdjustToMain"),
         }
     }
 }

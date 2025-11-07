@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
+use crate::connection;
 use crate::connection::options::Options;
-use crate::core::disconn::Disconn;
 use crate::core::runner::{self, Results};
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -26,13 +26,13 @@ pub enum Error {
 }
 
 pub struct DisconnectionRunner {
-    disconn: Disconn,
+    disconn: connection::Down,
     hopr: Arc<Hopr>,
     options: Options,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Evt {
+pub enum Event {
     DisconnectWg,
     OpenBridge,
     UnregisterWg,
@@ -40,7 +40,7 @@ pub enum Evt {
 }
 
 impl DisconnectionRunner {
-    pub fn new(disconn: Disconn, hopr: Arc<Hopr>, options: Options) -> Self {
+    pub fn new(disconn: connection::Down, hopr: Arc<Hopr>, options: Options) -> Self {
         Self { disconn, hopr, options }
     }
 
@@ -60,7 +60,7 @@ impl DisconnectionRunner {
             let _ = results_sender
                 .send(Results::DisconnectionEvent {
                     wg_public_key: self.disconn.wg_public_key.clone(),
-                    evt: Evt::DisconnectWg,
+                    evt: Event::DisconnectWg,
                 })
                 .await;
             let _ = wg
@@ -72,7 +72,7 @@ impl DisconnectionRunner {
         let _ = results_sender
             .send(Results::DisconnectionEvent {
                 wg_public_key: self.disconn.wg_public_key.clone(),
-                evt: Evt::OpenBridge,
+                evt: Event::OpenBridge,
             })
             .await;
         // 1. open bridge session
@@ -82,7 +82,7 @@ impl DisconnectionRunner {
         let _ = results_sender
             .send(Results::DisconnectionEvent {
                 wg_public_key: self.disconn.wg_public_key.clone(),
-                evt: Evt::UnregisterWg,
+                evt: Event::UnregisterWg,
             })
             .await;
         match unregister(&self.options, &bridge_session, self.disconn.wg_public_key.clone()).await {
@@ -98,7 +98,7 @@ impl DisconnectionRunner {
         let _ = results_sender
             .send(Results::DisconnectionEvent {
                 wg_public_key: self.disconn.wg_public_key.clone(),
-                evt: Evt::CloseBridge,
+                evt: Event::CloseBridge,
             })
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
@@ -109,7 +109,7 @@ impl DisconnectionRunner {
 
 async fn open_bridge_session(
     hopr: &Hopr,
-    disconn: &Disconn,
+    disconn: &connection::Down,
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
@@ -166,13 +166,13 @@ impl Display for DisconnectionRunner {
     }
 }
 
-impl Display for Evt {
+impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Evt::DisconnectWg => write!(f, "DisconnectWg"),
-            Evt::OpenBridge => write!(f, "OpenBridge"),
-            Evt::UnregisterWg => write!(f, "UnregisterWg"),
-            Evt::CloseBridge => write!(f, "CloseBridge"),
+            Event::DisconnectWg => write!(f, "DisconnectWg"),
+            Event::OpenBridge => write!(f, "OpenBridge"),
+            Event::UnregisterWg => write!(f, "UnregisterWg"),
+            Event::CloseBridge => write!(f, "CloseBridge"),
         }
     }
 }
