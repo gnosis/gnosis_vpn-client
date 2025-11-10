@@ -57,7 +57,7 @@ impl HoprParams {
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
         let identity_file = match &self.identity_file {
             Some(path) => {
-                tracing::warn!(?path, "Using provided HOPR identity file");
+                tracing::info!(?path, "Using provided HOPR identity file");
                 path.to_path_buf()
             }
             None => identity::file()?,
