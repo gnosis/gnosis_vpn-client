@@ -41,9 +41,12 @@ pub struct Runner {
 pub enum Event {
     GenerateWg,
     OpenBridge,
+    OpenBridgeFailed(String),
     RegisterWg(String),
+    RegisterWgFailed(String),
     CloseBridge,
     OpenPing,
+    OpenPingFailed(String),
     WgTunnel(wg_tooling::WireGuard),
     Ping,
     AdjustToMain,
@@ -75,7 +78,7 @@ impl Runner {
         let _ = results_sender
             .send(Results::ConnectionEvent { evt: Event::OpenBridge })
             .await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options).await?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options, &results_sender).await?;
 
         // 2. register wg public key
         let _ = results_sender
@@ -83,7 +86,7 @@ impl Runner {
                 evt: Event::RegisterWg(wg.key_pair.public_key.clone()),
             })
             .await;
-        let registration = register(&self.options, &bridge_session, &wg).await?;
+        let registration = register(&self.options, &bridge_session, &wg, &results_sender).await?;
 
         // 3. close bridge session
         let _ = results_sender
@@ -97,7 +100,7 @@ impl Runner {
         let _ = results_sender
             .send(Results::ConnectionEvent { evt: Event::OpenPing })
             .await;
-        let ping_session = open_ping_session(&self.hopr, &self.conn, &self.options).await?;
+        let ping_session = open_ping_session(&self.hopr, &self.conn, &self.options, &results_sender).await?;
 
         // 5. setup wg tunnel
         let _ = results_sender
@@ -134,9 +137,12 @@ impl Display for Event {
         match self {
             Event::GenerateWg => write!(f, "GenerateWg"),
             Event::OpenBridge => write!(f, "OpenBridge"),
+            Event::OpenBridgeFailed(_) => write!(f, "OpenBridgeFailed"),
             Event::RegisterWg(_) => write!(f, "RegisterWg"),
+            Event::RegisterWgFailed(_) => write!(f, "RegisterWgFailed"),
             Event::CloseBridge => write!(f, "CloseBridge"),
             Event::OpenPing => write!(f, "OpenPing"),
+            Event::OpenPingFailed(_) => write!(f, "OpenPingFailed"),
             Event::WgTunnel(_) => write!(f, "WgTunnel"),
             Event::Ping => write!(f, "Ping"),
             Event::AdjustToMain => write!(f, "AdjustToMain"),
@@ -145,7 +151,7 @@ impl Display for Event {
 }
 
 #[tracing::instrument(
-    skip(hopr, options, conn),
+    skip(hopr, options, conn, results_sender),
     fields(
         address = %conn.destination.address,
         routing = ?conn.destination.routing,
@@ -159,6 +165,7 @@ async fn open_bridge_session(
     hopr: &Hopr,
     conn: &connection::up::Up,
     options: &Options,
+    results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
@@ -179,7 +186,13 @@ async fn open_bridge_session(
                 Some(1),
                 cfg.clone(),
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                let _ = results_sender.send(Results::ConnectionEvent {
+                    evt: Event::OpenBridgeFailed(e.to_string()),
+                });
+                e
+            })?;
         Ok(res)
     })
     .await
@@ -189,6 +202,7 @@ async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
     wg: &wg_tooling::WireGuard,
+    results_sender: &mpsc::Sender<Results>,
 ) -> Result<Registration, gvpn_client::Error> {
     let input = gvpn_client::Input::new(
         wg.key_pair.public_key.clone(),
@@ -197,7 +211,12 @@ async fn register(
     );
     let client = reqwest::Client::new();
     retry(ExponentialBackoff::default(), || async {
-        let res = gvpn_client::register(&client, &input).await?;
+        let res = gvpn_client::register(&client, &input).await.map_err(|e| {
+            let _ = results_sender.send(Results::ConnectionEvent {
+                evt: Event::RegisterWgFailed(e.to_string()),
+            });
+            e
+        })?;
         Ok(res)
     })
     .await
@@ -221,6 +240,7 @@ async fn open_ping_session(
     hopr: &Hopr,
     conn: &connection::up::Up,
     options: &Options,
+    results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
@@ -241,7 +261,13 @@ async fn open_ping_session(
                 None,
                 cfg.clone(),
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                let _ = results_sender.send(Results::ConnectionEvent {
+                    evt: Event::OpenPingFailed(e.to_string()),
+                });
+                e
+            })?;
         Ok(res)
     })
     .await
