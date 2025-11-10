@@ -144,6 +144,17 @@ impl Display for Event {
     }
 }
 
+#[tracing::instrument(
+    skip(hopr, options, conn),
+    fields(
+        address = %conn.destination.address,
+        routing = ?conn.destination.routing,
+        phase = ?conn.phase,
+        wg_public_key = ?conn.wg_public_key
+    ),
+    level = "debug",
+    ret
+)]
 async fn open_bridge_session(
     hopr: &Hopr,
     conn: &connection::up::Up,
