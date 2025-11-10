@@ -24,12 +24,15 @@ impl Destination {
     fn meta_str(&self) -> String {
         match self.meta.get("location") {
             Some(location) => location.clone(),
-            None => self
-                .meta
-                .iter()
-                .map(|(key, value)| format!("{key}: {value}"))
-                .collect::<Vec<String>>()
-                .join(", "),
+            None => {
+                let mut metas = self
+                    .meta
+                    .iter()
+                    .map(|(key, value)| format!("{key}: {value}"))
+                    .collect::<Vec<String>>();
+                metas.sort();
+                metas.join(", ")
+            }
         }
     }
 }
