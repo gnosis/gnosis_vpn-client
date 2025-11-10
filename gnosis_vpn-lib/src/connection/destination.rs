@@ -1,11 +1,12 @@
+pub use edgli::hopr_lib::{Address, NodeId, RoutingOptions};
+use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 
-pub use edgli::hopr_lib::{Address, RoutingOptions};
-
 use crate::log_output;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
     pub meta: HashMap<String, String>,
     pub address: Address,
@@ -39,8 +40,33 @@ impl Destination {
 
 impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let address = log_output::address(&self.address);
-        let meta = self.meta_str();
-        write!(f, "Destination[{address},{meta}]")
+        let short_addr = log_output::address(&self.address);
+        let path = match self.routing.clone() {
+            RoutingOptions::Hops(hops) => {
+                let nr: u8 = hops.into();
+                let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
+                if nr > 0 {
+                    format!("->{}->", path).to_string()
+                } else {
+                    "->".to_string()
+                }
+            }
+            RoutingOptions::IntermediatePath(nodes) => nodes
+                .into_iter()
+                .map(|node_id| match node_id {
+                    NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
+                    NodeId::Chain(address) => format!("({})", log_output::address(&address)),
+                })
+                .collect::<Vec<String>>()
+                .join("->"),
+        };
+        write!(
+            f,
+            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
+            meta = self.meta_str(),
+            path = path,
+            address = self.address,
+            short_addr = short_addr,
+        )
     }
 }

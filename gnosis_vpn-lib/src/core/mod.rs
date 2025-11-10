@@ -256,7 +256,7 @@ impl Core {
                         let destinations = vals
                             .into_iter()
                             .map(|v| {
-                                let destination: command::Destination = v.into();
+                                let destination = v.clone();
                                 let connection_state = match &self.phase {
                                     Phase::Connecting(conn) if &conn.destination == v => {
                                         command::ConnectionState::Connecting(conn.phase.0, conn.phase.1.clone())
@@ -292,7 +292,7 @@ impl Core {
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
-                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.into())));
+                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone())));
                             self.act_on_target(results_sender);
                         }
                         None => {
@@ -307,7 +307,7 @@ impl Core {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(
-                                    (&conn.destination).into(),
+                                    conn.destination.clone(),
                                 )));
                             }
                             _ => {
