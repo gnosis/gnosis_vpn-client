@@ -223,11 +223,16 @@ async fn open_bridge_session(
                 cfg.clone(),
             )
             .await;
-
-        match res {
-            Ok(session) => Ok(session),
-            Err(e) => Err(e),
+        if let Err(e) = &res {
+            let _ = results_sender
+                .clone()
+                .send(Results::ConnectionEvent {
+                    evt: setback(Setback::OpenBridge(e.to_string())),
+                })
+                .await;
         }
+        let ret_val = res?;
+        Ok(ret_val)
     })
     .await
 }
@@ -245,13 +250,17 @@ async fn register(
     );
     let client = reqwest::Client::new();
     retry(ExponentialBackoff::default(), || async {
-        let res = gvpn_client::register(&client, &input).await.map_err(|e| {
-            let _ = results_sender.send(Results::ConnectionEvent {
-                evt: setback(Setback::RegisterWg(e.to_string())),
-            });
-            e
-        })?;
-        Ok(res)
+        let res = gvpn_client::register(&client, &input).await;
+        if let Err(e) = &res {
+            let _ = results_sender
+                .clone()
+                .send(Results::ConnectionEvent {
+                    evt: setback(Setback::RegisterWg(e.to_string())),
+                })
+                .await;
+        }
+        let ret_val = res?;
+        Ok(ret_val)
     })
     .await
 }
@@ -295,14 +304,16 @@ async fn open_ping_session(
                 None,
                 cfg.clone(),
             )
-            .await
-            .map_err(|e| {
-                let _ = results_sender.send(Results::ConnectionEvent {
+            .await;
+        if let Err(e) = &res {
+            let _ = results_sender
+                .send(Results::ConnectionEvent {
                     evt: setback(Setback::OpenPing(e.to_string())),
-                });
-                e
-            })?;
-        Ok(res)
+                })
+                .await;
+        }
+        let ret_val = res?;
+        Ok(ret_val)
     })
     .await
 }
