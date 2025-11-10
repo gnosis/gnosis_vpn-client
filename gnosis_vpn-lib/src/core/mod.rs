@@ -250,11 +250,11 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
-                        let destinations = self
-                            .config
-                            .destinations
-                            .values()
-                            .sort_by(|a, b| a.address.cmp(&b.address))
+                        let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
+                        vals.sort_by(|a, b| a.address.cmp(&b.address));
+
+                        let destinations = vals
+                            .into_iter()
                             .map(|v| {
                                 let destination: command::Destination = v.into();
                                 let connection_state = match &self.phase {
