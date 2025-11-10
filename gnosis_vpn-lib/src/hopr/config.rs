@@ -1,12 +1,11 @@
 pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
-
 use edgli::hopr_lib::{Balance, WxHOPR};
 use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
+use tokio::fs;
 use url::Url;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::balance;
@@ -39,8 +38,8 @@ impl From<SafeModuleDeploymentResult> for SafeModule {
     }
 }
 
-pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
-    let content = fs::read_to_string(path).map_err(|e| {
+pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
+    let content = fs::read_to_string(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
         } else {
@@ -51,18 +50,22 @@ pub fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub fn store_safe(safe_module: &SafeModule) -> Result<(), Error> {
+pub async fn store_safe(safe_module: &SafeModule) -> Result<(), Error> {
     let safe_file = safe_file()?;
     let content = serde_yaml::to_string(&safe_module)?;
-    fs::write(&safe_file, &content).map_err(Error::IO)
+    fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
 pub fn has_safe() -> bool {
     safe_file().is_ok_and(|path| path.exists())
 }
 
-pub fn generate(network: Network, rpc_provider: Url, ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
-    let safe_module: SafeModule = match fs::read_to_string(safe_file()?) {
+pub async fn generate(
+    network: Network,
+    rpc_provider: Url,
+    ticket_value: Balance<WxHOPR>,
+) -> Result<HoprLibConfig, Error> {
+    let safe_module: SafeModule = match fs::read_to_string(safe_file()?).await {
         Ok(content) => serde_yaml::from_str::<SafeModule>(&content)?,
         Err(e) => return Err(Error::IO(e)),
     };
@@ -104,7 +107,7 @@ strategy:
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-fn safe_file() -> Result<PathBuf, Error> {
+pub fn safe_file() -> Result<PathBuf, Error> {
     dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)
 }
 

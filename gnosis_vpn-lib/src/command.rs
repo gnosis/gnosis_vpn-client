@@ -1,20 +1,23 @@
-use edgli::hopr_lib::{Address, RoutingOptions};
+use edgli::hopr_lib::{Address, NodeId, RoutingOptions};
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use crate::balance::{self, FundingIssue};
+use crate::connection;
 use crate::connection::destination::Destination as ConnectionDestination;
+use crate::info::Info;
 use crate::log_output;
-use crate::network::Network;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     Status,
     Connect(Address),
+    Metrics,
     Disconnect,
     Balance,
     Ping,
@@ -28,6 +31,7 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
+    Metrics(String),
     Pong,
     Empty,
 }
@@ -35,8 +39,7 @@ pub enum Response {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub run_mode: RunMode,
-    pub available_destinations: Vec<Destination>,
-    pub network: Network,
+    pub destinations: Vec<DestinationState>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,7 +48,7 @@ pub enum RunMode {
     Init,
     /// after creating safe this state will not be reached again
     PreparingSafe {
-        node_address: Address,
+        node_address: String,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
@@ -53,21 +56,11 @@ pub enum RunMode {
     /// Before config generation
     ValueingTicket,
     /// Subsequent service start up in this state and after preparing safe
-    Warmup { sync_progress: f32, hopr_state: String },
+    Warmup { hopr_state: String },
     /// Normal operation where connections can be made
-    Running {
-        connection: ConnectionState,
-        funding: FundingState,
-        hopr_state: String,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ConnectionState {
-    Connecting(Destination),
-    Disconnecting(Destination),
-    Connected(Destination),
-    Disconnected,
+    Running { funding: FundingState, hopr_state: String },
+    /// Shutting down service
+    Shutdown,
 }
 
 // in order of priority
@@ -98,36 +91,27 @@ pub struct Destination {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DestinationState {
+    pub destination: Destination,
+    pub connection_state: ConnectionState,
+    pub last_connection_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ConnectionState {
+    None,
+    Connecting(SystemTime, connection::up::Phase),
+    Connected(SystemTime),
+    Disconnecting(SystemTime, connection::down::Phase),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BalanceResponse {
     pub node: String,
     pub safe: String,
     pub channels_out: String,
-    pub addresses: Addresses,
+    pub info: Info,
     pub issues: Vec<FundingIssue>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Addresses {
-    pub node: Address,
-    pub safe: Address,
-}
-
-impl ConnectionState {
-    pub fn connecting(destination: Destination) -> Self {
-        ConnectionState::Connecting(destination)
-    }
-
-    pub fn disconnecting(destination: Destination) -> Self {
-        ConnectionState::Disconnecting(destination)
-    }
-
-    pub fn connected(destination: Destination) -> Self {
-        ConnectionState::Connected(destination)
-    }
-
-    pub fn disconnected() -> Self {
-        ConnectionState::Disconnected
-    }
 }
 
 impl RunMode {
@@ -135,7 +119,7 @@ impl RunMode {
         RunMode::Init
     }
     pub fn preparing_safe(
-        node_address: Address,
+        node_address: String,
         pre_safe: balance::PreSafe,
         funding_tool: balance::FundingTool,
     ) -> Self {
@@ -147,23 +131,16 @@ impl RunMode {
         }
     }
 
-    pub fn warmup(sync_progress: f32, hopr_state: String) -> Self {
-        RunMode::Warmup {
-            sync_progress,
-            hopr_state,
-        }
+    pub fn warmup(hopr_state: String) -> Self {
+        RunMode::Warmup { hopr_state }
     }
 
     pub fn valueing_ticket() -> Self {
         RunMode::ValueingTicket
     }
 
-    pub fn running(connection: ConnectionState, funding: FundingState, hopr_state: String) -> Self {
-        RunMode::Running {
-            connection,
-            funding,
-            hopr_state,
-        }
+    pub fn running(funding: FundingState, hopr_state: String) -> Self {
+        RunMode::Running { funding, hopr_state }
     }
 }
 
@@ -188,29 +165,19 @@ impl DisconnectResponse {
 }
 
 impl StatusResponse {
-    pub fn new(run_mode: RunMode, available_destinations: Vec<Destination>, network: Network) -> Self {
-        StatusResponse {
-            run_mode,
-            available_destinations,
-            network,
-        }
+    pub fn new(run_mode: RunMode, destinations: Vec<DestinationState>) -> Self {
+        StatusResponse { run_mode, destinations }
     }
 }
 
 impl BalanceResponse {
-    pub fn new(
-        node: String,
-        safe: String,
-        channels_out: String,
-        issues: Vec<FundingIssue>,
-        addresses: Addresses,
-    ) -> Self {
+    pub fn new(node: String, safe: String, channels_out: String, issues: Vec<FundingIssue>, info: Info) -> Self {
         BalanceResponse {
             node,
             safe,
             channels_out,
             issues,
-            addresses,
+            info,
         }
     }
 }
@@ -244,12 +211,12 @@ impl FromStr for Command {
     }
 }
 
-impl From<ConnectionDestination> for Destination {
-    fn from(destination: ConnectionDestination) -> Self {
+impl From<&ConnectionDestination> for Destination {
+    fn from(destination: &ConnectionDestination) -> Self {
         Destination {
             address: destination.address,
-            meta: destination.meta,
-            path: destination.routing,
+            meta: destination.meta.clone(),
+            path: destination.routing.clone(),
         }
     }
 }
@@ -273,11 +240,30 @@ impl fmt::Display for Destination {
             .collect::<Vec<_>>()
             .join(", ");
         let short_addr = log_output::address(&self.address);
+        let path = match self.path.clone() {
+            RoutingOptions::Hops(hops) => {
+                let nr: u8 = hops.into();
+                let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
+                if nr > 0 {
+                    format!("->{}->", path).to_string()
+                } else {
+                    "->".to_string()
+                }
+            }
+            RoutingOptions::IntermediatePath(nodes) => nodes
+                .into_iter()
+                .map(|node_id| match node_id {
+                    NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
+                    NodeId::Chain(address) => format!("({})", log_output::address(&address)),
+                })
+                .collect::<Vec<String>>()
+                .join("->"),
+        };
         write!(
             f,
-            "Address: {address}, Route: (entry){path:?}({short_addr}), {meta}",
+            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
             meta = meta,
-            path = self.path,
+            path = path,
             address = self.address,
             short_addr = short_addr,
         )
@@ -287,8 +273,8 @@ impl fmt::Display for Destination {
 impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RunMode::Init => write!(f, "Initializing..."),
-            RunMode::ValueingTicket => write!(f, "Valueing Ticket..."),
+            RunMode::Init => write!(f, "Initializing"),
+            RunMode::ValueingTicket => write!(f, "Determine ticket value"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
@@ -297,18 +283,20 @@ impl fmt::Display for RunMode {
             } => {
                 write!(
                     f,
-                    "Waiting for funding on {node_address}({funding_tool}): {node_xdai}, {node_wxhopr}"
+                    "Waiting for funding on {node_address}({node_xdai}, {node_wxhopr}) - {funding_tool}"
                 )
             }
-            RunMode::Warmup {
-                sync_progress,
-                hopr_state,
-            } => write!(f, "Hopr: {hopr_state}, Syncing... {:.2}%", sync_progress * 100.0),
-            RunMode::Running {
-                connection,
-                funding,
-                hopr_state,
-            } => write!(f, "Hopr: {hopr_state}, Connection: {connection}, Funding: {funding}"),
+            RunMode::Warmup { hopr_state } => {
+                if hopr_state == "Running" {
+                    write!(f, "Checking channel funding (Hopr {})", hopr_state)
+                } else {
+                    write!(f, "Warmup (Hopr {})", hopr_state)
+                }
+            }
+            RunMode::Running { funding, hopr_state } => {
+                write!(f, "Ready (Hopr {hopr_state}), {funding}")
+            }
+            RunMode::Shutdown => write!(f, "Shutting down"),
         }
     }
 }
@@ -316,10 +304,27 @@ impl fmt::Display for RunMode {
 impl fmt::Display for ConnectionState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ConnectionState::Connecting(dest) => write!(f, "Connecting to {}", dest),
-            ConnectionState::Disconnecting(dest) => write!(f, "Disconnecting from {}", dest),
-            ConnectionState::Connected(dest) => write!(f, "Connected to {}", dest),
-            ConnectionState::Disconnected => write!(f, "Disconnected"),
+            ConnectionState::None => write!(f, "Not Connected"),
+            ConnectionState::Connecting(since, phase) => {
+                write!(f, "Connecting (since {}): {:?}", log_output::elapsed(since), phase)
+            }
+            ConnectionState::Connected(since) => {
+                write!(f, "Connected (since {})", log_output::elapsed(since))
+            }
+            ConnectionState::Disconnecting(since, phase) => {
+                write!(f, "Disconnecting (since {}): {:?}", log_output::elapsed(since), phase)
+            }
+        }
+    }
+}
+
+impl fmt::Display for DestinationState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let output = format!("{} - {}", self.destination, self.connection_state);
+        if let Some(err) = self.last_connection_error.clone() {
+            write!(f, "{} (Last error: {})", output, err)
+        } else {
+            write!(f, "{}", output)
         }
     }
 }

@@ -3,6 +3,7 @@ use url::Url;
 
 use std::path::PathBuf;
 
+use gnosis_vpn_lib::hopr_params::{self, HoprParams};
 use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::{config, hopr, socket};
 
@@ -47,8 +48,33 @@ pub struct Cli {
     /// Hopr edge client identity pass
     #[arg( long, env = hopr::ID_PASS_ENV, default_value = None)]
     pub hopr_identity_pass: Option<String>,
+
+    /// Allow insecure non-private connections (only for testing purposes)
+    #[arg(long)]
+    pub allow_insecure: bool,
 }
 
 pub fn parse() -> Cli {
     Cli::parse()
+}
+
+impl From<Cli> for HoprParams {
+    fn from(cli: Cli) -> Self {
+        let network = cli.hopr_network;
+        let rpc_provider = cli.hopr_rpc_provider;
+        let config_mode = match cli.hopr_config_path {
+            Some(path) => hopr_params::ConfigFileMode::Manual(path),
+            None => hopr_params::ConfigFileMode::Generated,
+        };
+        let allow_insecure = cli.allow_insecure;
+
+        HoprParams::new(
+            cli.hopr_identity_file,
+            cli.hopr_identity_pass,
+            config_mode,
+            network,
+            rpc_provider,
+            allow_insecure,
+        )
+    }
 }

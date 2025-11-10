@@ -12,11 +12,12 @@ mod cli;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = cli::parse();
 
     let cmd: Command = args.command.into();
-    let resp = match socket::process_cmd(&args.socket_path, &cmd) {
+    let resp = match socket::process_cmd(&args.socket_path, &cmd).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("Error processing {cmd}: {e}");
@@ -55,20 +56,11 @@ fn pretty_print(resp: &Response) {
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
         }
-        Response::Status(command::StatusResponse {
-            run_mode,
-            available_destinations,
-            network,
-        }) => {
+        Response::Status(command::StatusResponse { run_mode, destinations }) => {
             let mut str_resp = format!("Status: {run_mode}\n");
-            str_resp.push_str(&format!("Network: {network}\n"));
-            if available_destinations.is_empty() {
-                str_resp.push_str("No destinations available.\n")
-            } else {
-                str_resp.push_str("Available destinations:\n");
-                for dest in available_destinations {
-                    str_resp.push_str(&format!("  - {dest}\n"));
-                }
+            str_resp.push_str("Destinations:\n");
+            for dest in destinations {
+                str_resp.push_str(&format!("  {dest}\n"));
             }
             println!("{str_resp}");
         }
@@ -77,9 +69,13 @@ fn pretty_print(resp: &Response) {
             safe,
             channels_out,
             issues,
-            addresses,
+            info,
         })) => {
-            let mut str_resp = format!("Node Address: {}\nSafe Address: {}\n", addresses.node, addresses.safe);
+            let mut str_resp = format!("Network: {}\n", info.network);
+            str_resp.push_str(&format!(
+                "---\nNode Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
+                info.node_address, info.node_peer_id, info.safe_address
+            ));
             str_resp.push_str(&format!(
                 "---\nNode Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n"
             ));
@@ -100,6 +96,9 @@ fn pretty_print(resp: &Response) {
         Response::Empty => {
             println!();
         }
+        Response::Metrics(metrics) => {
+            println!("{metrics}");
+        }
     }
 }
 
@@ -113,5 +112,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
         Response::Empty => exitcode::OK,
+        Response::Metrics(..) => exitcode::OK,
     }
 }
