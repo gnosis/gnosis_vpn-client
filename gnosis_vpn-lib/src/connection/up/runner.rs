@@ -225,7 +225,6 @@ async fn open_bridge_session(
             .await;
         if let Err(e) = &res {
             let _ = results_sender
-                .clone()
                 .send(Results::ConnectionEvent {
                     evt: setback(Setback::OpenBridge(e.to_string())),
                 })
@@ -253,7 +252,6 @@ async fn register(
         let res = gvpn_client::register(&client, &input).await;
         if let Err(e) = &res {
             let _ = results_sender
-                .clone()
                 .send(Results::ConnectionEvent {
                     evt: setback(Setback::RegisterWg(e.to_string())),
                 })
