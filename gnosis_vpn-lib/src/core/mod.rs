@@ -254,6 +254,7 @@ impl Core {
                             .config
                             .destinations
                             .values()
+                            .sort_by(|a, b| a.address.cmp(&b.address))
                             .map(|v| {
                                 let destination: command::Destination = v.into();
                                 let connection_state = match &self.phase {
