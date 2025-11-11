@@ -6,6 +6,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -149,10 +150,19 @@ impl Core {
                 self.cancel_channel_funding.cancel();
                 self.cancel_connecting.cancel();
                 self.cancel_for_shutdown.cancel();
+                let shutdown_tracker = TaskTracker::new();
+                shutdown_tracker.spawn(async {
+                    // ensure wg is disconnected, ignore errors
+                    let _ = wg_tooling::down().await;
+                });
                 if let Some(hopr) = self.hopr.clone() {
-                    tracing::debug!("shutting down hopr");
-                    hopr.shutdown().await;
+                    shutdown_tracker.spawn(async move {
+                        tracing::debug!("shutting down hopr");
+                        hopr.shutdown().await;
+                    });
                 }
+                shutdown_tracker.close();
+                shutdown_tracker.wait().await;
                 if resp.send(()).is_err() {
                     tracing::warn!("shutdown receiver dropped");
                 }
