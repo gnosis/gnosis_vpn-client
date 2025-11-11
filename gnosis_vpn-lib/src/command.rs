@@ -1,15 +1,13 @@
-use edgli::hopr_lib::{Address, NodeId, RoutingOptions};
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::time::SystemTime;
 
 use crate::balance::{self, FundingIssue};
 use crate::connection;
-use crate::connection::destination::Destination as ConnectionDestination;
+use crate::connection::destination::{Address, Destination};
 use crate::info::Info;
 use crate::log_output;
 
@@ -81,13 +79,6 @@ pub enum ConnectResponse {
 pub enum DisconnectResponse {
     Disconnecting(Destination),
     NotConnected,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Destination {
-    pub meta: HashMap<String, String>,
-    pub address: Address,
-    pub path: RoutingOptions,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,16 +202,6 @@ impl FromStr for Command {
     }
 }
 
-impl From<&ConnectionDestination> for Destination {
-    fn from(destination: &ConnectionDestination) -> Self {
-        Destination {
-            address: destination.address,
-            meta: destination.meta.clone(),
-            path: destination.routing.clone(),
-        }
-    }
-}
-
 impl From<Vec<FundingIssue>> for FundingState {
     fn from(issues: Vec<FundingIssue>) -> Self {
         if issues.is_empty() {
@@ -228,45 +209,6 @@ impl From<Vec<FundingIssue>> for FundingState {
         } else {
             FundingState::TopIssue(issues[0].clone())
         }
-    }
-}
-
-impl fmt::Display for Destination {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let meta = self
-            .meta
-            .iter()
-            .map(|(k, v)| format!("{k}: {v}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let short_addr = log_output::address(&self.address);
-        let path = match self.path.clone() {
-            RoutingOptions::Hops(hops) => {
-                let nr: u8 = hops.into();
-                let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
-                if nr > 0 {
-                    format!("->{}->", path).to_string()
-                } else {
-                    "->".to_string()
-                }
-            }
-            RoutingOptions::IntermediatePath(nodes) => nodes
-                .into_iter()
-                .map(|node_id| match node_id {
-                    NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
-                    NodeId::Chain(address) => format!("({})", log_output::address(&address)),
-                })
-                .collect::<Vec<String>>()
-                .join("->"),
-        };
-        write!(
-            f,
-            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
-            meta = meta,
-            path = path,
-            address = self.address,
-            short_addr = short_addr,
-        )
     }
 }
 

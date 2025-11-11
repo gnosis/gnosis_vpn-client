@@ -250,12 +250,13 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
-                        let destinations = self
-                            .config
-                            .destinations
-                            .values()
+                        let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
+                        vals.sort_by(|a, b| a.address.cmp(&b.address));
+
+                        let destinations = vals
+                            .into_iter()
                             .map(|v| {
-                                let destination: command::Destination = v.into();
+                                let destination = v.clone();
                                 let connection_state = match &self.phase {
                                     Phase::Connecting(conn) if &conn.destination == v => {
                                         command::ConnectionState::Connecting(conn.phase.0, conn.phase.1.clone())
@@ -291,7 +292,7 @@ impl Core {
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
-                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.into())));
+                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone())));
                             self.act_on_target(results_sender);
                         }
                         None => {
@@ -306,7 +307,7 @@ impl Core {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(
-                                    (&conn.destination).into(),
+                                    conn.destination.clone(),
                                 )));
                             }
                             _ => {
@@ -509,9 +510,16 @@ impl Core {
             Results::ConnectionEvent { evt } => {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
-                    Phase::Connecting(mut conn) => {
-                        conn.connect_evt(evt);
-                    }
+                    Phase::Connecting(mut conn) => match evt {
+                        connection::up::runner::Event::Progress(e) => {
+                            conn.connect_progress(e);
+                            self.phase = Phase::Connecting(conn);
+                        }
+                        connection::up::runner::Event::Setback(e) => {
+                            self.last_connection_errors
+                                .insert(conn.destination.address, e.to_string());
+                        }
+                    },
                     phase => {
                         tracing::warn!(?phase, %evt, "received connection event in unexpected phase");
                     }
