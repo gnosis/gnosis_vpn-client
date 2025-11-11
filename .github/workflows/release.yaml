@@ -134,3 +134,21 @@ jobs:
           new_branch: main
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
+      - name: Notify release
+        uses: zulip/github-actions-zulip/send-message@e4c8f27c732ba9bd98ac6be0583096dea82feea5 # v1.0.2
+        with:
+          api-key: ${{ secrets.ZULIP_API_KEY }}
+          email: ${{ secrets.ZULIP_EMAIL }}
+          organization-url: "https://hopr.zulipchat.com"
+          type: "stream"
+          to: "GnosisVPN"
+          topic: "Releases"
+          content: |
+            I'm thrilled to inform the new gnosis_vpn-client version v${{ steps.bump.outputs.current_version }} has been released.
+            [Release Notes](https://github.com/gnosis/gnosis_vpn-client/releases/tag/v${{ steps.bump.outputs.current_version }})
+      - name: Trigger installer snapshot
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3.0.0
+        with:
+          token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
+          repository: gnosis/gnosis_vpn
+          event-type: new_snapshot_release
