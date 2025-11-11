@@ -188,7 +188,7 @@ Address = {address}
 [Peer]
 PublicKey = {public_key}
 Endpoint = {endpoint}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = {allowed_ips}
 ",
             private_key = self.key_pair.priv_key,
             address = interface.address,
