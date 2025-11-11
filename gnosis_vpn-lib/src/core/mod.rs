@@ -337,9 +337,9 @@ impl Core {
                                 balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
 
                             let res = command::BalanceResponse::new(
-                                format!("{} xDai", balances.node_xdai),
-                                format!("{} wxHOPR", balances.safe_wxhopr),
-                                format!("{} wxHOPR", balances.channels_out_wxhopr),
+                                balances.node_xdai.to_string(),
+                                balances.safe_wxhopr.to_string(),
+                                balances.channels_out_wxhopr.to_string(),
                                 issues,
                                 info,
                             );
