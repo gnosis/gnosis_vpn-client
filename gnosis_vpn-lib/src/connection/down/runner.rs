@@ -29,7 +29,7 @@ pub enum Error {
 }
 
 pub struct Runner {
-    disconn: connection::down::Down,
+    down: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
 }
@@ -43,52 +43,51 @@ pub enum Event {
 }
 
 impl Runner {
-    pub fn new(disconn: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
-        Self { disconn, hopr, options }
+    pub fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
+        Self { down, hopr, options }
     }
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender
             .send(Results::DisconnectionResult {
-                wg_public_key: self.disconn.wg_public_key.clone(),
+                wg_public_key: self.down.wg_public_key.clone(),
                 res,
             })
             .await;
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 0. disconnect wg tunnel if any
-        if let Some(wg) = self.disconn.wg() {
-            let _ = results_sender
-                .send(Results::DisconnectionEvent {
-                    wg_public_key: self.disconn.wg_public_key.clone(),
-                    evt: Event::DisconnectWg,
-                })
-                .await;
-            let _ = wg
-                .close_session()
-                .await
-                .map_err(|err| tracing::warn!("disconnecting WireGuard failed: {}", err));
+        // 0. disconnect wg tunnel
+        let _ = results_sender
+            .send(Results::DisconnectionEvent {
+                wg_public_key: self.down.wg_public_key.clone(),
+                evt: Event::DisconnectWg,
+            })
+            .await;
+        let res = wg_tooling::down().await;
+        // log error if we actually had a tunnel
+        if let (Some(_wg), Err(err)) = (self.down.wg(), res) {
+            tracing::error!("disconnecting WireGuard failed: {}", err);
         }
 
         let _ = results_sender
             .send(Results::DisconnectionEvent {
-                wg_public_key: self.disconn.wg_public_key.clone(),
+                wg_public_key: self.down.wg_public_key.clone(),
                 evt: Event::OpenBridge,
             })
             .await;
         // 1. open bridge session
-        let bridge_session = open_bridge_session(&self.hopr, &self.disconn, &self.options).await?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options).await?;
 
         // 2. unregister wg public key
         let _ = results_sender
             .send(Results::DisconnectionEvent {
-                wg_public_key: self.disconn.wg_public_key.clone(),
+                wg_public_key: self.down.wg_public_key.clone(),
                 evt: Event::UnregisterWg,
             })
             .await;
-        match unregister(&self.options, &bridge_session, self.disconn.wg_public_key.clone()).await {
+        match unregister(&self.options, &bridge_session, self.down.wg_public_key.clone()).await {
             Ok(_) => (),
             Err(gvpn_client::Error::RegistrationNotFound) => {
                 tracing::warn!("trying to unregister already removed registration");
@@ -100,7 +99,7 @@ impl Runner {
         // 3. close bridge session
         let _ = results_sender
             .send(Results::DisconnectionEvent {
-                wg_public_key: self.disconn.wg_public_key.clone(),
+                wg_public_key: self.down.wg_public_key.clone(),
                 evt: Event::CloseBridge,
             })
             .await;
@@ -112,13 +111,13 @@ impl Runner {
 
 async fn open_bridge_session(
     hopr: &Hopr,
-    disconn: &connection::down::Down,
+    down: &connection::down::Down,
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: disconn.destination.routing.clone(),
-        return_path_options: disconn.destination.routing.clone(),
+        forward_path_options: down.destination.routing.clone(),
+        return_path_options: down.destination.routing.clone(),
         surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.bridge,
             options.max_surb_upstream.bridge,
@@ -126,7 +125,7 @@ async fn open_bridge_session(
         ..Default::default()
     };
     hopr.open_session(
-        disconn.destination.address,
+        down.destination.address,
         options.sessions.bridge.target.clone(),
         Some(1),
         Some(1),
@@ -165,7 +164,7 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
 
 impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DisconnectionRunner for {}", self.disconn)
+        write!(f, "DisconnectionRunner for {}", self.down)
     }
 }
 

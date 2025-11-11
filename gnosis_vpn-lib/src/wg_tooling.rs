@@ -139,7 +139,7 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub async fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
+    pub async fn up(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
         let config = self.to_file_string(interface, peer);
         let content = config.as_bytes();
@@ -161,28 +161,6 @@ impl WireGuard {
             Err(Error::WgQuick(
                 output.status.code().unwrap_or_default(),
                 format!("wg-quick up failed: {}", String::from_utf8_lossy(&output.stderr)),
-            ))
-        }
-    }
-
-    pub async fn close_session(&self) -> Result<(), Error> {
-        let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
-
-        let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
-        if !output.stdout.is_empty() {
-            tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
-        }
-
-        if output.status.success() {
-            if !output.stderr.is_empty() {
-                // wg-quick populates stderr with info and warnings, log those in debug mode
-                tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
-            }
-            Ok(())
-        } else {
-            Err(Error::WgQuick(
-                output.status.code().unwrap_or_default(),
-                format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
             ))
         }
     }
@@ -210,17 +188,39 @@ Address = {address}
 [Peer]
 PublicKey = {public_key}
 Endpoint = {endpoint}
-AllowedIPs = {allowed_ips}
+AllowedIPs = 0.0.0.0/0
 ",
             private_key = self.key_pair.priv_key,
             address = interface.address,
             public_key = peer.public_key,
             endpoint = peer.endpoint,
-            allowed_ips = allowed_ips,
+            // allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
             // WireGuard has differnently sized packets not exactly adhering to MTU
             // so we postpone optimizing on this level for now
             // mtu = interface.mtu,
         )
+    }
+}
+
+pub async fn down() -> Result<(), Error> {
+    let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
+
+    let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
+    if !output.stdout.is_empty() {
+        tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    if output.status.success() {
+        if !output.stderr.is_empty() {
+            // wg-quick populates stderr with info and warnings, log those in debug mode
+            tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    } else {
+        Err(Error::WgQuick(
+            output.status.code().unwrap_or_default(),
+            format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
+        ))
     }
 }
