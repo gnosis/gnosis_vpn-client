@@ -44,23 +44,23 @@ impl Up {
         }
     }
 
-    pub fn connect_evt(&mut self, evt: runner::Event) {
+    pub fn connect_progress(&mut self, evt: runner::Progress) {
         let now = SystemTime::now();
         match evt {
-            runner::Event::GenerateWg => self.phase = (now, Phase::GeneratingWg),
-            runner::Event::OpenBridge => self.phase = (now, Phase::OpeningBridge),
-            runner::Event::RegisterWg(wg_public_key) => {
+            runner::Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
+            runner::Progress::OpenBridge => self.phase = (now, Phase::OpeningBridge),
+            runner::Progress::RegisterWg(wg_public_key) => {
                 self.phase = (now, Phase::RegisterWg);
                 self.wg_public_key = Some(wg_public_key);
             }
-            runner::Event::CloseBridge => self.phase = (now, Phase::ClosingBridge),
-            runner::Event::OpenPing => self.phase = (now, Phase::OpeningPing),
-            runner::Event::WgTunnel(wg) => {
+            runner::Progress::CloseBridge => self.phase = (now, Phase::ClosingBridge),
+            runner::Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
+            runner::Progress::WgTunnel(wg) => {
                 self.wg = Some(wg);
                 self.phase = (now, Phase::EstablishWgTunnel);
             }
-            runner::Event::Ping => self.phase = (now, Phase::VerifyPing),
-            runner::Event::AdjustToMain => self.phase = (now, Phase::AdjustToMain),
+            runner::Progress::Ping => self.phase = (now, Phase::VerifyPing),
+            runner::Progress::AdjustToMain => self.phase = (now, Phase::AdjustToMain),
         }
     }
 

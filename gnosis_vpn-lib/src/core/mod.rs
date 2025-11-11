@@ -510,9 +510,15 @@ impl Core {
             Results::ConnectionEvent { evt } => {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
-                    Phase::Connecting(mut conn) => {
-                        conn.connect_evt(evt);
-                    }
+                    Phase::Connecting(mut conn) => match evt {
+                        connection::up::runner::Event::Progress(e) => {
+                            conn.connect_progress(e);
+                        }
+                        connection::up::runner::Event::Setback(e) => {
+                            self.last_connection_errors
+                                .insert(conn.destination.address, e.to_string());
+                        }
+                    },
                     phase => {
                         tracing::warn!(?phase, %evt, "received connection event in unexpected phase");
                     }
