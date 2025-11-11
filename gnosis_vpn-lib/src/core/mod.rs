@@ -513,6 +513,7 @@ impl Core {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::runner::Event::Progress(e) => {
                             conn.connect_progress(e);
+                            self.phase = Phase::Connecting(conn);
                         }
                         connection::up::runner::Event::Setback(e) => {
                             self.last_connection_errors

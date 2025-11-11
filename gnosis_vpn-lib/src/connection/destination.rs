@@ -46,14 +46,17 @@ impl Display for Destination {
                     "->".to_string()
                 }
             }
-            RoutingOptions::IntermediatePath(nodes) => nodes
-                .into_iter()
-                .map(|node_id| match node_id {
-                    NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
-                    NodeId::Chain(address) => format!("({})", log_output::address(&address)),
-                })
-                .collect::<Vec<String>>()
-                .join("->"),
+            RoutingOptions::IntermediatePath(nodes) => {
+                let path = nodes
+                    .into_iter()
+                    .map(|node_id| match node_id {
+                        NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
+                        NodeId::Chain(address) => format!("({})", log_output::address(&address)),
+                    })
+                    .collect::<Vec<String>>()
+                    .join("->");
+                format!("->{}->", path).to_string()
+            }
         };
         write!(
             f,
