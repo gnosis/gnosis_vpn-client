@@ -146,3 +146,9 @@ jobs:
           content: |
             I'm thrilled to inform the new gnosis_vpn-client version v${{ steps.bump.outputs.current_version }} has been released.
             [Release Notes](https://github.com/gnosis/gnosis_vpn-client/releases/tag/v${{ steps.bump.outputs.current_version }})
+      - name: Trigger installer snapshot
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3.0.0
+        with:
+          token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
+          repository: gnosis/gnosis_vpn
+          event-type: new_snapshot_release
