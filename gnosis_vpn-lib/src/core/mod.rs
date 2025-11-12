@@ -44,6 +44,8 @@ pub enum Error {
     Balance(#[from] balance::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
+    #[error(transparent)]
+    HoprParams(#[from] crate::hopr_params::Error),
 }
 
 pub struct Core {
@@ -88,6 +90,7 @@ impl Core {
     pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
+        hopr_params.generate_id_if_absent().await?;
         Ok(Core {
             // config data
             config,
@@ -209,8 +212,8 @@ impl Core {
                                 let node_address = match self.hopr_params.calc_keys().await {
                                     Ok(keys) => keys.chain_key.public().to_address().to_string(),
                                     Err(err) => {
-                                        tracing::warn!(%err, "failed to calculate node address");
-                                        "unknown".to_string()
+                                        tracing::error!(%err, "critical error calculating node address");
+                                        return false;
                                     }
                                 };
                                 let (node_xdai, node_wxhopr) = match presafe {
