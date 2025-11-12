@@ -194,7 +194,7 @@ AllowedIPs = {allowed_ips}
             address = interface.address,
             public_key = peer.public_key,
             endpoint = peer.endpoint,
-            // allowed_ips = allowed_ips,
+            allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
             // WireGuard has differnently sized packets not exactly adhering to MTU
             // so we postpone optimizing on this level for now
