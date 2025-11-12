@@ -13,6 +13,7 @@ use edgli::{
 };
 use regex::Regex;
 use thiserror::Error;
+use tokio::task::JoinSet;
 use tracing::instrument;
 
 use std::fmt::{self, Display};
@@ -382,6 +383,25 @@ impl Hopr {
     pub fn status(&self) -> edgli::hopr_lib::state::HoprState {
         tracing::debug!("query hopr status");
         self.hopr.status()
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
+        tracing::debug!("query hopr connected peers");
+        let peer_ids = self.hopr.network_connected_peers().await?;
+        let mut set = JoinSet::new();
+        for p in peer_ids {
+            let hopr = self.hopr.clone();
+            set.spawn(async move { hopr.peerid_to_chain_key(&p).await });
+        }
+
+        let mut addresses = Vec::new();
+        while let Some(res) = set.join_next().await {
+            if let Ok(Ok(Some(address))) = res {
+                addresses.push(address);
+            }
+        }
+        Ok(addresses)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
