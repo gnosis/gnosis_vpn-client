@@ -44,6 +44,8 @@ pub enum Error {
     Balance(#[from] balance::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
+    #[error(transparent)]
+    HoprParams(#[from] crate::hopr_params::Error),
 }
 
 pub struct Core {
@@ -88,6 +90,7 @@ impl Core {
     pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
+        hopr_params.generate_id_if_absent().await?;
         Ok(Core {
             // config data
             config,
