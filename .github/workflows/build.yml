@@ -14,6 +14,7 @@ env:
   CARGO_TERM_COLOR: always
 jobs:
   free-disk-space:
+    name: Free Disk Space
     runs-on: ubuntu-latest
     steps:
       - name: Free Disk Space (Ubuntu)
@@ -32,6 +33,7 @@ jobs:
           swap-storage: true
   build:
     name: Build
+    needs: free-disk-space
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
