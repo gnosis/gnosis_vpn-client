@@ -24,7 +24,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
-            runner: macos-13
+            runner: macos-15
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
@@ -89,6 +89,7 @@ jobs:
         shell: bash
         run: |
           current_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
+          echo "current_version=${current_version}" | tee -a $GITHUB_OUTPUT
           # Extract parts without IFS or read
           IFS='.' read -r major_version minor_version patch_version <<< "${current_version}"
           echo "Current version $major_version $minor_version $patch_version"
