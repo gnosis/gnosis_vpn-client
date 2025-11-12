@@ -212,8 +212,8 @@ impl Core {
                                 let node_address = match self.hopr_params.calc_keys().await {
                                     Ok(keys) => keys.chain_key.public().to_address().to_string(),
                                     Err(err) => {
-                                        tracing::warn!(%err, "failed to calculate node address");
-                                        "unknown".to_string()
+                                        tracing::error!(%err, "critical error calculating node address");
+                                        return false;
                                     }
                                 };
                                 let (node_xdai, node_wxhopr) = match presafe {
