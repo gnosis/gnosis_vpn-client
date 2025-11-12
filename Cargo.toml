@@ -55,7 +55,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a5b84a233e9
 serde_with = "3.15.1"
 serde_yaml = "0.9.34"
 uuid = { version = "1.18.1", features = ["v4"] }
-tokio-util = "0.7.17"
+tokio-util = { version = "0.7.17", features = ["rt"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 

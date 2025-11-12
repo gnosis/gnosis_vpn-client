@@ -31,7 +31,7 @@ pub enum Error {
 }
 
 pub struct Runner {
-    conn: connection::up::Up,
+    up: connection::up::Up,
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wg_tooling::Config,
@@ -63,9 +63,9 @@ pub enum Setback {
 }
 
 impl Runner {
-    pub fn new(conn: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(up: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
         Self {
-            conn,
+            up,
             hopr,
             options,
             wg_config,
@@ -92,7 +92,7 @@ impl Runner {
                 evt: progress(Progress::OpenBridge),
             })
             .await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options, &results_sender).await?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.up, &self.options, &results_sender).await?;
 
         // 2. register wg public key
         let _ = results_sender
@@ -116,7 +116,7 @@ impl Runner {
                 evt: progress(Progress::OpenPing),
             })
             .await;
-        let ping_session = open_ping_session(&self.hopr, &self.conn, &self.options, &results_sender).await?;
+        let ping_session = open_ping_session(&self.hopr, &self.up, &self.options, &results_sender).await?;
 
         // 5. setup wg tunnel
         let _ = results_sender
@@ -148,7 +148,7 @@ impl Runner {
 
 impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ConnectionRunner {{ {} }}", self.conn)
+        write!(f, "ConnectionRunner {{ {} }}", self.up)
     }
 }
 
@@ -187,26 +187,26 @@ impl Display for Setback {
 }
 
 #[tracing::instrument(
-    skip(hopr, options, conn, results_sender),
+    skip(hopr, options, up, results_sender),
     fields(
-        address = %conn.destination.address,
-        routing = ?conn.destination.routing,
-        phase = ?conn.phase,
-        wg_public_key = ?conn.wg_public_key
+        address = %up.destination.address,
+        routing = ?up.destination.routing,
+        phase = ?up.phase,
+        wg_public_key = ?up.wg_public_key
     ),
     level = "debug",
     ret
 )]
 async fn open_bridge_session(
     hopr: &Hopr,
-    conn: &connection::up::Up,
+    up: &connection::up::Up,
     options: &Options,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: conn.destination.routing.clone(),
-        return_path_options: conn.destination.routing.clone(),
+        forward_path_options: up.destination.routing.clone(),
+        return_path_options: up.destination.routing.clone(),
         surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.bridge,
             options.max_surb_upstream.bridge,
@@ -216,7 +216,7 @@ async fn open_bridge_session(
     retry(ExponentialBackoff::default(), || async {
         let res = hopr
             .open_session(
-                conn.destination.address,
+                up.destination.address,
                 options.sessions.bridge.target.clone(),
                 Some(1),
                 Some(1),
@@ -279,14 +279,14 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
 
 async fn open_ping_session(
     hopr: &Hopr,
-    conn: &connection::up::Up,
+    up: &connection::up::Up,
     options: &Options,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path_options: conn.destination.routing.clone(),
-        return_path_options: conn.destination.routing.clone(),
+        forward_path_options: up.destination.routing.clone(),
+        return_path_options: up.destination.routing.clone(),
         surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.ping,
             options.max_surb_upstream.ping,
@@ -296,7 +296,7 @@ async fn open_ping_session(
     retry(ExponentialBackoff::default(), || async {
         let res = hopr
             .open_session(
-                conn.destination.address,
+                up.destination.address,
                 options.sessions.wg.target.clone(),
                 None,
                 None,
@@ -322,7 +322,7 @@ async fn wg_tunnel(
     wg: &wg_tooling::WireGuard,
 ) -> Result<(), wg_tooling::Error> {
     // run wg-quick down once to ensure no dangling state
-    _ = wg.close_session().await;
+    _ = wg_tooling::down().await;
 
     let interface_info = wg_tooling::InterfaceInfo {
         address: registration.address(),
@@ -334,7 +334,7 @@ async fn wg_tunnel(
         endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
     };
 
-    wg.connect_session(&interface_info, &peer_info).await
+    wg.up(&interface_info, &peer_info).await
 }
 
 async fn ping(options: &Options) -> Result<(), ping::Error> {
