@@ -59,6 +59,9 @@ pub enum Results {
     Balances {
         res: Result<balance::Balances, Error>,
     },
+    ConnectedPeers {
+        res: Result<Vec<Address>, Error>,
+    },
     HoprRunning,
     ConnectionEvent {
         evt: connection::up::runner::Event,
@@ -157,6 +160,11 @@ pub async fn fund_channel(
 ) {
     let res = run_fund_channel(hopr, address, ticket_value).await;
     let _ = results_sender.send(Results::FundChannel { address, res }).await;
+}
+
+pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    let res = hopr.connected_peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::ConnectedPeers { res }).await;
 }
 
 async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
@@ -317,6 +325,10 @@ impl Display for Results {
             Results::Balances { res } => match res {
                 Ok(balances) => write!(f, "Balances: {}", balances),
                 Err(err) => write!(f, "Balances: Error({})", err),
+            },
+            Results::ConnectedPeers { res } => match res {
+                Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
+                Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),

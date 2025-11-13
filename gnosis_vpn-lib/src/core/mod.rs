@@ -187,6 +187,7 @@ impl Core {
                             }
                         };
                         self.config = config;
+                        self.destination_health.clear();
                     }
                     Phase::HoprRunning | Phase::HoprChannelsFunded | Phase::Connecting(_) | Phase::Connected(_) => {
                         let config = match config::read(&path).await {
@@ -197,6 +198,7 @@ impl Core {
                             }
                         };
                         self.config = config;
+                        self.destination_health.clear();
                         self.reset_to_hopr_running(results_sender);
                     }
                 }
