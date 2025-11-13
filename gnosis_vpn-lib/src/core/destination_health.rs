@@ -1,68 +1,79 @@
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
-use thiserror::Error;
 
+#[derive(Debug, Clone)]
 pub struct DestinationHealth {
     pub last_error: Option<String>,
     pub health: Health,
-    needs_channel: Option<Address>,
+    need: Need,
 }
 
+#[derive(Clone, Debug)]
+pub enum Need {
+    Channel(Address),
+    Peer(Address),
+    SomePeers,
+    Nothing,
+}
+
+#[derive(Clone, Debug)]
 pub enum Health {
     ReadyToConnect,
     NeedsPeeredChannel,
     NeedsFundedChannel,
     NotPeered,
     NotAllowed,
-}
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("Invalid address in destination")]
     InvalidAddress,
-    #[error("Invalid path in destination")]
     InvalidPath,
 }
 
 impl DestinationHealth {
-    pub fn init_from_destination(dest: &Destination, allow_insecure: bool) -> Result<Self, Error> {
+    pub fn from_destination(dest: &Destination, allow_insecure: bool) -> Self {
         match dest.routing.clone() {
             RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => {
                 if allow_insecure {
-                    return Ok(Self {
+                    return Self {
                         last_error: None,
                         health: Health::NotPeered,
-                        needs_channel: None,
-                    });
+                        need: Need::Peer(dest.address),
+                    };
                 } else {
-                    return Ok(Self {
+                    return Self {
                         last_error: None,
                         health: Health::NotAllowed,
-                        needs_channel: None,
-                    });
+                        need: Need::Nothing,
+                    };
                 }
             }
             RoutingOptions::Hops(_) => {
-                return Ok(Self {
+                return Self {
                     last_error: None,
                     health: Health::ReadyToConnect,
-                    needs_channel: None,
-                });
-            }
-            RoutingOptions::IntermediatePath(nodes) => {
-                let first = nodes.into_iter().next().ok_or(Error::InvalidPath)?;
-                let address = match first {
-                    NodeId::Chain(address) => address,
-                    NodeId::Offchain(_) => {
-                        return Err(Error::InvalidAddress);
-                    }
+                    need: Need::SomePeers,
                 };
-
-                return Ok(Self {
-                    last_error: None,
-                    health: Health::NeedsPeeredChannel,
-                    needs_channel: Some(address),
-                });
             }
+            RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
+                Some(first) => match first {
+                    NodeId::Chain(address) => Self {
+                        last_error: None,
+                        health: Health::NeedsPeeredChannel,
+                        need: Need::Channel(address),
+                    },
+                    NodeId::Offchain(_) => {
+                        return Self {
+                            last_error: None,
+                            health: Health::InvalidAddress,
+                            need: Need::Nothing,
+                        };
+                    }
+                },
+                None => {
+                    return Self {
+                        last_error: None,
+                        health: Health::InvalidPath,
+                        need: Need::Nothing,
+                    };
+                }
+            },
         }
     }
 }
