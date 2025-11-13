@@ -22,8 +22,10 @@ use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
 use crate::{balance, log_output, wg_tooling};
 
+mod destination_health;
 pub mod runner;
 
+use destination_health::DestinationHealth;
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -69,8 +71,8 @@ pub struct Core {
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
+    destination_health: HashMap<Address, DestinationHealth>,
     ongoing_disconnections: Vec<connection::down::Down>,
-    last_connection_errors: HashMap<Address, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +82,6 @@ enum Phase {
     Starting,
     HoprSyncing,
     HoprRunning,
-    HoprChannelsFunded,
     Connecting(connection::up::Up),
     Connected(connection::up::Up),
     ShuttingDown,
@@ -113,7 +114,7 @@ impl Core {
             hopr: None,
             ticket_value: None,
             ongoing_disconnections: Vec::new(),
-            last_connection_errors: HashMap::new(),
+            destination_health: HashMap::new(),
         })
     }
 
