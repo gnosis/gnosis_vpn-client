@@ -84,13 +84,13 @@ pub async fn available() -> Result<(), Error> {
         .status()
         .await?;
     if code.success() {
-        executable().await
+        Ok(())
     } else {
         Err(Error::NotAvailable)
     }
 }
 
-async fn executable() -> Result<(), Error> {
+pub async fn executable() -> Result<(), Error> {
     let output = Command::new("wg-quick")
         // suppress stdout
         .stdout(std::process::Stdio::null())

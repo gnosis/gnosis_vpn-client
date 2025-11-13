@@ -26,6 +26,16 @@ pub enum Health {
     InvalidPath,
 }
 
+pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
+    for dh in dest_healths {
+        match dh.need {
+            Need::Channel(_) | Need::Peer(_) | Need::SomePeers => return true,
+            Need::Nothing => (),
+        }
+    }
+    false
+}
+
 impl DestinationHealth {
     pub fn from_destination(dest: &Destination, allow_insecure: bool) -> Self {
         match dest.routing.clone() {
@@ -74,6 +84,14 @@ impl DestinationHealth {
                     };
                 }
             },
+        }
+    }
+
+    pub fn with_error(&self, err: Option<String>) -> Self {
+        Self {
+            health: self.health.clone(),
+            need: self.need.clone(),
+            last_error: err,
         }
     }
 }

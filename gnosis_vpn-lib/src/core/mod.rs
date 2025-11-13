@@ -25,7 +25,7 @@ use crate::{balance, log_output, wg_tooling};
 mod destination_health;
 pub mod runner;
 
-use destination_health::DestinationHealth;
+use destination_health::{DestinationHealth, Health};
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -57,7 +57,7 @@ pub struct Core {
 
     // cancellation tokens
     cancel_balances: CancellationToken,
-    cancel_channel_funding: CancellationToken,
+    cancel_channel_tasks: CancellationToken,
     cancel_connecting: CancellationToken,
     cancel_for_shutdown: CancellationToken,
 
@@ -67,7 +67,6 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    funded_channels: Vec<Address>,
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
@@ -91,6 +90,7 @@ impl Core {
     pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
+        wg_tooling::executable().await?;
         hopr_params.generate_id_if_absent().await?;
         Ok(Core {
             // config data
@@ -99,7 +99,7 @@ impl Core {
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
-            cancel_channel_funding: CancellationToken::new(),
+            cancel_channel_tasks: CancellationToken::new(),
             cancel_connecting: CancellationToken::new(),
             cancel_for_shutdown: CancellationToken::new(),
 
@@ -109,7 +109,6 @@ impl Core {
             // runtime data
             phase: Phase::Initial,
             balances: None,
-            funded_channels: Vec::new(),
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             ticket_value: None,
@@ -151,7 +150,7 @@ impl Core {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
-                self.cancel_channel_funding.cancel();
+                self.cancel_channel_tasks.cancel();
                 self.cancel_connecting.cancel();
                 self.cancel_for_shutdown.cancel();
                 let shutdown_tracker = TaskTracker::new();
@@ -489,28 +488,13 @@ impl Core {
             },
 
             Results::HoprRunning => {
-                self.phase = Phase::HoprRunning;
-                tracing::debug!(
-                    channel_targets = ?self.config.channel_targets(),
-                    "hopr is running - ensuring channel funding"
-                );
-                for c in self.config.channel_targets() {
-                    self.spawn_channel_funding(c, results_sender, Duration::ZERO);
-                }
-                // only for testing purposes
-                if self.config.channel_targets().is_empty() && self.hopr_params.allow_insecure() {
-                    tracing::warn!(
-                        "no channel targets configured and insecure mode enabled - operating without channels"
-                    );
-                    self.phase = Phase::HoprChannelsFunded;
-                    self.act_on_target(results_sender);
-                }
+                self.on_hopr_running();
             }
 
             Results::FundChannel { address, res } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
-                    self.funded_channels.push(address);
+                    self.destination_health.self.funded_channels.push(address);
                     if self.funded_channels.len() == self.config.channel_targets().len() {
                         self.phase = Phase::HoprChannelsFunded;
                         tracing::info!("all channels funded - hopr is ready");
@@ -566,7 +550,12 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.last_connection_errors.remove(&conn.destination.address);
+                    if let Some(health) = self.destination_health.get(&conn.destination.address) {
+                        self.destination_health
+                            .insert(conn.destination.address, health.with_error(None));
+                    } else {
+                        tracing::warn!("connection has no health tracker");
+                    }
                     log_output::print_session_established(conn.destination.pretty_print_path().as_str());
                 }
                 (Ok(_), phase) => {
@@ -574,8 +563,12 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
-                    self.last_connection_errors
-                        .insert(conn.destination.address, err.to_string());
+                    if let Some(health) = self.destination_health.get(&conn.destination.address) {
+                        self.destination_health
+                            .insert(conn.destination.address, health.with_error(Some(err.to_string())));
+                    } else {
+                        tracing::warn!("connection has no health tracker");
+                    }
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
@@ -727,16 +720,22 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    fn spawn_channel_funding(&self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_channel_funding(
+        &self,
+        address: Address,
+        target_dest: Address,
+        results_sender: &mpsc::Sender<Results>,
+        delay: Duration,
+    ) {
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
-            let cancel = self.cancel_channel_funding.clone();
+            let cancel = self.cancel_channel_tasks.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::fund_channel(hopr, address, ticket_value, results_sender).await;
+                        runner::fund_channel(hopr, address, ticket_value, target_dest, results_sender).await;
                     })
                     .await
             });
@@ -744,8 +743,8 @@ impl Core {
     }
 
     fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let (Some(hopr)) = (self.hopr.clone()) {
-            let cancel = self.cancel_for_shutdown.clone();
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_channel_tasks.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -801,18 +800,39 @@ impl Core {
         tracing::debug!(target = ?self.target_destination, phase = ?self.phase, "acting on target destination");
         match (self.target_destination.clone(), self.phase.clone()) {
             // Connecting from ready
-            (Some(dest), Phase::HoprChannelsFunded) => {
-                tracing::info!(destination = %dest, "establishing connection to new destination");
-                if matches!(dest.routing, RoutingOptions::Hops(n) if <BoundedSize<3> as Into<u8>>::into(n) == 0) {
-                    if self.hopr_params.allow_insecure() {
-                        tracing::warn!("connecting to destination with insecure 0 hops route");
-                        self.spawn_connection_runner(dest.clone(), results_sender);
-                    } else {
-                        tracing::warn!(%dest, route = ?dest.routing, "refusing to connect to via insecure route to target destination");
+            (Some(dest), Phase::HoprRunning) => {
+                // Checking health
+                let destination_health = match self.destination_health.get(&dest.address) {
+                    Some(h) => h,
+                    None => {
+                        tracing::warn!(destination = %dest, "destination has no health");
+                        return;
                     }
-                } else {
-                    self.spawn_connection_runner(dest.clone(), results_sender);
+                };
+                match destination_health.health {
+                    Health::ReadyToConnect => {
+                        tracing::info!(destination = %dest, "establishing connection to new destination");
+                        self.spawn_connection_runner(dest.clone(), results_sender);
+                    }
+                    Health::NeedsFundedChannel => {
+                        tracing::info!(?destination_health, destination = %dest, "waiting for channel funding before connecting")
+                    }
+                    Health::NeedsPeeredChannel => {
+                        tracing::info!(?destination_health, destination = %dest, "waiting for channel peering before connecting")
+                    }
+                    Health::NotPeered => {
+                        tracing::info!(?destination_health, destination = %dest, "waiting for destination peering before connecting")
+                    }
+                    _ => {
+                        tracing::warn!(?destination_health, destination = %dest, "destination cannot be used for connection")
+                    }
                 }
+                // if matches!(dest.routing, RoutingOptions::Hops(n) if <BoundedSize<3> as Into<u8>>::into(n) == 0) {
+                // if self.hopr_params.allow_insecure() {
+                // tracing::warn!("connecting to destination with insecure 0 hops route");
+                // } else {
+                // tracing::warn!(%dest, route = ?dest.routing, "refusing to connect to via insecure route to target destination");
+                // }
             }
             // Connecting to different destination while already connected
             (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
@@ -840,7 +860,7 @@ impl Core {
     }
 
     fn disconnect_from_connected(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        self.phase = Phase::HoprChannelsFunded;
+        self.phase = Phase::HoprRunning;
         match conn.try_into() {
             Ok(disconn) => self.spawn_disconnection_runner(&disconn, results_sender),
             Err(err) => {
@@ -852,7 +872,7 @@ impl Core {
     fn disconnect_from_connecting(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.cancel_connecting.cancel();
         self.cancel_connecting = CancellationToken::new();
-        self.phase = Phase::HoprChannelsFunded;
+        self.phase = Phase::HoprRunning;
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, results_sender);
         } else {
@@ -871,13 +891,22 @@ impl Core {
             }
             _ => (),
         }
-        self.cancel_channel_funding.cancel();
-        self.cancel_channel_funding = CancellationToken::new();
+        self.cancel_channel_tasks.cancel();
+        self.cancel_channel_tasks = CancellationToken::new();
+        self.on_hopr_running(results_sender);
+    }
+
+    fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
-        self.funded_channels.clear();
-        self.last_connection_errors.clear();
-        for c in self.config.channel_targets() {
-            self.spawn_channel_funding(c, results_sender, Duration::ZERO);
+        for (address, dest) in self.config.destinations.clone() {
+            self.destination_health.insert(
+                address,
+                DestinationHealth::from_destination(&dest, self.hopr_params.allow_insecure()),
+            );
         }
+        if destination_health::needs_peers(&self.destination_health.values().collect::<Vec<_>>()) {
+            self.spawn_connected_peers(results_sender, Duration::ZERO);
+        }
+        self.act_on_target(results_sender);
     }
 }
