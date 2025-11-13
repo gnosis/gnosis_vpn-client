@@ -54,7 +54,7 @@ impl HoprParams {
         }
     }
 
-    pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
+    pub async fn generate_id_if_absent(&self) -> Result<(), Error> {
         let identity_file = match &self.identity_file {
             Some(path) => {
                 tracing::info!(?path, "Using provided HOPR identity file");
@@ -86,6 +86,24 @@ impl HoprParams {
                     }
                     Err(e) => Err(e),
                 }?
+            }
+        };
+
+        let _keys = identity::from_path(identity_file.as_path(), identity_pass.clone())?;
+        Ok(())
+    }
+
+    pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
+        let identity_file = match &self.identity_file {
+            Some(path) => path.to_path_buf(),
+            None => identity::file()?,
+        };
+
+        let identity_pass = match &self.identity_pass {
+            Some(pass) => pass.to_string(),
+            None => {
+                let path = identity::pass_file()?;
+                fs::read_to_string(&path).await?
             }
         };
 

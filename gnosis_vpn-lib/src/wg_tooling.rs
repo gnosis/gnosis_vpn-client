@@ -139,7 +139,7 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub async fn connect_session(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
+    pub async fn up(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
         let config = self.to_file_string(interface, peer);
         let content = config.as_bytes();
@@ -161,28 +161,6 @@ impl WireGuard {
             Err(Error::WgQuick(
                 output.status.code().unwrap_or_default(),
                 format!("wg-quick up failed: {}", String::from_utf8_lossy(&output.stderr)),
-            ))
-        }
-    }
-
-    pub async fn close_session(&self) -> Result<(), Error> {
-        let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
-
-        let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
-        if !output.stdout.is_empty() {
-            tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
-        }
-
-        if output.status.success() {
-            if !output.stderr.is_empty() {
-                // wg-quick populates stderr with info and warnings, log those in debug mode
-                tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
-            }
-            Ok(())
-        } else {
-            Err(Error::WgQuick(
-                output.status.code().unwrap_or_default(),
-                format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
             ))
         }
     }
@@ -222,5 +200,27 @@ AllowedIPs = {allowed_ips}
             // so we postpone optimizing on this level for now
             // mtu = interface.mtu,
         )
+    }
+}
+
+pub async fn down() -> Result<(), Error> {
+    let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
+
+    let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
+    if !output.stdout.is_empty() {
+        tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    if output.status.success() {
+        if !output.stderr.is_empty() {
+            // wg-quick populates stderr with info and warnings, log those in debug mode
+            tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(())
+    } else {
+        Err(Error::WgQuick(
+            output.status.code().unwrap_or_default(),
+            format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
+        ))
     }
 }

@@ -31,7 +31,7 @@ pub enum Error {
 }
 
 pub struct Runner {
-    conn: connection::up::Up,
+    up: connection::up::Up,
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wg_tooling::Config,
@@ -39,6 +39,12 @@ pub struct Runner {
 
 #[derive(Debug)]
 pub enum Event {
+    Progress(Progress),
+    Setback(Setback),
+}
+
+#[derive(Debug)]
+pub enum Progress {
     GenerateWg,
     OpenBridge,
     RegisterWg(String),
@@ -49,10 +55,17 @@ pub enum Event {
     AdjustToMain,
 }
 
+#[derive(Debug)]
+pub enum Setback {
+    OpenBridge(String),
+    RegisterWg(String),
+    OpenPing(String),
+}
+
 impl Runner {
-    pub fn new(conn: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(up: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
         Self {
-            conn,
+            up,
             hopr,
             options,
             wg_config,
@@ -67,54 +80,64 @@ impl Runner {
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Event::GenerateWg })
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::GenerateWg),
+            })
             .await;
         let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
 
         // 1. open bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Event::OpenBridge })
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::OpenBridge),
+            })
             .await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.conn, &self.options).await?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.up, &self.options, &results_sender).await?;
 
         // 2. register wg public key
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: Event::RegisterWg(wg.key_pair.public_key.clone()),
+                evt: progress(Progress::RegisterWg(wg.key_pair.public_key.clone())),
             })
             .await;
-        let registration = register(&self.options, &bridge_session, &wg).await?;
+        let registration = register(&self.options, &bridge_session, &wg, &results_sender).await?;
 
         // 3. close bridge session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: Event::CloseBridge,
+                evt: progress(Progress::CloseBridge),
             })
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
 
         // 4. open ping session
         let _ = results_sender
-            .send(Results::ConnectionEvent { evt: Event::OpenPing })
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::OpenPing),
+            })
             .await;
-        let ping_session = open_ping_session(&self.hopr, &self.conn, &self.options).await?;
+        let ping_session = open_ping_session(&self.hopr, &self.up, &self.options, &results_sender).await?;
 
         // 5. setup wg tunnel
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: Event::WgTunnel(wg.clone()),
+                evt: progress(Progress::WgTunnel(wg.clone())),
             })
             .await;
         wg_tunnel(&registration, &ping_session, &wg).await?;
 
         // 6. check ping
-        let _ = results_sender.send(Results::ConnectionEvent { evt: Event::Ping }).await;
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::Ping),
+            })
+            .await;
         ping(&self.options).await?;
 
         // 7. adjust to main session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: Event::AdjustToMain,
+                evt: progress(Progress::AdjustToMain),
             })
             .await;
         adjust_to_main_session(&self.hopr, &self.options, &ping_session).await?;
@@ -125,34 +148,65 @@ impl Runner {
 
 impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ConnectionRunner {{ {} }}", self.conn)
+        write!(f, "ConnectionRunner {{ {} }}", self.up)
     }
 }
 
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Event::GenerateWg => write!(f, "GenerateWg"),
-            Event::OpenBridge => write!(f, "OpenBridge"),
-            Event::RegisterWg(_) => write!(f, "RegisterWg"),
-            Event::CloseBridge => write!(f, "CloseBridge"),
-            Event::OpenPing => write!(f, "OpenPing"),
-            Event::WgTunnel(_) => write!(f, "WgTunnel"),
-            Event::Ping => write!(f, "Ping"),
-            Event::AdjustToMain => write!(f, "AdjustToMain"),
+            Event::Progress(p) => write!(f, "Progress: {p}"),
+            Event::Setback(s) => write!(f, "Setback: {s}"),
         }
     }
 }
 
+impl Display for Progress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Progress::GenerateWg => write!(f, "Generating WireGuard keypairs"),
+            Progress::OpenBridge => write!(f, "Opening bridge connection"),
+            Progress::RegisterWg(pk) => write!(f, "Registering WireGuard public key {}", pk),
+            Progress::CloseBridge => write!(f, "Closing bridge connection"),
+            Progress::OpenPing => write!(f, "Opening main connection"),
+            Progress::WgTunnel(_) => write!(f, "Establishing WireGuard tunnel"),
+            Progress::Ping => write!(f, "Verifying connectivity via ping"),
+            Progress::AdjustToMain => write!(f, "Adjusting to main session"),
+        }
+    }
+}
+
+impl Display for Setback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Setback::OpenBridge(reason) => write!(f, "Failed to open bridge session: {}", reason),
+            Setback::RegisterWg(reason) => write!(f, "Failed to register WireGuard public key: {}", reason),
+            Setback::OpenPing(reason) => write!(f, "Failed to open main session: {}", reason),
+        }
+    }
+}
+
+#[tracing::instrument(
+    skip(hopr, options, up, results_sender),
+    fields(
+        address = %up.destination.address,
+        routing = ?up.destination.routing,
+        phase = ?up.phase,
+        wg_public_key = ?up.wg_public_key
+    ),
+    level = "debug",
+    ret
+)]
 async fn open_bridge_session(
     hopr: &Hopr,
-    conn: &connection::up::Up,
+    up: &connection::up::Up,
     options: &Options,
+    results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: conn.destination.routing.clone(),
-        return_path_options: conn.destination.routing.clone(),
+        forward_path_options: up.destination.routing.clone(),
+        return_path_options: up.destination.routing.clone(),
         surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.bridge,
             options.max_surb_upstream.bridge,
@@ -162,14 +216,22 @@ async fn open_bridge_session(
     retry(ExponentialBackoff::default(), || async {
         let res = hopr
             .open_session(
-                conn.destination.address,
+                up.destination.address,
                 options.sessions.bridge.target.clone(),
                 Some(1),
                 Some(1),
                 cfg.clone(),
             )
-            .await?;
-        Ok(res)
+            .await;
+        if let Err(e) = &res {
+            let _ = results_sender
+                .send(Results::ConnectionEvent {
+                    evt: setback(Setback::OpenBridge(e.to_string())),
+                })
+                .await;
+        }
+        let ret_val = res?;
+        Ok(ret_val)
     })
     .await
 }
@@ -178,6 +240,7 @@ async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
     wg: &wg_tooling::WireGuard,
+    results_sender: &mpsc::Sender<Results>,
 ) -> Result<Registration, gvpn_client::Error> {
     let input = gvpn_client::Input::new(
         wg.key_pair.public_key.clone(),
@@ -186,8 +249,16 @@ async fn register(
     );
     let client = reqwest::Client::new();
     retry(ExponentialBackoff::default(), || async {
-        let res = gvpn_client::register(&client, &input).await?;
-        Ok(res)
+        let res = gvpn_client::register(&client, &input).await;
+        if let Err(e) = &res {
+            let _ = results_sender
+                .send(Results::ConnectionEvent {
+                    evt: setback(Setback::RegisterWg(e.to_string())),
+                })
+                .await;
+        }
+        let ret_val = res?;
+        Ok(ret_val)
     })
     .await
 }
@@ -208,13 +279,14 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
 
 async fn open_ping_session(
     hopr: &Hopr,
-    conn: &connection::up::Up,
+    up: &connection::up::Up,
     options: &Options,
+    results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path_options: conn.destination.routing.clone(),
-        return_path_options: conn.destination.routing.clone(),
+        forward_path_options: up.destination.routing.clone(),
+        return_path_options: up.destination.routing.clone(),
         surb_management: Some(runner::to_surb_balancer_config(
             options.buffer_sizes.ping,
             options.max_surb_upstream.ping,
@@ -224,14 +296,22 @@ async fn open_ping_session(
     retry(ExponentialBackoff::default(), || async {
         let res = hopr
             .open_session(
-                conn.destination.address,
+                up.destination.address,
                 options.sessions.wg.target.clone(),
                 None,
                 None,
                 cfg.clone(),
             )
-            .await?;
-        Ok(res)
+            .await;
+        if let Err(e) = &res {
+            let _ = results_sender
+                .send(Results::ConnectionEvent {
+                    evt: setback(Setback::OpenPing(e.to_string())),
+                })
+                .await;
+        }
+        let ret_val = res?;
+        Ok(ret_val)
     })
     .await
 }
@@ -242,7 +322,7 @@ async fn wg_tunnel(
     wg: &wg_tooling::WireGuard,
 ) -> Result<(), wg_tooling::Error> {
     // run wg-quick down once to ensure no dangling state
-    _ = wg.close_session().await;
+    _ = wg_tooling::down().await;
 
     let interface_info = wg_tooling::InterfaceInfo {
         address: registration.address(),
@@ -254,7 +334,7 @@ async fn wg_tunnel(
         endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
     };
 
-    wg.connect_session(&interface_info, &peer_info).await
+    wg.up(&interface_info, &peer_info).await
 }
 
 async fn ping(options: &Options) -> Result<(), ping::Error> {
@@ -273,4 +353,12 @@ async fn adjust_to_main_session(
     };
     let surb_management = runner::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
     hopr.adjust_session(surb_management, active_client).await
+}
+
+fn setback(setback: Setback) -> Event {
+    Event::Setback(setback)
+}
+
+fn progress(progress: Progress) -> Event {
+    Event::Progress(progress)
 }

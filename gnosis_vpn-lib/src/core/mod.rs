@@ -6,6 +6,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -43,6 +44,8 @@ pub enum Error {
     Balance(#[from] balance::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
+    #[error(transparent)]
+    HoprParams(#[from] crate::hopr_params::Error),
 }
 
 pub struct Core {
@@ -87,6 +90,7 @@ impl Core {
     pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
+        hopr_params.generate_id_if_absent().await?;
         Ok(Core {
             // config data
             config,
@@ -149,10 +153,19 @@ impl Core {
                 self.cancel_channel_funding.cancel();
                 self.cancel_connecting.cancel();
                 self.cancel_for_shutdown.cancel();
+                let shutdown_tracker = TaskTracker::new();
+                shutdown_tracker.spawn(async {
+                    // ensure wg is disconnected, ignore errors
+                    let _ = wg_tooling::down().await;
+                });
                 if let Some(hopr) = self.hopr.clone() {
-                    tracing::debug!("shutting down hopr");
-                    hopr.shutdown().await;
+                    shutdown_tracker.spawn(async move {
+                        tracing::debug!("shutting down hopr");
+                        hopr.shutdown().await;
+                    });
                 }
+                shutdown_tracker.close();
+                shutdown_tracker.wait().await;
                 if resp.send(()).is_err() {
                     tracing::warn!("shutdown receiver dropped");
                 }
@@ -199,8 +212,8 @@ impl Core {
                                 let node_address = match self.hopr_params.calc_keys().await {
                                     Ok(keys) => keys.chain_key.public().to_address().to_string(),
                                     Err(err) => {
-                                        tracing::warn!(%err, "failed to calculate node address");
-                                        "unknown".to_string()
+                                        tracing::error!(%err, "critical error calculating node address");
+                                        return false;
                                     }
                                 };
                                 let (node_xdai, node_wxhopr) = match presafe {
@@ -250,12 +263,13 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
-                        let destinations = self
-                            .config
-                            .destinations
-                            .values()
+                        let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
+                        vals.sort_by(|a, b| a.address.cmp(&b.address));
+
+                        let destinations = vals
+                            .into_iter()
                             .map(|v| {
-                                let destination: command::Destination = v.into();
+                                let destination = v.clone();
                                 let connection_state = match &self.phase {
                                     Phase::Connecting(conn) if &conn.destination == v => {
                                         command::ConnectionState::Connecting(conn.phase.0, conn.phase.1.clone())
@@ -291,7 +305,7 @@ impl Core {
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             self.target_destination = Some(dest.clone());
-                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.into())));
+                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone())));
                             self.act_on_target(results_sender);
                         }
                         None => {
@@ -306,7 +320,7 @@ impl Core {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
                                 let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(
-                                    (&conn.destination).into(),
+                                    conn.destination.clone(),
                                 )));
                             }
                             _ => {
@@ -326,9 +340,9 @@ impl Core {
                                 balances.to_funding_issues(self.config.channel_targets().len(), ticket_value);
 
                             let res = command::BalanceResponse::new(
-                                format!("{} xDai", balances.node_xdai),
-                                format!("{} wxHOPR", balances.safe_wxhopr),
-                                format!("{} wxHOPR", balances.channels_out_wxhopr),
+                                balances.node_xdai.to_string(),
+                                balances.safe_wxhopr.to_string(),
+                                balances.channels_out_wxhopr.to_string(),
                                 issues,
                                 info,
                             );
@@ -509,9 +523,16 @@ impl Core {
             Results::ConnectionEvent { evt } => {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
-                    Phase::Connecting(mut conn) => {
-                        conn.connect_evt(evt);
-                    }
+                    Phase::Connecting(mut conn) => match evt {
+                        connection::up::runner::Event::Progress(e) => {
+                            conn.connect_progress(e);
+                            self.phase = Phase::Connecting(conn);
+                        }
+                        connection::up::runner::Event::Setback(e) => {
+                            self.last_connection_errors
+                                .insert(conn.destination.address, e.to_string());
+                        }
+                    },
                     phase => {
                         tracing::warn!(?phase, %evt, "received connection event in unexpected phase");
                     }

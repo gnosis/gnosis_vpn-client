@@ -24,7 +24,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
-            runner: macos-13
+            runner: macos-15
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
@@ -89,6 +89,7 @@ jobs:
         shell: bash
         run: |
           current_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
+          echo "current_version=${current_version}" | tee -a $GITHUB_OUTPUT
           # Extract parts without IFS or read
           IFS='.' read -r major_version minor_version patch_version <<< "${current_version}"
           echo "Current version $major_version $minor_version $patch_version"
@@ -134,3 +135,21 @@ jobs:
           new_branch: main
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
+      - name: Notify release
+        uses: zulip/github-actions-zulip/send-message@e4c8f27c732ba9bd98ac6be0583096dea82feea5 # v1.0.2
+        with:
+          api-key: ${{ secrets.ZULIP_API_KEY }}
+          email: ${{ secrets.ZULIP_EMAIL }}
+          organization-url: "https://hopr.zulipchat.com"
+          type: "stream"
+          to: "GnosisVPN"
+          topic: "Releases"
+          content: |
+            I'm thrilled to inform the new gnosis_vpn-client version v${{ steps.bump.outputs.current_version }} has been released.
+            [Release Notes](https://github.com/gnosis/gnosis_vpn-client/releases/tag/v${{ steps.bump.outputs.current_version }})
+      - name: Trigger installer snapshot
+        uses: peter-evans/repository-dispatch@5fc4efd1a4797ddb68ffd0714a238564e4cc0e6f # v4.0.0
+        with:
+          token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
+          repository: gnosis/gnosis_vpn
+          event-type: new_snapshot_release
