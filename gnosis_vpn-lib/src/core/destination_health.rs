@@ -9,7 +9,10 @@ pub struct DestinationHealth {
 
 #[derive(Clone, Debug)]
 pub enum Need {
-    Channel(Address),
+    /// This implies channel peering as well
+    ChannelFunded(Address),
+    /// Usually switches to this need, once channel funding is established
+    ChannelPeered(Address),
     Peer(Address),
     SomePeers,
     Nothing,
@@ -18,8 +21,7 @@ pub enum Need {
 #[derive(Clone, Debug)]
 pub enum Health {
     ReadyToConnect,
-    NeedsPeeredChannel,
-    NeedsFundedChannel,
+    MissingChannel,
     NotPeered,
     NotAllowed,
     InvalidAddress,
@@ -29,7 +31,7 @@ pub enum Health {
 pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
     for dh in dest_healths {
         match dh.need {
-            Need::Channel(_) | Need::Peer(_) | Need::SomePeers => return true,
+            Need::ChannelFunded(_) | Need::ChannelPeered(_) | Need::Peer(_) | Need::SomePeers => return true,
             Need::Nothing => (),
         }
     }
@@ -65,8 +67,8 @@ impl DestinationHealth {
                 Some(first) => match first {
                     NodeId::Chain(address) => Self {
                         last_error: None,
-                        health: Health::NeedsPeeredChannel,
-                        need: Need::Channel(address),
+                        health: Health::MissingChannel,
+                        need: Need::ChannelFunded(address),
                     },
                     NodeId::Offchain(_) => {
                         return Self {

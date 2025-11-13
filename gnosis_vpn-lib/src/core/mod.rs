@@ -491,7 +491,11 @@ impl Core {
                 self.on_hopr_running();
             }
 
-            Results::FundChannel { address, res } => match res {
+            Results::FundChannel {
+                address,
+                res,
+                target_dest,
+            } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
                     self.destination_health.self.funded_channels.push(address);
@@ -516,8 +520,7 @@ impl Core {
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::runner::Event::Setback(e) => {
-                            self.last_connection_errors
-                                .insert(conn.destination.address, e.to_string());
+                            self.update_health_error(&conn.destination, Some(e.to_string()));
                         }
                     },
                     phase => {
@@ -550,12 +553,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    if let Some(health) = self.destination_health.get(&conn.destination.address) {
-                        self.destination_health
-                            .insert(conn.destination.address, health.with_error(None));
-                    } else {
-                        tracing::warn!("connection has no health tracker");
-                    }
+                    self.update_health_error(&conn.destination, None);
                     log_output::print_session_established(conn.destination.pretty_print_path().as_str());
                 }
                 (Ok(_), phase) => {
@@ -563,12 +561,7 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
-                    if let Some(health) = self.destination_health.get(&conn.destination.address) {
-                        self.destination_health
-                            .insert(conn.destination.address, health.with_error(Some(err.to_string())));
-                    } else {
-                        tracing::warn!("connection has no health tracker");
-                    }
+                    self.update_health_error(&conn.destination, Some(err.to_string()));
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
@@ -908,5 +901,14 @@ impl Core {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         }
         self.act_on_target(results_sender);
+    }
+
+    fn update_health_error(&mut self, destination: &Destination, err: Option<String>) {
+        if let Some(health) = self.destination_health.get(&destination.address) {
+            self.destination_health
+                .insert(destination.address, health.with_error(err));
+        } else {
+            tracing::warn!(?destination, "connection has no health tracker");
+        }
     }
 }
