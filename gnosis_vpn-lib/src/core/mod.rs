@@ -743,6 +743,21 @@ impl Core {
         }
     }
 
+    fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let (Some(hopr)) = (self.hopr.clone()) {
+            let cancel = self.cancel_for_shutdown.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::connected_peers(hopr, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
     fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connecting.clone();

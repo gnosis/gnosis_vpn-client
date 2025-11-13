@@ -163,6 +163,7 @@ pub async fn fund_channel(
 }
 
 pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting connected peers runner");
     let res = hopr.connected_peers().await.map_err(Error::from);
     let _ = results_sender.send(Results::ConnectedPeers { res }).await;
 }
