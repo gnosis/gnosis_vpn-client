@@ -19,24 +19,7 @@ impl Destination {
     }
 
     pub fn pretty_print_path(&self) -> String {
-        format!("{:?}({})", self.routing, log_output::address(&self.address))
-    }
-
-    fn meta_str(&self) -> String {
-        let mut metas = self
-            .meta
-            .iter()
-            .map(|(key, value)| format!("{key}: {value}"))
-            .collect::<Vec<String>>();
-        metas.sort();
-        metas.join(", ")
-    }
-}
-
-impl Display for Destination {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let short_addr = log_output::address(&self.address);
-        let path = match self.routing.clone() {
+        match self.routing.clone() {
             RoutingOptions::Hops(hops) => {
                 let nr: u8 = hops.into();
                 let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
@@ -57,12 +40,28 @@ impl Display for Destination {
                     .join("->");
                 format!("->{}->", path).to_string()
             }
-        };
+        }
+    }
+
+    fn meta_str(&self) -> String {
+        let mut metas = self
+            .meta
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<String>>();
+        metas.sort();
+        metas.join(", ")
+    }
+}
+
+impl Display for Destination {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let short_addr = log_output::address(&self.address);
         write!(
             f,
             "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
             meta = self.meta_str(),
-            path = path,
+            path = self.pretty_print_path(),
             address = self.address,
             short_addr = short_addr,
         )

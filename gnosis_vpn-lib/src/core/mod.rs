@@ -557,7 +557,12 @@ impl Core {
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     self.update_health(conn.destination.address, |h| h.no_error());
-                    log_output::print_session_established(conn.destination.pretty_print_path().as_str());
+                    let route = format!(
+                        "{}({})",
+                        conn.destination.pretty_print_path(),
+                        log_output::address(&conn.destination.address)
+                    );
+                    log_output::print_session_established(route.as_str());
                 }
                 (Ok(_), phase) => {
                     tracing::info!(?phase, "unawaited connection established successfully");
