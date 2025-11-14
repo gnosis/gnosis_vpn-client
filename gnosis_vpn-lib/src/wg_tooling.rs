@@ -92,6 +92,7 @@ pub async fn available() -> Result<(), Error> {
 
 pub async fn executable() -> Result<(), Error> {
     let output = Command::new("wg-quick")
+        .arg("-h")
         // suppress stdout
         .stdout(std::process::Stdio::null())
         .output()
