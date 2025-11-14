@@ -8,7 +8,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -186,9 +186,8 @@ impl Core {
                             }
                         };
                         self.config = config;
-                        self.destination_health.clear();
                     }
-                    Phase::HoprRunning | Phase::HoprChannelsFunded | Phase::Connecting(_) | Phase::Connected(_) => {
+                    Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                         let config = match config::read(&path).await {
                             Ok(cfg) => cfg,
                             Err(err) => {
@@ -197,7 +196,6 @@ impl Core {
                             }
                         };
                         self.config = config;
-                        self.destination_health.clear();
                         self.reset_to_hopr_running(results_sender);
                     }
                 }
@@ -488,8 +486,22 @@ impl Core {
             },
 
             Results::HoprRunning => {
-                self.on_hopr_running();
+                self.on_hopr_running(results_sender);
             }
+
+            Results::ConnectedPeers { res } => match res {
+                Ok(peers) => {
+                    tracing::info!(num_peers = %peers.len(), "fetched connected peers");
+                    let all_peers = HashSet::from_iter(peers.iter().cloned());
+                    for (target, health) in self.destination_health {
+                        let updated_health = health.peered(&all_peers);
+                        if let Some(addr) = updated_health.needs_channel_funding() {
+                            self.spawn_channel_funding(addr, target, results_sender, Duration::ZERO);
+                        }
+                        self.destination_health.insert(target, updated_health);
+                    }
+                }
+            },
 
             Results::FundChannel {
                 address,
@@ -498,19 +510,13 @@ impl Core {
             } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
-                    if let Some(health) = self.destination_health.get(target_dest) {
-                        let updated_health = health.channel_funded(address);
-                        self.destination_health.insert(target_dest.clone(), updated_health);
-                    }
-                    if self.funded_channels.len() == self.config.channel_targets().len() {
-                        self.phase = Phase::HoprChannelsFunded;
-                        tracing::info!("all channels funded - hopr is ready");
-                        self.act_on_target(results_sender);
-                    }
+                    self.update_health(target_dest, |h| h.channel_funded());
                 }
                 Err(err) => {
-                    tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute");
-                    self.spawn_channel_funding(address, results_sender, Duration::from_secs(60));
+                    tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute if needed");
+                    if self.update_health(target_dest, |h| h.with_error(err.to_string())) {
+                        self.spawn_channel_funding(address, target_dest, results_sender, Duration::from_secs(60));
+                    }
                 }
             },
 
@@ -523,7 +529,7 @@ impl Core {
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::runner::Event::Setback(e) => {
-                            self.update_health_error(&conn.destination, Some(e.to_string()));
+                            self.update_health(conn.destination.address, |h| h.with_error(e.to_string()));
                         }
                     },
                     phase => {
@@ -556,7 +562,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.update_health_error(&conn.destination, None);
+                    self.update_health(conn.destination.address, |h| h.no_error());
                     log_output::print_session_established(conn.destination.pretty_print_path().as_str());
                 }
                 (Ok(_), phase) => {
@@ -564,7 +570,7 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
-                    self.update_health_error(&conn.destination, Some(err.to_string()));
+                    self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
@@ -886,6 +892,7 @@ impl Core {
         }
         self.cancel_channel_tasks.cancel();
         self.cancel_channel_tasks = CancellationToken::new();
+        self.destination_health.clear();
         self.on_hopr_running(results_sender);
     }
 
@@ -903,12 +910,16 @@ impl Core {
         self.act_on_target(results_sender);
     }
 
-    fn update_health_error(&mut self, destination: &Destination, err: Option<String>) {
-        if let Some(health) = self.destination_health.get(&destination.address) {
-            self.destination_health
-                .insert(destination.address, health.with_error(err));
+    fn update_health<F>(&mut self, address: Address, cb: F) -> bool
+    where
+        F: Fn(&DestinationHealth) -> DestinationHealth,
+    {
+        if let Some(health) = self.destination_health.get(&address) {
+            self.destination_health.insert(address, cb(health));
+            true
         } else {
-            tracing::warn!(?destination, "connection has no health tracker");
+            tracing::warn!(?address, "connection destination has no health tracker");
+            false
         }
     }
 }

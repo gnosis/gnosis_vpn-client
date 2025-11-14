@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 
 #[derive(Debug, Clone)]
@@ -9,11 +11,8 @@ pub struct DestinationHealth {
 
 #[derive(Clone, Debug)]
 pub enum Need {
-    /// This implies channel peering as well
-    ChannelFunding,
-    /// Usually switches to this need, once channel funding is established
-    ChannelPeering,
-    Peering,
+    Channel(Address),
+    Peering(Address),
     AnyPeer,
     Nothing,
 }
@@ -21,7 +20,9 @@ pub enum Need {
 #[derive(Clone, Debug)]
 pub enum Health {
     ReadyToConnect,
-    MissingChannel,
+    MissingPeeredFundedChannel,
+    MissingPeeredChannel,
+    MissingFundedChannel,
     NotPeered,
     NotAllowed,
     InvalidAddress,
@@ -31,7 +32,7 @@ pub enum Health {
 pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
     for dh in dest_healths {
         match dh.need {
-            Need::ChannelFunding | Need::ChannelPeering | Need::Peering | Need::AnyPeer => return true,
+            Need::Channel(_) | Need::Peering(_) | Need::AnyPeer => return true,
             Need::Nothing => (),
         }
     }
@@ -46,7 +47,7 @@ impl DestinationHealth {
                     return Self {
                         last_error: None,
                         health: Health::NotPeered,
-                        need: Need::Peering,
+                        need: Need::Peering(dest.address),
                     };
                 } else {
                     return Self {
@@ -65,10 +66,10 @@ impl DestinationHealth {
             }
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
                 Some(first) => match first {
-                    NodeId::Chain(_) => Self {
+                    NodeId::Chain(address) => Self {
                         last_error: None,
-                        health: Health::MissingChannel,
-                        need: Need::ChannelFunding,
+                        health: Health::MissingPeeredFundedChannel,
+                        need: Need::Channel(address),
                     },
                     NodeId::Offchain(_) => {
                         return Self {
@@ -89,19 +90,63 @@ impl DestinationHealth {
         }
     }
 
-    pub fn with_error(&self, err: Option<String>) -> Self {
+    pub fn with_error(&self, err: String) -> Self {
         Self {
             health: self.health.clone(),
             need: self.need.clone(),
-            last_error: err,
+            last_error: Some(err),
         }
     }
 
-    pub fn channel_funded(&self) -> Self {
+    pub fn no_error(&self) -> Self {
         Self {
-            health: Health::ReadyToConnect,
-            need: Need::ChannelPeering,
+            health: self.health.clone(),
+            need: self.need.clone(),
+            last_error: None,
+        }
+    }
+
+    pub fn peered(&self, addresses: &HashSet<Address>) -> Self {
+        let health = match self.need {
+            Need::Channel(addr) if addresses.contains(&addr) => match self.health {
+                Health::MissingPeeredChannel => Health::ReadyToConnect,
+                Health::MissingPeeredFundedChannel => Health::MissingFundedChannel,
+                _ => self.health.clone(),
+            },
+            Need::Peering(addr) if addresses.contains(&addr) => Health::ReadyToConnect,
+            Need::AnyPeer => Health::ReadyToConnect,
+            _ => self.health.clone(),
+        };
+        Self {
+            health,
+            need: self.need.clone(),
             last_error: self.last_error.clone(),
+        }
+    }
+
+    pub fn channel_funded(&self, addresses: &HashSet<Address>) -> Self {
+        let health = match self.need {
+            Need::Channel(addr) if addresses.contains(&addr) => match self.health {
+                Health::MissingFundedChannel => Health::ReadyToConnect,
+                Health::MissingPeeredFundedChannel => Health::MissingPeeredChannel,
+                _ => self.health.clone(),
+            },
+            _ => self.health.clone(),
+        };
+        Self {
+            health,
+            need: self.need.clone(),
+            last_error: self.last_error.clone(),
+        }
+    }
+
+    pub fn needs_channel_funding(&self) -> Option<Address> {
+        match self.need {
+            Need::Channel(addr) => match self.health {
+                Health::MissingFundedChannel | Health::MissingPeeredFundedChannel => Some(addr),
+                _ => None,
+            },
+            _ => None,
         }
     }
 }
