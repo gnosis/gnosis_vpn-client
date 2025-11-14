@@ -510,7 +510,7 @@ impl Core {
             } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
-                    self.update_health(target_dest, |h| h.channel_funded());
+                    self.update_health(target_dest, |h| h.channel_funded(address));
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute if needed");
@@ -804,34 +804,18 @@ impl Core {
             // Connecting from ready
             (Some(dest), Phase::HoprRunning) => {
                 // Checking health
-                let destination_health = match self.destination_health.get(&dest.address) {
-                    Some(h) => h,
-                    None => {
-                        tracing::warn!(destination = %dest, "destination has no health");
-                        return;
-                    }
-                };
-                match destination_health.health {
-                    Health::ReadyToConnect => {
+                if let Some(health) = self.destination_health.get(&dest.address) {
+                    if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
                         self.spawn_connection_runner(dest.clone(), results_sender);
+                    } else if health.is_unrecoverable() {
+                        tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
+                    } else {
+                        tracing::warn!(?health, destination = %dest, "waiting for better destination health before connecting");
                     }
-                    Health::MissingChannel => {
-                        tracing::info!(?destination_health, destination = %dest, "waiting for channel peering and funding before connecting")
-                    }
-                    Health::NotPeered => {
-                        tracing::info!(?destination_health, destination = %dest, "waiting for destination peering before connecting")
-                    }
-                    _ => {
-                        tracing::warn!(?destination_health, destination = %dest, "destination cannot be used for connection")
-                    }
+                } else {
+                    tracing::warn!(destination = %dest, "refusing connection: destination has no health tracker");
                 }
-                // if matches!(dest.routing, RoutingOptions::Hops(n) if <BoundedSize<3> as Into<u8>>::into(n) == 0) {
-                // if self.hopr_params.allow_insecure() {
-                // tracing::warn!("connecting to destination with insecure 0 hops route");
-                // } else {
-                // tracing::warn!(%dest, route = ?dest.routing, "refusing to connect to via insecure route to target destination");
-                // }
             }
             // Connecting to different destination while already connected
             (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {

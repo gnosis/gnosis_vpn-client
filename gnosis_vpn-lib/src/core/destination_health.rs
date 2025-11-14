@@ -124,9 +124,9 @@ impl DestinationHealth {
         }
     }
 
-    pub fn channel_funded(&self, addresses: &HashSet<Address>) -> Self {
+    pub fn channel_funded(&self, address: Address) -> Self {
         let health = match self.need {
-            Need::Channel(addr) if addresses.contains(&addr) => match self.health {
+            Need::Channel(addr) if addr == address => match self.health {
                 Health::MissingFundedChannel => Health::ReadyToConnect,
                 Health::MissingPeeredFundedChannel => Health::MissingPeeredChannel,
                 _ => self.health.clone(),
@@ -148,5 +148,16 @@ impl DestinationHealth {
             },
             _ => None,
         }
+    }
+
+    pub fn is_ready_to_connect(&self) -> bool {
+        matches!(self.health, Health::ReadyToConnect)
+    }
+
+    pub fn is_unrecoverable(&self) -> bool {
+        matches!(
+            self.health,
+            Health::NotAllowed | Health::InvalidAddress | Health::InvalidPath
+        )
     }
 }
