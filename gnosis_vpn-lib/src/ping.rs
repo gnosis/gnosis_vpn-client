@@ -37,5 +37,5 @@ pub fn ping(opts: &PingOptions) -> Result<(), Error> {
         Some(opts.seq_count), // Seq Count
         None,                 // Custom Payload
     )
-    .map_err(|e| Error::PingFailed(e))
+    .map_err(Error::PingFailed)
 }

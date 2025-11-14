@@ -18,6 +18,7 @@ pub struct Registration {
     server_public_key: String,
 }
 
+#[derive(Clone, Debug)]
 pub struct Input {
     public_key: String,
     port: u16,

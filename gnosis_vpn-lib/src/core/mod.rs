@@ -578,6 +578,7 @@ impl Core {
                     {
                         tracing::info!(%dest, "removing target destination due to connection error");
                         self.target_destination = None;
+                        self.act_on_target(results_sender);
                     }
                 }
                 (Err(err), phase) => {

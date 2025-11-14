@@ -214,6 +214,7 @@ async fn open_bridge_session(
         ..Default::default()
     };
     retry(ExponentialBackoff::default(), || async {
+        tracing::debug!(%up,"attempting to open bridge session");
         let res = hopr
             .open_session(
                 up.destination.address,
@@ -249,6 +250,7 @@ async fn register(
     );
     let client = reqwest::Client::new();
     retry(ExponentialBackoff::default(), || async {
+        tracing::debug!(?input, "attempting to register gvpn client public key");
         let res = gvpn_client::register(&client, &input).await;
         if let Err(e) = &res {
             let _ = results_sender
@@ -264,6 +266,10 @@ async fn register(
 }
 
 async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
+    tracing::debug!(
+        bound_host = ?session_client_metadata.bound_host,
+        "closing bridge session"
+    );
     let res = hopr
         .close_session(session_client_metadata.bound_host, session_client_metadata.protocol)
         .await;
@@ -294,6 +300,7 @@ async fn open_ping_session(
         ..Default::default()
     };
     retry(ExponentialBackoff::default(), || async {
+        tracing::debug!(%up, "attempting to open ping session");
         let res = hopr
             .open_session(
                 up.destination.address,
@@ -334,11 +341,17 @@ async fn wg_tunnel(
         endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
     };
 
+    tracing::debug!(%registration, "establishing wg tunnel");
     wg.up(&interface_info, &peer_info).await
 }
 
 async fn ping(options: &Options) -> Result<(), ping::Error> {
-    ping::ping(&options.ping_options)
+    retry(ExponentialBackoff::default(), || async {
+        tracing::debug!(?options, "attempting to ping through wg tunnel");
+        ping::ping(&options.ping_options)?;
+        Ok(())
+    })
+    .await
 }
 
 async fn adjust_to_main_session(
@@ -351,6 +364,7 @@ async fn adjust_to_main_session(
         [client] => client.clone(),
         _ => return Err(HoprError::SessionAmbiguousClient),
     };
+    tracing::debug!(bound_host = ?session_client_metadata.bound_host, "adjusting to main session");
     let surb_management = runner::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
     hopr.adjust_session(surb_management, active_client).await
 }
