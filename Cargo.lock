@@ -2457,7 +2457,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=a5b84a233e96bca8f1e48eabd23de7a5a656ff23#a5b84a233e96bca8f1e48eabd23de7a5a656ff23"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=0125f875ded8332e0dda7c3d11af1d0ee231b23b#0125f875ded8332e0dda7c3d11af1d0ee231b23b"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3925,11 +3925,14 @@ dependencies = [
 name = "gnosis_vpn"
 version = "0.54.3"
 dependencies = [
+ "anyhow",
  "clap",
  "exitcode",
+ "gnosis_vpn",
  "gnosis_vpn-lib",
  "mimalloc",
  "notify",
+ "rstest",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -4645,6 +4648,7 @@ dependencies = [
  "hopr-api",
  "hopr-async-runtime",
  "hopr-chain-api",
+ "hopr-chain-rpc",
  "hopr-chain-types",
  "hopr-crypto-keypair",
  "hopr-crypto-random",
@@ -4661,6 +4665,8 @@ dependencies = [
  "hopr-transport",
  "human-bandwidth",
  "lazy_static",
+ "rand 0.8.5",
+ "rstest",
  "serde",
  "serde_json",
  "serde_with",
@@ -4669,6 +4675,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "validator",
 ]
@@ -7584,6 +7591,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "relative-path"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
+
+[[package]]
 name = "reqwest"
 version = "0.12.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7692,6 +7705,35 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rstest"
+version = "0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5a3193c063baaa2a95a33f03035c8a72b83d97a54916055ba22d35ed3839d49"
+dependencies = [
+ "futures-timer",
+ "futures-util",
+ "rstest_macros",
+]
+
+[[package]]
+name = "rstest_macros"
+version = "0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c845311f0ff7951c5506121a9ad75aec44d083c31583b2ea5a30bcb0b0abba0"
+dependencies = [
+ "cfg-if",
+ "glob",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "relative-path",
+ "rustc_version 0.4.1",
+ "syn 2.0.110",
+ "unicode-ident",
 ]
 
 [[package]]

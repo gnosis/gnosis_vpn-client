@@ -6,6 +6,12 @@ license = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = []
+testing = [ "edgli/testing" ]
+runtime-tokio = [ "edgli/runtime-tokio" ]
+session-server = [ "edgli/session-server" ]
+
 [dependencies]
 alloy.workspace = true
 anyhow.workspace = true
@@ -32,3 +38,6 @@ tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+edgli = { workspace = true, features = ["testing", "runtime-tokio", "session-server"] }
