@@ -51,12 +51,11 @@ pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
         }
     }
     let count = addresses.len();
-    if count == 0 {
-        if dest_healths.iter().any(|h| matches!(h.need, Need::AnyChannel)) {
+    if count == 0
+        && dest_healths.iter().any(|h| matches!(h.need, Need::AnyChannel)) {
             return 1;
         }
-    }
-    return count;
+    count
 }
 
 impl DestinationHealth {
@@ -64,25 +63,25 @@ impl DestinationHealth {
         match dest.routing.clone() {
             RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => {
                 if allow_insecure {
-                    return Self {
+                    Self {
                         last_error: None,
                         health: Health::NotPeered,
                         need: Need::Peering(dest.address),
-                    };
+                    }
                 } else {
-                    return Self {
+                    Self {
                         last_error: None,
                         health: Health::NotAllowed,
                         need: Need::Nothing,
-                    };
+                    }
                 }
             }
             RoutingOptions::Hops(_) => {
-                return Self {
+                Self {
                     last_error: None,
                     health: Health::MissingPeeredFundedChannel,
                     need: Need::AnyChannel,
-                };
+                }
             }
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
                 Some(first) => match first {
@@ -92,19 +91,19 @@ impl DestinationHealth {
                         need: Need::Channel(address),
                     },
                     NodeId::Offchain(_) => {
-                        return Self {
+                        Self {
                             last_error: None,
                             health: Health::InvalidAddress,
                             need: Need::Nothing,
-                        };
+                        }
                     }
                 },
                 None => {
-                    return Self {
+                    Self {
                         last_error: None,
                         health: Health::InvalidPath,
                         need: Need::Nothing,
-                    };
+                    }
                 }
             },
         }
@@ -213,7 +212,7 @@ impl DestinationHealth {
 impl Display for DestinationHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let error = if let Some(err) = self.last_error.as_ref() {
-            format!("Last error: {}, ", err.to_string())
+            format!("Last error: {}, ", err)
         } else {
             String::new()
         };
@@ -221,7 +220,7 @@ impl Display for DestinationHealth {
             f,
             "{error}{health:?},{need}",
             health = self.health,
-            need = self.need.to_string()
+            need = self.need
         )
     }
 }
