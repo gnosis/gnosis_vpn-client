@@ -12,8 +12,8 @@ pub struct DestinationHealth {
 #[derive(Clone, Debug)]
 pub enum Need {
     Channel(Address),
+    AnyChannel,
     Peering(Address),
-    AnyPeer,
     Nothing,
 }
 
@@ -32,11 +32,21 @@ pub enum Health {
 pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
     for dh in dest_healths {
         match dh.need {
-            Need::Channel(_) | Need::Peering(_) | Need::AnyPeer => return true,
+            Need::Channel(_) | Need::Peering(_) | Need::AnyChannel => return true,
             Need::Nothing => (),
         }
     }
     false
+}
+
+pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
+    let mut addresses = HashSet::new();
+    for dh in dest_healths {
+        if let Need::Channel(addr) = dh.need {
+            addresses.insert(addr);
+        }
+    }
+    addresses.len()
 }
 
 impl DestinationHealth {
@@ -60,8 +70,8 @@ impl DestinationHealth {
             RoutingOptions::Hops(_) => {
                 return Self {
                     last_error: None,
-                    health: Health::NotPeered,
-                    need: Need::AnyPeer,
+                    health: Health::MissingPeeredFundedChannel,
+                    need: Need::AnyChannel,
                 };
             }
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
@@ -106,16 +116,37 @@ impl DestinationHealth {
         }
     }
 
-    pub fn peered(&self, addresses: &HashSet<Address>) -> Self {
+    pub fn peers(&self, addresses: &HashSet<Address>) -> Self {
         let health = match self.need {
+            // channel address becomes peered
             Need::Channel(addr) if addresses.contains(&addr) => match self.health {
                 Health::MissingPeeredChannel => Health::ReadyToConnect,
                 Health::MissingPeeredFundedChannel => Health::MissingFundedChannel,
                 _ => self.health.clone(),
             },
+            // channel address lost its peer
+            Need::Channel(_) => match self.health {
+                Health::ReadyToConnect => Health::MissingPeeredChannel,
+                Health::MissingFundedChannel => Health::MissingPeeredFundedChannel,
+                _ => self.health.clone(),
+            },
+            // desired peer address becomes peered
             Need::Peering(addr) if addresses.contains(&addr) => Health::ReadyToConnect,
-            Need::AnyPeer => Health::ReadyToConnect,
-            _ => self.health.clone(),
+            // peered address lost its peer
+            Need::Peering(_) => Health::NotPeered,
+            // no peer available, even any channel lost its peer
+            Need::AnyChannel if addresses.is_empty() => match self.health {
+                Health::ReadyToConnect => Health::MissingPeeredChannel,
+                Health::MissingFundedChannel => Health::MissingPeeredFundedChannel,
+                _ => self.health.clone(),
+            },
+            // any peer will suffice for any channel need
+            Need::AnyChannel => match self.health {
+                Health::MissingPeeredChannel => Health::ReadyToConnect,
+                Health::MissingPeeredFundedChannel => Health::MissingFundedChannel,
+                _ => self.health.clone(),
+            },
+            Need::Nothing => self.health.clone(),
         };
         Self {
             health,
@@ -126,7 +157,14 @@ impl DestinationHealth {
 
     pub fn channel_funded(&self, address: Address) -> Self {
         let health = match self.need {
+            // needed channel becomes funded
             Need::Channel(addr) if addr == address => match self.health {
+                Health::MissingFundedChannel => Health::ReadyToConnect,
+                Health::MissingPeeredFundedChannel => Health::MissingPeeredChannel,
+                _ => self.health.clone(),
+            },
+            // any channel becomes funded
+            Need::AnyChannel => match self.health {
                 Health::MissingFundedChannel => Health::ReadyToConnect,
                 Health::MissingPeeredFundedChannel => Health::MissingPeeredChannel,
                 _ => self.health.clone(),

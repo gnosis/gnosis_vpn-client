@@ -1,6 +1,5 @@
+use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
-use edgli::hopr_lib::exports::types::primitive::bounded::BoundedSize;
-use edgli::hopr_lib::{Address, RoutingOptions};
 use edgli::hopr_lib::{Balance, WxHOPR};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -25,7 +24,7 @@ use crate::{balance, log_output, wg_tooling};
 mod destination_health;
 pub mod runner;
 
-use destination_health::{DestinationHealth, Health};
+use destination_health::DestinationHealth;
 use runner::Results;
 
 #[derive(Debug, Error)]
@@ -493,13 +492,18 @@ impl Core {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
-                    for (target, health) in self.destination_health {
-                        let updated_health = health.peered(&all_peers);
+                    for (target, health) in self.destination_health.clone() {
+                        let updated_health = health.peers(&all_peers);
                         if let Some(addr) = updated_health.needs_channel_funding() {
                             self.spawn_channel_funding(addr, target, results_sender, Duration::ZERO);
                         }
                         self.destination_health.insert(target, updated_health);
                     }
+                    self.spawn_connected_peers(results_sender, Duration::from_secs(90));
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to fetch connected peers");
+                    self.spawn_connected_peers(results_sender, Duration::from_secs(10));
                 }
             },
 
