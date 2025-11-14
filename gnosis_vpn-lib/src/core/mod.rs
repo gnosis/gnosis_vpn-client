@@ -488,6 +488,7 @@ impl Core {
                         self.destination_health.insert(target, updated_health);
                     }
                     self.spawn_connected_peers(results_sender, Duration::from_secs(90));
+                    self.act_on_target(results_sender);
                 }
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch connected peers");
@@ -503,6 +504,7 @@ impl Core {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
                     self.update_health(target_dest, |h| h.channel_funded(address));
+                    self.act_on_target(results_sender);
                 }
                 Err(err) => {
                     tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute if needed");

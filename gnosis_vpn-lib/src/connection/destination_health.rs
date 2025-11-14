@@ -214,7 +214,7 @@ impl Display for DestinationHealth {
         } else {
             format!(", {}", self.need)
         };
-        write!(f, "{error}{health:?},{need}", health = self.health,)
+        write!(f, "{error}{health:?}{need}", health = self.health)
     }
 }
 
