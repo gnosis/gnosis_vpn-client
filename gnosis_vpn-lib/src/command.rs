@@ -88,6 +88,8 @@ pub enum FundingState {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
+    WaitingToConnect(Destination, Option<DestinationHealth>),
+    UnableToConnection(Destination, DestinationHealth),
     AddressNotFound,
 }
 
@@ -150,10 +152,15 @@ impl RunMode {
 }
 
 impl ConnectResponse {
-    pub fn new(destination: Destination) -> Self {
+    pub fn connecting(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
     }
-
+    pub fn waiting(destination: Destination, health: Option<DestinationHealth>) -> Self {
+        ConnectResponse::WaitingToConnect(destination, health)
+    }
+    pub fn unable(destination: Destination, health: DestinationHealth) -> Self {
+        ConnectResponse::UnableToConnection(destination, health)
+    }
     pub fn address_not_found() -> Self {
         ConnectResponse::AddressNotFound
     }

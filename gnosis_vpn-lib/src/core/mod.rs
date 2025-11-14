@@ -268,9 +268,29 @@ impl Core {
 
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
-                            self.target_destination = Some(dest.clone());
-                            let _ = resp.send(Response::connect(command::ConnectResponse::new(dest.clone())));
-                            self.act_on_target(results_sender);
+                            if let Some(health) = self.destination_health.get(&dest.address) {
+                                if health.is_ready_to_connect() {
+                                    let _ = resp
+                                        .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
+                                    self.target_destination = Some(dest.clone());
+                                    self.act_on_target(results_sender);
+                                } else if health.is_unrecoverable() {
+                                    let _ = resp.send(Response::connect(command::ConnectResponse::unable(
+                                        dest.clone(),
+                                        health.clone(),
+                                    )));
+                                } else {
+                                    let _ = resp.send(Response::connect(command::ConnectResponse::waiting(
+                                        dest.clone(),
+                                        Some(health.clone()),
+                                    )));
+                                    self.target_destination = Some(dest.clone());
+                                }
+                            } else {
+                                let _ =
+                                    resp.send(Response::connect(command::ConnectResponse::waiting(dest.clone(), None)));
+                                self.target_destination = Some(dest.clone());
+                            }
                         }
                         None => {
                             tracing::info!(address = %address, "cannot connect to destination - address not configured");
