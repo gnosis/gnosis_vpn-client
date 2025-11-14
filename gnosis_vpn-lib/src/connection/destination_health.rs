@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
+use std::fmt::{self, Display};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
+use crate::log_output;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestinationHealth {
@@ -205,5 +207,32 @@ impl DestinationHealth {
             self.health,
             Health::NotAllowed | Health::InvalidAddress | Health::InvalidPath
         )
+    }
+}
+
+impl Display for DestinationHealth {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let error = if let Some(err) = self.last_error.as_ref() {
+            format!("Last error: {}, ", err.to_string())
+        } else {
+            String::new()
+        };
+        write!(
+            f,
+            "{error}{health:?},{need}",
+            health = self.health,
+            need = self.need.to_string()
+        )
+    }
+}
+
+impl Display for Need {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Need::Channel(addr) => write!(f, "needs channel to {}", log_output::address(addr)),
+            Need::AnyChannel => write!(f, "needs any channel"),
+            Need::Peering(addr) => write!(f, "needs to see peer {}", log_output::address(addr)),
+            Need::Nothing => write!(f, "unable to connect"),
+        }
     }
 }

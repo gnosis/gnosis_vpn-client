@@ -89,7 +89,7 @@ impl HoprParams {
             }
         };
 
-        identity::from_path(identity_file.as_path(), identity_pass.clone())?;
+        identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
     }
 
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {

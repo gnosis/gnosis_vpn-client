@@ -2,7 +2,7 @@ use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-use std::fmt;
+use std::fmt::{self, Display};
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -207,7 +207,7 @@ impl Response {
     }
 }
 
-impl fmt::Display for Command {
+impl Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = log_output::serialize(self);
         write!(f, "{s}")
@@ -245,8 +245,7 @@ impl From<Option<HoprState>> for HoprStatus {
     }
 }
 
-/*
-impl fmt::Display for RunMode {
+impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RunMode::Init => write!(f, "Initializing"),
@@ -262,22 +261,18 @@ impl fmt::Display for RunMode {
                     "Waiting for funding on {node_address}({node_xdai}, {node_wxhopr}) - {funding_tool}"
                 )
             }
-            RunMode::Warmup { hopr_state } => {
-                if hopr_state == "Running" {
-                    write!(f, "Checking channel funding (Hopr {})", hopr_state)
-                } else {
-                    write!(f, "Warmup (Hopr {})", hopr_state)
-                }
+            RunMode::Warmup { hopr_status } => {
+                write!(f, "Warmup (Hopr {})", hopr_status)
             }
-            RunMode::Running { funding, hopr_state } => {
-                write!(f, "Ready (Hopr {hopr_state}), {funding}")
+            RunMode::Running { funding, hopr_status } => {
+                write!(f, "Ready (Hopr {hopr_status}), {funding}")
             }
             RunMode::Shutdown => write!(f, "Shutting down"),
         }
     }
 }
 
-impl fmt::Display for ConnectionState {
+impl Display for ConnectionState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ConnectionState::None => write!(f, "Not Connected"),
@@ -294,18 +289,18 @@ impl fmt::Display for ConnectionState {
     }
 }
 
-impl fmt::Display for DestinationState {
+impl Display for DestinationState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let output = format!("{} - {}", self.destination, self.connection_state);
-        if let Some(err) = self.last_connection_error.clone() {
-            write!(f, "{} (Last error: {})", output, err)
+        if let Some(health) = self.health.as_ref() {
+            write!(f, "{} (Health: {})", output, health)
         } else {
             write!(f, "{}", output)
         }
     }
 }
 
-impl fmt::Display for FundingState {
+impl Display for FundingState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             FundingState::Unknown => write!(f, "Unknown"),
@@ -314,4 +309,16 @@ impl fmt::Display for FundingState {
         }
     }
 }
-*/
+
+impl Display for HoprStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HoprStatus::Running => write!(f, "Running"),
+            HoprStatus::Syncing => write!(f, "Syncing"),
+            HoprStatus::Starting => write!(f, "Starting"),
+            HoprStatus::Indexing => write!(f, "Indexing"),
+            HoprStatus::Initializing => write!(f, "Initializing"),
+            HoprStatus::Uninitialized => write!(f, "Uninitialized"),
+        }
+    }
+}
