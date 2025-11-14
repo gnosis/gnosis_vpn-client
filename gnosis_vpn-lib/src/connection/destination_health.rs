@@ -51,10 +51,9 @@ pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
         }
     }
     let count = addresses.len();
-    if count == 0
-        && dest_healths.iter().any(|h| matches!(h.need, Need::AnyChannel)) {
-            return 1;
-        }
+    if count == 0 && dest_healths.iter().any(|h| matches!(h.need, Need::AnyChannel)) {
+        return 1;
+    }
     count
 }
 
@@ -76,13 +75,11 @@ impl DestinationHealth {
                     }
                 }
             }
-            RoutingOptions::Hops(_) => {
-                Self {
-                    last_error: None,
-                    health: Health::MissingPeeredFundedChannel,
-                    need: Need::AnyChannel,
-                }
-            }
+            RoutingOptions::Hops(_) => Self {
+                last_error: None,
+                health: Health::MissingPeeredFundedChannel,
+                need: Need::AnyChannel,
+            },
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
                 Some(first) => match first {
                     NodeId::Chain(address) => Self {
@@ -90,21 +87,17 @@ impl DestinationHealth {
                         health: Health::MissingPeeredFundedChannel,
                         need: Need::Channel(address),
                     },
-                    NodeId::Offchain(_) => {
-                        Self {
-                            last_error: None,
-                            health: Health::InvalidAddress,
-                            need: Need::Nothing,
-                        }
-                    }
-                },
-                None => {
-                    Self {
+                    NodeId::Offchain(_) => Self {
                         last_error: None,
-                        health: Health::InvalidPath,
+                        health: Health::InvalidAddress,
                         need: Need::Nothing,
-                    }
-                }
+                    },
+                },
+                None => Self {
+                    last_error: None,
+                    health: Health::InvalidPath,
+                    need: Need::Nothing,
+                },
             },
         }
     }
@@ -216,12 +209,12 @@ impl Display for DestinationHealth {
         } else {
             String::new()
         };
-        write!(
-            f,
-            "{error}{health:?},{need}",
-            health = self.health,
-            need = self.need
-        )
+        let need = if matches!(self.health, Health::ReadyToConnect) {
+            String::new()
+        } else {
+            format!(", {}", self.need)
+        };
+        write!(f, "{error}{health:?},{need}", health = self.health,)
     }
 }
 
