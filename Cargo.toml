@@ -58,7 +58,6 @@ uuid = { version = "1.18.1", features = ["v4"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
 rstest = { version = "0.26.1" }
 
-gnosis_vpn = { path = "gnosis_vpn" }
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 
 # this profile focuses on the best runtime performance and the smallest binary size

@@ -22,7 +22,6 @@ url.workspace = true
 anyhow.workspace = true
 rstest.workspace = true
 gnosis_vpn-lib = { workspace = true, features = ["testing", "runtime-tokio", "session-server"]}
-gnosis_vpn = { workspace = true }
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
