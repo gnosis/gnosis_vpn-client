@@ -10,11 +10,11 @@ pub struct DestinationHealth {
 #[derive(Clone, Debug)]
 pub enum Need {
     /// This implies channel peering as well
-    ChannelFunded(Address),
+    ChannelFunding,
     /// Usually switches to this need, once channel funding is established
-    ChannelPeered(Address),
-    Peer(Address),
-    SomePeers,
+    ChannelPeering,
+    Peering,
+    AnyPeer,
     Nothing,
 }
 
@@ -31,7 +31,7 @@ pub enum Health {
 pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
     for dh in dest_healths {
         match dh.need {
-            Need::ChannelFunded(_) | Need::ChannelPeered(_) | Need::Peer(_) | Need::SomePeers => return true,
+            Need::ChannelFunding | Need::ChannelPeering | Need::Peering | Need::AnyPeer => return true,
             Need::Nothing => (),
         }
     }
@@ -46,7 +46,7 @@ impl DestinationHealth {
                     return Self {
                         last_error: None,
                         health: Health::NotPeered,
-                        need: Need::Peer(dest.address),
+                        need: Need::Peering,
                     };
                 } else {
                     return Self {
@@ -59,16 +59,16 @@ impl DestinationHealth {
             RoutingOptions::Hops(_) => {
                 return Self {
                     last_error: None,
-                    health: Health::ReadyToConnect,
-                    need: Need::SomePeers,
+                    health: Health::NotPeered,
+                    need: Need::AnyPeer,
                 };
             }
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
                 Some(first) => match first {
-                    NodeId::Chain(address) => Self {
+                    NodeId::Chain(_) => Self {
                         last_error: None,
                         health: Health::MissingChannel,
-                        need: Need::ChannelFunded(address),
+                        need: Need::ChannelFunding,
                     },
                     NodeId::Offchain(_) => {
                         return Self {
@@ -94,6 +94,14 @@ impl DestinationHealth {
             health: self.health.clone(),
             need: self.need.clone(),
             last_error: err,
+        }
+    }
+
+    pub fn channel_funded(&self) -> Self {
+        Self {
+            health: Health::ReadyToConnect,
+            need: Need::ChannelPeering,
+            last_error: self.last_error.clone(),
         }
     }
 }

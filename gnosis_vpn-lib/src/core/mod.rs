@@ -498,7 +498,10 @@ impl Core {
             } => match res {
                 Ok(()) => {
                     tracing::info!(%address, "channel funded");
-                    self.destination_health.self.funded_channels.push(address);
+                    if let Some(health) = self.destination_health.get(target_dest) {
+                        let updated_health = health.channel_funded(address);
+                        self.destination_health.insert(target_dest.clone(), updated_health);
+                    }
                     if self.funded_channels.len() == self.config.channel_targets().len() {
                         self.phase = Phase::HoprChannelsFunded;
                         tracing::info!("all channels funded - hopr is ready");
@@ -807,11 +810,8 @@ impl Core {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
                         self.spawn_connection_runner(dest.clone(), results_sender);
                     }
-                    Health::NeedsFundedChannel => {
-                        tracing::info!(?destination_health, destination = %dest, "waiting for channel funding before connecting")
-                    }
-                    Health::NeedsPeeredChannel => {
-                        tracing::info!(?destination_health, destination = %dest, "waiting for channel peering before connecting")
+                    Health::MissingChannel => {
+                        tracing::info!(?destination_health, destination = %dest, "waiting for channel peering and funding before connecting")
                     }
                     Health::NotPeered => {
                         tracing::info!(?destination_health, destination = %dest, "waiting for destination peering before connecting")
