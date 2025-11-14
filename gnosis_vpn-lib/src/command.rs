@@ -89,7 +89,7 @@ pub enum FundingState {
 pub enum ConnectResponse {
     Connecting(Destination),
     WaitingToConnect(Destination, Option<DestinationHealth>),
-    UnableToConnection(Destination, DestinationHealth),
+    UnableToConnect(Destination, DestinationHealth),
     AddressNotFound,
 }
 
@@ -159,7 +159,7 @@ impl ConnectResponse {
         ConnectResponse::WaitingToConnect(destination, health)
     }
     pub fn unable(destination: Destination, health: DestinationHealth) -> Self {
-        ConnectResponse::UnableToConnection(destination, health)
+        ConnectResponse::UnableToConnect(destination, health)
     }
     pub fn address_not_found() -> Self {
         ConnectResponse::AddressNotFound
