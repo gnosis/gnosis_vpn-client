@@ -1,3 +1,4 @@
+use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,7 @@ use std::time::SystemTime;
 use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
+use crate::connection::destination_health::DestinationHealth;
 use crate::info::Info;
 use crate::log_output;
 
@@ -46,7 +48,7 @@ pub enum RunMode {
     Init,
     /// after creating safe this state will not be reached again
     PreparingSafe {
-        node_address: String,
+        node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
@@ -54,17 +56,31 @@ pub enum RunMode {
     /// Before config generation
     ValueingTicket,
     /// Subsequent service start up in this state and after preparing safe
-    Warmup { hopr_state: String },
+    Warmup { hopr_status: HoprStatus },
     /// Normal operation where connections can be made
-    Running { funding: FundingState, hopr_state: String },
+    Running {
+        funding: FundingState,
+        hopr_status: HoprStatus,
+    },
     /// Shutting down service
     Shutdown,
 }
 
-// in order of priority
 #[derive(Debug, Serialize, Deserialize)]
+pub enum HoprStatus {
+    Running,
+    Syncing,
+    Starting,
+    Indexing,
+    Initializing,
+    Uninitialized,
+}
+
+// in order of priority
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub enum FundingState {
-    Unknown,                // state not queried yet
+    #[default]
+    Unknown, // state not queried yet
     TopIssue(FundingIssue), // there is at least one issue
     WellFunded,
 }
@@ -85,7 +101,7 @@ pub enum DisconnectResponse {
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
-    pub last_connection_error: Option<String>,
+    pub health: Option<DestinationHealth>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -98,40 +114,38 @@ pub enum ConnectionState {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BalanceResponse {
-    pub node: String,
-    pub safe: String,
-    pub channels_out: String,
+    pub node: Balance<XDai>,
+    pub safe: Balance<WxHOPR>,
+    pub channels_out: Balance<WxHOPR>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
 }
 
 impl RunMode {
-    pub fn initializing() -> Self {
-        RunMode::Init
-    }
     pub fn preparing_safe(
-        node_address: String,
-        pre_safe: balance::PreSafe,
+        node_address: Address,
+        pre_safe: Option<balance::PreSafe>,
         funding_tool: balance::FundingTool,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
-            node_xdai: pre_safe.node_xdai,
-            node_wxhopr: pre_safe.node_wxhopr,
+            node_xdai: pre_safe.clone().map(|s| s.node_xdai).unwrap_or_default(),
+            node_wxhopr: pre_safe.map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
         }
     }
 
-    pub fn warmup(hopr_state: String) -> Self {
-        RunMode::Warmup { hopr_state }
+    pub fn warmup(hopr_state: Option<HoprState>) -> Self {
+        RunMode::Warmup {
+            hopr_status: hopr_state.into(),
+        }
     }
 
-    pub fn valueing_ticket() -> Self {
-        RunMode::ValueingTicket
-    }
-
-    pub fn running(funding: FundingState, hopr_state: String) -> Self {
-        RunMode::Running { funding, hopr_state }
+    pub fn running(funding: FundingState, hopr_state: Option<HoprState>) -> Self {
+        RunMode::Running {
+            funding,
+            hopr_status: hopr_state.into(),
+        }
     }
 }
 
@@ -162,7 +176,13 @@ impl StatusResponse {
 }
 
 impl BalanceResponse {
-    pub fn new(node: String, safe: String, channels_out: String, issues: Vec<FundingIssue>, info: Info) -> Self {
+    pub fn new(
+        node: Balance<XDai>,
+        safe: Balance<WxHOPR>,
+        channels_out: Balance<WxHOPR>,
+        issues: Vec<FundingIssue>,
+        info: Info,
+    ) -> Self {
         BalanceResponse {
             node,
             safe,
@@ -212,6 +232,20 @@ impl From<Vec<FundingIssue>> for FundingState {
     }
 }
 
+impl From<Option<HoprState>> for HoprStatus {
+    fn from(state: Option<HoprState>) -> Self {
+        match state {
+            Some(HoprState::Running) => HoprStatus::Running,
+            Some(HoprState::Starting) => HoprStatus::Starting,
+            Some(HoprState::Indexing) => HoprStatus::Indexing,
+            Some(HoprState::Initializing) => HoprStatus::Initializing,
+            Some(HoprState::Uninitialized) => HoprStatus::Uninitialized,
+            None => HoprStatus::Uninitialized,
+        }
+    }
+}
+
+/*
 impl fmt::Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -280,3 +314,4 @@ impl fmt::Display for FundingState {
         }
     }
 }
+*/

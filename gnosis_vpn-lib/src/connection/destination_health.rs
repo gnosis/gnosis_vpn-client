@@ -1,15 +1,17 @@
+use serde::{Deserialize, Serialize};
+
 use std::collections::HashSet;
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestinationHealth {
     pub last_error: Option<String>,
     pub health: Health,
     need: Need,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Need {
     Channel(Address),
     AnyChannel,
@@ -17,7 +19,7 @@ pub enum Need {
     Nothing,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Health {
     ReadyToConnect,
     MissingPeeredFundedChannel,
@@ -46,7 +48,13 @@ pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
             addresses.insert(addr);
         }
     }
-    addresses.len()
+    let count = addresses.len();
+    if count == 0 {
+        if dest_healths.iter().any(|h| matches!(h.need, Need::AnyChannel)) {
+            return 1;
+        }
+    }
+    return count;
 }
 
 impl DestinationHealth {
