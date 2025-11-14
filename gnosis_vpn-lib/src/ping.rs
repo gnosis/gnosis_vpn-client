@@ -27,6 +27,7 @@ impl Default for PingOptions {
     }
 }
 
+#[tracing::instrument(name = "ping", ret)]
 pub fn ping(opts: &PingOptions) -> Result<(), Error> {
     ping::ping(
         opts.address,
