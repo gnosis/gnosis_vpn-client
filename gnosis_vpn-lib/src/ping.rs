@@ -27,6 +27,7 @@ impl Default for PingOptions {
     }
 }
 
+#[tracing::instrument(name = "ping", ret)]
 pub fn ping(opts: &PingOptions) -> Result<(), Error> {
     ping::ping(
         opts.address,
@@ -36,5 +37,5 @@ pub fn ping(opts: &PingOptions) -> Result<(), Error> {
         Some(opts.seq_count), // Seq Count
         None,                 // Custom Payload
     )
-    .map_err(Error::PingFailed)
+    .map_err(|e| Error::PingFailed(e))
 }
