@@ -1,3 +1,8 @@
+/// This module keeps track of a destination's health indicating wether a connection can be
+/// successful.
+/// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted
+/// connections.
+/// The **need** field indicates what is required to make the destination healthy in general.
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
@@ -13,6 +18,8 @@ pub struct DestinationHealth {
     need: Need,
 }
 
+/// Requirements to be able to connect to this destination
+/// This is statically derived at construction time from a destination's routing options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Need {
     Channel(Address),
@@ -21,6 +28,7 @@ pub enum Need {
     Nothing,
 }
 
+/// Potential problems or final health states of a destination
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Health {
     ReadyToConnect,
@@ -28,19 +36,19 @@ pub enum Health {
     MissingPeeredChannel,
     MissingFundedChannel,
     NotPeered,
+    // final - not allowed to connect to this destination
     NotAllowed,
+    // final - destination address is invalid - should be impossible due to config deserialization
     InvalidAddress,
+    // final - destination path is invalid - should be impossible due to config deserialization
     InvalidPath,
 }
 
+// Determine if any destination needs peers
 pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
-    for dh in dest_healths {
-        match dh.need {
-            Need::Channel(_) | Need::Peering(_) | Need::AnyChannel => return true,
-            Need::Nothing => (),
-        }
-    }
-    false
+    dest_healths
+        .iter()
+        .any(|v| matches!(v.need, Need::Channel(_) | Need::Peering(_) | Need::AnyChannel))
 }
 
 pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
@@ -237,5 +245,52 @@ impl Display for Need {
             Need::Peering(addr) => write!(f, "needs to see peer {}", log_output::address(addr)),
             Need::Nothing => write!(f, "unable to connect"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_count_distinct_channels() -> anyhow::Result<()> {
+        use super::*;
+
+        let addr_1 = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
+        let addr_2 = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
+
+        let dh1 = DestinationHealth {
+            last_error: None,
+            health: Health::MissingPeeredFundedChannel,
+            need: Need::Channel(addr_1),
+        };
+        let dh2 = DestinationHealth {
+            last_error: None,
+            health: Health::MissingPeeredFundedChannel,
+            need: Need::Channel(addr_2),
+        };
+        let dh3 = DestinationHealth {
+            last_error: None,
+            health: Health::MissingPeeredFundedChannel,
+            need: Need::Channel(addr_1),
+        };
+        let dh4 = DestinationHealth {
+            last_error: None,
+            health: Health::MissingPeeredFundedChannel,
+            need: Need::AnyChannel,
+        };
+        let dh5 = DestinationHealth {
+            last_error: None,
+            health: Health::MissingPeeredFundedChannel,
+            need: Need::Peering(addr_1),
+        };
+
+        let dest_healths = vec![&dh1, &dh2, &dh3, &dh4, &dh5];
+        assert_eq!(count_distinct_channels(&dest_healths), 2);
+
+        let dest_healths_any = vec![&dh4, &dh5];
+        assert_eq!(count_distinct_channels(&dest_healths_any), 1);
+
+        let dest_healths_mixed = vec![&dh5];
+        assert_eq!(count_distinct_channels(&dest_healths_mixed), 0);
+        Ok(())
     }
 }
