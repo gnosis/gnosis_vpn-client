@@ -52,7 +52,7 @@ url = { version = "2.5.7", features = ["serde"] }
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a5b84a233e96bca8f1e48eabd23de7a5a656ff23", features = [
   "prometheus",
 ] }
-serde_with = "3.15.1"
+serde_with = "3.16.0"
 serde_yaml = "0.9.34"
 uuid = { version = "1.18.1", features = ["v4"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
