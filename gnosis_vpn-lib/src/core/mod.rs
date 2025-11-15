@@ -90,7 +90,7 @@ impl Core {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
         wg_tooling::executable().await?;
-        let keys = hopr_params.generate_id_if_absent().await?;
+        let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         Ok(Core {
             // config data
