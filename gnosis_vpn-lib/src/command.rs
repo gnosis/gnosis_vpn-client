@@ -77,10 +77,9 @@ pub enum HoprStatus {
 }
 
 // in order of priority
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum FundingState {
-    #[default]
-    Unknown, // state not queried yet
+    Querying,               // currently checking balances to determine FundingState
     TopIssue(FundingIssue), // there is at least one issue
     WellFunded,
 }
@@ -126,26 +125,26 @@ pub struct BalanceResponse {
 impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
-        pre_safe: Option<balance::PreSafe>,
+        pre_safe: &Option<balance::PreSafe>,
         funding_tool: balance::FundingTool,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
             node_xdai: pre_safe.clone().map(|s| s.node_xdai).unwrap_or_default(),
-            node_wxhopr: pre_safe.map(|s| s.node_wxhopr).unwrap_or_default(),
+            node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
         }
     }
 
-    pub fn warmup(hopr_state: Option<HoprState>) -> Self {
+    pub fn warmup(hopr_state: &Option<HoprState>) -> Self {
         RunMode::Warmup {
             hopr_status: hopr_state.into(),
         }
     }
 
-    pub fn running(funding: FundingState, hopr_state: Option<HoprState>) -> Self {
+    pub fn running(issues: &Option<Vec<FundingIssue>>, hopr_state: &Option<HoprState>) -> Self {
         RunMode::Running {
-            funding,
+            funding: issues.into(),
             hopr_status: hopr_state.into(),
         }
     }
@@ -229,18 +228,23 @@ impl FromStr for Command {
     }
 }
 
-impl From<Vec<FundingIssue>> for FundingState {
-    fn from(issues: Vec<FundingIssue>) -> Self {
-        if issues.is_empty() {
-            FundingState::WellFunded
-        } else {
-            FundingState::TopIssue(issues[0].clone())
+impl From<&Option<Vec<FundingIssue>>> for FundingState {
+    fn from(issues: &Option<Vec<FundingIssue>>) -> Self {
+        match issues {
+            Some(issues) => {
+                if issues.is_empty() {
+                    FundingState::WellFunded
+                } else {
+                    FundingState::TopIssue(issues[0].clone())
+                }
+            }
+            None => FundingState::Querying,
         }
     }
 }
 
-impl From<Option<HoprState>> for HoprStatus {
-    fn from(state: Option<HoprState>) -> Self {
+impl From<&Option<HoprState>> for HoprStatus {
+    fn from(state: &Option<HoprState>) -> Self {
         match state {
             Some(HoprState::Running) => HoprStatus::Running,
             Some(HoprState::Starting) => HoprStatus::Starting,
@@ -310,9 +314,9 @@ impl Display for DestinationState {
 impl Display for FundingState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            FundingState::Unknown => write!(f, "Unknown"),
+            FundingState::Querying => write!(f, "Determining funding"),
             FundingState::TopIssue(issue) => write!(f, "Issue: {}", issue),
-            FundingState::WellFunded => write!(f, "Well Funded"),
+            FundingState::WellFunded => write!(f, "Well funded"),
         }
     }
 }

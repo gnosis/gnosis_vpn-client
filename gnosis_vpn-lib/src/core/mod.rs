@@ -210,21 +210,20 @@ impl Core {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
                             Phase::CreatingSafe { presafe } => {
-                                RunMode::preparing_safe(self.node_address, presafe, self.funding_tool.clone())
+                                RunMode::preparing_safe(self.node_address, &presafe, self.funding_tool.clone())
                             }
                             Phase::Starting => RunMode::ValueingTicket,
-                            Phase::HoprSyncing => RunMode::warmup(self.hopr.as_ref().map(|h| h.status())),
+                            Phase::HoprSyncing => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                let funding =
-                                    if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
-                                        let min_channel_count = destination_health::count_distinct_channels(
-                                            &self.destination_health.values().collect::<Vec<_>>(),
-                                        );
-                                        balances.to_funding_issues(min_channel_count, ticket_value).into()
-                                    } else {
-                                        Default::default()
-                                    };
-                                RunMode::running(funding, self.hopr.as_ref().map(|h| h.status()))
+                                if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
+                                    let min_channel_count = destination_health::count_distinct_channels(
+                                        &self.destination_health.values().collect::<Vec<_>>(),
+                                    );
+                                    let issues = balances.to_funding_issues(min_channel_count, ticket_value);
+                                    RunMode::running(&Some(issues), &self.hopr.as_ref().map(|h| h.status()))
+                                } else {
+                                    RunMode::running(&None, &self.hopr.as_ref().map(|h| h.status()))
+                                }
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
