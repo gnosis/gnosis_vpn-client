@@ -15,7 +15,7 @@ use crate::log_output;
 pub struct DestinationHealth {
     pub last_error: Option<String>,
     pub health: Health,
-    need: Need,
+    pub need: Need,
 }
 
 /// Requirements to be able to connect to this destination
