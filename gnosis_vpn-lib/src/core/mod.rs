@@ -482,12 +482,22 @@ impl Core {
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     for (target, health) in self.destination_health.clone() {
                         let updated_health = health.peers(&all_peers);
-                        if let Some(addr) = updated_health.needs_channel_funding() {
+                        // only spawn channel funding when we are peered
+                        if let Some(addr) = updated_health.needs_channel_funding()
+                            && !updated_health.needs_peer()
+                        {
                             self.spawn_channel_funding(addr, target, results_sender, Duration::ZERO);
                         }
                         self.destination_health.insert(target, updated_health);
                     }
-                    self.spawn_connected_peers(results_sender, Duration::from_secs(90));
+
+                    let delay =
+                        if destination_health::needs_peers(&self.destination_health.values().collect::<Vec<_>>()) {
+                            Duration::from_secs(10)
+                        } else {
+                            Duration::from_secs(90)
+                        };
+                    self.spawn_connected_peers(results_sender, delay);
                     self.act_on_target(results_sender);
                 }
                 Err(err) => {

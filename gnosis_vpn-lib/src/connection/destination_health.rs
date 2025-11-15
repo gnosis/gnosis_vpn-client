@@ -180,6 +180,17 @@ impl DestinationHealth {
         }
     }
 
+    pub fn needs_peer(&self) -> bool {
+        match self.need {
+            Need::Channel(_) | Need::AnyChannel => matches!(
+                self.health,
+                Health::MissingPeeredChannel | Health::MissingPeeredFundedChannel | Health::NotPeered
+            ),
+            Need::Peering(_) => matches!(self.health, Health::NotPeered),
+            Need::Nothing => false,
+        }
+    }
+
     pub fn needs_channel_funding(&self) -> Option<Address> {
         match self.need {
             Need::Channel(addr) => match self.health {
