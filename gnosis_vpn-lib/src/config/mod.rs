@@ -1,5 +1,3 @@
-use edgli::hopr_lib::NodeId;
-use edgli::hopr_lib::exports::network::types::types::RoutingOptions;
 use edgli::hopr_lib::{Address, GeneralError};
 use thiserror::Error;
 
@@ -39,22 +37,6 @@ pub enum Error {
     NoDestinations,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
-}
-
-impl Config {
-    pub fn channel_targets(&self) -> Vec<Address> {
-        self.destinations
-            .values()
-            .filter_map(|d| match d.routing.clone() {
-                RoutingOptions::IntermediatePath(path) => path.into_iter().next(),
-                _ => None,
-            })
-            .filter_map(|node_id| match node_id {
-                NodeId::Chain(address) => Some(address),
-                _ => None,
-            })
-            .collect()
-    }
 }
 
 pub async fn read(path: &Path) -> Result<Config, Error> {
