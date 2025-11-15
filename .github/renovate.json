@@ -3,6 +3,7 @@
   "prCreation": "not-pending",
   "extends": ["config:recommended", ":disableDependencyDashboard"],
   "vulnerabilityAlerts": { "enabled": true },
+  "ignoreDeps": ["alloy"],
   "semanticCommits": "enabled",
   "rangeStrategy": "bump",
   "packageRules": [
