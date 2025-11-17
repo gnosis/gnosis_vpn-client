@@ -38,6 +38,7 @@ use crate::ticket_stats::{self, TicketStats};
 pub enum Results {
     FundChannel {
         address: Address,
+        target_dest: Address,
         res: Result<(), hopr_api::ChannelError>,
     },
     PreSafe {
@@ -58,6 +59,9 @@ pub enum Results {
     },
     Balances {
         res: Result<balance::Balances, Error>,
+    },
+    ConnectedPeers {
+        res: Result<Vec<Address>, Error>,
     },
     HoprRunning,
     ConnectionEvent {
@@ -153,10 +157,23 @@ pub async fn fund_channel(
     hopr: Arc<Hopr>,
     address: Address,
     ticket_value: Balance<WxHOPR>,
+    target_dest: Address,
     results_sender: mpsc::Sender<Results>,
 ) {
     let res = run_fund_channel(hopr, address, ticket_value).await;
-    let _ = results_sender.send(Results::FundChannel { address, res }).await;
+    let _ = results_sender
+        .send(Results::FundChannel {
+            address,
+            res,
+            target_dest,
+        })
+        .await;
+}
+
+pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting connected peers runner");
+    let res = hopr.connected_peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::ConnectedPeers { res }).await;
 }
 
 async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
@@ -289,9 +306,24 @@ async fn run_fund_channel(
 impl Display for Results {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Results::FundChannel { address, res } => match res {
-                Ok(_) => write!(f, "FundChannel to {}: Success", address),
-                Err(err) => write!(f, "FundChannel to {}: Error({})", address, err),
+            Results::FundChannel {
+                address,
+                res,
+                target_dest,
+            } => match res {
+                Ok(_) => write!(
+                    f,
+                    "FundChannel (-> {} -> {}): Success",
+                    log_output::address(address),
+                    log_output::address(target_dest)
+                ),
+                Err(err) => write!(
+                    f,
+                    "FundChannel (-> {} -> {}): Error({})",
+                    log_output::address(address),
+                    log_output::address(target_dest),
+                    err
+                ),
             },
             Results::PreSafe { res } => match res {
                 Ok(presafe) => write!(f, "PreSafe: {}", presafe),
@@ -317,6 +349,10 @@ impl Display for Results {
             Results::Balances { res } => match res {
                 Ok(balances) => write!(f, "Balances: {}", balances),
                 Err(err) => write!(f, "Balances: Error({})", err),
+            },
+            Results::ConnectedPeers { res } => match res {
+                Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
+                Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),

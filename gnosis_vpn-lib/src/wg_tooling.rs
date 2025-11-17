@@ -8,8 +8,10 @@ use crate::dirs;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Implementation not available")]
-    NotAvailable,
+    #[error("dependency not available: {0}")]
+    NotAvailable(String),
+    #[error("dependency {0} not executable: {1}")]
+    NotExecutable(String, String),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("Encoding error: {0}")]
@@ -84,7 +86,24 @@ pub async fn available() -> Result<(), Error> {
     if code.success() {
         Ok(())
     } else {
-        Err(Error::NotAvailable)
+        Err(Error::NotAvailable("wg-quick".to_string()))
+    }
+}
+
+pub async fn executable() -> Result<(), Error> {
+    let output = Command::new("wg-quick")
+        .arg("-h")
+        // suppress stdout
+        .stdout(std::process::Stdio::null())
+        .output()
+        .await?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::NotExecutable(
+            "wg-quick".to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ))
     }
 }
 
