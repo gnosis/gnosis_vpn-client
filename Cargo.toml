@@ -35,6 +35,7 @@ human-bandwidth = "0.1.4"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
+multiaddr = "0.18.2"
 notify = { version = "8.2.0", features = ["crossbeam-channel"] }
 ping = "0.7.0"
 primitive-types = "0.14.0"

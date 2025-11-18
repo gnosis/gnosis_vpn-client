@@ -11,6 +11,7 @@ use edgli::{
     },
     run_hopr_edge_node,
 };
+use multiaddr::Protocol;
 use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -391,6 +392,30 @@ impl Hopr {
         let peer_ids = self.hopr.network_connected_peers().await?;
         let mut set = JoinSet::new();
         for p in peer_ids {
+            let observed = self.hopr.network_observed_multiaddresses(&p).await;
+            tracing::debug!("observed: {:?}", observed);
+            for addr in observed.clone().iter_mut() {
+                tracing::debug!("observed multiaddress: {:?}", addr);
+                while let Some(prot) = addr.pop() {
+                    match prot {
+                        Protocol::Ip4(address) => {
+                            tracing::debug!("observed IPv4 address: {:?}", address);
+                        }
+                        Protocol::Ip6(address) => {
+                            tracing::debug!("observed IPv6 address: {:?}", address);
+                        }
+                        Protocol::Tcp(port) => {
+                            tracing::debug!("observed TCP port: {:?}", port);
+                        }
+                        Protocol::Udp(port) => {
+                            tracing::debug!("observed UDP port: {:?}", port);
+                        }
+                        _ => (),
+                    }
+                }
+            }
+            tracing::debug!("observed: {:?}", observed);
+
             let hopr = self.hopr.clone();
             set.spawn(async move { hopr.peerid_to_chain_key(&p).await });
         }
