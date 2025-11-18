@@ -20,7 +20,7 @@ impl Default for PingOptions {
     fn default() -> Self {
         PingOptions {
             address: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
-            timeout: Duration::from_secs(7),
+            timeout: Duration::from_secs(15),
             ttl: 6,
             seq_count: 1,
         }

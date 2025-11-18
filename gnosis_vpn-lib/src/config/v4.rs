@@ -48,8 +48,6 @@ enum DestinationPath {
 pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     http_timeout: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
-    ping_retries_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
@@ -135,9 +133,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
                     if k == "http_timeout" {
-                        continue;
-                    }
-                    if k == "ping_retries_timeout" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
@@ -348,17 +343,11 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.max_surb_upstream.clone())
             .map(|b| b.into())
             .unwrap_or_default();
-        let ping_retries_timeout = connection
-            .and_then(|c| c.ping_retries_timeout)
-            .unwrap_or(Connection::default_ping_retry_timeout());
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
 
-        let timeouts = options::Timeouts {
-            ping_retries: ping_retries_timeout,
-            http: http_timeout,
-        };
+        let timeouts = options::Timeouts { http: http_timeout };
 
         options::Options::new(sessions, ping_opts, buffer_sizes, max_surb_upstream, timeouts)
     }
@@ -428,19 +417,6 @@ version = 4
     }
 
     #[test]
-    fn test_ping_without_interval() -> anyhow::Result<()> {
-        let config = r#####"
-version = 4
-
-[connection.ping]
-address = "10.128.0.1"
-
-"#####;
-        toml::from_str::<Config>(config)?;
-        Ok(())
-    }
-
-    #[test]
     fn config_parse_single_destination_should_succeed() -> anyhow::Result<()> {
         let config = r#####"
 version = 4
@@ -476,8 +452,7 @@ meta = { location = "Spain" }
 path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
-http_timeout = "15s"
-ping_retries_timeout = "20s"
+http_timeout = "60s"
 
 [connection.bridge]
 capabilities = [ "segmentation", "retransmission" ]
