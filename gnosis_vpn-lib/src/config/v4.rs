@@ -270,11 +270,11 @@ impl Connection {
     }
 
     pub fn default_http_timeout() -> Duration {
-        Duration::from_secs(15)
+        Duration::from_secs(60)
     }
 
     pub fn default_ping_retry_timeout() -> Duration {
-        Duration::from_secs(10)
+        Duration::from_secs(15)
     }
 }
 
