@@ -7,7 +7,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +20,7 @@ use crate::connection::destination_health::{self, DestinationHealth};
 use crate::external_event::Event as ExternalEvent;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
+use crate::peer::Peer;
 use crate::{balance, log_output, wg_tooling};
 
 pub mod runner;
@@ -268,7 +269,7 @@ impl Core {
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             if let Some(health) = self.destination_health.get(&dest.address) {
-                                if health.is_ready_to_connect() {
+                                if let Some(_) = health.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
                                     self.target_destination = Some(dest.clone());
@@ -477,10 +478,9 @@ impl Core {
 
             Results::ConnectedPeers { res } => match res {
                 Ok(peers) => {
-                    tracing::info!(num_peers = %peers.len(), "fetched connected peers");
-                    let all_peers = HashSet::from_iter(peers.iter().cloned());
+                    tracing::info!(?peers, "fetched connected peers");
                     for (target, health) in self.destination_health.clone() {
-                        let updated_health = health.peers(&all_peers);
+                        let updated_health = health.peers(&peers);
                         // only spawn channel funding when we are peered
                         if let Some(addr) = updated_health.needs_channel_funding()
                             && !updated_health.needs_peer()
@@ -767,14 +767,20 @@ impl Core {
         }
     }
 
-    fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_connection_runner(
+        &mut self,
+        destination: Destination,
+        peer: Peer,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connecting.clone();
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            let runner = connection::up::runner::Runner::new(conn.clone(), config_connection, config_wireguard, hopr);
+            let runner =
+                connection::up::runner::Runner::new(conn.clone(), config_connection, config_wireguard, peer, hopr);
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
@@ -813,9 +819,9 @@ impl Core {
             (Some(dest), Phase::HoprRunning) => {
                 // Checking health
                 if let Some(health) = self.destination_health.get(&dest.address) {
-                    if health.is_ready_to_connect() {
+                    if let Some(peer) = health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), results_sender);
+                        self.spawn_connection_runner(dest.clone(), peer, results_sender);
                     } else if health.is_unrecoverable() {
                         tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
                     } else {

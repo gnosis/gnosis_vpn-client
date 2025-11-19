@@ -1,8 +1,10 @@
+use serde::{Deserialize, Serialize};
+
 use std::net::Ipv4Addr;
 
 use crate::connection::destination::Address;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
     pub address: Address,
     pub ipv4: Ipv4Addr,

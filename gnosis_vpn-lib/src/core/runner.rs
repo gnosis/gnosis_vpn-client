@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use tokio::time;
 use url::Url;
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +31,7 @@ use crate::connection;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
 use crate::log_output;
+use crate::peer::Peer;
 use crate::remote_data;
 use crate::ticket_stats::{self, TicketStats};
 
@@ -61,7 +63,7 @@ pub enum Results {
         res: Result<balance::Balances, Error>,
     },
     ConnectedPeers {
-        res: Result<Vec<Address>, Error>,
+        res: Result<HashMap<Address, Peer>, Error>,
     },
     HoprRunning,
     ConnectionEvent {

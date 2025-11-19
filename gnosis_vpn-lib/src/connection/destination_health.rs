@@ -4,6 +4,7 @@
 /// connections.
 /// The **need** field indicates what is required to make the destination healthy in general.
 use rand::seq::IteratorRandom;
+use serde::{Deserialize, Serialize};
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
@@ -12,7 +13,7 @@ use crate::connection::destination::{Address, Destination, NodeId, RoutingOption
 use crate::log_output;
 use crate::peer::Peer;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestinationHealth {
     pub last_error: Option<String>,
     pub health: Health,
@@ -21,7 +22,7 @@ pub struct DestinationHealth {
 
 /// Requirements to be able to connect to this destination
 /// This is statically derived at construction time from a destination's routing options.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Need {
     Channel(Address),
     AnyChannel,
@@ -30,7 +31,7 @@ pub enum Need {
 }
 
 /// Potential problems or final health states of a destination
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Health {
     ReadyToConnect(Peer),
     MissingPeeredFundedChannel,
@@ -228,7 +229,7 @@ impl DestinationHealth {
     }
 
     pub fn is_ready_to_connect(&self) -> Option<Peer> {
-        if match self.health {
+        match self.health {
             Health::ReadyToConnect(ref peer) => Some(peer.clone()),
             _ => None,
         }
