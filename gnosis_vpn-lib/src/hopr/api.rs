@@ -20,6 +20,7 @@ use tracing::instrument;
 use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
+use crate::peer::{self, Peer};
 use crate::{
     balance::Balances,
     hopr::{HoprError, types::SessionClientMetadata},
@@ -387,46 +388,47 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
+    pub async fn connected_peers(&self) -> Result<Vec<Peer>, HoprError> {
         tracing::debug!("query hopr connected peers");
         let peer_ids = self.hopr.network_connected_peers().await?;
         let mut set = JoinSet::new();
-        for p in peer_ids {
-            let observed = self.hopr.network_observed_multiaddresses(&p).await;
-            tracing::debug!("observed: {:?}", observed);
-            for addr in observed.clone().iter_mut() {
-                tracing::debug!("observed multiaddress: {:?}", addr);
-                while let Some(prot) = addr.pop() {
-                    match prot {
-                        Protocol::Ip4(address) => {
-                            tracing::debug!("observed IPv4 address: {:?}", address);
+        for peer_id in peer_ids {
+            let hopr = self.hopr.clone();
+            set.spawn(async move {
+                let address = match hopr.peerid_to_chain_key(&peer_id).await {
+                    Ok(Some(address)) => address,
+                    Ok(None) => {
+                        tracing::warn!(%peer_id, "no address for peer id");
+                        return None;
+                    }
+                    Err(err) => {
+                        tracing::error!(%peer_id, ?err, "failed to get address for peer id");
+                        return None;
+                    }
+                };
+                let observed = hopr.network_observed_multiaddresses(&peer_id).await;
+                for addr in observed.clone().iter_mut() {
+                    tracing::debug!("observed multiaddress: {:?}", addr);
+                    while let Some(protocol) = addr.pop() {
+                        match protocol {
+                            Protocol::Ip4(ipv4) => {
+                                return Some(Peer::new(address, ipv4));
+                            }
+                            _ => (),
                         }
-                        Protocol::Ip6(address) => {
-                            tracing::debug!("observed IPv6 address: {:?}", address);
-                        }
-                        Protocol::Tcp(port) => {
-                            tracing::debug!("observed TCP port: {:?}", port);
-                        }
-                        Protocol::Udp(port) => {
-                            tracing::debug!("observed UDP port: {:?}", port);
-                        }
-                        _ => (),
                     }
                 }
-            }
-            tracing::debug!("observed: {:?}", observed);
-
-            let hopr = self.hopr.clone();
-            set.spawn(async move { hopr.peerid_to_chain_key(&p).await });
+                None
+            });
         }
 
-        let mut addresses = Vec::new();
+        let mut peers = Vec::new();
         while let Some(res) = set.join_next().await {
-            if let Ok(Ok(Some(address))) = res {
-                addresses.push(address);
+            if let Ok(Some(peer)) = res {
+                peers.push(peer);
             }
         }
-        Ok(addresses)
+        Ok(peers)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
