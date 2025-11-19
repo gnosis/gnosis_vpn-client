@@ -3,7 +3,6 @@
 /// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted
 /// connections.
 /// The **need** field indicates what is required to make the destination healthy in general.
-use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 
 use std::collections::{HashMap, HashSet};
@@ -44,6 +43,8 @@ pub enum Health {
     InvalidAddress,
     // final - destination path is invalid - should be impossible due to config deserialization
     InvalidPath,
+    // final - currently not supported by HOPRd
+    UnsupportedRouting,
 }
 
 // Determine if any destination needs peers
@@ -87,7 +88,7 @@ impl DestinationHealth {
             }
             RoutingOptions::Hops(_) => Self {
                 last_error: None,
-                health: Health::MissingPeeredFundedChannel,
+                health: Health::UnsupportedRouting,
                 need: Need::AnyChannel,
             },
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
@@ -157,6 +158,8 @@ impl DestinationHealth {
                 }
             }
             Need::AnyChannel => {
+                // Revisit once hoprd can expose the first relayer in a route
+                /*
                 let mut rng = rand::rng();
                 if let Some((_, peer)) = peers.iter().choose(&mut rng) {
                     // any peer will suffice for any channel need
@@ -173,6 +176,8 @@ impl DestinationHealth {
                         _ => self.health.clone(),
                     }
                 }
+                */
+                self.health.clone()
             }
 
             Need::Nothing => self.health.clone(),

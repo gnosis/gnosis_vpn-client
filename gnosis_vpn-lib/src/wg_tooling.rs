@@ -210,7 +210,7 @@ Endpoint = 127.0.0.1:{port}
 AllowedIPs = 0.0.0.0/0
 ",
             private_key = self.key_pair.priv_key,
-            address = address.to_string(),
+            address = address,
             public_key = peer.public_key,
             port = peer.port,
             listen_port_line = listen_port_line,
