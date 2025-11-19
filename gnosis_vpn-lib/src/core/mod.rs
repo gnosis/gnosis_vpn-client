@@ -269,7 +269,7 @@ impl Core {
                     Command::Connect(address) => match self.config.destinations.clone().get(&address) {
                         Some(dest) => {
                             if let Some(health) = self.destination_health.get(&dest.address) {
-                                if let Some(_) = health.is_ready_to_connect() {
+                                if health.is_ready_to_connect().is_some() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
                                     self.target_destination = Some(dest.clone());

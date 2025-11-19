@@ -410,11 +410,8 @@ impl Hopr {
                 for addr in observed.clone().iter_mut() {
                     tracing::debug!("observed multiaddress: {:?}", addr);
                     while let Some(protocol) = addr.pop() {
-                        match protocol {
-                            Protocol::Ip4(ipv4) => {
-                                return Some(Peer::new(address, ipv4));
-                            }
-                            _ => (),
+                        if let Protocol::Ip4(ipv4) = protocol {
+                            return Some(Peer::new(address, ipv4));
                         }
                     }
                 }
