@@ -92,7 +92,5 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # [wireguard]
 # interface listen port for incoming connections; defaults to 51820
 # listen_port = 51820
-# manually override derived allowed_ips for the WireGuard interface
-# allowed_ips = "10.128.0.1/9"
-# If you want to disable WireGuard key rotation, provide a static private key here.
+# If you want to disable WireGuard key rotation, provide a static private key here
 # force_private_key = "<your WireGuard private key>"

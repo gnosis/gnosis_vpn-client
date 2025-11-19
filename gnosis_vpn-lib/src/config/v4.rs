@@ -105,7 +105,6 @@ struct MaxSurbUpstreamOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
     pub(super) listen_port: Option<u16>,
-    pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
 }
 
@@ -120,7 +119,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, _v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "listen_port" || k == "force_private_key" {
                         continue;
                     }
                     wrong_keys.push(format!("wireguard.{k}"));
@@ -352,9 +351,8 @@ impl From<Option<Connection>> for options::Options {
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
         let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
-        let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key)
+        WireGuardConfig::new(listen_port, force_private_key)
     }
 }
 
@@ -476,7 +474,6 @@ main = "2 MB"
 
 [wireguard]
 listen_port = 51820
-allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 "#####;
