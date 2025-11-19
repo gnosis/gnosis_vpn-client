@@ -14,11 +14,8 @@ pub mod socket;
 mod dirs;
 mod gvpn_client;
 mod log_output;
+mod peer;
 mod ping;
 mod remote_data;
 mod ticket_stats;
 mod wg_tooling;
-
-pub mod prelude {
-    pub use edgli::hopr_lib::Address;
-}

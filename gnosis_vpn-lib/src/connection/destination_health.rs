@@ -227,8 +227,11 @@ impl DestinationHealth {
         }
     }
 
-    pub fn is_ready_to_connect(&self) -> bool {
-        matches!(self.health, Health::ReadyToConnect(_))
+    pub fn is_ready_to_connect(&self) -> Option<Peer> {
+        if match self.health {
+            Health::ReadyToConnect(ref peer) => Some(peer.clone()),
+            _ => None,
+        }
     }
 
     pub fn is_unrecoverable(&self) -> bool {

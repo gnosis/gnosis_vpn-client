@@ -10,13 +10,13 @@ use tokio::sync::mpsc;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use crate::addressable_peer::AddressablePeer;
 use crate::connection;
 use crate::connection::options::Options;
 use crate::core::runner::{self, Results};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::peer::Peer;
 use crate::{ping, wg_tooling};
 
 #[derive(Debug, Error)]
@@ -35,7 +35,7 @@ pub struct Runner {
     up: connection::up::Up,
     hopr: Arc<Hopr>,
     options: Options,
-    peer: AddressablePeer,
+    peer: Peer,
     wg_config: wg_tooling::Config,
 }
 
@@ -69,7 +69,7 @@ impl Runner {
         up: connection::up::Up,
         options: Options,
         wg_config: wg_tooling::Config,
-        peer: AddressablePeer,
+        peer: Peer,
         hopr: Arc<Hopr>,
     ) -> Self {
         Self {
@@ -335,7 +335,7 @@ async fn open_ping_session(
 async fn wg_tunnel(
     registration: &Registration,
     session_client_metadata: &SessionClientMetadata,
-    peer: &AddressablePeer,
+    peer: &Peer,
     wg: &wg_tooling::WireGuard,
 ) -> Result<(), wg_tooling::Error> {
     // run wg-quick down once to ensure no dangling state
