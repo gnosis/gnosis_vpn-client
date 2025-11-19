@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
+use crate::addressable_peer::AddressablePeer;
 use crate::connection;
 use crate::connection::options::Options;
 use crate::core::runner::{self, Results};
@@ -34,6 +35,7 @@ pub struct Runner {
     up: connection::up::Up,
     hopr: Arc<Hopr>,
     options: Options,
+    peer: AddressablePeer,
     wg_config: wg_tooling::Config,
 }
 
@@ -63,11 +65,18 @@ pub enum Setback {
 }
 
 impl Runner {
-    pub fn new(up: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(
+        up: connection::up::Up,
+        options: Options,
+        wg_config: wg_tooling::Config,
+        peer: AddressablePeer,
+        hopr: Arc<Hopr>,
+    ) -> Self {
         Self {
             up,
             hopr,
             options,
+            peer,
             wg_config,
         }
     }
@@ -124,7 +133,7 @@ impl Runner {
                 evt: progress(Progress::WgTunnel(wg.clone())),
             })
             .await;
-        wg_tunnel(&registration, &ping_session, &wg).await?;
+        wg_tunnel(&registration, &ping_session, &self.peer, &wg).await?;
 
         // 6. check ping
         let _ = results_sender
@@ -326,6 +335,7 @@ async fn open_ping_session(
 async fn wg_tunnel(
     registration: &Registration,
     session_client_metadata: &SessionClientMetadata,
+    peer: &AddressablePeer,
     wg: &wg_tooling::WireGuard,
 ) -> Result<(), wg_tooling::Error> {
     // run wg-quick down once to ensure no dangling state
@@ -338,7 +348,8 @@ async fn wg_tunnel(
 
     let peer_info = wg_tooling::PeerInfo {
         public_key: registration.server_public_key(),
-        endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
+        port: session_client_metadata.bound_host.port(),
+        relayer_ip: peer.ipv4,
     };
 
     tracing::debug!(%registration, "establishing wg tunnel");
