@@ -20,7 +20,7 @@ use tracing::instrument;
 use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
-use crate::peer::{self, Peer};
+use crate::peer::Peer;
 use crate::{
     balance::Balances,
     hopr::{HoprError, types::SessionClientMetadata},
@@ -388,7 +388,7 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn connected_peers(&self) -> Result<Vec<Peer>, HoprError> {
+    pub async fn connected_peers(&self) -> Result<HashMap<Address, Peer>, HoprError> {
         tracing::debug!("query hopr connected peers");
         let peer_ids = self.hopr.network_connected_peers().await?;
         let mut set = JoinSet::new();
@@ -422,10 +422,10 @@ impl Hopr {
             });
         }
 
-        let mut peers = Vec::new();
+        let mut peers = HashMap::new();
         while let Some(res) = set.join_next().await {
             if let Ok(Some(peer)) = res {
-                peers.push(peer);
+                peers.insert(peer.address, peer);
             }
         }
         Ok(peers)

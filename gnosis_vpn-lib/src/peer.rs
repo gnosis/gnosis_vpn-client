@@ -1,5 +1,15 @@
-// do something like addressable peers which has ipv4 guaranteed
+use std::net::Ipv4Addr;
+
+use crate::connection::destination::Address;
+
+#[derive(Debug, Clone)]
 pub struct Peer {
-    addr: Address,
-    ipv4: Option<Ipv4Addr>,
+    pub address: Address,
+    pub ipv4: Ipv4Addr,
+}
+
+impl Peer {
+    pub fn new(address: Address, ipv4: Ipv4Addr) -> Self {
+        Self { address, ipv4 }
+    }
 }
