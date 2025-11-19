@@ -31,3 +31,19 @@ impl FromStr for Network {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_parses_known_values_case_insensitively() {
+        assert_eq!("Rotsee".parse::<Network>().unwrap(), Network::Rotsee);
+        assert_eq!("DUFOUR".parse::<Network>().unwrap(), Network::Dufour);
+    }
+
+    #[test]
+    fn from_str_errors_on_unknown_network() {
+        "unknown".parse::<Network>().expect_err("invalid network");
+    }
+}

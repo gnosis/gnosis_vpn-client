@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Info {
     pub node_address: Address,
     pub node_peer_id: String,

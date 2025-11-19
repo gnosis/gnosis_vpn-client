@@ -20,7 +20,7 @@ pub struct Up {
     pub wg: Option<wg_tooling::WireGuard>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Init,
     GeneratingWg,
