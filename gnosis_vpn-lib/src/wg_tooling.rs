@@ -26,7 +26,7 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
     #[error("Unable to determine default interface")]
     NoInterface,
-    #[error("Unable running network routing detection")]
+    #[error("Unable to run network routing detection")]
     RoutingDetection,
 }
 
@@ -328,7 +328,6 @@ pub async fn down() -> Result<(), Error> {
 
 fn pre_up_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
     if cfg!(target_os = "macos") {
-        // macos
         if let Some(ref gateway) = interface.gateway {
             format!(
                 "route -n add --host {relayer_ip} {gateway}",
@@ -363,7 +362,6 @@ fn pre_up_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
 
 fn post_down_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
     if cfg!(target_os = "macos") {
-        // macos
         format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
     } else {
         // assuming linux
