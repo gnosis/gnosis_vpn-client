@@ -1,8 +1,10 @@
-use std::os::unix::fs::PermissionsExt;
 use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+
+use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 
 use crate::dirs;
 
@@ -44,7 +46,8 @@ pub struct InterfaceInfo {
 #[derive(Clone, Debug)]
 pub struct PeerInfo {
     pub public_key: String,
-    pub endpoint: String,
+    pub port: u16,
+    pub relayer_ip: Ipv4Addr,
 }
 
 #[derive(Clone, Debug)]
@@ -206,15 +209,17 @@ Address = {address}
 
 [Peer]
 PublicKey = {public_key}
-Endpoint = {endpoint}
+Endpoint = 127.0.0.1:{port}
 AllowedIPs = {allowed_ips}
+# relayer_ip = {relayer_ip}
 ",
             private_key = self.key_pair.priv_key,
             address = interface.address,
             public_key = peer.public_key,
-            endpoint = peer.endpoint,
+            port = peer.port,
             allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
+            relayer_ip = peer.relayer_ip,
             // WireGuard has differnently sized packets not exactly adhering to MTU
             // so we postpone optimizing on this level for now
             // mtu = interface.mtu,
