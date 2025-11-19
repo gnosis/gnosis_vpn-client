@@ -17,7 +17,8 @@ use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::peer::Peer;
-use crate::{ping, wg_tooling};
+use crate::ping;
+use crate::wg_tooling::{self, InterfaceInfo};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -341,10 +342,7 @@ async fn wg_tunnel(
     // run wg-quick down once to ensure no dangling state
     _ = wg_tooling::down().await;
 
-    let interface_info = wg_tooling::InterfaceInfo {
-        address: registration.address(),
-        mtu: session_client_metadata.hopr_mtu,
-    };
+    let interface_info = InterfaceInfo::from_system(&peer.ipv4).await?;
 
     let peer_info = wg_tooling::PeerInfo {
         public_key: registration.server_public_key(),
@@ -353,7 +351,7 @@ async fn wg_tunnel(
     };
 
     tracing::debug!(%registration, "establishing wg tunnel");
-    wg.up(&interface_info, &peer_info).await
+    wg.up(registration.client_ip(), &interface_info, &peer_info).await
 }
 
 async fn ping(options: &Options) -> Result<(), ping::Error> {

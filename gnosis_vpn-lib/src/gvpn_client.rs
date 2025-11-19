@@ -52,8 +52,8 @@ impl Input {
 }
 
 impl Registration {
-    pub fn address(&self) -> String {
-        format!("{}/32", self.ip)
+    pub fn client_ip(&self) -> Ipv4Addr {
+        self.ip
     }
 
     pub fn server_public_key(&self) -> String {

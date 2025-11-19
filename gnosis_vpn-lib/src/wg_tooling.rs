@@ -62,7 +62,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub(crate) fn new<L, M, S>(listen_port: Option<L>, force_private_key: Option<S>) -> Self
+    pub(crate) fn new<L, S>(listen_port: Option<L>, force_private_key: Option<S>) -> Self
     where
         L: Into<u16>,
         S: Into<String>,
@@ -157,7 +157,7 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub async fn up(&self, address: String, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
+    pub async fn up(&self, address: Ipv4Addr, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
         let config = self.to_file_string(address, interface, peer);
         let content = config.as_bytes();
@@ -189,7 +189,7 @@ impl WireGuard {
         }
     }
 
-    fn to_file_string(&self, address: String, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
+    fn to_file_string(&self, address: Ipv4Addr, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
         let listen_port_line = self
             .config
             .listen_port
@@ -199,7 +199,7 @@ impl WireGuard {
         format!(
             "[Interface]
 PrivateKey = {private_key}
-Address = {address}
+Address = {address}/32
 PreUp = {pre_up_routing}
 PostDown = {post_down_routing}
 {listen_port_line}
@@ -210,7 +210,7 @@ Endpoint = 127.0.0.1:{port}
 AllowedIPs = 0.0.0.0/0
 ",
             private_key = self.key_pair.priv_key,
-            address = address,
+            address = address.to_string(),
             public_key = peer.public_key,
             port = peer.port,
             listen_port_line = listen_port_line,
