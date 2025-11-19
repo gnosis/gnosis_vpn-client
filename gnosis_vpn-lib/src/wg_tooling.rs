@@ -18,16 +18,16 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Encoding error: {0}")]
     FromUtf8Error(#[from] std::string::FromUtf8Error),
-    #[error("TOML error: {0}")]
-    Toml(#[from] toml::ser::Error),
-    #[error("Monitoring error: {0}")]
-    Monitoring(String),
     #[error("WG generate key error [status: {0}]: {1}")]
     WgGenKey(i32, String),
     #[error("WG quick error [status: {0}]: {1}")]
     WgQuick(i32, String),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
+    #[error("Unable to determine default interface")]
+    NoInterface,
+    #[error("Unable running network routing detection")]
+    RoutingDetection,
 }
 
 #[derive(Clone, Debug)]
@@ -38,9 +38,8 @@ pub struct WireGuard {
 
 #[derive(Clone, Debug)]
 pub struct InterfaceInfo {
-    pub address: String,
-    #[allow(dead_code)]
-    pub mtu: usize,
+    pub gateway: Option<String>,
+    pub device: String,
 }
 
 #[derive(Clone, Debug)]
@@ -60,19 +59,16 @@ pub struct KeyPair {
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
-    pub allowed_ips: Option<String>,
 }
 
 impl Config {
-    pub(crate) fn new<L, M, S>(listen_port: Option<L>, allowed_ips: Option<M>, force_private_key: Option<S>) -> Self
+    pub(crate) fn new<L, M, S>(listen_port: Option<L>, force_private_key: Option<S>) -> Self
     where
         L: Into<u16>,
-        M: Into<String>,
         S: Into<String>,
     {
         Config {
             listen_port: listen_port.map(Into::into),
-            allowed_ips: allowed_ips.map(Into::into),
             force_private_key: force_private_key.map(Into::into),
         }
     }
@@ -161,22 +157,28 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub async fn up(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
+    pub async fn up(&self, address: String, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
-        let config = self.to_file_string(interface, peer);
+        let config = self.to_file_string(address, interface, peer);
         let content = config.as_bytes();
         fs::write(&conf_file, content).await?;
         fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
 
         let output = Command::new("wg-quick").arg("up").arg(conf_file).output().await?;
         if !output.stdout.is_empty() {
-            tracing::info!("wg-quick up stdout: {}", String::from_utf8_lossy(&output.stdout));
+            tracing::info!(
+                stdout = String::from_utf8_lossy(&output.stdout).to_string(),
+                "unexpected wg-quick up output"
+            );
         }
 
         if output.status.success() {
             if !output.stderr.is_empty() {
                 // wg-quick populates stderr with info and warnings, log those in debug mode
-                tracing::debug!("wg-quick up stderr: {}", String::from_utf8_lossy(&output.stderr));
+                tracing::debug!(
+                    stderr = String::from_utf8_lossy(&output.stderr).to_string(),
+                    "wg-quick up output"
+                );
             }
             Ok(())
         } else {
@@ -187,43 +189,112 @@ impl WireGuard {
         }
     }
 
-    fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
-        let allowed_ips = match &self.config.allowed_ips {
-            Some(allowed_ips) => allowed_ips.clone(),
-            None => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
-        };
+    fn to_file_string(&self, address: String, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
         let listen_port_line = self
             .config
             .listen_port
             .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
 
-        // WireGuard has differently sized packets not exactly adhering to MTU
-        // so we postpone optimizing on this level for now
-        // MTU = {mtu}
         format!(
             "[Interface]
 PrivateKey = {private_key}
 Address = {address}
+PreUp = {pre_up_routing}
+PostDown = {post_down_routing}
 {listen_port_line}
 
 [Peer]
 PublicKey = {public_key}
 Endpoint = 127.0.0.1:{port}
-AllowedIPs = {allowed_ips}
-# relayer_ip = {relayer_ip}
+AllowedIPs = 0.0.0.0/0
 ",
             private_key = self.key_pair.priv_key,
-            address = interface.address,
+            address = address,
             public_key = peer.public_key,
             port = peer.port,
-            allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
-            relayer_ip = peer.relayer_ip,
-            // WireGuard has differnently sized packets not exactly adhering to MTU
-            // so we postpone optimizing on this level for now
-            // mtu = interface.mtu,
+            pre_up_routing = pre_up_routing(&peer.relayer_ip, interface),
+            post_down_routing = post_down_routing(&peer.relayer_ip, interface),
         )
+    }
+}
+
+impl InterfaceInfo {
+    pub async fn from_system(relayer_ip: &Ipv4Addr) -> Result<Self, Error> {
+        if cfg!(target_os = "macos") {
+            Self::from_macos(relayer_ip).await
+        } else {
+            // assuming linux
+            Self::from_linux(relayer_ip).await
+        }
+    }
+
+    async fn from_macos(relayer_ip: &Ipv4Addr) -> Result<Self, Error> {
+        let output = Command::new("route")
+            .arg("-n")
+            .arg("get")
+            .arg(relayer_ip.to_string())
+            .output()
+            .await?;
+        if !output.stderr.is_empty() {
+            tracing::error!(
+                stderr = String::from_utf8_lossy(&output.stderr).to_string(),
+                "error running route -n get"
+            );
+        }
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+
+            let device_index = parts.iter().position(|&x| x == "interface");
+            let via_index = parts.iter().position(|&x| x == "gateway");
+
+            let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
+                Some(dev) => dev.to_string(),
+                None => {
+                    tracing::error!(%stdout, "Unable to determine default interface from route -n get output");
+                    return Err(Error::NoInterface);
+                }
+            };
+
+            let gateway = via_index.and_then(|idx| parts.get(idx + 1)).map(|gw| gw.to_string());
+            Ok(InterfaceInfo { gateway, device })
+        } else {
+            Err(Error::RoutingDetection)
+        }
+    }
+
+    async fn from_linux(relayer_ip: &Ipv4Addr) -> Result<Self, Error> {
+        let output = Command::new("ip")
+            .arg("route")
+            .arg("get")
+            .arg(relayer_ip.to_string())
+            .output()
+            .await?;
+        if !output.stderr.is_empty() {
+            tracing::error!(stderr = String::from_utf8_lossy(&output.stderr).to_string(), %relayer_ip, "error running ip route get");
+        }
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+
+            let device_index = parts.iter().position(|&x| x == "dev");
+            let via_index = parts.iter().position(|&x| x == "via");
+
+            let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
+                Some(dev) => dev.to_string(),
+                None => {
+                    tracing::error!(%stdout, %relayer_ip, "Unable to determine default interface from ip route get output");
+                    return Err(Error::NoInterface);
+                }
+            };
+
+            let gateway = via_index.and_then(|idx| parts.get(idx + 1)).map(|gw| gw.to_string());
+            Ok(InterfaceInfo { gateway, device })
+        } else {
+            Err(Error::RoutingDetection)
+        }
     }
 }
 
@@ -232,13 +303,19 @@ pub async fn down() -> Result<(), Error> {
 
     let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
     if !output.stdout.is_empty() {
-        tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
+        tracing::info!(
+            stdout = String::from_utf8_lossy(&output.stdout).to_string(),
+            "unexpected wg-quick down stdout"
+        );
     }
 
     if output.status.success() {
         if !output.stderr.is_empty() {
             // wg-quick populates stderr with info and warnings, log those in debug mode
-            tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
+            tracing::debug!(
+                stderr = String::from_utf8_lossy(&output.stderr).to_string(),
+                "wg-quick down output"
+            );
         }
         Ok(())
     } else {
@@ -246,5 +323,63 @@ pub async fn down() -> Result<(), Error> {
             output.status.code().unwrap_or_default(),
             format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
         ))
+    }
+}
+
+fn pre_up_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
+    if cfg!(target_os = "macos") {
+        // macos
+        if let Some(ref gateway) = interface.gateway {
+            format!(
+                "route -n add --host {relayer_ip} {gateway}",
+                relayer_ip = relayer_ip,
+                gateway = gateway
+            )
+        } else {
+            format!(
+                "route -n add -host {relayer_ip} -interface {device}",
+                relayer_ip = relayer_ip,
+                device = interface.device
+            )
+        }
+    } else {
+        // assuming linux
+        if let Some(ref gateway) = interface.gateway {
+            format!(
+                "ip route add {relayer_ip} via {gateway} dev {device}",
+                relayer_ip = relayer_ip,
+                gateway = gateway,
+                device = interface.device
+            )
+        } else {
+            format!(
+                "ip route add {relayer_ip} dev {device}",
+                relayer_ip = relayer_ip,
+                device = interface.device
+            )
+        }
+    }
+}
+
+fn post_down_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
+    if cfg!(target_os = "macos") {
+        // macos
+        format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
+    } else {
+        // assuming linux
+        if let Some(ref gateway) = interface.gateway {
+            format!(
+                "ip route del {relayer_ip} via {gateway} dev {device}",
+                relayer_ip = relayer_ip,
+                gateway = gateway,
+                device = interface.device
+            )
+        } else {
+            format!(
+                "ip route del {relayer_ip} dev {device}",
+                relayer_ip = relayer_ip,
+                device = interface.device
+            )
+        }
     }
 }
