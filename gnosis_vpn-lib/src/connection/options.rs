@@ -23,7 +23,6 @@ pub struct Sessions {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Timeouts {
-    pub ping_retries: Duration,
     pub http: Duration,
 }
 

@@ -55,18 +55,8 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 ## connection section - adjust for more fine grained connection control
 
 # [connection]
-# listen host - specify the internal listen host on your hoprd node.
-# If you have a firewall running and can only use static ports, you need to adjust this setting.
-# It is best to only use the `internal_connection_port` from the [hoprd_node] section.
-# If listen_host is enabled, `internal_connection_port` is ignored.
-# listen_host = "0.0.0.0:1422"
-# http_timeout - specify general HTTP timeouts for requests to your hoprd node.
-# http_timeout = "5s"
-# session timeout - specify HTTP timeout for session requests.
-# Session creation usually takes longer than normal requests.
-# session_timeout = "15s"
-# specify how long a connection will try sending an initial ping request before giving up.
-# ping_retry_timeout = "10s"
+# http_timeout - specify general HTTP timeouts for internal protocol related requests
+# http_timeout = "60s"
 
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
@@ -78,14 +68,12 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # capabilities = [ "segmentation", "no_delay" ]
 # target = "172.30.0.1:51820"
 
-# adjust internal session monitoring
+# adjust internal session validation ping settings
 # [connection.ping]
-# timeout = "7s"
+# address = "10.128.0.1"
+# timeout = "15s"
 # ttl = 6
 # seq_count = 1
-# [connection.ping.interval]
-# min = 5
-# max = 10
 
 # adjust session internal options
 # [connection.max_surb_upstream]
