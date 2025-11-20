@@ -401,7 +401,7 @@ mod tests {
     fn connect_response_helpers_build_variants() {
         let dest = destination();
         let resp = ConnectResponse::connecting(dest.clone());
-        assert_eq!(matches!(resp, ConnectResponse::Connecting(_)), true);
+        assert!(matches!(resp, ConnectResponse::Connecting(_)));
 
         let waiting = ConnectResponse::waiting(dest.clone(), Some(health()));
         assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, Some(_))));

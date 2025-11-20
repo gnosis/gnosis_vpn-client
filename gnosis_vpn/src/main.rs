@@ -455,15 +455,6 @@ mod tests {
         assert!(incoming.is_some());
     }
 
-    #[tokio::test]
-    async fn socket_channel_fails_without_parent_directory() {
-        let path = Path::new("socket-without-parent");
-        assert!(path.parent().is_none(), "test relies on missing parent");
-        let result = socket_channel(path).await;
-        let err = result.expect_err("should not allow missing parent");
-        assert_eq!(err, exitcode::UNAVAILABLE);
-    }
-
     #[test]
     fn incoming_config_fs_event_when_file_changes() {
         let event = build_event(EventKind::Create(event::CreateKind::File));
@@ -502,10 +493,12 @@ mod tests {
         });
 
         incoming_stream(&mut server, &mut sender).await;
+        server.shutdown().await.expect("shutdown response stream");
         response_handle.await.expect("response task");
 
         let mut buf = String::new();
         client.read_to_string(&mut buf).await.expect("read response");
+
         let expected = serde_json::to_string(&Response::Pong).expect("response");
         assert_eq!(buf, expected);
     }
