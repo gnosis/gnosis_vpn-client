@@ -3928,12 +3928,14 @@ dependencies = [
 name = "gnosis_vpn"
 version = "0.55.1"
 dependencies = [
+ "anyhow",
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
  "mimalloc",
  "notify",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3976,6 +3978,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tokio-util",

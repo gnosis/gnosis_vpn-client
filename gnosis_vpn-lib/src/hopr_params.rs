@@ -132,3 +132,56 @@ impl HoprParams {
         self.allow_insecure
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hopr::config::HoprLibConfig;
+    use std::fs;
+    use tempfile::NamedTempFile;
+    use tokio::runtime::Runtime;
+
+    fn sample_url() -> Url {
+        Url::parse("https://example.com").expect("valid url")
+    }
+
+    fn params_with_mode(mode: ConfigFileMode) -> HoprParams {
+        HoprParams::new(None, None, mode, Network::Dufour, sample_url(), true)
+    }
+
+    fn rt() -> Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt")
+    }
+
+    #[test]
+    fn manual_mode_reads_hopr_config_from_file() -> anyhow::Result<()> {
+        let temp = NamedTempFile::new().expect("temp config");
+        let config = HoprLibConfig::default();
+        let yaml = serde_yaml::to_string(&config).expect("yaml");
+
+        fs::write(temp.path(), yaml).expect("write config");
+
+        let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
+        let cfg = rt().block_on(params.to_config(Balance::<WxHOPR>::default()))?;
+
+        assert_eq!(cfg, config);
+        Ok(())
+    }
+
+    #[test]
+    fn manual_mode_propagates_parsing_error() -> anyhow::Result<()> {
+        let temp = NamedTempFile::new().expect("temp config");
+        fs::write(temp.path(), "invalid: [::yaml").expect("write invalid");
+
+        let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
+        let err = rt()
+            .block_on(params.to_config(Balance::<WxHOPR>::default()))
+            .expect_err("invalid config should bubble up parse error");
+
+        assert!(matches!(err, Error::Config(_)));
+        Ok(())
+    }
+}

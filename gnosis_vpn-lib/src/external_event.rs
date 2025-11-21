@@ -50,3 +50,45 @@ impl Debug for Event {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::{Command, Response};
+    use std::path::PathBuf;
+    use tokio::sync::oneshot;
+
+    #[test]
+    fn command_constructor_wraps_command_and_response_channel() -> anyhow::Result<()> {
+        let (tx, _rx) = oneshot::channel::<Response>();
+        let evt = command(Command::Ping, tx);
+
+        match evt {
+            Event::Command { cmd, .. } => assert!(matches!(cmd, Command::Ping)),
+            other => panic!("expected command event, got {:?}", other),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn shutdown_constructor_wraps_shutdown_channel() -> anyhow::Result<()> {
+        let (tx, _rx) = oneshot::channel();
+        let evt = shutdown(tx);
+
+        assert!(matches!(evt, Event::Shutdown { .. }));
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_reload_constructor_preserves_path_payload() -> anyhow::Result<()> {
+        let evt = config_reload(PathBuf::from("/tmp/config.toml"));
+
+        match evt {
+            Event::ConfigReload { path } => assert_eq!(path, PathBuf::from("/tmp/config.toml")),
+            other => panic!("expected config reload, got {:?}", other),
+        }
+        Ok(())
+    }
+}

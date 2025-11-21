@@ -80,7 +80,7 @@ mod tests {
     use anyhow::Ok;
 
     #[tokio::test]
-    async fn test_client_creation_with_default_url() -> anyhow::Result<()> {
+    async fn creates_client_with_default_rpc_url() -> anyhow::Result<()> {
         let default_signer = ChainKeypair::random();
         let client = GnosisRpcClient::new(default_signer).await;
         assert!(client.is_ok());
@@ -92,7 +92,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires Anvil to be running"]
-    async fn test_client_creation_with_custom_url() -> anyhow::Result<()> {
+    async fn with_url_uses_provided_rpc_endpoint() -> anyhow::Result<()> {
         let anvil = Anvil::new().spawn();
         let default_signer = ChainKeypair::random();
         let custom_url = anvil.endpoint();

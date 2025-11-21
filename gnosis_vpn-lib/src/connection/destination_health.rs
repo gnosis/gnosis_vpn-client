@@ -11,7 +11,7 @@ use std::fmt::{self, Display};
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 use crate::log_output;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DestinationHealth {
     pub last_error: Option<String>,
     pub health: Health,
@@ -20,7 +20,7 @@ pub struct DestinationHealth {
 
 /// Requirements to be able to connect to this destination
 /// This is statically derived at construction time from a destination's routing options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Need {
     Channel(Address),
     AnyChannel,
@@ -29,7 +29,7 @@ pub enum Need {
 }
 
 /// Potential problems or final health states of a destination
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Health {
     ReadyToConnect,
     MissingPeeredFundedChannel,

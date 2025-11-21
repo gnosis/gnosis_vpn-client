@@ -59,3 +59,67 @@ async fn pull_response(socket: &mut UnixStream) -> Result<String, Error> {
         .map(|_size| response)
         .map_err(Error::from)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+    use tempfile::tempdir;
+
+    fn sample_command() -> Command {
+        Command::Ping
+    }
+
+    #[tokio::test]
+    async fn check_path_reports_service_not_running_when_socket_missing() -> anyhow::Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let missing = tmp.path().join("missing.sock");
+        let err = check_path(&missing).expect_err("missing socket should error");
+        matches!(err, Error::ServiceNotRunning)
+            .then_some(())
+            .expect("service not running");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn push_and_pull_round_trip_command_frames() -> anyhow::Result<()> {
+        let (mut server, mut client) = UnixStream::pair().expect("pair");
+        let json = serde_json::to_string(&sample_command()).expect("serialize");
+        let push = push_command(&mut client, &json);
+        let pull = pull_response(&mut server);
+        tokio::try_join!(push, pull).expect("push and pull should complete round trip");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn process_cmd_serializes_request_and_parses_response() -> anyhow::Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("socket");
+        let listener_path = path.clone();
+
+        let server = tokio::spawn(async move {
+            let listener = tokio::net::UnixListener::bind(&listener_path).expect("bind");
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = String::new();
+                stream.read_to_string(&mut buf).await.expect("read");
+
+                let cmd: Command = serde_json::from_str(&buf).expect("command");
+                assert!(matches!(cmd, Command::Ping));
+
+                let resp = Response::Pong;
+                let json = serde_json::to_string(&resp).expect("json");
+
+                stream.write_all(json.as_bytes()).await.expect("write response");
+                stream.flush().await.expect("flush");
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let resp = process_cmd(path.as_path(), &sample_command()).await.expect("response");
+
+        assert!(matches!(resp, Response::Pong));
+        server.await.expect("listener task");
+        Ok(())
+    }
+}

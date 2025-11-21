@@ -68,27 +68,38 @@ mod tests {
     use serde_json;
 
     #[test]
-    fn test_deserialize_udp() {
+    fn deserializes_udp_protocol_case_insensitively() -> anyhow::Result<()> {
         let udps = [r#""udp""#, r#""UDP""#, r#""UdP""#];
+
         for json_data in &udps {
-            let protocol: Protocol = serde_json::from_str(json_data).unwrap();
+            let protocol: Protocol =
+                serde_json::from_str(json_data).expect("parses UDP protocol irrespective of casing");
             assert_eq!(protocol, Protocol::Udp);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_deserialize_tcp() {
+    fn deserializes_tcp_protocol_case_insensitively() -> anyhow::Result<()> {
         let tcps = [r#""tcp""#, r#""TCP""#, r#""TcP""#];
+
         for json_data in &tcps {
-            let protocol: Protocol = serde_json::from_str(json_data).unwrap();
+            let protocol: Protocol =
+                serde_json::from_str(json_data).expect("parses TCP protocol irrespective of casing");
             assert_eq!(protocol, Protocol::Tcp);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_deserialize_invalid() {
+    fn rejects_unknown_protocol_strings() -> anyhow::Result<()> {
         let json_data = r#""http""#;
         let result = serde_json::from_str::<Protocol>(json_data);
+
         assert!(result.is_err());
+
+        Ok(())
     }
 }

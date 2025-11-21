@@ -13,7 +13,7 @@ use crate::connection::destination_health::DestinationHealth;
 use crate::info::Info;
 use crate::log_output;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
     Connect(Address),
@@ -66,7 +66,7 @@ pub enum RunMode {
     Shutdown,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprStatus {
     Running,
     Syncing,
@@ -77,14 +77,14 @@ pub enum HoprStatus {
 }
 
 // in order of priority
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum FundingState {
     Querying,               // currently checking balances to determine FundingState
     TopIssue(FundingIssue), // there is at least one issue
     WellFunded,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum ConnectResponse {
     Connecting(Destination),
     WaitingToConnect(Destination, Option<DestinationHealth>),
@@ -92,20 +92,20 @@ pub enum ConnectResponse {
     AddressNotFound,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum DisconnectResponse {
     Disconnecting(Destination),
     NotConnected,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
     pub health: Option<DestinationHealth>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum ConnectionState {
     None,
     Connecting(SystemTime, connection::up::Phase),
@@ -113,7 +113,7 @@ pub enum ConnectionState {
     Disconnecting(SystemTime, connection::down::Phase),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct BalanceResponse {
     pub node: Balance<XDai>,
     pub safe: Balance<WxHOPR>,
@@ -331,5 +331,102 @@ impl Display for HoprStatus {
             HoprStatus::Initializing => write!(f, "Initializing"),
             HoprStatus::Uninitialized => write!(f, "Uninitialized"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::destination::RoutingOptions;
+    use crate::connection::destination_health::{DestinationHealth, Health, Need};
+    use std::collections::HashMap;
+
+    fn address(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    fn destination() -> Destination {
+        Destination::new(
+            address(1),
+            RoutingOptions::IntermediatePath(Default::default()),
+            HashMap::new(),
+        )
+    }
+
+    fn health() -> DestinationHealth {
+        DestinationHealth {
+            last_error: None,
+            health: Health::ReadyToConnect,
+            need: Need::Nothing,
+        }
+    }
+
+    #[test]
+    fn command_should_serialize_and_deserialize_to_the_same_value() -> anyhow::Result<()> {
+        let cmd_str = serde_json::to_string(&Command::RefreshNode).expect("serialize refresh command");
+        let parsed: Command = cmd_str.parse().expect("parse serialized command");
+
+        assert_eq!(parsed, Command::RefreshNode);
+        Ok(())
+    }
+
+    #[test]
+    fn runmode_running_uses_top_issue_and_hopr_status() -> anyhow::Result<()> {
+        let issues = Some(vec![FundingIssue::NodeLowOnFunds]);
+        let hopr_state = Some(HoprState::Running);
+
+        match RunMode::running(&issues, &hopr_state) {
+            RunMode::Running { funding, hopr_status } => {
+                assert_eq!(funding, FundingState::TopIssue(FundingIssue::NodeLowOnFunds));
+                assert_eq!(hopr_status, HoprStatus::Running);
+            }
+            other => panic!("unexpected run mode {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn funding_state_from_option_applies_priority_rules() -> anyhow::Result<()> {
+        assert_eq!(FundingState::from(&None), FundingState::Querying);
+
+        let empty: Option<Vec<FundingIssue>> = Some(vec![]);
+        assert_eq!(FundingState::from(&empty), FundingState::WellFunded);
+
+        let top = Some(vec![FundingIssue::SafeLowOnFunds]);
+        assert_eq!(
+            FundingState::from(&top),
+            FundingState::TopIssue(FundingIssue::SafeLowOnFunds)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn connect_response_helpers_cover_all_variants() -> anyhow::Result<()> {
+        let dest = destination();
+        let resp = ConnectResponse::connecting(dest.clone());
+        assert!(matches!(resp, ConnectResponse::Connecting(_)));
+
+        let waiting = ConnectResponse::waiting(dest.clone(), Some(health()));
+        assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, Some(_))));
+
+        let unable = ConnectResponse::unable(dest.clone(), health());
+        assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
+
+        assert_eq!(ConnectResponse::address_not_found(), ConnectResponse::AddressNotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn response_constructors_delegate_to_variant_wrappers() -> anyhow::Result<()> {
+        let destination = destination();
+        let conn = ConnectResponse::connecting(destination.clone());
+        assert!(matches!(Response::connect(conn), Response::Connect(_)));
+
+        let disc = DisconnectResponse::new(destination);
+        assert!(matches!(Response::disconnect(disc), Response::Disconnect(_)));
+
+        let status = StatusResponse::new(RunMode::Init, vec![]);
+        assert!(matches!(Response::status(status), Response::Status(_)));
+        Ok(())
     }
 }

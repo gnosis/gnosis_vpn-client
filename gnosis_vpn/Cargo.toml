@@ -21,3 +21,7 @@ url.workspace = true
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
 mimalloc = { workspace = true }
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile = "3.13.0"

@@ -12,7 +12,7 @@ use crate::chain::contracts::{CheckBalanceInputs, CheckBalanceResult};
 use crate::chain::errors::ChainError;
 
 // in order of priority
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FundingIssue {
     Unfunded,           // cannot work at all - initial state
     ChannelsOutOfFunds, // less than 1 ticket (10 wxHOPR)
@@ -169,4 +169,45 @@ pub fn min_stake_threshold(ticket_value: Balance<WxHOPR>) -> Balance<WxHOPR> {
 /// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)
 pub fn min_funds_threshold() -> Balance<XDai> {
     Balance::<XDai>::from(750000000000000_u64) // 0.00075 xDai = 3 gwei * 250'000 gas
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chain::contracts::CheckBalanceResult;
+    use alloy::primitives::U256;
+
+    #[test]
+    fn converts_check_balance_result_into_presafe_balances() -> anyhow::Result<()> {
+        let result = CheckBalanceResult {
+            hopr_token_balance: U256::from(20),
+            native_token_balance: U256::from(10),
+        };
+        let presafe = PreSafe::from(result);
+
+        assert_eq!(presafe.node_xdai, Balance::<XDai>::from(10u64));
+        assert_eq!(presafe.node_wxhopr, Balance::<WxHOPR>::from(20u64));
+        Ok(())
+    }
+
+    #[test]
+    fn to_funding_issues_marks_unfunded_when_all_balances_zero() -> anyhow::Result<()> {
+        let balances = Balances {
+            node_xdai: Balance::<XDai>::zero(),
+            safe_wxhopr: Balance::<WxHOPR>::zero(),
+            channels_out_wxhopr: Balance::<WxHOPR>::zero(),
+        };
+        let issues = balances.to_funding_issues(2, Balance::<WxHOPR>::from(5u64));
+
+        assert!(issues.contains(&FundingIssue::Unfunded));
+        Ok(())
+    }
+
+    #[test]
+    fn funding_amount_adds_one_ticket_above_threshold() -> anyhow::Result<()> {
+        let ticket = Balance::<WxHOPR>::from(10u64);
+
+        assert_eq!(funding_amount(ticket), min_stake_threshold(ticket) + ticket);
+        Ok(())
+    }
 }

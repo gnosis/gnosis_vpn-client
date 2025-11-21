@@ -400,3 +400,133 @@ async fn main_inner() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gnosis_vpn_lib::command::Response;
+    use notify::event::{self, Event, EventKind};
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::UnixStream;
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
+
+    fn build_event(kind: EventKind) -> Event {
+        Event {
+            kind,
+            paths: Vec::new(),
+            attrs: event::EventAttributes::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn config_channel_succeeds_when_file_exists() -> anyhow::Result<()> {
+        let dir = tempdir().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "log-level = \"info\"").expect("config");
+
+        let result = config_channel(config_path.as_path()).await;
+        result.expect("watcher available");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_channel_fails_when_file_missing() -> anyhow::Result<()> {
+        let dir = tempdir().expect("temp dir");
+        let config_path = dir.path().join("missing.toml");
+
+        let err = config_channel(config_path.as_path()).await.expect_err("missing config");
+        assert_eq!(err, exitcode::NOINPUT);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn socket_channel_accepts_new_connections() -> anyhow::Result<()> {
+        let dir = tempdir().expect("temp dir");
+        let socket_path = dir.path().join("daemon.sock");
+
+        let mut receiver = socket_channel(socket_path.as_path()).await.expect("socket");
+        let _client = UnixStream::connect(socket_path.as_path()).await.expect("connects");
+
+        let incoming = timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("waiting for connection");
+        assert!(incoming.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn incoming_config_fs_event_when_file_changes() -> anyhow::Result<()> {
+        let event = build_event(EventKind::Create(event::CreateKind::File));
+        assert!(incoming_config_fs_event(event, Path::new("config.toml")));
+
+        let event = build_event(EventKind::Modify(event::ModifyKind::Data(event::DataChange::Size)));
+        assert!(incoming_config_fs_event(event, Path::new("config.toml")));
+
+        let event = build_event(EventKind::Remove(event::RemoveKind::File));
+        assert!(incoming_config_fs_event(event, Path::new("config.toml")));
+        Ok(())
+    }
+
+    #[test]
+    fn incoming_config_fs_event_skips_irrelevant_events() -> anyhow::Result<()> {
+        let event = build_event(EventKind::Other);
+        assert!(!incoming_config_fs_event(event, Path::new("config.toml")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn incoming_stream_processes_valid_command() -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut server, mut client) = UnixStream::pair().expect("pair");
+        let (mut sender, mut receiver) = mpsc::channel(1);
+        let payload = serde_json::to_string(&Command::Ping).expect("serialize");
+        client.write_all(payload.as_bytes()).await.expect("write");
+        client.shutdown().await.expect("shutdown write");
+
+        let response_handle = tokio::spawn(async move {
+            if let Some(external_event::Event::Command { cmd, resp }) = receiver.recv().await {
+                assert!(matches!(cmd, Command::Ping));
+                resp.send(Response::Pong).expect("response sent");
+            } else {
+                panic!("expected command event");
+            }
+        });
+
+        incoming_stream(&mut server, &mut sender).await;
+        server.shutdown().await.expect("shutdown response stream");
+        response_handle.await.expect("response task");
+
+        let mut buf = String::new();
+        client.read_to_string(&mut buf).await.expect("read response");
+
+        let expected = serde_json::to_string(&Response::Pong).expect("response");
+        assert_eq!(buf, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn incoming_stream_ignores_invalid_payloads() -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut server, mut client) = UnixStream::pair().expect("pair");
+        let (mut sender, mut receiver) = mpsc::channel(1);
+
+        client.write_all(b"not-a-command").await.expect("write");
+        client.shutdown().await.expect("shutdown write");
+
+        incoming_stream(&mut server, &mut sender).await;
+        drop(server);
+
+        assert!(receiver.try_recv().is_err(), "no command dispatched");
+
+        let mut buf = String::new();
+        client.read_to_string(&mut buf).await.expect("read");
+        assert!(buf.is_empty(), "invalid payload should not yield response");
+        Ok(())
+    }
+}
