@@ -34,4 +34,4 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-tempfile = "3.13.0"
+tempfile = "3.23.0"

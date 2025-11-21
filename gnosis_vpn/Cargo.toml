@@ -24,4 +24,4 @@ mimalloc = { workspace = true }
 
 [dev-dependencies]
 anyhow.workspace = true
-tempfile = "3.13.0"
+tempfile = "3.23.0"
