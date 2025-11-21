@@ -71,26 +71,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_path_returns_error_when_missing() {
+    async fn check_path_reports_service_not_running_when_socket_missing() -> anyhow::Result<()> {
         let tmp = tempdir().expect("tempdir");
         let missing = tmp.path().join("missing.sock");
-        let err = check_path(&missing).expect_err("missing socket");
+        let err = check_path(&missing).expect_err("missing socket should error");
         matches!(err, Error::ServiceNotRunning)
             .then_some(())
             .expect("service not running");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn push_and_pull_round_trip_command() {
+    async fn push_and_pull_round_trip_command_frames() -> anyhow::Result<()> {
         let (mut server, mut client) = UnixStream::pair().expect("pair");
         let json = serde_json::to_string(&sample_command()).expect("serialize");
         let push = push_command(&mut client, &json);
         let pull = pull_response(&mut server);
-        tokio::try_join!(push, pull).expect("round trip");
+        tokio::try_join!(push, pull).expect("push and pull should complete round trip");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn process_cmd_serializes_and_deserializes_response() {
+    async fn process_cmd_serializes_request_and_parses_response() -> anyhow::Result<()> {
         let tmp = tempdir().expect("tempdir");
         let path = tmp.path().join("socket");
         let listener_path = path.clone();
@@ -118,5 +120,6 @@ mod tests {
 
         assert!(matches!(resp, Response::Pong));
         server.await.expect("listener task");
+        Ok(())
     }
 }

@@ -362,15 +362,16 @@ mod tests {
     }
 
     #[test]
-    fn command_from_str_round_trip() {
-        let cmd_str = serde_json::to_string(&Command::RefreshNode).expect("json");
-        let parsed: Command = cmd_str.parse().expect("parse");
+    fn command_should_serialize_and_deserialize_to_the_same_value() -> anyhow::Result<()> {
+        let cmd_str = serde_json::to_string(&Command::RefreshNode).expect("serialize refresh command");
+        let parsed: Command = cmd_str.parse().expect("parse serialized command");
 
         assert_eq!(parsed, Command::RefreshNode);
+        Ok(())
     }
 
     #[test]
-    fn runmode_running_reflects_inputs() {
+    fn runmode_running_uses_top_issue_and_hopr_status() -> anyhow::Result<()> {
         let issues = Some(vec![FundingIssue::NodeLowOnFunds]);
         let hopr_state = Some(HoprState::Running);
 
@@ -381,10 +382,11 @@ mod tests {
             }
             other => panic!("unexpected run mode {other:?}"),
         }
+        Ok(())
     }
 
     #[test]
-    fn funding_state_from_options() {
+    fn funding_state_from_option_applies_priority_rules() -> anyhow::Result<()> {
         assert_eq!(FundingState::from(&None), FundingState::Querying);
 
         let empty: Option<Vec<FundingIssue>> = Some(vec![]);
@@ -395,10 +397,11 @@ mod tests {
             FundingState::from(&top),
             FundingState::TopIssue(FundingIssue::SafeLowOnFunds)
         );
+        Ok(())
     }
 
     #[test]
-    fn connect_response_helpers_build_variants() {
+    fn connect_response_helpers_cover_all_variants() -> anyhow::Result<()> {
         let dest = destination();
         let resp = ConnectResponse::connecting(dest.clone());
         assert!(matches!(resp, ConnectResponse::Connecting(_)));
@@ -410,10 +413,11 @@ mod tests {
         assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
 
         assert_eq!(ConnectResponse::address_not_found(), ConnectResponse::AddressNotFound);
+        Ok(())
     }
 
     #[test]
-    fn response_constructors_wrap_variants() {
+    fn response_constructors_delegate_to_variant_wrappers() -> anyhow::Result<()> {
         let destination = destination();
         let conn = ConnectResponse::connecting(destination.clone());
         assert!(matches!(Response::connect(conn), Response::Connect(_)));
@@ -423,5 +427,6 @@ mod tests {
 
         let status = StatusResponse::new(RunMode::Init, vec![]);
         assert!(matches!(Response::status(status), Response::Status(_)));
+        Ok(())
     }
 }

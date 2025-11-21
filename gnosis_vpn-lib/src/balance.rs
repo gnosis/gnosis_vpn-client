@@ -178,30 +178,36 @@ mod tests {
     use alloy::primitives::U256;
 
     #[test]
-    fn presafe_from_check_balance_result_converts_balances() {
+    fn converts_check_balance_result_into_presafe_balances() -> anyhow::Result<()> {
         let result = CheckBalanceResult {
             hopr_token_balance: U256::from(20),
             native_token_balance: U256::from(10),
         };
         let presafe = PreSafe::from(result);
+
         assert_eq!(presafe.node_xdai, Balance::<XDai>::from(10u64));
         assert_eq!(presafe.node_wxhopr, Balance::<WxHOPR>::from(20u64));
+        Ok(())
     }
 
     #[test]
-    fn balances_to_funding_issues_identifies_problems() {
+    fn to_funding_issues_marks_unfunded_when_all_balances_zero() -> anyhow::Result<()> {
         let balances = Balances {
             node_xdai: Balance::<XDai>::zero(),
             safe_wxhopr: Balance::<WxHOPR>::zero(),
             channels_out_wxhopr: Balance::<WxHOPR>::zero(),
         };
         let issues = balances.to_funding_issues(2, Balance::<WxHOPR>::from(5u64));
+
         assert!(issues.contains(&FundingIssue::Unfunded));
+        Ok(())
     }
 
     #[test]
-    fn funding_amount_exceeds_threshold() {
+    fn funding_amount_adds_one_ticket_above_threshold() -> anyhow::Result<()> {
         let ticket = Balance::<WxHOPR>::from(10u64);
+
         assert_eq!(funding_amount(ticket), min_stake_threshold(ticket) + ticket);
+        Ok(())
     }
 }

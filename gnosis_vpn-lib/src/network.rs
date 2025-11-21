@@ -37,13 +37,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_str_parses_known_values_case_insensitively() {
-        assert_eq!("Rotsee".parse::<Network>().unwrap(), Network::Rotsee);
-        assert_eq!("DUFOUR".parse::<Network>().unwrap(), Network::Dufour);
+    fn from_str_accepts_known_network_names_case_insensitively() -> anyhow::Result<()> {
+        assert_eq!(
+            "Rotsee".parse::<Network>().expect("rotsee should parse"),
+            Network::Rotsee
+        );
+        assert_eq!(
+            "DUFOUR".parse::<Network>().expect("dufour should parse"),
+            Network::Dufour
+        );
+
+        Ok(())
     }
 
     #[test]
-    fn from_str_errors_on_unknown_network() {
-        "unknown".parse::<Network>().expect_err("invalid network");
+    fn from_str_rejects_unknown_network_names() -> anyhow::Result<()> {
+        "unknown"
+            .parse::<Network>()
+            .expect_err("unknown network names should return an error");
+
+        Ok(())
     }
 }

@@ -270,7 +270,7 @@ mod tests {
     use alloy::primitives::{U256, address, hex};
 
     #[test]
-    fn test_safe_module_deployment_user_data_encoding() {
+    fn build_user_data_encodes_nonce_token_amount_and_admins() -> anyhow::Result<()> {
         let nonce = U256::from(999);
         let token_amount = U256::from(500000000000000000u64); // 0.5 tokens
         let admins = vec![
@@ -289,18 +289,21 @@ mod tests {
                 "0105b97dcdf19d454ebe36f91ed516c2b90ee79f4a46af96a0138c1f5403c1cc00000000000000000000000000000000000000000000000000000000000003e777c9414043d27fdc98a6a2d73fc77b9b383092a70101030202020202020202020000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000200000000000000000000000011111111111111111111111111111111111111110000000000000000000000002222222222222222222222222222222222222222"
             )
         );
+        Ok(())
     }
 
     #[test]
-    fn test_network_config() {
+    fn network_specifications_return_dufour_defaults() -> anyhow::Result<()> {
         let dufour_spec = NetworkSpecifications::get_network_specification(&Network::Dufour);
         assert_eq!(dufour_spec.network, Network::Dufour);
+        Ok(())
     }
 
     #[test]
-    fn test_build_default_target() {
+    fn build_default_target_matches_known_rotsee_bytes() -> anyhow::Result<()> {
         let default_target = NetworkSpecifications::get_network_contracts(&Network::Rotsee).build_default_target();
         let used_default_target = hex!("77c9414043d27fdc98a6a2d73fc77b9b383092a7010103020202020202020202");
         assert_eq!(default_target, used_default_target);
+        Ok(())
     }
 }

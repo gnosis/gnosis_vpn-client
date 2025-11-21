@@ -3928,6 +3928,7 @@ dependencies = [
 name = "gnosis_vpn"
 version = "0.55.1"
 dependencies = [
+ "anyhow",
  "clap",
  "exitcode",
  "gnosis_vpn-lib",

@@ -39,21 +39,23 @@ mod tests {
 
     #[test]
     #[ignore = "fails in the CI as nix is a readonly environment"]
-    fn test_cache_dir_creates_directory_and_returns_file_path() {
+    fn cache_dir_creates_directory_and_appends_file_name() -> anyhow::Result<()> {
         let file_name = "test_cache.txt";
-        let path = cache_dir(file_name).expect("cache_dir should succeed");
+        let path = cache_dir(file_name).expect("cache dir should be creatable on writable systems");
 
-        path.parent().expect("Path should have a parent");
-        assert!(path.ends_with(file_name), "Returned path should end with file name");
+        path.parent().expect("cache path should include parent directories");
+        assert!(path.ends_with(file_name), "cache path keeps the provided filename");
+        Ok(())
     }
 
     #[test]
     #[ignore = "fails in the CI as nix is a readonly environment"]
-    fn test_config_dir_creates_directory_and_returns_file_path() {
+    fn config_dir_creates_directory_and_appends_file_name() -> anyhow::Result<()> {
         let file_name = "test_config.toml";
-        let path = config_dir(file_name).expect("config_dir should succeed");
+        let path = config_dir(file_name).expect("config dir should be creatable on writable systems");
 
-        path.parent().expect("Path should have a parent");
-        assert!(path.ends_with(file_name), "Returned path should end with file name");
+        path.parent().expect("config path should include parent directories");
+        assert!(path.ends_with(file_name), "config path keeps the provided filename");
+        Ok(())
     }
 }

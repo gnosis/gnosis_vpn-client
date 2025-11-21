@@ -96,19 +96,23 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_with_minimum_arguments() {
-        let args = Cli::try_parse_from(base_args()).expect("cli parses");
+    fn parses_cli_with_minimum_arguments() -> anyhow::Result<()> {
+        let args = Cli::try_parse_from(base_args())?;
         assert_eq!(args.hopr_network, Network::Dufour);
         assert!(args.hopr_config_path.is_none());
+
+        Ok(())
     }
 
     #[test]
-    fn cli_parse_fails_without_required_rpc_provider() {
+    fn cli_parse_fails_when_rpc_provider_missing() -> anyhow::Result<()> {
         assert!(Cli::try_parse_from(["gnosis_vpn"]).is_err());
+
+        Ok(())
     }
 
     #[test]
-    fn hopr_params_conversion_preserves_core_fields() {
+    fn hopr_params_conversion_preserves_network_and_security_flags() -> anyhow::Result<()> {
         let cli = Cli {
             socket_path: PathBuf::from("/tmp/socket"),
             config_path: PathBuf::from("/tmp/config"),
@@ -124,5 +128,7 @@ mod tests {
         assert_eq!(params.network(), cli.hopr_network);
         assert_eq!(params.rpc_provider(), cli.hopr_rpc_provider);
         assert!(params.allow_insecure());
+
+        Ok(())
     }
 }

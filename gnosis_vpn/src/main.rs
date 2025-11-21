@@ -423,26 +423,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_channel_succeeds_when_file_exists() {
+    async fn config_channel_succeeds_when_file_exists() -> anyhow::Result<()> {
         let dir = tempdir().expect("temp dir");
         let config_path = dir.path().join("config.toml");
         std::fs::write(&config_path, "log-level = \"info\"").expect("config");
 
         let result = config_channel(config_path.as_path()).await;
         result.expect("watcher available");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn config_channel_fails_when_file_missing() {
+    async fn config_channel_fails_when_file_missing() -> anyhow::Result<()> {
         let dir = tempdir().expect("temp dir");
         let config_path = dir.path().join("missing.toml");
 
         let err = config_channel(config_path.as_path()).await.expect_err("missing config");
         assert_eq!(err, exitcode::NOINPUT);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn socket_channel_accepts_new_connections() {
+    async fn socket_channel_accepts_new_connections() -> anyhow::Result<()> {
         let dir = tempdir().expect("temp dir");
         let socket_path = dir.path().join("daemon.sock");
 
@@ -453,10 +455,11 @@ mod tests {
             .await
             .expect("waiting for connection");
         assert!(incoming.is_some());
+        Ok(())
     }
 
     #[test]
-    fn incoming_config_fs_event_when_file_changes() {
+    fn incoming_config_fs_event_when_file_changes() -> anyhow::Result<()> {
         let event = build_event(EventKind::Create(event::CreateKind::File));
         assert!(incoming_config_fs_event(event, Path::new("config.toml")));
 
@@ -465,16 +468,18 @@ mod tests {
 
         let event = build_event(EventKind::Remove(event::RemoveKind::File));
         assert!(incoming_config_fs_event(event, Path::new("config.toml")));
+        Ok(())
     }
 
     #[test]
-    fn incoming_config_fs_event_skips_irrelevant_events() {
+    fn incoming_config_fs_event_skips_irrelevant_events() -> anyhow::Result<()> {
         let event = build_event(EventKind::Other);
         assert!(!incoming_config_fs_event(event, Path::new("config.toml")));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn incoming_stream_processes_valid_command() {
+    async fn incoming_stream_processes_valid_command() -> anyhow::Result<()> {
         use tokio::io::AsyncWriteExt;
 
         let (mut server, mut client) = UnixStream::pair().expect("pair");
@@ -501,10 +506,11 @@ mod tests {
 
         let expected = serde_json::to_string(&Response::Pong).expect("response");
         assert_eq!(buf, expected);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn incoming_stream_ignores_invalid_payloads() {
+    async fn incoming_stream_ignores_invalid_payloads() -> anyhow::Result<()> {
         use tokio::io::AsyncWriteExt;
 
         let (mut server, mut client) = UnixStream::pair().expect("pair");
@@ -521,5 +527,6 @@ mod tests {
         let mut buf = String::new();
         client.read_to_string(&mut buf).await.expect("read");
         assert!(buf.is_empty(), "invalid payload should not yield response");
+        Ok(())
     }
 }

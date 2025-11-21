@@ -156,34 +156,32 @@ mod tests {
             .expect("rt")
     }
 
-    // CROSS_TEST
     #[test]
-    fn to_config_manual_reads_valid_config() {
+    fn manual_mode_reads_hopr_config_from_file() -> anyhow::Result<()> {
         let temp = NamedTempFile::new().expect("temp config");
         let config = HoprLibConfig::default();
         let yaml = serde_yaml::to_string(&config).expect("yaml");
+
         fs::write(temp.path(), yaml).expect("write config");
 
         let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
-        let cfg = rt()
-            .block_on(params.to_config(Balance::<WxHOPR>::default()))
-            .expect("config");
+        let cfg = rt().block_on(params.to_config(Balance::<WxHOPR>::default()))?;
+
         assert_eq!(cfg, config);
+        Ok(())
     }
 
-    // CROSS_TEST
     #[test]
-    fn to_config_manual_propagates_parse_errors() {
+    fn manual_mode_propagates_parsing_error() -> anyhow::Result<()> {
         let temp = NamedTempFile::new().expect("temp config");
         fs::write(temp.path(), "invalid: [::yaml").expect("write invalid");
 
         let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
         let err = rt()
             .block_on(params.to_config(Balance::<WxHOPR>::default()))
-            .expect_err("invalid config");
-        match err {
-            Error::Config(_) => (),
-            other => panic!("expected config error, got {other:?}"),
-        }
+            .expect_err("invalid config should bubble up parse error");
+
+        assert!(matches!(err, Error::Config(_)));
+        Ok(())
     }
 }
