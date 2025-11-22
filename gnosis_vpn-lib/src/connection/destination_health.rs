@@ -240,9 +240,9 @@ impl Display for DestinationHealth {
 impl Display for Need {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Need::Channel(addr) => write!(f, "needs channel to {}", log_output::address(addr)),
-            Need::AnyChannel => write!(f, "needs any channel"),
-            Need::Peering(addr) => write!(f, "needs to see peer {}", log_output::address(addr)),
+            Need::Channel(addr) => write!(f, "needs peered channel to {}", log_output::address(addr)),
+            Need::AnyChannel => write!(f, "needs any peered channel"),
+            Need::Peering(addr) => write!(f, "needs peer {}", log_output::address(addr)),
             Need::Nothing => write!(f, "unable to connect"),
         }
     }
