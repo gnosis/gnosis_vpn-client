@@ -609,7 +609,7 @@ impl Core {
 
             Results::SessionMonitorFailed => match self.phase.clone() {
                 Phase::Connected(conn) => {
-                    tracing::warn!(%conn, "session mointor failed - reconnecting");
+                    tracing::warn!(%conn, "session monitor failed - reconnecting");
                     self.disconnect_from_connection(&conn, results_sender);
                 }
                 phase => {
