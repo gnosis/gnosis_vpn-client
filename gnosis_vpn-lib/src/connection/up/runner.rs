@@ -77,7 +77,7 @@ impl Runner {
         let _ = results_sender.send(Results::ConnectionResult { res }).await;
     }
 
-    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
+    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 0. generate wg keys
         let _ = results_sender
             .send(Results::ConnectionEvent {
@@ -142,7 +142,7 @@ impl Runner {
             .await;
         adjust_to_main_session(&self.hopr, &self.options, &ping_session).await?;
 
-        Ok(())
+        Ok(ping_session)
     }
 }
 

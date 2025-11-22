@@ -34,11 +34,22 @@ pub struct SessionClientMetadata {
     /// have multiple clients (defaults to 1 for UDP).
     pub max_client_sessions: usize,
     /// The maximum throughput at which artificial SURBs might be generated and sent
-    /// to the recipient of the Session.    
+    /// to the recipient of the Session.
     pub max_surb_upstream: Option<human_bandwidth::re::bandwidth::Bandwidth>,
     /// The amount of response data the Session counterparty can deliver back to us, without us
     /// sending any SURBs to them.
     pub response_buffer: Option<bytesize::ByteSize>,
     /// How many Sessions to pool for clients.
     pub session_pool: Option<usize>,
+}
+
+impl PartialEq for SessionClientMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.destination == other.destination
+            && self.forward_path == other.forward_path
+            && self.return_path == other.return_path
+            && self.protocol == other.protocol
+            && self.bound_host == other.bound_host
+    }
 }

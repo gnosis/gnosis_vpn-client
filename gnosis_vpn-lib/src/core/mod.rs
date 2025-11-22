@@ -18,6 +18,7 @@ use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
 use crate::external_event::Event as ExternalEvent;
+use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
 use crate::{balance, log_output, wg_tooling};
@@ -57,7 +58,7 @@ pub struct Core {
     // cancellation tokens
     cancel_balances: CancellationToken,
     cancel_channel_tasks: CancellationToken,
-    cancel_connecting: CancellationToken,
+    cancel_connection: CancellationToken,
     cancel_for_shutdown: CancellationToken,
 
     // user provided data
@@ -101,7 +102,7 @@ impl Core {
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
             cancel_channel_tasks: CancellationToken::new(),
-            cancel_connecting: CancellationToken::new(),
+            cancel_connection: CancellationToken::new(),
             cancel_for_shutdown: CancellationToken::new(),
 
             // user provided data
@@ -152,7 +153,7 @@ impl Core {
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
                 self.cancel_channel_tasks.cancel();
-                self.cancel_connecting.cancel();
+                self.cancel_connection.cancel();
                 self.cancel_for_shutdown.cancel();
                 let shutdown_tracker = TaskTracker::new();
                 shutdown_tracker.spawn(async {
@@ -561,7 +562,7 @@ impl Core {
             }
 
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
-                (Ok(_), Phase::Connecting(mut conn)) => {
+                (Ok(session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
@@ -572,9 +573,10 @@ impl Core {
                         log_output::address(&conn.destination.address)
                     );
                     log_output::print_session_established(route.as_str());
+                    self.spawn_session_monitoring(session, results_sender);
                 }
                 (Ok(_), phase) => {
-                    tracing::info!(?phase, "unawaited connection established successfully");
+                    tracing::warn!(?phase, "unawaited connection established successfully");
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
@@ -604,6 +606,16 @@ impl Core {
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
                 self.act_on_target(results_sender);
             }
+
+            Results::SessionMonitorFailed => match self.phase.clone() {
+                Phase::Connected(conn) => {
+                    tracing::warn!(%conn, "session monitor failed - reconnecting");
+                    self.disconnect_from_connection(&conn, results_sender);
+                }
+                phase => {
+                    tracing::error!(?phase, "session monitor failed in unexpected phase");
+                }
+            },
         }
     }
 
@@ -769,7 +781,7 @@ impl Core {
 
     fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_connecting.clone();
+            let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
@@ -805,6 +817,20 @@ impl Core {
         }
     }
 
+    fn spawn_session_monitoring(&self, session: SessionClientMetadata, results_sender: &mpsc::Sender<Results>) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_connection.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner::monitor_session(hopr, &session, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(target = ?self.target_destination, phase = ?self.phase, "acting on target destination");
@@ -827,42 +853,32 @@ impl Core {
             }
             // Connecting to different destination while already connected
             (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
-                tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connected");
-                self.disconnect_from_connected(&conn, results_sender);
+                tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while connected");
+                self.disconnect_from_connection(&conn, results_sender);
             }
             // Connecting to different destination while already connecting
             (Some(dest), Phase::Connecting(conn)) if dest != conn.destination => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connecting");
-                self.disconnect_from_connecting(&conn, results_sender);
+                self.disconnect_from_connection(&conn, results_sender);
             }
             // Disconnecting from established connection
             (None, Phase::Connected(conn)) => {
                 tracing::info!(current = %conn.destination, "disconnecting from destination");
-                self.disconnect_from_connected(&conn, results_sender);
+                self.disconnect_from_connection(&conn, results_sender);
             }
             // Disconnecting while establishing connection
             (None, Phase::Connecting(conn)) => {
                 tracing::info!(current = %conn.destination, "disconnecting from ongoing connection attempt");
-                self.disconnect_from_connecting(&conn, results_sender);
+                self.disconnect_from_connection(&conn, results_sender);
             }
             // No action needed
             _ => {}
         }
     }
 
-    fn disconnect_from_connected(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        self.phase = Phase::HoprRunning;
-        match conn.try_into() {
-            Ok(disconn) => self.spawn_disconnection_runner(&disconn, results_sender),
-            Err(err) => {
-                tracing::error!(%err, "failed to create disconnection runner from connection");
-            }
-        }
-    }
-
-    fn disconnect_from_connecting(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        self.cancel_connecting.cancel();
-        self.cancel_connecting = CancellationToken::new();
+    fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        self.cancel_connection.cancel();
+        self.cancel_connection = CancellationToken::new();
         self.phase = Phase::HoprRunning;
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, results_sender);
@@ -874,11 +890,8 @@ impl Core {
 
     fn reset_to_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         match self.phase.clone() {
-            Phase::Connected(conn) => {
-                self.disconnect_from_connected(&conn, results_sender);
-            }
-            Phase::Connecting(conn) => {
-                self.disconnect_from_connecting(&conn, results_sender);
+            Phase::Connected(conn) | Phase::Connecting(conn) => {
+                self.disconnect_from_connection(&conn, results_sender);
             }
             _ => (),
         }

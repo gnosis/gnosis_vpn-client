@@ -5,10 +5,10 @@ use alloy::primitives::U256;
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use bytesize::ByteSize;
-use edgli::hopr_lib::SurbBalancerConfig;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::Rng;
 use serde_json::json;
@@ -27,6 +27,7 @@ use crate::chain::contracts::NetworkSpecifications;
 use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use crate::chain::errors::ChainError;
 use crate::connection;
+use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
 use crate::log_output;
@@ -68,7 +69,7 @@ pub enum Results {
         evt: connection::up::runner::Event,
     },
     ConnectionResult {
-        res: Result<(), connection::up::runner::Error>,
+        res: Result<SessionClientMetadata, connection::up::runner::Error>,
     },
     DisconnectionEvent {
         wg_public_key: String,
@@ -78,6 +79,7 @@ pub enum Results {
         wg_public_key: String,
         res: Result<(), connection::down::runner::Error>,
     },
+    SessionMonitorFailed,
 }
 
 #[derive(Debug, Error)]
@@ -174,6 +176,11 @@ pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
     tracing::debug!("starting connected peers runner");
     let res = hopr.connected_peers().await.map_err(Error::from);
     let _ = results_sender.send(Results::ConnectedPeers { res }).await;
+}
+
+pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
+    run_monitor_session(hopr, session).await;
+    let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
 async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
@@ -303,6 +310,21 @@ async fn run_fund_channel(
     .await
 }
 
+async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
+    tracing::debug!(?session, "starting session monitor runner");
+    loop {
+        let delay = rand::rng().random_range(5..10);
+        time::sleep(Duration::from_secs(delay)).await;
+        let sessions = hopr.list_sessions(IpProtocol::UDP).await;
+        let found = sessions.iter().any(|s| s == session);
+        if found {
+            tracing::info!(?session, "session still active");
+        } else {
+            break;
+        }
+    }
+}
+
 impl Display for Results {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -367,6 +389,7 @@ impl Display for Results {
                 Ok(_) => write!(f, "DisconnectionResult ({}): Success", wg_public_key),
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
+            Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
         }
     }
 }
