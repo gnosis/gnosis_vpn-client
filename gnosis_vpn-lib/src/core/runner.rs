@@ -109,7 +109,7 @@ pub enum Error {
 
 #[derive(Debug, Deserialize)]
 struct UnauthorizedError {
-    pub error: String,
+    error: String,
 }
 
 pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
