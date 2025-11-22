@@ -54,7 +54,7 @@ pub enum Results {
     },
     SafePersisted,
     FundingTool {
-        res: Result<(), Error>,
+        res: Result<Option<String>, Error>,
     },
     Hopr {
         res: Result<Hopr, Error>,
@@ -103,8 +103,6 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error(transparent)]
     ChannelError(#[from] hopr_api::ChannelError),
-    #[error("Funding failed: {0}")]
-    FundingFailed(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,7 +254,9 @@ async fn run_safe_deployment(
     .await
 }
 
-async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<(), Error> {
+// Posts to the HOPR funding tool API to request an airdrop using the provided code.
+// Returns final errors in ok branch to break exponential backoff retries.
+async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Option<String>, Error> {
     let keys = hopr_params.calc_keys().await?;
     let node_address = keys.chain_key.public().to_address();
     let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
@@ -287,7 +287,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<(), E
                 Error::from(err)
             })?;
             tracing::debug!(?unauthorized, "Funding tool unauthorized response");
-            Err(Error::FundingFailed(unauthorized.error))
+            Ok(Some(unauthorized.error))
         } else {
             let text = resp.text().await.map_err(|err| {
                 tracing::error!(?err, "Funding tool read response failed");
@@ -295,14 +295,9 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<(), E
             })?;
 
             tracing::debug!(%status, ?text, "Funding tool response");
-            if status.is_success() {
-                Ok(())
-            } else {
-                Err(Error::FundingFailed(text))
-            }
+            if status.is_success() { Ok(None) } else { Ok(Some(text)) }
         };
-        res?;
-        Ok(())
+        res
     })
     .await
 }
@@ -380,7 +375,8 @@ impl Display for Results {
             },
             Results::SafePersisted => write!(f, "SafePersisted: Success"),
             Results::FundingTool { res } => match res {
-                Ok(success) => write!(f, "FundingTool: Success({})", success),
+                Ok(None) => write!(f, "FundingTool: Success"),
+                Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
             },
             Results::Hopr { res } => match res {
