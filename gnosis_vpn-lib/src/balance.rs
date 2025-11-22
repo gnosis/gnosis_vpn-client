@@ -27,7 +27,7 @@ pub enum FundingTool {
     NotStarted,
     InProgress,
     CompletedSuccess,
-    CompletedError,
+    CompletedError(String),
 }
 
 #[derive(Debug, Error)]
@@ -52,13 +52,12 @@ impl Display for FundingIssue {
 
 impl Display for FundingTool {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self {
-            FundingTool::NotStarted => "funding tool not used",
-            FundingTool::InProgress => "funding tool in progress",
-            FundingTool::CompletedSuccess => "funding tool completed",
-            FundingTool::CompletedError => "funding tool errored",
-        };
-        write!(f, "{s}")
+        match self {
+            FundingTool::NotStarted => write!(f, "Funding not started"),
+            FundingTool::InProgress => write!(f, "Funding in progress"),
+            FundingTool::CompletedSuccess => write!(f, "Funding successful"),
+            FundingTool::CompletedError(err) => write!(f, "Funding error: {}", err),
+        }
     }
 }
 

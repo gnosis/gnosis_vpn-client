@@ -447,16 +447,11 @@ impl Core {
             },
 
             Results::FundingTool { res } => match res {
-                Ok(success) => {
-                    self.funding_tool = if success {
-                        balance::FundingTool::CompletedSuccess
-                    } else {
-                        balance::FundingTool::CompletedError
-                    };
-                }
+                Ok(None) => self.funding_tool = balance::FundingTool::CompletedSuccess,
+                Ok(Some(reason)) => self.funding_tool = balance::FundingTool::CompletedError(reason),
                 Err(err) => {
                     tracing::error!(%err, "funding runner exited with error");
-                    self.funding_tool = balance::FundingTool::CompletedError;
+                    self.funding_tool = balance::FundingTool::CompletedError(err.to_string());
                 }
             },
 
