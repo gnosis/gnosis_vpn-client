@@ -55,8 +55,8 @@ impl Display for FundingTool {
         match self {
             FundingTool::NotStarted => write!(f, "Funding not started"),
             FundingTool::InProgress => write!(f, "Funding in progress"),
-            FundingTool::CompletedSuccess => write!(f, "Funding completed successfully"),
-            FundingTool::CompletedError(err) => write!(f, "Funding completed with error: {}", err),
+            FundingTool::CompletedSuccess => write!(f, "Funding successful"),
+            FundingTool::CompletedError(err) => write!(f, "Funding error: {}", err),
         }
     }
 }
