@@ -6,6 +6,7 @@
   "ignoreDeps": ["alloy"],
   "semanticCommits": "enabled",
   "rangeStrategy": "bump",
+  "minimumReleaseAge": "14 days",
   "packageRules": [
     { "matchCategories": ["rust"], "enabled": true },
     { "matchCategories": ["docker"], "enabled": true, "pinDigests": true }
