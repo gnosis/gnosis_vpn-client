@@ -316,12 +316,7 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
         let delay = rand::rng().random_range(5..10);
         time::sleep(Duration::from_secs(delay)).await;
         let sessions = hopr.list_sessions(IpProtocol::UDP).await;
-        tracing::warn!(?session, "comparing current session");
-        let found = sessions.iter().any(|s| {
-            let res = s == session;
-            tracing::warn!(?s, res, "checking with this session");
-            res
-        });
+        let found = sessions.iter().any(|s| s == session);
         if found {
             tracing::info!(?session, "session still active");
         } else {

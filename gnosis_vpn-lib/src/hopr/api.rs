@@ -304,6 +304,8 @@ impl Hopr {
         tracing::debug!("adjust hopr session");
         let session_id = HoprSessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
+        // NOTE: known bug: adjust seesion does not update self.open_listeners which leads to
+        // outdated info being reported by list_sessions
         self.hopr
             .update_session_surb_balancer_config(&session_id, balancer_cfg)
             .await
