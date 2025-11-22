@@ -11,6 +11,7 @@ use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::Rng;
+use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -53,7 +54,7 @@ pub enum Results {
     },
     SafePersisted,
     FundingTool {
-        res: Result<bool, Error>,
+        res: Result<(), Error>,
     },
     Hopr {
         res: Result<Hopr, Error>,
@@ -102,6 +103,13 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error(transparent)]
     ChannelError(#[from] hopr_api::ChannelError),
+    #[error("Funding failed: {0}")]
+    FundingFailed(String),
+}
+
+#[derive(Debug, Deserialize)]
+struct UnauthorizedError {
+    pub error: String,
 }
 
 pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
@@ -248,7 +256,7 @@ async fn run_safe_deployment(
     .await
 }
 
-async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool, Error> {
+async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<(), Error> {
     let keys = hopr_params.calc_keys().await?;
     let node_address = keys.chain_key.public().to_address();
     let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
@@ -273,17 +281,28 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool,
             .map_err(Error::from)?;
 
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|err| {
+        let res = if status == reqwest::StatusCode::UNAUTHORIZED {
+            let unauthorized: UnauthorizedError = resp.json().await.map_err(|err| {
+                tracing::error!(?err, "Funding tool read unauthorized response failed");
+                Error::from(err)
+            })?;
+            tracing::debug!(?unauthorized, "Funding tool unauthorized response");
+            Err(Error::FundingFailed(unauthorized.error))
+        } else {
+            let text = resp.text().await.map_err(|err| {
                 tracing::error!(?err, "Funding tool read response failed");
-                err
-            })
-            .map_err(Error::from)?;
+                Error::from(err)
+            })?;
 
-        tracing::debug!(%status, ?text, "Funding tool response");
-        Ok(status.is_success())
+            tracing::debug!(%status, ?text, "Funding tool response");
+            if status.is_success() {
+                Ok(())
+            } else {
+                Err(Error::FundingFailed(text))
+            }
+        };
+        res?;
+        Ok(())
     })
     .await
 }
