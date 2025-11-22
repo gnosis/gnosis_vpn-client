@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use edgli::hopr_lib::{Address, IpProtocol, RoutingOptions};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 /// Response body for creating a new client session.
 pub struct SessionClientMetadata {
     /// Target of the Session.
