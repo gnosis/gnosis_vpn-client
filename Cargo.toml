@@ -22,7 +22,7 @@ alloy = { version = "=1.0.42", default-features = false, features = [
 anyhow = { version = "1.0.100" }
 async-lock = { version = "3.4.1" }
 backoff = { version = "0.4.0", features = ["tokio"] }
-bytesize = "2.2.0"
+bytesize = "2.3.0"
 clap = { version = "4.5.53", features = ["derive", "env"] }
 crossbeam-channel = "0.5.15"
 ctrlc = { version = "3.5.1", features = ["termination"] }
