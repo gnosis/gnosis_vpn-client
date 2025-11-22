@@ -103,6 +103,8 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error(transparent)]
     ChannelError(#[from] hopr_api::ChannelError),
+    #[error("Funding tool error: {0}")]
+    FundingTool(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -281,7 +283,8 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
             .map_err(Error::from)?;
 
         let status = resp.status();
-        let res = if status == reqwest::StatusCode::UNAUTHORIZED {
+
+        let result = if status == reqwest::StatusCode::UNAUTHORIZED {
             let unauthorized: UnauthorizedError = resp.json().await.map_err(|err| {
                 tracing::error!(?err, "Funding tool read unauthorized response failed");
                 Error::from(err)
@@ -295,9 +298,15 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
             })?;
 
             tracing::debug!(%status, ?text, "Funding tool response");
-            if status.is_success() { Ok(None) } else { Ok(Some(text)) }
+            if status.is_success() {
+                Ok(None)
+            } else {
+                Err(Error::FundingTool(text))
+            }
         };
-        res
+        // allow conversion to retry error
+        let res = result?;
+        Ok(res)
     })
     .await
 }
