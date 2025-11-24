@@ -3908,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn"
-version = "0.56.1"
+version = "0.56.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3927,7 +3927,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.56.1"
+version = "0.56.2"
 dependencies = [
  "clap",
  "exitcode",
@@ -3939,7 +3939,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.56.1"
+version = "0.56.2"
 dependencies = [
  "anyhow",
  "backoff",
@@ -4921,12 +4921,11 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.12"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "601cbb57e577e2f5ef5be8e7b83f0f63994f25aa94d673e54a92d5c516d101f1"
+checksum = "e3ba2a386d7f85a81f119ad7498ebe444d2e22c2af0b86b069416ace48b3311a"
 dependencies = [
  "bytes",
- "fnv",
  "itoa",
 ]
 
