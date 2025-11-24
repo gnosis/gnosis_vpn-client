@@ -11,6 +11,7 @@ use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::Rng;
+use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -53,7 +54,7 @@ pub enum Results {
     },
     SafePersisted,
     FundingTool {
-        res: Result<bool, Error>,
+        res: Result<Option<String>, Error>,
     },
     Hopr {
         res: Result<Hopr, Error>,
@@ -102,6 +103,13 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error(transparent)]
     ChannelError(#[from] hopr_api::ChannelError),
+    #[error("Funding tool error: {0}")]
+    FundingTool(String),
+}
+
+#[derive(Debug, Deserialize)]
+struct UnauthorizedError {
+    error: String,
 }
 
 pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
@@ -248,7 +256,9 @@ async fn run_safe_deployment(
     .await
 }
 
-async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool, Error> {
+// Posts to the HOPR funding tool API to request an airdrop using the provided code.
+// Returns final errors in ok branch to break exponential backoff retries.
+async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Option<String>, Error> {
     let keys = hopr_params.calc_keys().await?;
     let node_address = keys.chain_key.public().to_address();
     let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
@@ -273,17 +283,30 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<bool,
             .map_err(Error::from)?;
 
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|err| {
-                tracing::error!(?err, "Funding tool read response failed");
-                err
-            })
-            .map_err(Error::from)?;
 
-        tracing::debug!(%status, ?text, "Funding tool response");
-        Ok(status.is_success())
+        let result = if status == reqwest::StatusCode::UNAUTHORIZED {
+            let unauthorized: UnauthorizedError = resp.json().await.map_err(|err| {
+                tracing::error!(?err, "Funding tool read unauthorized response failed");
+                Error::from(err)
+            })?;
+            tracing::debug!(?unauthorized, "Funding tool unauthorized response");
+            Ok(Some(unauthorized.error))
+        } else {
+            let text = resp.text().await.map_err(|err| {
+                tracing::error!(?err, "Funding tool read response failed");
+                Error::from(err)
+            })?;
+
+            tracing::debug!(%status, ?text, "Funding tool response");
+            if status.is_success() {
+                Ok(None)
+            } else {
+                Err(Error::FundingTool(text))
+            }
+        };
+        // allow conversion to retry error
+        let res = result?;
+        Ok(res)
     })
     .await
 }
@@ -361,7 +384,8 @@ impl Display for Results {
             },
             Results::SafePersisted => write!(f, "SafePersisted: Success"),
             Results::FundingTool { res } => match res {
-                Ok(success) => write!(f, "FundingTool: Success({})", success),
+                Ok(None) => write!(f, "FundingTool: Success"),
+                Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
             },
             Results::Hopr { res } => match res {
