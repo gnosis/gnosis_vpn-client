@@ -363,7 +363,7 @@ impl Core {
                     }
 
                     Command::Metrics => {
-                        let metrics = match edgli::hopr_lib::Hopr::collect_hopr_metrics() {
+                        let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
                             Ok(m) => m,
                             Err(err) => {
                                 tracing::error!(%err, "failed to collect hopr metrics");

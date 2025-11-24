@@ -1,11 +1,11 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use alloy::primitives::U256;
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::hopr_lib::reexports::alloy::primitives::U256;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
@@ -237,8 +237,15 @@ async fn run_safe_deployment(
         let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
             .await
             .map_err(Error::from)?;
-        let safe_module_deployment_inputs =
-            SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
+        let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(
+            nonce,
+            token_amount,
+            vec![node_address.as_ref().try_into().map_err(|e| {
+                Error::Chain(ChainError::DecodeEventError(format!(
+                    "failed to convert to address: {e}"
+                )))
+            })?],
+        );
         let res = safe_module_deployment_inputs
             .deploy(&client.provider, network.clone())
             .await
@@ -292,7 +299,9 @@ async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Res
     tracing::debug!("starting hopr runner");
     let cfg = hopr_params.to_config(ticket_value).await?;
     let keys = hopr_params.calc_keys().await?;
-    Hopr::new(cfg, keys).await.map_err(Error::from)
+    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys)
+        .await
+        .map_err(Error::from)
 }
 
 async fn run_fund_channel(

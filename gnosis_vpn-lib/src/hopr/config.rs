@@ -31,8 +31,8 @@ pub enum Error {
 impl From<SafeModuleDeploymentResult> for SafeModule {
     fn from(result: SafeModuleDeploymentResult) -> Self {
         Self {
-            safe_address: result.safe_address.into(),
-            module_address: result.module_address.into(),
+            safe_address: result.safe_address.0.0.into(),
+            module_address: result.module_address.0.0.into(),
             ..Default::default()
         }
     }
@@ -111,7 +111,7 @@ pub fn safe_file() -> Result<PathBuf, Error> {
     dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)
 }
 
-fn db_file() -> Result<PathBuf, Error> {
+pub(crate) fn db_file() -> Result<PathBuf, Error> {
     dirs::config_dir(DB_FILE).map_err(Error::Dirs)
 }
 

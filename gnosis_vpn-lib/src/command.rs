@@ -74,6 +74,7 @@ pub enum HoprStatus {
     Indexing,
     Initializing,
     Uninitialized,
+    Terminated,
 }
 
 // in order of priority
@@ -247,10 +248,9 @@ impl From<&Option<HoprState>> for HoprStatus {
     fn from(state: &Option<HoprState>) -> Self {
         match state {
             Some(HoprState::Running) => HoprStatus::Running,
-            Some(HoprState::Starting) => HoprStatus::Starting,
-            Some(HoprState::Indexing) => HoprStatus::Indexing,
             Some(HoprState::Initializing) => HoprStatus::Initializing,
             Some(HoprState::Uninitialized) => HoprStatus::Uninitialized,
+            Some(HoprState::Terminated) => HoprStatus::Terminated,
             None => HoprStatus::Uninitialized,
         }
     }
@@ -330,6 +330,7 @@ impl Display for HoprStatus {
             HoprStatus::Indexing => write!(f, "Indexing"),
             HoprStatus::Initializing => write!(f, "Initializing"),
             HoprStatus::Uninitialized => write!(f, "Uninitialized"),
+            HoprStatus::Terminated => write!(f, "Terminated"),
         }
     }
 }

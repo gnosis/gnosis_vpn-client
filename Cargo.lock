@@ -50,6 +50,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
+ "getrandom 0.3.4",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -329,7 +330,7 @@ checksum = "dcab4c51fb1273e3b0f59078e0cdf8aa99f697925b09f0d2055c18be46b4d48c"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
- "http",
+ "http 1.3.1",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -688,7 +689,7 @@ checksum = "fe215a2f9b51d5f1aa5c8cf22c8be8cdb354934de09c9a4e37aefb79b77552fd"
 dependencies = [
  "alloy-json-rpc",
  "auto_impl",
- "base64",
+ "base64 0.22.1",
  "derive_more",
  "futures",
  "futures-utils-wasm",
@@ -1075,6 +1076,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-broadcast"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "435a87a52755b8f27fcf321ac4f04b2802e337c8c4872923137471ec39c37532"
+dependencies = [
+ "event-listener 5.4.1",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1086,18 +1099,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-channel"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "924ed96dd52d1b75e9c1a3e6275715fd320f5f9439fb5a4a11fa51f4221158d2"
-dependencies = [
- "concurrent-queue",
- "event-listener-strategy",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
 name = "async-compression"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1106,38 +1107,8 @@ dependencies = [
  "compression-codecs",
  "compression-core",
  "futures-core",
- "futures-io",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "async-executor"
-version = "1.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "497c00e0fd83a72a79a39fcbd8e3e2f055d6f6c7e025f3b3d91f4f8e76527fb8"
-dependencies = [
- "async-task",
- "concurrent-queue",
- "fastrand",
- "futures-lite",
- "pin-project-lite",
- "slab",
-]
-
-[[package]]
-name = "async-global-executor"
-version = "2.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05b1b633a2115cd122d73b955eadd9916c18c8f510ec9cd1686404c60ad1c29c"
-dependencies = [
- "async-channel 2.5.0",
- "async-executor",
- "async-io",
- "async-lock",
- "blocking",
- "futures-lite",
- "once_cell",
 ]
 
 [[package]]
@@ -1170,24 +1141,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-process"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc50921ec0055cdd8a16de48773bfeec5c972598674347252c0399676be7da75"
-dependencies = [
- "async-channel 2.5.0",
- "async-io",
- "async-lock",
- "async-signal",
- "async-task",
- "blocking",
- "cfg-if",
- "event-listener 5.4.1",
- "futures-lite",
- "rustix 1.1.2",
-]
-
-[[package]]
 name = "async-signal"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1203,33 +1156,6 @@ dependencies = [
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "async-std"
-version = "1.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c8e079a4ab67ae52b7403632e4618815d6db36d2a010cfe41b02c1b1578f93b"
-dependencies = [
- "async-channel 1.9.0",
- "async-global-executor",
- "async-io",
- "async-lock",
- "async-process",
- "crossbeam-utils",
- "futures-channel",
- "futures-core",
- "futures-io",
- "futures-lite",
- "gloo-timers 0.3.0",
- "kv-log-macro",
- "log",
- "memchr",
- "once_cell",
- "pin-project-lite",
- "pin-utils",
- "slab",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -1253,26 +1179,6 @@ dependencies = [
  "quote",
  "syn 2.0.110",
 ]
-
-[[package]]
-name = "async-tar"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1937db2d56578aa3919b9bdb0e5100693fd7d1c0f145c53eb81fbb03e217550"
-dependencies = [
- "async-std",
- "filetime",
- "libc",
- "pin-project",
- "redox_syscall 0.2.16",
- "xattr",
-]
-
-[[package]]
-name = "async-task"
-version = "4.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
@@ -1332,8 +1238,8 @@ version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16e2cdb6d5ed835199484bb92bb8b3edd526effe995c61732580439c1a67e2e9"
 dependencies = [
- "base64",
- "http",
+ "base64 0.22.1",
+ "http 1.3.1",
  "log",
  "url",
 ]
@@ -1413,6 +1319,12 @@ dependencies = [
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -1422,6 +1334,12 @@ name = "base64ct"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
+
+[[package]]
+name = "beef"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
 
 [[package]]
 name = "bigdecimal"
@@ -1554,16 +1472,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "blocking"
-version = "1.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e83f8d02be6967315521be875afa792a316e28d57b5a2d401897e2a7921b7f21"
+name = "blokli-client"
+version = "0.8.0"
+source = "git+https://github.com/hoprnet/blokli?rev=e2dc682#e2dc682c52bdd4f78fe7899bbbd86356dc1de7d6"
 dependencies = [
- "async-channel 2.5.0",
- "async-task",
- "futures-io",
- "futures-lite",
- "piper",
+ "anyhow",
+ "async-trait",
+ "cynic",
+ "cynic-codegen",
+ "eventsource-client",
+ "futures",
+ "futures-time",
+ "hex",
+ "reqwest",
+ "serde_json",
+ "smart-default",
+ "thiserror 2.0.17",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1728,17 +1654,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "cfg_eval"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45565fc9416b9896014f5732ac776f810ee53a66730c17e4020c3ec064a8f88f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.110",
-]
-
-[[package]]
 name = "chacha20"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1804,7 +1719,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "clap_lex",
- "strsim",
+ "strsim 0.11.1",
 ]
 
 [[package]]
@@ -1845,7 +1760,8 @@ checksum = "680dc087785c5230f8e8843e2e57ac7c1c90488b6a91b88caa265410568f441b"
 dependencies = [
  "brotli",
  "compression-core",
- "liblzma",
+ "flate2",
+ "memchr",
  "zstd",
  "zstd-safe",
 ]
@@ -2130,6 +2046,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "cynic"
+version = "3.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b215a2d2bebcbbd3bd005b59f5b1b7dc5eb07343d64db80ec23aff9e7e1a2e2"
+dependencies = [
+ "cynic-proc-macros",
+ "ref-cast",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cynic-codegen"
+version = "3.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eeb2693bc9916fa694d2023bb1adc4356a8896b9b96478f23d51a263140811c"
+dependencies = [
+ "cynic-parser",
+ "darling 0.20.11",
+ "once_cell",
+ "ouroboros",
+ "proc-macro2",
+ "quote",
+ "strsim 0.10.0",
+ "syn 2.0.110",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cynic-parser"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3136ed6464e975162667c08092fcb54947ce08785fca301162fd614c4dfd974f"
+dependencies = [
+ "indexmap 2.12.0",
+ "lalrpop-util",
+ "logos",
+]
+
+[[package]]
+name = "cynic-proc-macros"
+version = "3.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c0b2eab13c954db96ae72db53b2d275c237f3197499212c4d55b5ae7418e5b2"
+dependencies = [
+ "cynic-codegen",
+ "darling 0.20.11",
+ "quote",
+ "syn 2.0.110",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2159,7 +2130,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
- "strsim",
+ "strsim 0.11.1",
  "syn 2.0.110",
 ]
 
@@ -2174,7 +2145,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "strsim",
+ "strsim 0.11.1",
  "syn 2.0.110",
 ]
 
@@ -2404,6 +2375,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
+name = "dtoa"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6add3b8cff394282be81f3fc1a0605db594ed69890078ca6e2cab1c408bcf04"
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2460,7 +2437,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=a5b84a233e96bca8f1e48eabd23de7a5a656ff23#a5b84a233e96bca8f1e48eabd23de7a5a656ff23"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=92282ec71e878753c3f72df2ab555d7ef36942a1#92282ec71e878753c3f72df2ab555d7ef36942a1"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2475,7 +2452,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "validator",
  "vergen-gix",
 ]
 
@@ -2614,6 +2590,23 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener 5.4.1",
  "pin-project-lite",
+]
+
+[[package]]
+name = "eventsource-client"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eac4ff1772eb6093353479bf347409299d2dfb3251168a70fb5638724196dd2"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "hyper 0.14.32",
+ "hyper-rustls 0.24.2",
+ "hyper-timeout",
+ "log",
+ "pin-project",
+ "rand 0.8.5",
+ "tokio",
 ]
 
 [[package]]
@@ -2947,7 +2940,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f2f12607f92c69b12ed746fabf9ca4f5c482cba46679c1a75b874ed7c26adb"
 dependencies = [
  "futures-io",
- "rustls",
+ "rustls 0.23.35",
  "rustls-pki-types",
 ]
 
@@ -2969,7 +2962,7 @@ version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17f4f4272ec2be25287f1e184066c249b1f6b6d4d982d7c2f56f424096ae64e2"
 dependencies = [
- "async-channel 1.9.0",
+ "async-channel",
  "async-io",
  "futures-core",
  "pin-project-lite",
@@ -2981,7 +2974,7 @@ version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
 dependencies = [
- "gloo-timers 0.2.6",
+ "gloo-timers",
 ]
 
 [[package]]
@@ -3913,18 +3906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gloo-timers"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
-dependencies = [
- "futures-channel",
- "futures-core",
- "js-sys",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "gnosis_vpn"
 version = "0.55.1"
 dependencies = [
@@ -3959,9 +3940,7 @@ dependencies = [
 name = "gnosis_vpn-lib"
 version = "0.55.1"
 dependencies = [
- "alloy",
  "anyhow",
- "async-lock",
  "backoff",
  "bytesize",
  "directories",
@@ -4000,6 +3979,25 @@ dependencies = [
 
 [[package]]
 name = "h2"
+version = "0.3.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0beca50380b1fc32983fc1cb4587bfa4bb9e78fc259aad4a0032d2080309222d"
+dependencies = [
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
+ "http 0.2.12",
+ "indexmap 2.12.0",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "h2"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c0b69cfcb4e1b9f1bf2f53f95f766e4661169728ec61cd3fe5a0166f2d1386"
@@ -4009,7 +4007,7 @@ dependencies = [
  "fnv",
  "futures-core",
  "futures-sink",
- "http",
+ "http 1.3.1",
  "indexmap 2.12.0",
  "slab",
  "tokio",
@@ -4068,6 +4066,7 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.1.5",
+ "rayon",
 ]
 
 [[package]]
@@ -4217,9 +4216,10 @@ dependencies = [
 [[package]]
 name = "hopr-api"
 version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "async-trait",
+ "auto_impl",
  "chrono",
  "futures",
  "hopr-chain-types",
@@ -4231,192 +4231,91 @@ dependencies = [
  "hopr-primitive-types",
  "multiaddr",
  "strum 0.27.2",
+ "thiserror 2.0.17",
+ "tracing",
 ]
 
 [[package]]
 name = "hopr-async-runtime"
-version = "0.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.4.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
+ "auto_impl",
  "futures",
+ "indexmap 2.12.0",
  "tokio",
 ]
 
 [[package]]
 name = "hopr-bindings"
-version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "4.0.0"
+source = "git+https://github.com/hoprnet/contracts?rev=cc74253f4226fdca9f3ac4147e7ee0ac9b629c7c#cc74253f4226fdca9f3ac4147e7ee0ac9b629c7c"
 dependencies = [
  "alloy",
  "anyhow",
- "serde",
-]
-
-[[package]]
-name = "hopr-chain-actions"
-version = "0.10.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "alloy",
- "async-lock",
- "async-trait",
- "futures",
- "futures-timer",
- "hopr-api",
- "hopr-async-runtime",
- "hopr-bindings",
- "hopr-chain-rpc",
- "hopr-chain-types",
- "hopr-crypto-types",
- "hopr-db-sql",
- "hopr-internal-types",
- "hopr-platform",
- "hopr-primitive-types",
- "lazy_static",
- "multiaddr",
- "serde",
- "smart-default",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
-name = "hopr-chain-api"
-version = "0.8.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "alloy",
- "async-trait",
- "futures",
- "hopr-api",
- "hopr-async-runtime",
- "hopr-chain-actions",
- "hopr-chain-config",
- "hopr-chain-indexer",
- "hopr-chain-rpc",
- "hopr-chain-types",
- "hopr-crypto-types",
- "hopr-db-node",
- "hopr-db-sql",
- "hopr-internal-types",
- "hopr-primitive-types",
- "serde",
- "smart-default",
- "thiserror 2.0.17",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "hopr-chain-config"
-version = "1.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "anyhow",
- "hopr-chain-types",
- "hopr-primitive-types",
- "semver 1.0.27",
+ "const_format",
  "serde",
  "serde_json",
  "serde_with",
  "strum 0.27.2",
- "thiserror 2.0.17",
- "validator",
 ]
 
 [[package]]
-name = "hopr-chain-indexer"
-version = "0.10.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+name = "hopr-chain-connector"
+version = "0.1.1"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
- "alloy",
- "async-compression",
- "async-lock",
- "async-tar",
+ "ahash",
+ "anyhow",
+ "async-broadcast",
  "async-trait",
- "backon",
+ "bincode",
+ "blokli-client",
+ "dashmap",
  "futures",
- "futures-util",
+ "futures-concurrency",
+ "futures-time",
  "hopr-api",
  "hopr-async-runtime",
- "hopr-bindings",
- "hopr-chain-rpc",
  "hopr-chain-types",
  "hopr-crypto-types",
- "hopr-db-entity",
- "hopr-db-sql",
  "hopr-internal-types",
  "hopr-primitive-types",
- "lazy_static",
- "multiaddr",
- "reqwest",
+ "moka",
+ "parking_lot",
+ "petgraph",
+ "redb",
+ "serde_json",
  "smart-default",
- "sqlx",
- "sysinfo",
  "tempfile",
  "thiserror 2.0.17",
  "tracing",
 ]
 
 [[package]]
-name = "hopr-chain-rpc"
-version = "0.7.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "alloy",
- "async-stream",
- "async-trait",
- "futures",
- "futures-timer",
- "hopr-async-runtime",
- "hopr-bindings",
- "hopr-chain-types",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-primitive-types",
- "http",
- "lazy_static",
- "moka",
- "primitive-types 0.14.0",
- "reqwest",
- "rust-stream-ext-concurrent",
- "serde",
- "serde_json",
- "serde_with",
- "serde_yaml",
- "smart-default",
- "thiserror 2.0.17",
- "tower",
- "tracing",
- "url",
- "validator",
-]
-
-[[package]]
 name = "hopr-chain-types"
 version = "0.10.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
- "alloy",
+ "anyhow",
+ "async-trait",
  "hex-literal",
  "hopr-bindings",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-primitive-types",
  "lazy_static",
- "libp2p-identity",
  "multiaddr",
  "serde",
  "serde_with",
  "strum 0.27.2",
  "thiserror 2.0.17",
- "tracing",
 ]
 
 [[package]]
 name = "hopr-crypto-keypair"
 version = "0.4.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "hex",
  "hopr-crypto-random",
@@ -4435,7 +4334,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-packet"
 version = "1.0.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "flagset",
  "hex",
@@ -4443,7 +4342,6 @@ dependencies = [
  "hopr-crypto-sphinx",
  "hopr-crypto-types",
  "hopr-internal-types",
- "hopr-path",
  "hopr-primitive-types",
  "serde",
  "serde_bytes",
@@ -4454,8 +4352,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-random"
-version = "0.2.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.3.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "generic-array 1.3.5",
  "rand 0.8.5",
@@ -4464,7 +4362,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-sphinx"
 version = "0.10.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "bimap",
  "curve25519-dalek",
@@ -4483,8 +4381,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-types"
-version = "0.7.3"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.8.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "aes",
  "blake3",
@@ -4516,11 +4414,10 @@ dependencies = [
 
 [[package]]
 name = "hopr-db-entity"
-version = "0.4.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.5.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "anyhow",
- "chrono",
  "clap",
  "futures",
  "hopr-crypto-types",
@@ -4536,11 +4433,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-db-migration"
-version = "0.2.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.3.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
- "hopr-internal-types",
- "hopr-primitive-types",
  "sea-orm-migration",
  "tokio",
 ]
@@ -4548,7 +4443,7 @@ dependencies = [
 [[package]]
 name = "hopr-db-node"
 version = "0.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "async-lock",
  "async-stream",
@@ -4567,7 +4462,6 @@ dependencies = [
  "hopr-metrics",
  "hopr-network-types",
  "hopr-parallelize",
- "hopr-path",
  "hopr-platform",
  "hopr-primitive-types",
  "lazy_static",
@@ -4584,38 +4478,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "hopr-db-sql"
-version = "0.19.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "async-trait",
- "chrono",
- "dashmap",
- "futures",
- "hopr-crypto-packet",
- "hopr-crypto-types",
- "hopr-db-entity",
- "hopr-db-migration",
- "hopr-internal-types",
- "hopr-primitive-types",
- "moka",
- "multiaddr",
- "sea-orm",
- "sea-query",
- "smart-default",
- "sqlx",
- "strum 0.27.2",
- "thiserror 2.0.17",
- "tracing",
- "validator",
-]
-
-[[package]]
 name = "hopr-internal-types"
-version = "0.12.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.14.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "aquamarine",
+ "async-trait",
  "hex-literal",
  "hopr-crypto-random",
  "hopr-crypto-types",
@@ -4632,16 +4500,14 @@ dependencies = [
 
 [[package]]
 name = "hopr-lib"
-version = "3.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "4.0.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
- "alloy",
  "anyhow",
- "async-lock",
  "async-trait",
  "atomic_enum",
  "backon",
- "base64",
+ "base64 0.22.1",
  "bytesize",
  "cfg-if",
  "const_format",
@@ -4650,8 +4516,7 @@ dependencies = [
  "futures-time",
  "hopr-api",
  "hopr-async-runtime",
- "hopr-chain-api",
- "hopr-chain-types",
+ "hopr-chain-connector",
  "hopr-crypto-keypair",
  "hopr-crypto-random",
  "hopr-crypto-types",
@@ -4660,15 +4525,13 @@ dependencies = [
  "hopr-metrics",
  "hopr-network-types",
  "hopr-parallelize",
- "hopr-path",
  "hopr-platform",
  "hopr-primitive-types",
- "hopr-strategy",
  "hopr-transport",
  "human-bandwidth",
  "lazy_static",
+ "parking_lot",
  "serde",
- "serde_json",
  "serde_with",
  "smart-default",
  "strum 0.27.2",
@@ -4682,7 +4545,7 @@ dependencies = [
 [[package]]
 name = "hopr-metrics"
 version = "1.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "prometheus",
 ]
@@ -4690,7 +4553,7 @@ dependencies = [
 [[package]]
 name = "hopr-network-types"
 version = "1.1.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -4703,7 +4566,6 @@ dependencies = [
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-metrics",
- "hopr-path",
  "hopr-primitive-types",
  "lazy_static",
  "libp2p-identity",
@@ -4722,38 +4584,16 @@ dependencies = [
 [[package]]
 name = "hopr-parallelize"
 version = "0.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "futures",
  "rayon",
 ]
 
 [[package]]
-name = "hopr-path"
-version = "0.9.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "async-lock",
- "async-trait",
- "cfg_eval",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-metrics",
- "hopr-primitive-types",
- "lazy_static",
- "petgraph",
- "serde",
- "serde_with",
- "smart-default",
- "thiserror 2.0.17",
- "tracing",
-]
-
-[[package]]
 name = "hopr-platform"
 version = "0.2.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "thiserror 2.0.17",
 ]
@@ -4761,9 +4601,8 @@ dependencies = [
 [[package]]
 name = "hopr-primitive-types"
 version = "0.9.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
- "alloy",
  "bigdecimal",
  "chrono",
  "float-cmp",
@@ -4780,7 +4619,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "hopr-crypto-packet",
  "hopr-primitive-types",
@@ -4793,7 +4632,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "1.0.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -4825,7 +4664,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "aquamarine",
  "hopr-crypto-packet",
@@ -4837,49 +4676,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "hopr-strategy"
-version = "0.15.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
-dependencies = [
- "async-trait",
- "futures",
- "hopr-api",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-metrics",
- "hopr-primitive-types",
- "hopr-transport-protocol",
- "lazy_static",
- "serde",
- "serde_with",
- "smart-default",
- "strum 0.27.2",
- "thiserror 2.0.17",
- "tracing",
- "validator",
-]
-
-[[package]]
 name = "hopr-transport"
 version = "0.15.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
- "async-lock",
  "async-trait",
  "cfg-if",
  "futures",
  "futures-concurrency",
  "hopr-api",
  "hopr-async-runtime",
- "hopr-chain-types",
  "hopr-crypto-packet",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-metrics",
  "hopr-network-types",
- "hopr-parallelize",
- "hopr-path",
  "hopr-primitive-types",
  "hopr-protocol-app",
  "hopr-transport-identity",
@@ -4891,7 +4702,6 @@ dependencies = [
  "hopr-transport-session",
  "lazy_static",
  "proc-macro-regex",
- "rand 0.8.5",
  "serde",
  "serde_with",
  "smart-default",
@@ -4904,7 +4714,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-bloom"
 version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "bloomfilter",
  "hopr-crypto-random",
@@ -4915,7 +4725,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-identity"
 version = "0.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "libp2p-identity",
  "multiaddr",
@@ -4925,7 +4735,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "0.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "futures",
  "futures-timer",
@@ -4941,7 +4751,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-network"
 version = "0.8.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "futures",
  "hopr-api",
@@ -4966,7 +4776,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-p2p"
 version = "0.8.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "async-trait",
  "futures",
@@ -4978,7 +4788,6 @@ dependencies = [
  "lazy_static",
  "libp2p",
  "libp2p-stream",
- "rand 0.8.5",
  "thiserror 2.0.17",
  "tracing",
 ]
@@ -4986,7 +4795,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4994,13 +4803,11 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "hex",
- "hopr-api",
  "hopr-async-runtime",
  "hopr-crypto-random",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-network-types",
- "hopr-parallelize",
  "hopr-platform",
  "hopr-primitive-types",
  "hopr-protocol-app",
@@ -5018,8 +4825,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-protocol"
-version = "0.11.3"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+version = "0.12.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5031,13 +4838,10 @@ dependencies = [
  "hopr-crypto-packet",
  "hopr-crypto-random",
  "hopr-crypto-types",
- "hopr-db-node",
  "hopr-internal-types",
  "hopr-metrics",
  "hopr-network-types",
  "hopr-parallelize",
- "hopr-path",
- "hopr-platform",
  "hopr-primitive-types",
  "hopr-protocol-app",
  "hopr-transport-bloom",
@@ -5060,7 +4864,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-session"
 version = "0.13.5"
-source = "git+https://github.com/hoprnet/hoprnet?rev=f57f777c946d03dd36aaffff13d891e2aad141af#f57f777c946d03dd36aaffff13d891e2aad141af"
+source = "git+https://github.com/hoprnet/hoprnet?rev=82a12d29111a14a7ebfaa79227886147ac269cb7#82a12d29111a14a7ebfaa79227886147ac269cb7"
 dependencies = [
  "arrayvec",
  "async-trait",
@@ -5093,6 +4897,17 @@ dependencies = [
 
 [[package]]
 name = "http"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "601cbb57e577e2f5ef5be8e7b83f0f63994f25aa94d673e54a92d5c516d101f1"
+dependencies = [
+ "bytes",
+ "fnv",
+ "itoa",
+]
+
+[[package]]
+name = "http"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4a85d31aea989eead29a3aaf9e1115a180df8282431156e533de47660892565"
@@ -5104,12 +4919,23 @@ dependencies = [
 
 [[package]]
 name = "http-body"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ceab25649e9960c0311ea418d17bee82c0dcec1bd053b5f9a66e265a693bed2"
+dependencies = [
+ "bytes",
+ "http 0.2.12",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "http-body"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1efedce1fb8e6913f23e0c92de8e62cd5b772a67e7b3946df930a62566c93184"
 dependencies = [
  "bytes",
- "http",
+ "http 1.3.1",
 ]
 
 [[package]]
@@ -5120,8 +4946,8 @@ checksum = "b021d93e26becf5dc7e1b75b1bed1fd93124b374ceb73f43d4d4eafec896a64a"
 dependencies = [
  "bytes",
  "futures-core",
- "http",
- "http-body",
+ "http 1.3.1",
+ "http-body 1.0.1",
  "pin-project-lite",
 ]
 
@@ -5130,6 +4956,12 @@ name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "human-bandwidth"
@@ -5159,6 +4991,30 @@ dependencies = [
 
 [[package]]
 name = "hyper"
+version = "0.14.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41dfc780fdec9373c01bae43289ea34c972e40ee3c9f6b3c8801a35f35586ce7"
+dependencies = [
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "h2 0.3.27",
+ "http 0.2.12",
+ "http-body 0.4.6",
+ "httparse",
+ "httpdate",
+ "itoa",
+ "pin-project-lite",
+ "socket2 0.5.10",
+ "tokio",
+ "tower-service",
+ "tracing",
+ "want",
+]
+
+[[package]]
+name = "hyper"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
@@ -5167,9 +5023,9 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2",
- "http",
- "http-body",
+ "h2 0.4.12",
+ "http 1.3.1",
+ "http-body 1.0.1",
  "httparse",
  "itoa",
  "pin-project-lite",
@@ -5181,18 +5037,46 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
+dependencies = [
+ "futures-util",
+ "http 0.2.12",
+ "hyper 0.14.32",
+ "log",
+ "rustls 0.21.12",
+ "rustls-native-certs",
+ "tokio",
+ "tokio-rustls 0.24.1",
+]
+
+[[package]]
+name = "hyper-rustls"
 version = "0.27.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c93eb611681b207e1fe55d5a71ecf91572ec8a6705cdb6857f7d8d5242cf58"
 dependencies = [
- "http",
- "hyper",
+ "http 1.3.1",
+ "hyper 1.8.1",
  "hyper-util",
- "rustls",
+ "rustls 0.23.35",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.26.4",
  "tower-service",
+]
+
+[[package]]
+name = "hyper-timeout"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
+dependencies = [
+ "hyper 0.14.32",
+ "pin-project-lite",
+ "tokio",
+ "tokio-io-timeout",
 ]
 
 [[package]]
@@ -5203,7 +5087,7 @@ checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
 dependencies = [
  "bytes",
  "http-body-util",
- "hyper",
+ "hyper 1.8.1",
  "hyper-util",
  "native-tls",
  "tokio",
@@ -5217,14 +5101,14 @@ version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52e9a2a24dc5c6821e71a7030e1e14b7b632acac55c40e9d2e082c621261bb56"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-core",
  "futures-util",
- "http",
- "http-body",
- "hyper",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "hyper 1.8.1",
  "ipnet",
  "libc",
  "percent-encoding",
@@ -5412,9 +5296,9 @@ dependencies = [
  "attohttpc",
  "bytes",
  "futures",
- "http",
+ "http 1.3.1",
  "http-body-util",
- "hyper",
+ "hyper 1.8.1",
  "hyper-util",
  "log",
  "rand 0.9.2",
@@ -5508,6 +5392,7 @@ checksum = "6717a8d2a5a929a1a2eb43a12812498ed141a0bcfb7e8f7844fbdbe4303bba9f"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.0",
+ "rayon",
  "serde",
  "serde_core",
 ]
@@ -5753,12 +5638,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "kv-log-macro"
-version = "1.0.7"
+name = "lalrpop-util"
+version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0de8b303297635ad57c9f5059fd9cee7a47f8e8daa09df0fcd07dd39fb22977f"
+checksum = "b5baa5e9ff84f1aefd264e6869907646538a52147a755d494517a8007fb48733"
 dependencies = [
- "log",
+ "rustversion",
 ]
 
 [[package]]
@@ -5775,27 +5660,6 @@ name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
-
-[[package]]
-name = "liblzma"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73c36d08cad03a3fbe2c4e7bb3a9e84c57e4ee4135ed0b065cade3d98480c648"
-dependencies = [
- "liblzma-sys",
- "num_cpus",
-]
-
-[[package]]
-name = "liblzma-sys"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01b9596486f6d60c3bbe644c0e1be1aa6ccc472ad630fe8927b456973d7cb736"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
-]
 
 [[package]]
 name = "libm"
@@ -5829,8 +5693,10 @@ dependencies = [
  "libp2p-connection-limits",
  "libp2p-core",
  "libp2p-dns",
+ "libp2p-identify",
  "libp2p-identity",
  "libp2p-mdns",
+ "libp2p-metrics",
  "libp2p-noise",
  "libp2p-quic",
  "libp2p-request-response",
@@ -5933,6 +5799,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-identify"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ab792a8b68fdef443a62155b01970c81c3aadab5e659621b063ef252a8e65e8"
+dependencies = [
+ "asynchronous-codec",
+ "either",
+ "futures",
+ "futures-bounded",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-swarm",
+ "quick-protobuf",
+ "quick-protobuf-codec",
+ "smallvec",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
 name = "libp2p-identity"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5968,6 +5855,22 @@ dependencies = [
  "socket2 0.5.10",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "libp2p-metrics"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805a555148522cb3414493a5153451910cb1a146c53ffbf4385708349baf62b7"
+dependencies = [
+ "futures",
+ "libp2p-core",
+ "libp2p-identify",
+ "libp2p-identity",
+ "libp2p-swarm",
+ "pin-project",
+ "prometheus-client",
+ "web-time",
 ]
 
 [[package]]
@@ -6008,7 +5911,7 @@ dependencies = [
  "quinn",
  "rand 0.8.5",
  "ring",
- "rustls",
+ "rustls 0.23.35",
  "socket2 0.5.10",
  "thiserror 2.0.17",
  "tokio",
@@ -6107,8 +6010,8 @@ dependencies = [
  "libp2p-identity",
  "rcgen",
  "ring",
- "rustls",
- "rustls-webpki",
+ "rustls 0.23.35",
+ "rustls-webpki 0.103.8",
  "thiserror 2.0.17",
  "x509-parser",
  "yasna",
@@ -6152,7 +6055,7 @@ checksum = "416f7e718bdb06000964960ffa43b4335ad4012ae8b99060261aa4a8088d5ccb"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
- "redox_syscall 0.5.18",
+ "redox_syscall",
 ]
 
 [[package]]
@@ -6198,8 +6101,38 @@ name = "log"
 version = "0.4.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+
+[[package]]
+name = "logos"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7251356ef8cb7aec833ddf598c6cb24d17b689d20b993f9d11a3d764e34e6458"
 dependencies = [
- "value-bag",
+ "logos-derive",
+]
+
+[[package]]
+name = "logos-codegen"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59f80069600c0d66734f5ff52cc42f2dabd6b29d205f333d61fd7832e9e9963f"
+dependencies = [
+ "beef",
+ "fnv",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "regex-syntax 0.8.8",
+ "syn 2.0.110",
+]
+
+[[package]]
+name = "logos-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24fb722b06a9dc12adb0963ed585f19fc61dc5413e6a9be9422ef92c091e731d"
+dependencies = [
+ "logos-codegen",
 ]
 
 [[package]]
@@ -6580,15 +6513,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e0826a989adedc2a244799e823aece04662b66609d96af8dff7ac6df9a8925d"
 
 [[package]]
-name = "ntapi"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8a3895c6391c39d7fe7ebc444a87eb2991b2a0bc718fdabd071eec617fc68e4"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6712,25 +6636,6 @@ dependencies = [
  "ruint",
  "serde",
  "smallvec",
-]
-
-[[package]]
-name = "objc2-core-foundation"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
-dependencies = [
- "bitflags 2.10.0",
-]
-
-[[package]]
-name = "objc2-io-kit"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
-dependencies = [
- "libc",
- "objc2-core-foundation",
 ]
 
 [[package]]
@@ -6899,7 +6804,7 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall 0.5.18",
+ "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
 ]
@@ -6926,7 +6831,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde_core",
 ]
 
@@ -6964,6 +6869,7 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap 2.12.0",
+ "rayon",
  "serde",
  "serde_derive",
 ]
@@ -7027,17 +6933,6 @@ dependencies = [
  "rand 0.9.2",
  "socket2 0.6.1",
  "thiserror 2.0.17",
-]
-
-[[package]]
-name = "piper"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96c8c490f422ef9a4efd2cb5b42b76c8613d7e7dfc1caf667b8a3350a5acc066"
-dependencies = [
- "atomic-waker",
- "fastrand",
- "futures-io",
 ]
 
 [[package]]
@@ -7258,6 +7153,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus-client"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf41c1a7c32ed72abe5082fb19505b969095c12da9f5732a4bc9878757fd087c"
+dependencies = [
+ "dtoa",
+ "itoa",
+ "parking_lot",
+ "prometheus-client-derive-encode",
+]
+
+[[package]]
+name = "prometheus-client-derive-encode"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "440f724eba9f6996b75d63681b0a92b06947f1457076d503a4d2e2c8f56442b8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.110",
+]
+
+[[package]]
 name = "proptest"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7337,7 +7255,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls",
+ "rustls 0.23.35",
  "socket2 0.6.1",
  "thiserror 2.0.17",
  "tokio",
@@ -7357,7 +7275,7 @@ dependencies = [
  "rand 0.9.2",
  "ring",
  "rustc-hash",
- "rustls",
+ "rustls 0.23.35",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.17",
@@ -7506,12 +7424,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_syscall"
-version = "0.2.16"
+name = "redb"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb5a58c1855b4b6819d59012155603f0b22ad30cad752600aadfcb695265519a"
+checksum = "ae323eb086579a3769daa2c753bb96deb95993c534711e0dbe881b5192906a06"
 dependencies = [
- "bitflags 1.3.2",
+ "libc",
 ]
 
 [[package]]
@@ -7596,18 +7514,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d0946410b9f7b082a427e4ef5c8ff541a88b357bc6c637c40db3a68ac70a36f"
 dependencies = [
  "async-compression",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2",
- "http",
- "http-body",
+ "h2 0.4.12",
+ "http 1.3.1",
+ "http-body 1.0.1",
  "http-body-util",
- "hyper",
- "hyper-rustls",
+ "hyper 1.8.1",
+ "hyper-rustls 0.27.7",
  "hyper-tls",
  "hyper-util",
  "js-sys",
@@ -7630,7 +7548,6 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
  "web-sys",
 ]
 
@@ -7840,6 +7757,18 @@ dependencies = [
 
 [[package]]
 name = "rustls"
+version = "0.21.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f56a14d1f48b391359b22f731fd4bd7e43c97f3c50eee276f3aa09c94784d3e"
+dependencies = [
+ "log",
+ "ring",
+ "rustls-webpki 0.101.7",
+ "sct",
+]
+
+[[package]]
+name = "rustls"
 version = "0.23.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "533f54bc6a7d4f647e46ad909549eda97bf5afc1585190ef692b4286b198bd8f"
@@ -7847,9 +7776,30 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki",
+ "rustls-webpki 0.103.8",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-native-certs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9aace74cb666635c918e9c12bc0d348266037aa8eb599b5cba565709a8dff00"
+dependencies = [
+ "openssl-probe",
+ "rustls-pemfile",
+ "schannel",
+ "security-framework",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
+dependencies = [
+ "base64 0.21.7",
 ]
 
 [[package]]
@@ -7860,6 +7810,16 @@ checksum = "94182ad936a0c91c324cd46c6511b9510ed16af436d7b5bab34beab0afd55f7a"
 dependencies = [
  "web-time",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-webpki"
+version = "0.101.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b6275d1ee7a1cd780b64aca7726599a1dbc893b1e64144529e55c3c2f745765"
+dependencies = [
+ "ring",
+ "untrusted",
 ]
 
 [[package]]
@@ -7980,6 +7940,16 @@ dependencies = [
  "pbkdf2",
  "salsa20",
  "sha2",
+]
+
+[[package]]
+name = "sct"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
+dependencies = [
+ "ring",
+ "untrusted",
 ]
 
 [[package]]
@@ -8367,7 +8337,7 @@ version = "3.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10574371d41b0d9b2cff89418eda27da52bcaff2cc8741db26382a77c29131f1"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "chrono",
  "hex",
  "indexmap 1.9.3",
@@ -8639,7 +8609,7 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "crc",
@@ -8657,7 +8627,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
- "rustls",
+ "rustls 0.23.35",
  "serde",
  "serde_json",
  "sha2",
@@ -8715,7 +8685,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
 dependencies = [
  "atoi",
- "base64",
+ "base64 0.22.1",
  "bitflags 2.10.0",
  "byteorder",
  "bytes",
@@ -8758,7 +8728,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
 dependencies = [
  "atoi",
- "base64",
+ "base64 0.22.1",
  "bitflags 2.10.0",
  "byteorder",
  "chrono",
@@ -8836,6 +8806,12 @@ dependencies = [
  "unicode-normalization",
  "unicode-properties",
 ]
+
+[[package]]
+name = "strsim"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "strsim"
@@ -8928,20 +8904,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.110",
-]
-
-[[package]]
-name = "sysinfo"
-version = "0.37.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16607d5caffd1c07ce073528f9ed972d88db15dd44023fa57142963be3feb11f"
-dependencies = [
- "libc",
- "memchr",
- "ntapi",
- "objc2-core-foundation",
- "objc2-io-kit",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -9134,6 +9096,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-io-timeout"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bd86198d9ee903fedd2f9a2e72014287c0d9167e4ae43b5853007205dda1b76"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9156,11 +9128,21 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c28327cf380ac148141087fbfb9de9d7bd4e84ab5d2c28fbc911d753de8a7081"
+dependencies = [
+ "rustls 0.21.12",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-rustls"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls",
+ "rustls 0.23.35",
  "tokio",
 ]
 
@@ -9266,8 +9248,8 @@ dependencies = [
  "bitflags 2.10.0",
  "bytes",
  "futures-util",
- "http",
- "http-body",
+ "http 1.3.1",
+ "http-body 1.0.1",
  "iri-string",
  "pin-project-lite",
  "tower",
@@ -9562,12 +9544,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
-name = "value-bag"
-version = "1.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "943ce29a8a743eb10d6082545d861b24f9d1b160b7d741e0f2cdf726bec909c5"
-
-[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9732,19 +9708,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "wasmtimer"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9813,22 +9776,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
-name = "winapi"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
-dependencies = [
- "winapi-i686-pc-windows-gnu",
- "winapi-x86_64-pc-windows-gnu",
-]
-
-[[package]]
-name = "winapi-i686-pc-windows-gnu"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
-
-[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9836,12 +9783,6 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.48.0",
 ]
-
-[[package]]
-name = "winapi-x86_64-pc-windows-gnu"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
@@ -10329,15 +10270,6 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.17",
  "time",
-]
-
-[[package]]
-name = "xattr"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d1526bbe5aaeb5eb06885f4d987bcdfa5e23187055de9b83fe00156a821fabc"
-dependencies = [
- "libc",
 ]
 
 [[package]]

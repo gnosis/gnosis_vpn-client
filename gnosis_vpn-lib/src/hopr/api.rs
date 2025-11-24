@@ -1,12 +1,15 @@
 use bytesize::ByteSize;
 use edgli::{
-    EdgliProcesses,
     hopr_lib::{
-        Address, HoprSessionId, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionTarget,
-        SurbBalancerConfig,
+        Address, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget, SurbBalancerConfig,
         errors::HoprLibError,
-        utils::session::{
-            ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
+        utils::{
+            blokli::{BlokliClient, HoprBlockchainSafeConnector},
+            db::HoprNodeDb,
+            session::{
+                ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
+                create_udp_client_binding,
+            },
         },
     },
     run_hopr_edge_node,
@@ -16,8 +19,8 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use std::fmt::{self, Display};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
+use std::{fmt::{self, Display}, str::FromStr};
+use std::{net::SocketAddr, sync::Arc};
 
 use crate::{
     balance::Balances,
@@ -25,12 +28,6 @@ use crate::{
     info::Info,
     ticket_stats::TicketStats,
 };
-
-pub struct Hopr {
-    hopr: Arc<edgli::hopr_lib::Hopr>,
-    processes: Vec<EdgliProcesses>,
-    open_listeners: ListenerJoinHandles,
-}
 
 #[derive(Debug, Error)]
 pub enum ChannelError {
@@ -44,26 +41,28 @@ pub enum ChannelError {
     HoprLibError(#[from] HoprLibError),
 }
 
+pub struct Hopr {
+    hopr: Arc<edgli::hopr_lib::Hopr<Arc<HoprBlockchainSafeConnector<BlokliClient>>, HoprNodeDb>>,
+    open_listeners: Arc<ListenerJoinHandles>,
+}
+
 impl Hopr {
     #[instrument(skip(keys, cfg), level = "debug", err)]
     pub async fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
+        db_data_dir: &std::path::Path,
         keys: edgli::hopr_lib::HoprKeys,
     ) -> Result<Self, HoprError> {
+        // HoprBlockchainSafeConnector<BlokliClient>
         tracing::debug!("running hopr edge node");
-        let (hopr, processes) = run_hopr_edge_node(cfg, keys)
+        let hopr = run_hopr_edge_node(cfg, db_data_dir, keys)
             .await
             .map_err(|e| HoprError::Construction(e.to_string()))?;
-
-        tracing::debug!("awaiting hopr processes");
-        let processes = processes.await?;
-        let open_listeners = Arc::new(async_lock::RwLock::new(HashMap::new()));
 
         tracing::debug!("hopr edge node finished setup");
         Ok(Self {
             hopr,
-            processes,
-            open_listeners,
+            open_listeners: Default::default(),
         })
     }
 
@@ -176,7 +175,7 @@ impl Hopr {
 
         let hopr = self.hopr.clone();
         let open_listeners = self.open_listeners.clone();
-        if bind_host.port() > 0 && open_listeners.read_arc().await.contains_key(&listener_id) {
+        if bind_host.port() > 0 && open_listeners.as_ref().0.contains_key(&listener_id) {
             return Err(HoprError::Construction("listener already exists".into()));
         }
 
@@ -247,12 +246,14 @@ impl Hopr {
         tracing::debug!("close hopr session");
         let unspecified: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
 
-        let mut open_listeners = self.open_listeners.write_arc().await;
-
         // Find all listeners with protocol, listening IP and optionally port number (if > 0)
-        let to_remove = open_listeners
+        let to_remove = self
+            .open_listeners
+            .as_ref()
+            .0
             .iter()
-            .filter_map(|(ListenerId(proto, addr), _)| {
+            .filter_map(|record| {
+                let ListenerId(proto, addr) = record.key();
                 if protocol == *proto && (addr == &bound_session || addr == &unspecified) {
                     Some(ListenerId(*proto, *addr))
                 } else {
@@ -266,8 +267,14 @@ impl Hopr {
         }
 
         for bound_addr in to_remove {
-            let entry = open_listeners.remove(&bound_addr).ok_or(HoprError::SessionNotFound)?;
-            entry.abort_handle.abort();
+            let entry = self
+                .open_listeners
+                .as_ref()
+                .0
+                .remove(&bound_addr)
+                .ok_or(HoprError::SessionNotFound)?;
+
+            entry.1.abort_handle.abort();
         }
 
         Ok(())
@@ -277,24 +284,28 @@ impl Hopr {
     pub async fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
         tracing::debug!("list hopr sessions");
         self.open_listeners
-            .read_arc()
-            .await
+            .as_ref()
+            .0
             .iter()
-            .filter(|(id, _)| id.0 == protocol)
-            .map(|(id, entry)| SessionClientMetadata {
-                protocol,
-                bound_host: id.1,
-                target: entry.target.to_string(),
-                forward_path: entry.forward_path.clone(),
-                return_path: entry.return_path.clone(),
-                destination: entry.destination,
-                hopr_mtu: SESSION_MTU,
-                surb_len: SURB_SIZE,
-                active_clients: entry.get_clients().iter().map(|e| e.key().to_string()).collect(),
-                max_client_sessions: entry.max_client_sessions,
-                max_surb_upstream: entry.max_surb_upstream,
-                response_buffer: entry.response_buffer,
-                session_pool: entry.session_pool,
+            .filter(|content| content.key().0 == protocol)
+            .map(|content| {
+                let key = content.key();
+                let entry = content.value();
+                SessionClientMetadata {
+                    protocol,
+                    bound_host: key.1,
+                    target: entry.target.to_string(),
+                    forward_path: entry.forward_path.clone(),
+                    return_path: entry.return_path.clone(),
+                    destination: entry.destination,
+                    hopr_mtu: SESSION_MTU,
+                    surb_len: SURB_SIZE,
+                    active_clients: entry.get_clients().iter().map(|e| e.key().to_string()).collect(),
+                    max_client_sessions: entry.max_client_sessions,
+                    max_surb_upstream: entry.max_surb_upstream,
+                    response_buffer: entry.response_buffer,
+                    session_pool: entry.session_pool,
+                }
             })
             .collect::<Vec<_>>()
     }
@@ -302,7 +313,7 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
         tracing::debug!("adjust hopr session");
-        let session_id = HoprSessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+        let session_id = SessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
         // NOTE: known bug: adjust session does not update self.open_listeners which leads to
         // outdated info being reported by list_sessions
@@ -319,7 +330,7 @@ impl Hopr {
             node_address: self.hopr.me_onchain(),
             node_peer_id: self.hopr.me_peer_id().to_string(),
             safe_address: self.hopr.get_safe_config().safe_address,
-            network: self.hopr.network(),
+            network: "unknwon".into(), // TODO: extract network name
         }
     }
 
@@ -359,7 +370,7 @@ impl Hopr {
         let re = Regex::new(r"hopr_indexer_sync_progress(?:\{[^}]*\})?\s+([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
             .expect("the sync extraction regex is constructible");
 
-        edgli::hopr_lib::Hopr::collect_hopr_metrics()
+        edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics()
             .map(move |prometheus_values| {
                 tracing::debug!("prometheus metrics: {}", prometheus_values);
                 let sync_percentage = re
@@ -409,12 +420,10 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn shutdown(&self) {
         tracing::debug!("shutdown hopr session listeners");
-        let open_listeners = self.open_listeners.clone();
 
-        let open_listeners = open_listeners.write_arc().await;
-        for process in open_listeners.iter() {
-            tracing::info!("shutting down session listener: {:?}", process.0);
-            process.1.abort_handle.abort();
+        for process in self.open_listeners.as_ref().0.iter() {
+            tracing::info!("shutting down session listener: {:?}", process.key());
+            process.value().abort_handle.abort();
         }
     }
 }
@@ -431,17 +440,5 @@ impl Display for HoprTelemetry {
             "HoprTelemetry(sync_percentage: {:.2}%)",
             self.sync_percentage * 100.0
         )
-    }
-}
-
-impl Drop for Hopr {
-    fn drop(&mut self) {
-        for process in &mut self.processes {
-            tracing::info!("shutting down HOPR process: {process}");
-            match process {
-                EdgliProcesses::HoprLib(_process, handle) => handle.abort(),
-                EdgliProcesses::Hopr(handle) => handle.abort(),
-            }
-        }
     }
 }

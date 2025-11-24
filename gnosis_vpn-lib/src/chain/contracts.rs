@@ -1,4 +1,4 @@
-use alloy::{
+use edgli::hopr_lib::reexports::alloy::{
     primitives::{Address, B256, Bytes, U256, address},
     providers::Provider,
     sol,
@@ -267,7 +267,7 @@ pub async fn send_hopr_tokens(provider: &GnosisProvider, recipient: Address, amo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{U256, address, hex};
+    use edgli::hopr_lib::reexports::alloy::primitives::{U256, address, hex};
 
     #[test]
     fn build_user_data_encodes_nonce_token_amount_and_admins() -> anyhow::Result<()> {
