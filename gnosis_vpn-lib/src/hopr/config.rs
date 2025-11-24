@@ -93,6 +93,16 @@ strategy:
           min_stake_threshold: {min_stake_threshold}
         - !ClosureFinalizer
           max_closure_overdue: 300
+network_options:
+    # Minimum delay (seconds) will be multiplied by backoff, it will be half the actual minimum value.
+    min_delay: 1
+    max_delay: 30 # down from 300, means that at most 30 seconds will be the maximum backed off timeout in case of failed probes
+    # Minimum score to add a node to the routing table
+    node_score_auto_path_threshold: 0.90 # down from 0.95
+    # Maximum latency for the first hop in ms
+    max_first_hop_latency_threshold: 400 # up from 250
+    # Indicates how long (in seconds) a node is considered "ignored"
+    ignore_timeframe: 0 # down from 2 minutes
 "#,
         db_file = db_file()?.to_string_lossy(),
         port = rand::rng().random_range(20000..65000),
