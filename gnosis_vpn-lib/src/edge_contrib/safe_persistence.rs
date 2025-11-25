@@ -8,7 +8,7 @@ use serde_yaml;
 use thiserror::Error;
 use tokio::fs;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Error)]
 pub enum PersistenceError {
@@ -74,6 +74,7 @@ impl SafeModulePersistence {
 mod tests {
     use super::*;
     use alloy::primitives::address;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn sample_safe_module() -> SafeModule {
