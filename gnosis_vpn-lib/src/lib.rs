@@ -4,6 +4,7 @@ pub mod command;
 pub mod config;
 pub mod connection;
 pub mod core;
+pub mod edge_contrib;
 pub mod external_event;
 pub mod hopr;
 pub mod hopr_params;
