@@ -1,12 +1,13 @@
-use std::time::Duration;
-
 use bytesize::ByteSize;
 use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
+use serde::{Deserialize, Serialize};
+
+use std::time::Duration;
 
 use crate::ping;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Options {
     pub timeouts: Timeouts,
     pub sessions: Sessions,
@@ -15,31 +16,31 @@ pub struct Options {
     pub max_surb_upstream: MaxSurbUpstream,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sessions {
     pub bridge: SessionParameters,
     pub wg: SessionParameters,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Timeouts {
     pub http: Duration,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionParameters {
     pub target: SessionTarget,
     pub capabilities: SessionCapabilities,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BufferSizes {
     pub bridge: ByteSize,
     pub ping: ByteSize,
     pub main: ByteSize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaxSurbUpstream {
     pub bridge: Bandwidth,
     pub ping: Bandwidth,

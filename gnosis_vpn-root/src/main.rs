@@ -368,19 +368,11 @@ async fn loop_daemon(
     }
 }
 
+/// limit root service to two threads
+/// one for the socket to be responsive
+/// one for handling worker task orchestration
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 fn main() {
-    match hopr_lib::prepare_tokio_runtime() {
-        Ok(rt) => {
-            rt.block_on(main_inner());
-        }
-        Err(e) => {
-            eprintln!("error preparing tokio runtime: {}", e);
-            process::exit(exitcode::IOERR);
-        }
-    }
-}
-
-async fn main_inner() {
     let args = cli::parse();
 
     // install global collector configured based on RUST_LOG env var.

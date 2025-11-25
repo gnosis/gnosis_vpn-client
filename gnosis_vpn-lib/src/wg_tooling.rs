@@ -1,8 +1,10 @@
-use std::os::unix::fs::PermissionsExt;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+
+use std::os::unix::fs::PermissionsExt;
 
 use crate::dirs;
 
@@ -53,7 +55,7 @@ pub struct KeyPair {
     pub public_key: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
