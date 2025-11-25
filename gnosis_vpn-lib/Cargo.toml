@@ -12,6 +12,7 @@ backoff.workspace = true
 bytesize = { workspace = true, features = ["serde"] }
 directories.workspace = true
 edgli.workspace = true
+hopr-utils-session.workspace = true
 human-bandwidth = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 humantime-serde.workspace = true

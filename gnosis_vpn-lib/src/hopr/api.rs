@@ -3,23 +3,21 @@ use edgli::{
     hopr_lib::{
         Address, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget, SurbBalancerConfig,
         errors::HoprLibError,
-        utils::{
-            blokli::{BlokliClient, HoprBlockchainSafeConnector},
-            db::HoprNodeDb,
-            session::{
-                ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
-                create_udp_client_binding,
-            },
-        },
     },
     run_hopr_edge_node,
+};
+use hopr_utils_session::{
+    ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
 use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use std::{fmt::{self, Display}, str::FromStr};
+use std::{
+    fmt::{self, Display},
+    str::FromStr,
+};
 use std::{net::SocketAddr, sync::Arc};
 
 use crate::{
@@ -42,7 +40,7 @@ pub enum ChannelError {
 }
 
 pub struct Hopr {
-    hopr: Arc<edgli::hopr_lib::Hopr<Arc<HoprBlockchainSafeConnector<BlokliClient>>, HoprNodeDb>>,
+    hopr: Arc<edgli::HoprEdgeClient>,
     open_listeners: Arc<ListenerJoinHandles>,
 }
 

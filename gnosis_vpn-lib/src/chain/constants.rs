@@ -1,4 +1,4 @@
-use edgli::hopr_lib::reexports::alloy::primitives::{Address, address, hex};
+use edgli::hopr_utils_chain_connector::reexports::alloy::primitives::{Address, address, hex};
 
 // wxHOPR Token contract address on Gnosis Chain
 pub const WXHOPR_TOKEN_ADDRESS: Address = address!("0xD4fdec44DB9D44B8f2b6d529620f9C0C7066A2c1");
