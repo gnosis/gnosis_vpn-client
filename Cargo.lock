@@ -3924,25 +3924,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gnosis_vpn"
-version = "0.56.2"
-dependencies = [
- "anyhow",
- "clap",
- "exitcode",
- "gnosis_vpn-lib",
- "mimalloc",
- "notify",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
 name = "gnosis_vpn-ctl"
 version = "0.56.2"
 dependencies = [
@@ -3983,6 +3964,44 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
+ "url",
+]
+
+[[package]]
+name = "gnosis_vpn-root"
+version = "0.56.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "exitcode",
+ "gnosis_vpn-lib",
+ "mimalloc",
+ "notify",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "gnosis_vpn-worker"
+version = "0.56.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "exitcode",
+ "gnosis_vpn-lib",
+ "mimalloc",
+ "notify",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 

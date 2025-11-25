@@ -1,4 +1,5 @@
 use edgli::hopr_lib::{Address, GeneralError};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ mod v4;
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub connection: ConnectionOptions,
     pub destinations: HashMap<Address, Destination>,
