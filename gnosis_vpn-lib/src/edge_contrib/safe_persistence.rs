@@ -32,6 +32,11 @@ impl SafeModulePersistence {
     ///
     /// # Returns
     /// Ok(()) on success, or an error
+    ///
+    /// # Notes
+    /// This function does NOT create parent directories automatically.
+    /// Ensure the parent directory exists before calling this function,
+    /// otherwise an IO error will be returned.
     pub async fn store(safe_module: &SafeModule, path: &Path) -> Result<(), PersistenceError> {
         let content = serde_yaml::to_string(safe_module)?;
         fs::write(path, &content).await.map_err(PersistenceError::IO)

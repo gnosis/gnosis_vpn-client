@@ -40,6 +40,9 @@ sol!(
 
 type UserDataTuple = sol! { tuple(bytes32, uint256, bytes32, address[]) };
 
+// ABI encoding offset size in bytes - the first 32 bytes contain the data offset
+const ABI_OFFSET_SIZE: usize = 32;
+
 #[derive(Debug, Error)]
 pub enum SafeDeploymentError {
     #[error("Contract error: {0}")]
@@ -103,8 +106,8 @@ impl SafeDeploymentConfig {
             self.admins.clone(),
         ));
 
-        // Remove the first 32 bytes which is the offset
-        let user_data = user_data_with_offset[32..].to_vec();
+        // Remove the ABI encoding offset (first 32 bytes)
+        let user_data = user_data_with_offset[ABI_OFFSET_SIZE..].to_vec();
         Bytes::from(user_data)
     }
 }
@@ -157,17 +160,24 @@ impl SafeDeployer {
             .await
             .map_err(|e| SafeDeploymentError::Transport(e.to_string()))?;
 
+        // Check if transaction was successful
+        if !receipt.status() {
+            return Err(SafeDeploymentError::Contract(
+                "Transaction failed - check if sufficient tokens were provided".to_string(),
+            ));
+        }
+
         let maybe_safe_log = receipt.decoded_log::<HoprNodeStakeFactory::NewHoprNodeStakeSafe>();
         let Some(safe_log) = maybe_safe_log else {
             return Err(SafeDeploymentError::DecodeEvent(
-                "NewHoprNodeStakeSafe".to_string(),
+                "NewHoprNodeStakeSafe event not found in transaction receipt".to_string(),
             ));
         };
 
         let maybe_module_log = receipt.decoded_log::<HoprNodeStakeFactory::NewHoprNodeStakeModule>();
         let Some(module_log) = maybe_module_log else {
             return Err(SafeDeploymentError::DecodeEvent(
-                "NewHoprNodeStakeModule".to_string(),
+                "NewHoprNodeStakeModule event not found in transaction receipt".to_string(),
             ));
         };
 

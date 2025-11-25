@@ -39,6 +39,9 @@ impl IdentityConfig {
     }
 }
 
+/// Password length in characters
+const PASSWORD_LENGTH: usize = 48;
+
 /// Identity manager for HOPR nodes
 pub struct IdentityManager;
 
@@ -85,7 +88,7 @@ impl IdentityManager {
     pub fn generate_password() -> String {
         rand::rng()
             .sample_iter(&Alphanumeric)
-            .take(48)
+            .take(PASSWORD_LENGTH)
             .map(char::from)
             .collect()
     }
@@ -122,8 +125,8 @@ mod tests {
     fn test_generate_password() {
         let password = IdentityManager::generate_password();
         
-        // Password should be 48 characters
-        assert_eq!(password.len(), 48);
+        // Password should be PASSWORD_LENGTH characters
+        assert_eq!(password.len(), super::PASSWORD_LENGTH);
         
         // Password should only contain alphanumeric characters
         assert!(password.chars().all(|c| c.is_ascii_alphanumeric()));
@@ -167,8 +170,8 @@ mod tests {
         
         let (keys, password) = result.unwrap();
         
-        // Password should be 48 characters
-        assert_eq!(password.len(), 48);
+        // Password should be PASSWORD_LENGTH characters
+        assert_eq!(password.len(), super::PASSWORD_LENGTH);
         
         // Keys should be valid
         assert!(!keys.chain_key.public().to_address().is_zero());
