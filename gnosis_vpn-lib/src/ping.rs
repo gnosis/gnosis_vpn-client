@@ -1,8 +1,10 @@
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Clone, Debug, PartialEq)]
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PingOptions {
     pub address: IpAddr,
     pub timeout: Duration,

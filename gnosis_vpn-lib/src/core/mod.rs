@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,8 +86,7 @@ enum Phase {
 }
 
 impl Core {
-    pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
-        let config = config::read(config_path).await?;
+    pub async fn init(config: Config, hopr_params: HoprParams) -> Result<Core, Error> {
         wg_tooling::available().await?;
         wg_tooling::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
@@ -172,36 +170,6 @@ impl Core {
                     tracing::warn!("shutdown receiver dropped");
                 }
                 false
-            }
-
-            ExternalEvent::ConfigReload { path } => {
-                match self.phase {
-                    Phase::ShuttingDown => {
-                        tracing::warn!("ignoring configuration reload - shutting down");
-                    }
-                    Phase::Initial | Phase::CreatingSafe { .. } | Phase::Starting | Phase::HoprSyncing => {
-                        let config = match config::read(&path).await {
-                            Ok(cfg) => cfg,
-                            Err(err) => {
-                                tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
-                                return true;
-                            }
-                        };
-                        self.config = config;
-                    }
-                    Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                        let config = match config::read(&path).await {
-                            Ok(cfg) => cfg,
-                            Err(err) => {
-                                tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
-                                return true;
-                            }
-                        };
-                        self.config = config;
-                        self.reset_to_hopr_running(results_sender);
-                    }
-                }
-                true
             }
 
             ExternalEvent::Command { cmd, resp } => {
@@ -881,19 +849,6 @@ impl Core {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
             self.act_on_target(results_sender);
         }
-    }
-
-    fn reset_to_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
-        match self.phase.clone() {
-            Phase::Connected(conn) | Phase::Connecting(conn) => {
-                self.disconnect_from_connection(&conn, results_sender);
-            }
-            _ => (),
-        }
-        self.cancel_channel_tasks.cancel();
-        self.cancel_channel_tasks = CancellationToken::new();
-        self.destination_health.clear();
-        self.on_hopr_running(results_sender);
     }
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {

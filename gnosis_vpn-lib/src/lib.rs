@@ -10,6 +10,7 @@ pub mod hopr_params;
 pub mod info;
 pub mod network;
 pub mod socket;
+pub mod worker_command;
 
 mod dirs;
 mod gvpn_client;
