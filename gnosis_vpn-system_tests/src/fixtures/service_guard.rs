@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use crate::cli::CliArgs;
+use crate::cli::SharedArgs;
 use anyhow::Context;
 
 /// Owns the spawned gnosis_vpn service process and tears it down when dropped.
@@ -12,7 +12,7 @@ pub struct ServiceGuard {
 
 impl ServiceGuard {
     /// Spawns the binary with the configuration required for system tests.
-    pub fn spawn(binary: &Path, cfg: &CliArgs, socket_path: &Path) -> anyhow::Result<Self> {
+    pub fn spawn(binary: &Path, cfg: &SharedArgs, socket_path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).context("create socket directory")?;
         }

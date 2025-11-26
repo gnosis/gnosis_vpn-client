@@ -80,7 +80,7 @@ impl ControlClient {
     pub async fn wait_for_service_running(&self) -> anyhow::Result<()> {
         lib::wait_for_condition(
             "service running",
-            Duration::from_secs(60),
+            Duration::from_secs(30),
             Duration::from_secs(2),
             || async {
                 match self.ping().await {
@@ -100,7 +100,7 @@ impl ControlClient {
     pub async fn wait_for_node_funding(&self) -> anyhow::Result<()> {
         lib::wait_for_condition(
             "node funds",
-            Duration::from_secs(60 * 5),
+            Duration::from_secs(30),
             Duration::from_secs(5),
             || async {
                 match self.balance().await {
@@ -149,7 +149,7 @@ impl ControlClient {
     pub async fn wait_for_ready_destinations(&self) -> anyhow::Result<Vec<Destination>> {
         lib::wait_for_condition(
             "node ready to connect destinations",
-            Duration::from_secs(60 * 30),
+            Duration::from_secs(60 * 2),
             Duration::from_secs(10),
             || async {
                 match self.status().await {
