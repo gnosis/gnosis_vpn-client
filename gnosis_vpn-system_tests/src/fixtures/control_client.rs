@@ -26,27 +26,27 @@ impl ControlClient {
     pub async fn send(&self, cmd: &Command) -> anyhow::Result<Response> {
         match socket::process_cmd(self.socket_path.as_path(), cmd).await {
             Ok(resp) => {
-                debug!("got response to command {cmd:?}: {resp:?}");
+                debug!(?cmd, ?resp, "received command response");
                 Ok(resp)
             }
             Err(socket::Error::ServiceNotRunning) => {
-                error!("service not running when sending command {cmd:?}");
+                error!(?cmd, "service not running when sending command");
                 Err(socket::Error::ServiceNotRunning.into())
             }
-            Err(err) => {
-                error!("error while sending command {cmd:?}: {err:?}");
-                Err(err.into())
+            Err(error) => {
+                error!(%error, ?cmd, "error while sending command");
+                Err(error.into())
             }
         }
     }
 
     /// Verifies the daemon responds to ping requests.
     pub async fn ping(&self) -> anyhow::Result<()> {
-        match self.send(&Command::Ping).await {
-            Ok(Response::Pong) => Ok(()),
-            Ok(resp) => Err(anyhow::anyhow!("unexpected ping response {resp:?}")),
-            Err(e) => Err(e),
-        }
+        self.send(&Command::Ping).await.and_then(|result| {
+            matches!(result, Response::Pong)
+                .then_some(())
+                .ok_or(anyhow::anyhow!("unexpected ping response {result:?}"))
+        })
     }
 
     /// Fetches current daemon status information.
@@ -77,79 +77,64 @@ impl ControlClient {
     }
 
     /// Waits until the control API responds to ping requests.
-    pub async fn wait_for_service_running(&self) -> anyhow::Result<()> {
-        lib::wait_for_condition(
-            "service running",
-            Duration::from_secs(30),
-            Duration::from_secs(2),
-            || async {
-                match self.ping().await {
-                    Ok(_) => {
-                        info!("gnosis_vpn service is pingable");
-                        Ok(Some(()))
-                    }
-                    Err(_) => Ok(None),
+    pub async fn wait_for_service_running(&self, timeout: Duration) -> anyhow::Result<()> {
+        lib::wait_for_condition("service running", timeout, Duration::from_secs(2), || async {
+            match self.ping().await {
+                Ok(_) => {
+                    info!("gnosis_vpn service is pingable");
+                    Ok(Some(()))
                 }
-            },
-        )
+                Err(_) => Ok(None),
+            }
+        })
         .await?;
         Ok(())
     }
 
     /// Ensures both on-chain accounts have funds before the test proceeds.
-    pub async fn wait_for_node_funding(&self) -> anyhow::Result<()> {
-        lib::wait_for_condition(
-            "node funds",
-            Duration::from_secs(30),
-            Duration::from_secs(5),
-            || async {
-                match self.balance().await {
-                    Ok(Some(BalanceResponse { node, safe, .. })) => {
-                        if node.is_zero() || safe.is_zero() {
-                            Ok(None)
-                        } else {
-                            Ok(Some(()))
-                        }
+    pub async fn wait_for_node_funding(&self, timeout: Duration) -> anyhow::Result<()> {
+        lib::wait_for_condition("node funds", timeout, Duration::from_secs(5), || async {
+            match self.balance().await {
+                Ok(Some(BalanceResponse { node, safe, .. })) => {
+                    if node.is_zero() || safe.is_zero() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(()))
                     }
-                    Ok(None) => Ok(None),
-                    Err(_) => Ok(None),
                 }
-            },
-        )
+                Ok(None) => Ok(None),
+                Err(_) => Ok(None),
+            }
+        })
         .await?;
         Ok(())
     }
 
     /// Waits until the node reports a running state.
-    pub async fn wait_for_node_running(&self) -> anyhow::Result<()> {
-        lib::wait_for_condition(
-            "node running",
-            Duration::from_secs(60 * 30),
-            Duration::from_secs(10),
-            || async {
-                match self.status().await {
-                    Ok(Some(status)) => {
-                        if matches!(status.run_mode, RunMode::Running { .. }) {
-                            info!("node is in Running state");
-                            Ok(Some(()))
-                        } else {
-                            Ok(None)
-                        }
+    pub async fn wait_for_node_running(&self, timeout: Duration) -> anyhow::Result<()> {
+        lib::wait_for_condition("node running", timeout, Duration::from_secs(10), || async {
+            match self.status().await {
+                Ok(Some(status)) => {
+                    if matches!(status.run_mode, RunMode::Running { .. }) {
+                        info!("node is in Running state");
+                        Ok(Some(()))
+                    } else {
+                        Ok(None)
                     }
-                    Ok(None) => Ok(None),
-                    Err(_) => Ok(None),
                 }
-            },
-        )
+                Ok(None) => Ok(None),
+                Err(_) => Ok(None),
+            }
+        })
         .await?;
         Ok(())
     }
 
     /// Returns the destinations ready for connection establishment.
-    pub async fn wait_for_ready_destinations(&self) -> anyhow::Result<Vec<Destination>> {
+    pub async fn wait_for_ready_destinations(&self, timeout: Duration) -> anyhow::Result<Vec<Destination>> {
         lib::wait_for_condition(
             "node ready to connect destinations",
-            Duration::from_secs(60 * 2),
+            timeout,
             Duration::from_secs(10),
             || async {
                 match self.status().await {
@@ -184,35 +169,34 @@ impl ControlClient {
     }
 
     /// Ensures a specific destination reaches the Connected state.
-    pub async fn wait_for_connection_established(&self, destination: &Destination) -> anyhow::Result<()> {
-        lib::wait_for_condition(
-            "connection established",
-            Duration::from_secs(60),
-            Duration::from_secs(2),
-            || async {
-                match self.status().await {
-                    Ok(Some(status)) => {
-                        if let Some(state) = status
-                            .destinations
-                            .iter()
-                            .find(|c| c.destination.address == destination.address)
-                        {
-                            if matches!(state.connection_state, ConnectionState::Connected(_)) {
-                                info!("connection is established");
-                                return Ok(Some(()));
-                            }
-                            warn!(
-                                "connection not established yet, current state: {:?}",
-                                state.connection_state
-                            );
+    pub async fn wait_for_connection_established(
+        &self,
+        destination: &Destination,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        lib::wait_for_condition("connection established", timeout, Duration::from_secs(2), || async {
+            match self.status().await {
+                Ok(Some(status)) => {
+                    if let Some(state) = status
+                        .destinations
+                        .iter()
+                        .find(|c| c.destination.address == destination.address)
+                    {
+                        if matches!(state.connection_state, ConnectionState::Connected(_)) {
+                            info!("connection is established");
+                            return Ok(Some(()));
                         }
-                        Ok(None)
+                        warn!(
+                            "connection not established yet, current state: {:?}",
+                            state.connection_state
+                        );
                     }
-                    Ok(None) => Ok(None),
-                    Err(_) => Ok(None),
+                    Ok(None)
                 }
-            },
-        )
+                Ok(None) => Ok(None),
+                Err(_) => Ok(None),
+            }
+        })
         .await?;
         Ok(())
     }

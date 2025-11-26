@@ -28,7 +28,7 @@ where
             Err(anyhow::anyhow!("timeout while waiting for {label}"))?;
         }
 
-        tokio::time::sleep(interval).await;
+        tokio::time::sleep(interval.min(timeout - start.elapsed())).await;
     }
 }
 

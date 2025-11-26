@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::Parser;
 use gnosis_vpn_lib::hopr::hopr_lib;
 use rand::seq::IndexedRandom;
+use std::time::Duration;
 use tracing::{error, info};
 
 use cli::{Cli, Command, DownloadArgs};
@@ -53,16 +54,16 @@ async fn main_inner() -> Result<()> {
     };
 
     // wait for up to 30s for service to be running
-    client.wait_for_service_running().await?;
+    client.wait_for_service_running(Duration::from_secs(30)).await?;
 
     // wait for up to 30s for node to be funded (should be instant as already funded for now)
-    client.wait_for_node_funding().await?;
+    client.wait_for_node_funding(Duration::from_secs(30)).await?;
 
     // wait for up to 30min for the node to be in Running state
-    client.wait_for_node_running().await?;
+    client.wait_for_node_running(Duration::from_secs(30 * 60)).await?;
 
     // wait for up to 2min for destination to be ready to be used
-    let destinations = client.wait_for_ready_destinations().await?;
+    let destinations = client.wait_for_ready_destinations(Duration::from_secs(2 * 60)).await?;
 
     // Pick a random destination that is connectable
     let destination = destinations
@@ -73,7 +74,9 @@ async fn main_inner() -> Result<()> {
     let state = client.connect(destination.address).await?;
     info!("Connection state: {:?}", state);
 
-    client.wait_for_connection_established(&destination).await?;
+    client
+        .wait_for_connection_established(&destination, Duration::from_secs(60))
+        .await?;
 
     // Query public IP
     let ip = lib::fetch_public_ip(&cli.shared.ip_echo_url, None).await?;
@@ -97,7 +100,7 @@ async fn perform_download_attempts(
     fail_fast: bool,
 ) -> Result<()> {
     for idx in 0..attempts {
-        let file_size = args.download_min_size_bytes * (2u64.pow(idx as u32));
+        let file_size = args.download_min_size_bytes * (2u64.pow(idx));
         info!(%file_size, "performing sample download attempt #{}/{}", idx + 1, attempts);
 
         match lib::download_file(&args.download_url, file_size, proxy).await {
