@@ -1,4 +1,5 @@
-use alloy::{
+use edgli::hopr_lib::{Keypair, prelude::ChainKeypair};
+use edgli::hopr_utils_chain_connector::reexports::alloy::{
     network::EthereumWallet,
     providers::{
         Identity, Provider, ProviderBuilder, RootProvider,
@@ -6,7 +7,6 @@ use alloy::{
     },
     signers::local::PrivateKeySigner,
 };
-use edgli::hopr_lib::{Keypair, prelude::ChainKeypair};
 use reqwest::Url;
 
 use crate::chain::errors::ChainError;
@@ -76,8 +76,8 @@ impl GnosisRpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::node_bindings::Anvil;
     use anyhow::Ok;
+    use edgli::hopr_utils_chain_connector::reexports::alloy::node_bindings::Anvil;
 
     #[tokio::test]
     async fn creates_client_with_default_rpc_url() -> anyhow::Result<()> {
