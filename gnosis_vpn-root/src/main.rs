@@ -2,6 +2,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, sleep};
@@ -9,13 +10,15 @@ use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process;
+use std::process::{self, Stdio};
 
-use gnosis_vpn_lib::command::Command;
-use gnosis_vpn_lib::hopr::hopr_lib;
-use gnosis_vpn_lib::{core, external_event, hopr_params, socket};
+use gnosis_vpn_lib::command::Command as cmdCmd;
+use gnosis_vpn_lib::hopr_params::HoprParams;
+use gnosis_vpn_lib::{external_event, hopr_params, socket, wg_tooling};
 
 mod cli;
+mod user;
+
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
@@ -120,7 +123,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
-            match socket::process_cmd(socket_path, &Command::Ping).await {
+            match socket::process_cmd(socket_path, &cmdCmd::Ping).await {
                 Ok(_) => {
                     tracing::error!("system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);
@@ -183,6 +186,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>
     Ok(receiver)
 }
 
+/*
 async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sender<external_event::Event>) {
     let mut msg = String::new();
     if let Err(e) = stream.read_to_string(&mut msg).await {
@@ -233,6 +237,7 @@ async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sende
         tracing::error!(error = ?e, "error flushing stream");
     }
 }
+*/
 
 // handling fs config events with a grace period to avoid duplicate reads without delay
 const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
@@ -263,6 +268,25 @@ fn incoming_config_fs_event(event: notify::Event, config_path: &Path) -> bool {
 }
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    // set up signal handler
+    let mut ctrlc_receiver = ctrlc_channel().await?;
+
+    // ensure worker user exists
+    let user = user::Worker::from_system().map_err(|err| {
+        tracing::error!(error = ?err, "error retrieving worker user");
+        exitcode::NOUSER
+    })?;
+
+    // check wireguard tooling
+    wg_tooling::available()
+        .await
+        .and(wg_tooling::executable().await)
+        .map_err(|err| {
+            tracing::error!(error = ?err, "error checking WireGuard tools");
+            exitcode::UNAVAILABLE
+        });
+
+    // set up config watcher
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
@@ -270,44 +294,60 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
-
-    let mut ctrlc_receiver = ctrlc_channel().await?;
-
     // keep config watcher in scope so it does not get dropped
     let (_config_watcher, mut config_receiver) = config_channel(&config_path).await?;
 
+    // set up system socket
     let socket_path = args.socket_path.clone();
     let mut socket_receiver = socket_channel(&args.socket_path).await?;
 
-    let exit_code = loop_daemon(&mut ctrlc_receiver, &mut config_receiver, &mut socket_receiver, args).await;
+    let res = loop_daemon(
+        &mut ctrlc_receiver,
+        &mut config_receiver,
+        &mut socket_receiver,
+        user,
+        &config_path,
+        args,
+    )
+    .await;
     match fs::remove_file(&socket_path).await {
         Ok(_) => (),
         Err(e) => {
             tracing::error!(error = %e, "failed removing socket");
         }
     }
-    Err(exit_code)
+    res
 }
 
 async fn loop_daemon(
     ctrlc_receiver: &mut mpsc::Receiver<()>,
     config_receiver: &mut mpsc::Receiver<notify::Event>,
     socket_receiver: &mut mpsc::Receiver<UnixStream>,
+    user: user::Worker,
+    config_path: &Path,
     args: cli::Cli,
-) -> exitcode::ExitCode {
-    let hopr_params = hopr_params::HoprParams::from(args.clone());
-    let config_path = args.config_path.clone();
-    let (mut event_sender, mut event_receiver) = mpsc::channel(32);
-    let core = match core::Core::init(&config_path, hopr_params).await {
-        Ok(core) => core,
-        Err(e) => {
-            tracing::error!(error = ?e, "failed to initialize core logic");
-            return exitcode::OSERR;
-        }
-    };
+) -> Result<(), exitcode::ExitCode> {
+    // let (mut worker_cmd_sender, mut worker_cmd_receiver) = mpsc::channel(32);
+    let mut worker = Command::new("./gnosis_vpn-worker")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .uid(user.uid)
+        .gid(user.gid)
+        .spawn()
+        .map_err(|err| {
+            tracing::error!("unable to spawn worker process");
+            exitcode::IOERR
+        })?;
 
-    tracing::info!("enter listening mode");
-    tokio::spawn(async move { core.start(&mut event_receiver).await });
+    let worker_stdin = worker.stdin.as_mut().ok_or_else(|| {
+        tracing::error!("failed to aquire stdin");
+        exitcode::IOERR
+    })?;
+    let worker_stdout = worker.stdout.as_mut().ok_or_else(|| {
+        tracing::error!("failed to aquire stdout");
+        exitcode::IOERR
+    })?;
+
     let mut reload_cancel = CancellationToken::new();
     let mut ctrc_already_triggered = false;
     let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
@@ -319,50 +359,50 @@ async fn loop_daemon(
             Some(_) = ctrlc_receiver.recv() => {
                 if ctrc_already_triggered {
                     tracing::info!("force shutdown immediately");
-                    return exitcode::OK;
+                    return Err(exitcode::OK);
                 } else {
                     ctrc_already_triggered = true;
                     tracing::info!("initiate shutdown");
                     match shutdown_sender_opt.take() {
                         Some(sender) => {
-                            if event_sender.send(external_event::shutdown(sender)).await.is_err() {
-                                tracing::warn!("event receiver already closed");
-                            }
+                            // if event_sender.send(external_event::shutdown(sender)).await.is_err() {
+                                // tracing::warn!("event receiver already closed");
+                            // }
                         }
                         None => {
                             tracing::error!("shutdown sender already taken");
-                            return exitcode::IOERR;
+                            return Err(exitcode::IOERR);
                         }
                     }
                 }
             },
             Ok(_) = &mut shutdown_receiver => {
                 tracing::info!("shutdown complete");
-                return exitcode::OK;
+                return Ok(());
             }
             Some(mut stream) = socket_receiver.recv() => {
-                incoming_stream(&mut stream, &mut event_sender).await;
+                // incoming_stream(&mut stream, &mut event_sender).await;
             },
             Some(evt) = config_receiver.recv() => {
                 if incoming_config_fs_event(evt, &config_path) {
                     reload_cancel.cancel();
                     reload_cancel = CancellationToken::new();
                     let cancel_token = reload_cancel.clone();
-                    let evt_sender = event_sender.clone();
+                    // let evt_sender = event_sender.clone();
                     let path = config_path.clone();
                     tokio::spawn(async move {
                         cancel_token.run_until_cancelled(async move {
                             sleep(CONFIG_GRACE_PERIOD).await;
-                            if evt_sender.send(external_event::config_reload(path)).await.is_err() {
-                                tracing::warn!("event receiver already closed");
-                            }
+                            // if evt_sender.send(external_event::config_reload(path)).await.is_err() {
+                                // tracing::warn!("event receiver already closed");
+                            // }
                         }).await;
                     });
                 }
             },
             else => {
                 tracing::error!("unexpected channel closure");
-                return exitcode::IOERR;
+                return Err(exitcode::IOERR);
             }
         }
     }
@@ -372,7 +412,7 @@ async fn loop_daemon(
 /// one for the socket to be responsive
 /// one for handling worker task orchestration
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-fn main() {
+async fn main() {
     let args = cli::parse();
 
     // install global collector configured based on RUST_LOG env var.
