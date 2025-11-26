@@ -10,6 +10,7 @@ pub mod hopr_params;
 pub mod info;
 pub mod network;
 pub mod socket;
+pub mod wg_tooling;
 pub mod worker_command;
 
 mod dirs;
@@ -18,7 +19,6 @@ mod log_output;
 mod ping;
 mod remote_data;
 mod ticket_stats;
-mod wg_tooling;
 
 pub mod prelude {
     pub use edgli::hopr_lib::Address;
