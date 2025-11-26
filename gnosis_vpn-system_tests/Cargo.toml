@@ -11,7 +11,6 @@ exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
 rand.workspace = true
 reqwest.workspace = true
-serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
