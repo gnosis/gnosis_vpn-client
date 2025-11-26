@@ -17,9 +17,9 @@ impl Worker {
     pub fn from_system() -> Result<Self, Error> {
         users::get_user_by_name(NAME)
             .map(|user| {
-                let u_id = user.uid();
-                let g_id = user.primary_group_id();
-                Worker { u_id, g_id }
+                let uid = user.uid();
+                let gid = user.primary_group_id();
+                Worker { uid, gid }
             })
             .ok_or(Error::UserNotFound)
     }
