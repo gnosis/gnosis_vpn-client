@@ -12,7 +12,6 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Performs download attempts against the configured endpoint.
     Download(DownloadArgs),
 }
 
