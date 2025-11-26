@@ -1,6 +1,6 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
@@ -13,8 +13,7 @@ use std::path::Path;
 use std::process::{self, Stdio};
 
 use gnosis_vpn_lib::command::Command as cmdCmd;
-use gnosis_vpn_lib::hopr_params::HoprParams;
-use gnosis_vpn_lib::{external_event, hopr_params, socket, wg_tooling};
+use gnosis_vpn_lib::{socket, wg_tooling};
 
 mod cli;
 mod user;
@@ -380,16 +379,16 @@ async fn loop_daemon(
                 tracing::info!("shutdown complete");
                 return Ok(());
             }
-            Some(mut stream) = socket_receiver.recv() => {
+            Some(stream) = socket_receiver.recv() => {
                 // incoming_stream(&mut stream, &mut event_sender).await;
             },
             Some(evt) = config_receiver.recv() => {
-                if incoming_config_fs_event(evt, &config_path) {
+                if incoming_config_fs_event(evt, config_path) {
                     reload_cancel.cancel();
                     reload_cancel = CancellationToken::new();
                     let cancel_token = reload_cancel.clone();
                     // let evt_sender = event_sender.clone();
-                    let path = config_path.clone();
+                    let path = config_path;
                     tokio::spawn(async move {
                         cancel_token.run_until_cancelled(async move {
                             sleep(CONFIG_GRACE_PERIOD).await;
