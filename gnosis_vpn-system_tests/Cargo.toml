@@ -6,12 +6,10 @@ license = { workspace = true }
 
 [dependencies]
 anyhow.workspace = true
-env_logger = "0.11.8"
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
 rand.workspace = true
 reqwest.workspace = true
-tempfile.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
