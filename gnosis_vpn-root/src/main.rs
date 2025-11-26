@@ -327,14 +327,14 @@ async fn loop_daemon(
     args: cli::Cli,
 ) -> Result<(), exitcode::ExitCode> {
     // let (mut worker_cmd_sender, mut worker_cmd_receiver) = mpsc::channel(32);
-    let mut worker = Command::new("./gnosis_vpn-worker")
+    let mut worker = Command::new("/home/gnosisvpn/gnosis_vpn-worker")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .uid(user.uid)
         .gid(user.gid)
         .spawn()
         .map_err(|err| {
-            tracing::error!("unable to spawn worker process");
+            tracing::error!(error = ?err, user = ?user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
@@ -346,6 +346,9 @@ async fn loop_daemon(
         tracing::error!("failed to aquire stdout");
         exitcode::IOERR
     })?;
+
+    let res = worker.wait().await;
+    tracing::warn!(?res, "foobi");
 
     let mut reload_cancel = CancellationToken::new();
     let mut ctrc_already_triggered = false;
