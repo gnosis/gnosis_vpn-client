@@ -34,14 +34,6 @@ impl ServiceGuard {
         let child = cmd.spawn().context("failed to start gnosis_vpn service")?;
         Ok(Self { child })
     }
-
-    #[allow(dead_code)]
-    pub fn ensure_running(&mut self) -> anyhow::Result<()> {
-        if let Some(status) = self.child.try_wait()? {
-            Err(anyhow::anyhow!("gnosis_vpn exited early with status {status}"))?;
-        }
-        Ok(())
-    }
 }
 
 impl Drop for ServiceGuard {

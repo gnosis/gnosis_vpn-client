@@ -3,7 +3,7 @@ mod fixtures;
 use anyhow::Context;
 
 use gnosis_vpn_lib::{
-    command::{BalanceResponse, RunMode},
+    command::{BalanceResponse, ConnectionState, RunMode},
     connection::{destination::Destination, destination_health::Health},
     hopr::hopr_lib,
 };
@@ -88,7 +88,7 @@ async fn main_inner() {
     };
     let client = ControlClient::new(socket_path.clone());
 
-    let _ = lib::wait_for_condition(
+    if let Err(e) = lib::wait_for_condition(
         "service running",
         Duration::from_secs(60),
         Duration::from_secs(2),
@@ -102,9 +102,13 @@ async fn main_inner() {
             }
         },
     )
-    .await;
+    .await
+    {
+        error!("error while waiting for service to start: {}", e);
+        process::exit(exitcode::SOFTWARE);
+    }
 
-    let _ = lib::wait_for_condition(
+    if let Err(e) = lib::wait_for_condition(
         "node funds",
         Duration::from_secs(60 * 5),
         Duration::from_secs(5),
@@ -112,10 +116,10 @@ async fn main_inner() {
             match client.balance().await {
                 Ok(Some(BalanceResponse { node, safe, .. })) => {
                     if node.is_zero() {
-                        return Err(anyhow::anyhow!("node has zero xDai balance, cannot proceed with test"));
+                        return Ok(None);
                     }
                     if safe.is_zero() {
-                        return Err(anyhow::anyhow!("safe has zero HOPR balance, cannot proceed with test"));
+                        return Ok(None);
                     }
                     Ok(Some(()))
                 }
@@ -124,10 +128,14 @@ async fn main_inner() {
             }
         },
     )
-    .await;
+    .await
+    {
+        error!("error while waiting for node funds: {}", e);
+        process::exit(exitcode::DATAERR);
+    }
 
     // wait for up to 30min for the node to be in Running state
-    let _ = lib::wait_for_condition(
+    if let Err(e) = lib::wait_for_condition(
         "node running",
         Duration::from_secs(60 * 30),
         Duration::from_secs(10),
@@ -138,7 +146,7 @@ async fn main_inner() {
                         info!("node is in Running state");
                         Ok(Some(status))
                     } else {
-                        Err(anyhow::anyhow!("node not running yet"))
+                        Ok(None)
                     }
                 }
                 Ok(None) => Ok(None),
@@ -146,11 +154,15 @@ async fn main_inner() {
             }
         },
     )
-    .await;
+    .await
+    {
+        error!("error while waiting for node to run: {}", e);
+        process::exit(exitcode::DATAERR);
+    }
 
     // wait for up to 30min for the node to be in Running state
     let res = lib::wait_for_condition(
-        "node running",
+        "node ready to connect destinations",
         Duration::from_secs(60 * 30),
         Duration::from_secs(10),
         || async {
@@ -185,10 +197,7 @@ async fn main_inner() {
     .await;
 
     let destinations = match res {
-        Ok(dests) => {
-            info!("destinations are: {:?}", dests);
-            dests
-        }
+        Ok(dests) => dests,
         Err(e) => {
             error!("error getting ready to connect destinations: {}", e);
             process::exit(exitcode::DATAERR);
@@ -202,23 +211,57 @@ async fn main_inner() {
         .clone();
 
     match client.connect(destination.address).await {
-        Ok(state) => {
-            info!("Connection state: {:?}", state);
-        }
+        Ok(state) => info!("Connection state: {:?}", state),
         Err(e) => {
             error!("error connecting to destination {}: {}", destination, e);
             process::exit(exitcode::DATAERR);
         }
     }
 
-    // match lib::download_sample(cfg.download_url.clone()).await {
-    //     Ok(_) => {
-    //         info!("sample download succeeded");
-    //     }
-    //     Err(e) => {
-    //         error!("sample download failed: {}", e);
-    //     }
-    // }
+    if let Err(e) = lib::wait_for_condition(
+        "connection established",
+        Duration::from_secs(60),
+        Duration::from_secs(2),
+        || async {
+            match client.status().await {
+                Ok(Some(status)) => {
+                    if let Some(state) = status
+                        .destinations
+                        .iter()
+                        .find(|c| c.destination.address == destination.address)
+                    {
+                        if matches!(state.connection_state, ConnectionState::Connected(_)) {
+                            info!("connection to is established");
+                            return Ok(Some(()));
+                        } else {
+                            warn!(
+                                "connection not established yet, current state: {:?}",
+                                state.connection_state
+                            );
+                        }
+                    }
+                    Ok(None)
+                }
+                Ok(None) => Ok(None),
+                Err(_) => Ok(None),
+            }
+        },
+    )
+    .await
+    {
+        error!("error while waiting for connection establishment: {}", e);
+        process::exit(exitcode::DATAERR);
+    }
+
+    match lib::download_random_file(&cfg.download_url, cfg.download_size_bytes, cfg.download_proxy.as_ref()).await {
+        Ok(_) => info!("sample download succeeded"),
+        Err(e) => error!("sample download failed: {}", e),
+    }
+
+    match lib::fetch_public_ip(&cfg.ip_echo_url, cfg.download_proxy.as_ref()).await {
+        Ok(ip) => info!(public_ip = %ip, "queried public IP via echo service"),
+        Err(e) => error!("failed to fetch public IP: {}", e),
+    }
 
     // Keep the handle alive until the end of the test and drop it for cleanup.
     drop(service);
