@@ -1,8 +1,6 @@
 mod cli;
 mod fixtures;
 
-use std::process;
-
 use anyhow::Result;
 use clap::Parser;
 use gnosis_vpn_lib::hopr::hopr_lib;
@@ -13,22 +11,27 @@ use cli::{Cli, Command, DownloadArgs};
 use fixtures::control_client::ControlClient;
 use fixtures::lib;
 use fixtures::service_guard::ServiceGuard;
-use url::Url;
 
 fn main() {
-    match hopr_lib::prepare_tokio_runtime() {
-        Ok(rt) => {
-            rt.block_on(main_inner());
-        }
+    let res = match hopr_lib::prepare_tokio_runtime() {
+        Ok(rt) => rt.block_on(main_inner()),
         Err(e) => {
             error!("error preparing tokio runtime: {}", e);
-            process::exit(exitcode::IOERR);
+            std::process::exit(exitcode::IOERR);
+        }
+    };
+
+    match res {
+        Ok(_) => std::process::exit(exitcode::OK),
+        Err(e) => {
+            error!("error running system tests: {}", e);
+            std::process::exit(exitcode::SOFTWARE);
         }
     }
 }
 
 /// Entry point for the asynchronous system test workflow.
-async fn main_inner() {
+async fn main_inner() -> Result<()> {
     tracing_subscriber::fmt::init();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -40,46 +43,26 @@ async fn main_inner() {
 
     let (gnosis_bin, socket_path) = match lib::prepare_configs().await {
         Ok(res) => res,
-        Err(e) => {
-            error!("error preparing system test config: {}", e);
-            process::exit(exitcode::SOFTWARE);
-        }
+        Err(e) => return Err(e),
     };
 
     let client = ControlClient::new(socket_path.clone());
     let service = match ServiceGuard::spawn(&gnosis_bin, &cli.shared, &socket_path) {
         Ok(process) => process,
-        Err(e) => {
-            error!("error spawning gnosis_vpn service: {}", e);
-            process::exit(exitcode::SOFTWARE);
-        }
+        Err(e) => return Err(e),
     };
 
     // wait for up to 30s for service to be running
-    if let Err(e) = client.wait_for_service_running().await {
-        error!("error while waiting for service to start: {}", e);
-        process::exit(exitcode::SOFTWARE);
-    }
+    client.wait_for_service_running().await?;
 
     // wait for up to 30s for node to be funded (should be instant as already funded for now)
-    if let Err(e) = client.wait_for_node_funding().await {
-        error!("error while waiting for node funds: {}", e);
-        process::exit(exitcode::DATAERR);
-    }
+    client.wait_for_node_funding().await?;
 
     // wait for up to 30min for the node to be in Running state
-    if let Err(e) = client.wait_for_node_running().await {
-        error!("error while waiting for node to run: {}", e);
-        process::exit(exitcode::DATAERR);
-    }
+    client.wait_for_node_running().await?;
+
     // wait for up to 2min for destination to be ready to be used
-    let destinations = match client.wait_for_ready_destinations().await {
-        Ok(dests) => dests,
-        Err(e) => {
-            error!("error getting ready to connect destinations: {}", e);
-            process::exit(exitcode::DATAERR);
-        }
-    };
+    let destinations = client.wait_for_ready_destinations().await?;
 
     // Pick a random destination that is connectable
     let destination = destinations
@@ -87,39 +70,32 @@ async fn main_inner() {
         .expect("destinations should not be empty")
         .clone();
 
-    match client.connect(destination.address).await {
-        Ok(state) => info!("Connection state: {:?}", state),
-        Err(e) => {
-            error!("error connecting to destination {}: {}", destination, e);
-            process::exit(exitcode::DATAERR);
-        }
-    }
+    let state = client.connect(destination.address).await?;
+    info!("Connection state: {:?}", state);
 
-    if let Err(e) = client.wait_for_connection_established(&destination).await {
-        error!("error while waiting for connection establishment: {}", e);
-        process::exit(exitcode::DATAERR);
-    }
+    client.wait_for_connection_established(&destination).await?;
 
     // Query public IP
-    match lib::fetch_public_ip(&cli.shared.ip_echo_url, None).await {
-        Ok(ip) => info!(public_ip = %ip, "queried public IP via echo service"),
-        Err(e) => error!("failed to fetch public IP: {}", e),
-    }
+    let ip = lib::fetch_public_ip(&cli.shared.ip_echo_url, None).await?;
+    info!(public_ip = %ip, "queried public IP via echo service");
 
     match cli.command {
         Command::Download(args) => {
-            if let Err(e) = perform_download_attempts(&args, cli.shared.proxy.as_ref(), true).await {
-                error!("download command failed: {e}");
-                process::exit(exitcode::IOERR);
-            }
+            perform_download_attempts(&args, cli.shared.proxy.as_ref(), 5, true).await?;
         }
     }
 
     drop(service);
+
+    Ok(())
 }
 
-async fn perform_download_attempts(args: &DownloadArgs, proxy: Option<&Url>, fail_fast: bool) -> Result<()> {
-    let attempts = 5;
+async fn perform_download_attempts(
+    args: &DownloadArgs,
+    proxy: Option<&url::Url>,
+    attempts: u32,
+    fail_fast: bool,
+) -> Result<()> {
     for idx in 0..attempts {
         let file_size = args.download_min_size_bytes * (2u64.pow(idx as u32));
         info!(%file_size, "performing sample download attempt #{}/{}", idx + 1, attempts);
@@ -134,5 +110,6 @@ async fn perform_download_attempts(args: &DownloadArgs, proxy: Option<&Url>, fai
             }
         }
     }
+
     Ok(())
 }
