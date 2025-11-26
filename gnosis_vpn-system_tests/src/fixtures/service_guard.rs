@@ -7,11 +7,13 @@ use gnosis_vpn_lib::network::Network;
 
 use crate::fixtures::system_test_config::SystemTestConfig;
 
+/// Owns the spawned gnosis_vpn service process and tears it down when dropped.
 pub struct ServiceGuard {
     child: Child,
 }
 
 impl ServiceGuard {
+    /// Spawns the binary with the configuration required for system tests.
     pub fn spawn(binary: &Path, cfg: &SystemTestConfig, socket_path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).context("create socket directory")?;
@@ -38,6 +40,7 @@ impl ServiceGuard {
 
 impl Drop for ServiceGuard {
     fn drop(&mut self) {
+        // Ensure we always stop the background service at the end of the test run.
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
         }

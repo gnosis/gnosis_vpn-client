@@ -1,55 +1,13 @@
 mod fixtures;
 
-use anyhow::Context;
-
-use gnosis_vpn_lib::{
-    command::{BalanceResponse, ConnectionState, RunMode},
-    connection::{destination::Destination, destination_health::Health},
-    hopr::hopr_lib,
-};
+use gnosis_vpn_lib::hopr::hopr_lib;
 use rand::seq::IndexedRandom;
-use std::{path::PathBuf, process, time::Duration};
-use tracing::{error, info, warn};
+use std::process;
+use tracing::{error, info};
 
 use fixtures::control_client::ControlClient;
 use fixtures::lib;
 use fixtures::service_guard::ServiceGuard;
-use fixtures::system_test_config::SystemTestConfig;
-
-async fn prepare_configs() -> anyhow::Result<(SystemTestConfig, PathBuf, PathBuf)> {
-    let cfg = match SystemTestConfig::load().await {
-        Ok(Some(config)) => config,
-        Ok(None) => {
-            return Err(anyhow::anyhow!("no system test config found, skipping system tests"));
-        }
-        Err(e) => return Err(e),
-    };
-
-    let gnosis_bin = lib::find_binary("gnosis_vpn")
-        .with_context(|| "Build the gnosis_vpn binary first, e.g. `cargo build -p gnosis_vpn`")?;
-
-    let working_dir = match std::env::current_dir() {
-        Ok(dir) => PathBuf::from(dir).join("tmp"),
-        Err(e) => {
-            error!("error getting current directory: {}", e);
-            process::exit(exitcode::IOERR);
-        }
-    };
-
-    match std::fs::create_dir_all(&working_dir) {
-        Ok(_) => {}
-        Err(e) => {
-            error!("error creating working directory {:?}: {}", working_dir, e);
-            process::exit(exitcode::IOERR);
-        }
-    };
-
-    let socket_path = working_dir.join("gnosis_vpn.sock");
-
-    info!("Using socket path at {:?}", socket_path);
-
-    Ok((cfg, gnosis_bin, socket_path))
-}
 
 fn main() {
     match hopr_lib::prepare_tokio_runtime() {
@@ -63,6 +21,7 @@ fn main() {
     }
 }
 
+/// Entry point for the asynchronous system test workflow.
 async fn main_inner() {
     tracing_subscriber::fmt::init();
     tracing::info!(
@@ -71,7 +30,7 @@ async fn main_inner() {
         env!("CARGO_PKG_NAME")
     );
 
-    let (cfg, gnosis_bin, socket_path) = match prepare_configs().await {
+    let (cfg, gnosis_bin, socket_path) = match lib::prepare_configs().await {
         Ok(res) => res,
         Err(e) => {
             error!("error preparing system test config: {}", e);
@@ -88,115 +47,23 @@ async fn main_inner() {
     };
     let client = ControlClient::new(socket_path.clone());
 
-    if let Err(e) = lib::wait_for_condition(
-        "service running",
-        Duration::from_secs(60),
-        Duration::from_secs(2),
-        || async {
-            match client.ping().await {
-                Ok(_) => {
-                    info!("gnosis_vpn service is pingable");
-                    Ok(Some(()))
-                }
-                Err(_) => Ok(None),
-            }
-        },
-    )
-    .await
-    {
+    if let Err(e) = client.wait_for_service_running().await {
         error!("error while waiting for service to start: {}", e);
         process::exit(exitcode::SOFTWARE);
     }
 
-    if let Err(e) = lib::wait_for_condition(
-        "node funds",
-        Duration::from_secs(60 * 5),
-        Duration::from_secs(5),
-        || async {
-            match client.balance().await {
-                Ok(Some(BalanceResponse { node, safe, .. })) => {
-                    if node.is_zero() {
-                        return Ok(None);
-                    }
-                    if safe.is_zero() {
-                        return Ok(None);
-                    }
-                    Ok(Some(()))
-                }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
-            }
-        },
-    )
-    .await
-    {
+    if let Err(e) = client.wait_for_node_funding().await {
         error!("error while waiting for node funds: {}", e);
         process::exit(exitcode::DATAERR);
     }
 
     // wait for up to 30min for the node to be in Running state
-    if let Err(e) = lib::wait_for_condition(
-        "node running",
-        Duration::from_secs(60 * 30),
-        Duration::from_secs(10),
-        || async {
-            match client.status().await {
-                Ok(Some(status)) => {
-                    if matches!(status.run_mode, RunMode::Running { .. }) {
-                        info!("node is in Running state");
-                        Ok(Some(status))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
-            }
-        },
-    )
-    .await
-    {
+    if let Err(e) = client.wait_for_node_running().await {
         error!("error while waiting for node to run: {}", e);
         process::exit(exitcode::DATAERR);
     }
 
-    // wait for up to 30min for the node to be in Running state
-    let res = lib::wait_for_condition(
-        "node ready to connect destinations",
-        Duration::from_secs(60 * 30),
-        Duration::from_secs(10),
-        || async {
-            match client.status().await {
-                Ok(Some(status)) => {
-                    let ready_dests = status
-                        .destinations
-                        .iter()
-                        .filter_map(|dest| {
-                            dest.health.as_ref().and_then(|health| {
-                                if health.health == Health::ReadyToConnect {
-                                    Some(dest.destination.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .collect::<Vec<Destination>>();
-
-                    if !ready_dests.is_empty() {
-                        Ok(Some(ready_dests))
-                    } else {
-                        warn!("didn't find any destinations ready to connect yet");
-                        Ok(None)
-                    }
-                }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
-            }
-        },
-    )
-    .await;
-
-    let destinations = match res {
+    let destinations = match client.wait_for_ready_destinations().await {
         Ok(dests) => dests,
         Err(e) => {
             error!("error getting ready to connect destinations: {}", e);
@@ -218,51 +85,22 @@ async fn main_inner() {
         }
     }
 
-    if let Err(e) = lib::wait_for_condition(
-        "connection established",
-        Duration::from_secs(60),
-        Duration::from_secs(2),
-        || async {
-            match client.status().await {
-                Ok(Some(status)) => {
-                    if let Some(state) = status
-                        .destinations
-                        .iter()
-                        .find(|c| c.destination.address == destination.address)
-                    {
-                        if matches!(state.connection_state, ConnectionState::Connected(_)) {
-                            info!("connection to is established");
-                            return Ok(Some(()));
-                        } else {
-                            warn!(
-                                "connection not established yet, current state: {:?}",
-                                state.connection_state
-                            );
-                        }
-                    }
-                    Ok(None)
-                }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
-            }
-        },
-    )
-    .await
-    {
+    if let Err(e) = client.wait_for_connection_established(&destination).await {
         error!("error while waiting for connection establishment: {}", e);
         process::exit(exitcode::DATAERR);
     }
 
+    // Perform a sample download to verify connectivity
     match lib::download_random_file(&cfg.download_url, cfg.download_size_bytes, cfg.download_proxy.as_ref()).await {
         Ok(_) => info!("sample download succeeded"),
         Err(e) => error!("sample download failed: {}", e),
     }
 
+    // Query public IP
     match lib::fetch_public_ip(&cfg.ip_echo_url, cfg.download_proxy.as_ref()).await {
         Ok(ip) => info!(public_ip = %ip, "queried public IP via echo service"),
         Err(e) => error!("failed to fetch public IP: {}", e),
     }
 
-    // Keep the handle alive until the end of the test and drop it for cleanup.
     drop(service);
 }

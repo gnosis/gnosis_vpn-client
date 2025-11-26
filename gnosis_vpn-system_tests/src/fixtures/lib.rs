@@ -1,8 +1,13 @@
 use std::{path::PathBuf, time::Duration};
+
+use anyhow::Context;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use url::{Url, form_urlencoded::Serializer};
 
+use crate::fixtures::system_test_config::SystemTestConfig;
+
+/// Returns the environment variable value or a default when it is not set.
 pub fn env_string_with_default(key: &'static str, default: &str) -> String {
     match std::env::var(key) {
         Ok(v) => v,
@@ -10,6 +15,7 @@ pub fn env_string_with_default(key: &'static str, default: &str) -> String {
     }
 }
 
+/// Repeatedly evaluates `check` until it yields a value or the timeout expires.
 pub async fn wait_for_condition<T, F, Fut>(
     label: &str,
     timeout: Duration,
@@ -36,6 +42,7 @@ where
     }
 }
 
+/// Downloads a file of the provided size, optionally routing traffic through a proxy.
 pub async fn download_random_file(base_url: &Url, size_bytes: u64, proxy: Option<&Url>) -> anyhow::Result<()> {
     let mut download_url = base_url.clone();
     let existing_pairs = download_url
@@ -84,6 +91,7 @@ pub async fn download_random_file(base_url: &Url, size_bytes: u64, proxy: Option
     Ok(())
 }
 
+/// Queries an IP echo endpoint (e.g. api.ipify.org) and returns the IP string.
 pub async fn fetch_public_ip(ip_echo_url: &Url, proxy: Option<&Url>) -> anyhow::Result<String> {
     let mut client = reqwest::Client::builder().timeout(Duration::from_secs(30));
     if let Some(proxy_url) = proxy {
@@ -106,6 +114,7 @@ pub async fn fetch_public_ip(ip_echo_url: &Url, proxy: Option<&Url>) -> anyhow::
     Ok(trimmed)
 }
 
+/// Attempts to resolve the a binary path for the current build profile.
 pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
     let env_key = format!("CARGO_BIN_EXE_{}", name.replace('-', "_"));
 
@@ -125,4 +134,25 @@ pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
     } else {
         Err(anyhow::anyhow!("could not locate binary {name} in {candidate:?}"))
     }
+}
+
+/// Resolves the test configuration, binary path, and socket location on disk.
+pub async fn prepare_configs() -> anyhow::Result<(SystemTestConfig, PathBuf, PathBuf)> {
+    let cfg = match SystemTestConfig::load().await {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            return Err(anyhow::anyhow!("no system test config found"));
+        }
+        Err(e) => return Err(e),
+    };
+
+    let gnosis_bin = find_binary("gnosis_vpn")
+        .with_context(|| "Build the gnosis_vpn binary first, e.g. `cargo build -p gnosis_vpn`")?;
+
+    let working_dir = std::env::current_dir()?.join("tmp");
+    let socket_path = working_dir.join("gnosis_vpn.sock");
+
+    std::fs::create_dir_all(&working_dir)?;
+
+    Ok((cfg, gnosis_bin, socket_path))
 }

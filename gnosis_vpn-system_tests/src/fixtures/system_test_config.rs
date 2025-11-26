@@ -21,6 +21,7 @@ const DOWNLOAD_SIZE_BYTES_ENV: EnvVar = EnvVar::new("SYSTEM_TEST_DOWNLOAD_SIZE_B
 const DOWNLOAD_PROXY_ENV: EnvVar = EnvVar::new("SYSTEM_TEST_DOWNLOAD_PROXY", "http://10.128.0.1:3128");
 const IP_ECHO_URL_ENV: EnvVar = EnvVar::new("SYSTEM_TEST_IP_ECHO_URL", "https://api.ipify.org");
 
+/// Runtime configuration consumed by the system tests.
 pub struct SystemTestConfig {
     pub rpc_provider: Url,
     pub download_url: Url,
@@ -31,6 +32,7 @@ pub struct SystemTestConfig {
 }
 
 impl SystemTestConfig {
+    /// Reads configuration from the environment with sensible defaults.
     pub async fn load() -> anyhow::Result<Option<Self>> {
         let rpc_provider = env_string_with_default(RPC_PROVIDER_ENV.name, RPC_PROVIDER_ENV.default);
         let download: String = env_string_with_default(DOWNLOAD_URL_ENV.name, DOWNLOAD_URL_ENV.default);
