@@ -2,10 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+use crate::cli::CliArgs;
 use anyhow::Context;
-use gnosis_vpn_lib::network::Network;
-
-use crate::fixtures::system_test_config::SystemTestConfig;
 
 /// Owns the spawned gnosis_vpn service process and tears it down when dropped.
 pub struct ServiceGuard {
@@ -14,7 +12,7 @@ pub struct ServiceGuard {
 
 impl ServiceGuard {
     /// Spawns the binary with the configuration required for system tests.
-    pub fn spawn(binary: &Path, cfg: &SystemTestConfig, socket_path: &Path) -> anyhow::Result<Self> {
+    pub fn spawn(binary: &Path, cfg: &CliArgs, socket_path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).context("create socket directory")?;
         }
@@ -23,7 +21,7 @@ impl ServiceGuard {
         cmd.arg("--hopr-rpc-provider")
             .arg(cfg.rpc_provider.as_str())
             .arg("--hopr-network")
-            .arg(Network::Rotsee.to_string())
+            .arg(cfg.network.as_str())
             .arg("--socket-path")
             .arg(socket_path.as_os_str())
             .stdout(Stdio::inherit())

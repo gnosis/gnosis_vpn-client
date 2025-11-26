@@ -3991,10 +3991,12 @@ name = "gnosis_vpn-system-tests"
 version = "0.56.2"
 dependencies = [
  "anyhow",
+ "clap",
  "exitcode",
  "gnosis_vpn-lib",
  "rand 0.9.2",
  "reqwest",
+ "serde",
  "tokio",
  "tracing",
  "tracing-subscriber",

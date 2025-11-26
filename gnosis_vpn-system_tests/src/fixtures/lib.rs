@@ -5,16 +5,6 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use url::{Url, form_urlencoded::Serializer};
 
-use crate::fixtures::system_test_config::SystemTestConfig;
-
-/// Returns the environment variable value or a default when it is not set.
-pub fn env_string_with_default(key: &'static str, default: &str) -> String {
-    match std::env::var(key) {
-        Ok(v) => v,
-        Err(_) => default.to_string(),
-    }
-}
-
 /// Repeatedly evaluates `check` until it yields a value or the timeout expires.
 pub async fn wait_for_condition<T, F, Fut>(
     label: &str,
@@ -43,7 +33,7 @@ where
 }
 
 /// Downloads a file of the provided size, optionally routing traffic through a proxy.
-pub async fn download_random_file(base_url: &Url, size_bytes: u64, proxy: Option<&Url>) -> anyhow::Result<()> {
+pub async fn download_file(base_url: &Url, size_bytes: u64, proxy: Option<&Url>) -> anyhow::Result<()> {
     let mut download_url = base_url.clone();
     let existing_pairs = download_url
         .query_pairs()
@@ -137,15 +127,7 @@ pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Resolves the test configuration, binary path, and socket location on disk.
-pub async fn prepare_configs() -> anyhow::Result<(SystemTestConfig, PathBuf, PathBuf)> {
-    let cfg = match SystemTestConfig::load().await {
-        Ok(Some(config)) => config,
-        Ok(None) => {
-            return Err(anyhow::anyhow!("no system test config found"));
-        }
-        Err(e) => return Err(e),
-    };
-
+pub async fn prepare_configs() -> anyhow::Result<(PathBuf, PathBuf)> {
     let gnosis_bin = find_binary("gnosis_vpn")
         .with_context(|| "Build the gnosis_vpn binary first, e.g. `cargo build -p gnosis_vpn`")?;
 
@@ -154,5 +136,5 @@ pub async fn prepare_configs() -> anyhow::Result<(SystemTestConfig, PathBuf, Pat
 
     std::fs::create_dir_all(&working_dir)?;
 
-    Ok((cfg, gnosis_bin, socket_path))
+    Ok((gnosis_bin, socket_path))
 }

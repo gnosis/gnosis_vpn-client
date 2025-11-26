@@ -1,3 +1,4 @@
+mod cli;
 mod fixtures;
 
 use gnosis_vpn_lib::hopr::hopr_lib;
@@ -30,7 +31,9 @@ async fn main_inner() {
         env!("CARGO_PKG_NAME")
     );
 
-    let (cfg, gnosis_bin, socket_path) = match lib::prepare_configs().await {
+    let args = <cli::CliArgs as clap::Parser>::parse();
+
+    let (gnosis_bin, socket_path) = match lib::prepare_configs().await {
         Ok(res) => res,
         Err(e) => {
             error!("error preparing system test config: {}", e);
@@ -38,7 +41,7 @@ async fn main_inner() {
         }
     };
 
-    let service = match ServiceGuard::spawn(&gnosis_bin, &cfg, &socket_path) {
+    let service = match ServiceGuard::spawn(&gnosis_bin, &args, &socket_path) {
         Ok(process) => process,
         Err(e) => {
             error!("error spawning gnosis_vpn service: {}", e);
@@ -90,16 +93,22 @@ async fn main_inner() {
         process::exit(exitcode::DATAERR);
     }
 
-    // Perform a sample download to verify connectivity
-    match lib::download_random_file(&cfg.download_url, cfg.download_size_bytes, cfg.download_proxy.as_ref()).await {
-        Ok(_) => info!("sample download succeeded"),
-        Err(e) => error!("sample download failed: {}", e),
-    }
-
     // Query public IP
-    match lib::fetch_public_ip(&cfg.ip_echo_url, cfg.download_proxy.as_ref()).await {
+    match lib::fetch_public_ip(&args.ip_echo_url, Some(&args.proxy_url)).await {
         Ok(ip) => info!(public_ip = %ip, "queried public IP via echo service"),
         Err(e) => error!("failed to fetch public IP: {}", e),
+    }
+
+    // Perform downloads to verify connectivity
+    let attempts = 3;
+    for idx in 0..attempts {
+        let file_size = args.download_min_size_bytes * (2u64.pow(idx as u32));
+        info!(%file_size, "performing sample download attempt #{}/attempts", idx + 1);
+
+        match lib::download_file(&args.download_url, file_size, Some(&args.proxy_url)).await {
+            Ok(_) => info!(%file_size, "sample download succeeded"),
+            Err(e) => error!(%file_size, "sample download failed {}", e),
+        }
     }
 
     drop(service);
