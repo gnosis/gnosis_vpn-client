@@ -99,10 +99,9 @@ jobs:
             echo "config_dir=$CONFIG_DIR"
           } >> "$GITHUB_OUTPUT"
       - name: Run system tests
-        if: false # disabled for now.
         env:
           XDG_CONFIG_HOME: ${{ steps.prepare-system-tests.outputs.config_home }}
-        run: nix run .#gnosis_vpn-system-tests download
+        run: just system-tests
   build-binaries:
     strategy:
       matrix:

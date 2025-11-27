@@ -123,10 +123,23 @@ pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
     let candidate = target_dir.join(profile).join(name);
 
     if candidate.exists() {
-        Ok(candidate)
-    } else {
-        Err(anyhow::anyhow!("could not locate binary {name} in {candidate:?}"))
+        return Ok(candidate);
     }
+
+    // When running via `nix build`/`nix run` the binaries are available under `result/bin`.
+    let result_candidate = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join("result").join("bin").join(name));
+
+    if let Some(path) = result_candidate {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "could not locate binary {name} in {candidate:?} or result/bin"
+    ))
 }
 
 /// Resolves the test configuration, binary path, and socket location on disk.
