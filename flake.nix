@@ -165,6 +165,11 @@
             profile = "dev";
           };
 
+          gvpn-system-tests = mkPackage {
+            pname = "gnosis_vpn-system-tests";
+            profile = "release";
+          };
+
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
             hooks = {
@@ -292,12 +297,9 @@
           packages = {
             inherit gvpn;
             inherit gvpn-dev;
+            inherit gvpn-system-tests;
             inherit pre-commit-check;
             default = gvpn;
-          };
-
-          apps = {
-            inherit generate-lockfile;
           };
 
           devShells.default = craneLib.devShell {

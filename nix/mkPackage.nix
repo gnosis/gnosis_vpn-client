@@ -20,7 +20,7 @@
 {
   pname, # Package name (e.g., "gnosis_vpn" or "gnosis_vpn-dev")
   profile ? "release", # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
-  cargoExtraArgs ? "--bin gnosis_vpn --bin gnosis_vpn-ctl", # Build only binary crates in workspace
+  cargoExtraArgs ? "--bin gnosis_vpn --bin gnosis_vpn-ctl --bin gnosis_vpn-system-tests", # Build only binary crates in workspace
   ... # Any additional arguments are passed through to craneLib.buildPackage
 }@args:
 let
@@ -33,6 +33,7 @@ let
     fileset = lib.fileset.unions [
       ../Cargo.toml
       ../Cargo.lock
+      (craneLib.fileset.commonCargoSources ../gnosis_vpn-system_tests)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-lib)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-ctl)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn)
