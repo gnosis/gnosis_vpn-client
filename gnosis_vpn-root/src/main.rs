@@ -1,6 +1,6 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
@@ -347,10 +347,7 @@ async fn loop_daemon(
         exitcode::IOERR
     })?;
 
-    expected_reader_version
-    let reader = BufReader::new(worker_stdout);
-    let lines = reader.lines().next_line().await.unwrap();
-    tracing::info!(?lines, "worker stdout reader established");
+    expected_reader_version(&worker_stdout, env!("CARGO_PKG_VERSION"))?;
 
     let res = worker.wait().await;
     tracing::warn!(?res, "foobi");
@@ -413,6 +410,44 @@ async fn loop_daemon(
             }
         }
     }
+}
+
+async fn expected_reader_version(
+    stdout: &UnixStream,
+    expected_version: &str,
+) -> Result<(), exitcode::ExitCode> {
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    match reader.read_line(&mut line).await {
+        Ok(version_line) => {
+    // Regex explanation:
+    // version   -> matches the literal text "version"
+    // .*?       -> matches any character (non-greedy) to skip ANSI codes
+    // =         -> matches the literal "="
+    // .*?       -> matches any character (non-greedy) to skip ANSI codes/quotes
+    // "         -> matches the opening quote
+    // ([^"]+)   -> Capture Group 1: Matches anything that is NOT a quote
+    // "         -> matches the closing quote
+    let re = Regex::new(r#"version.*?=.*?"([^"]+)""#).unwrap();
+    if let Some(caps) = re.capture(version_line) {
+        tracing::info!(?caps, "caps");
+        if let Some(version) = caps.get(1) {
+            tracing::info!(?version, "version");
+            if version == expected_version {
+                return Ok(());
+            } else {
+            tracing::error!(worker_version = version, "incorrect worker version")
+                return Err(exitcode::FOOBAR);
+            }
+        }
+    }
+        },
+        Err(e) => {
+            tracing::error!(error = ?e, "error reading worker version");
+            return Err(exitcode::IOERR);
+        }
+    }
+    Ok(())
 }
 
 /// limit root service to two threads
