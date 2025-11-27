@@ -29,6 +29,9 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
+    // TODO add cli params for worker
+    //
+    //
     /// RPC provider URL needed for fat Hopr edge client
     #[arg(long, env = hopr::RPC_PROVIDER_ENV)]
     pub hopr_rpc_provider: Url,
