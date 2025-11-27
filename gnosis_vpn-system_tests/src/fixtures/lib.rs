@@ -5,6 +5,8 @@ use tokio::time::Instant;
 use tracing::{debug, info, warn};
 use url::{Url, form_urlencoded::Serializer};
 
+const BASE_DOWNLOAD_URL: &str = "https://speed.cloudflare.com/__down";
+
 /// Repeatedly evaluates `check` until it yields a value or the timeout expires.
 pub async fn wait_for_condition<T, F, Fut>(
     label: &str,
@@ -33,8 +35,9 @@ where
 }
 
 /// Downloads a file of the provided size, optionally routing traffic through a proxy.
-pub async fn download_file(base_url: &Url, size_bytes: u64, proxy: Option<&Url>) -> anyhow::Result<()> {
-    let mut download_url = base_url.clone();
+pub async fn download_file(size_bytes: u64, proxy: Option<&Url>) -> anyhow::Result<()> {
+    let mut download_url = Url::parse(BASE_DOWNLOAD_URL)?;
+
     let existing_pairs = download_url
         .query_pairs()
         .map(|(k, v)| (k.into_owned(), v.into_owned()))

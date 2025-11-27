@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{
-    BalanceResponse, Command, ConnectResponse, ConnectionState, Response, RunMode, StatusResponse,
+    BalanceResponse, Command, ConnectResponse, ConnectionState, DisconnectResponse, Response, RunMode, StatusResponse,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination};
 use gnosis_vpn_lib::connection::destination_health::Health;
@@ -76,6 +76,15 @@ impl ControlClient {
         }
     }
 
+    /// Close the VPN connection.
+    pub async fn disconnect(&self) -> anyhow::Result<DisconnectResponse> {
+        match self.send(&Command::Disconnect).await {
+            Ok(Response::Disconnect(state)) => Ok(state),
+            Ok(resp) => Err(anyhow::anyhow!("unexpected connect response {resp:?}")),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Waits until the control API responds to ping requests.
     pub async fn wait_for_service_running(&self, timeout: Duration) -> anyhow::Result<()> {
         lib::wait_for_condition("service running", timeout, Duration::from_secs(2), || async {
@@ -84,6 +93,34 @@ impl ControlClient {
                     info!("gnosis_vpn service is pingable");
                     Ok(Some(()))
                 }
+                Err(_) => Ok(None),
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Waits until a safe is created and available.
+    pub async fn wait_for_safe_created(&self, timeout: Duration) -> anyhow::Result<()> {
+        lib::wait_for_condition("safe created", timeout, Duration::from_secs(5), || async {
+            match self.status().await {
+                Ok(Some(status)) => match status.run_mode {
+                    RunMode::Init => Ok(None),
+                    RunMode::PreparingSafe {
+                        node_address: _,
+                        node_xdai: _,
+                        node_wxhopr: _,
+                        funding_tool: _,
+                    } => {
+                        warn!("safe being prepared");
+                        Ok(None)
+                    }
+                    _ => {
+                        info!("safe is created and ready");
+                        Ok(Some(()))
+                    }
+                },
+                Ok(None) => Ok(None),
                 Err(_) => Ok(None),
             }
         })
@@ -194,6 +231,27 @@ impl ControlClient {
                     Ok(None)
                 }
                 Ok(None) => Ok(None),
+                Err(_) => Ok(None),
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Ensures there is no active VPN connection.
+    pub async fn wait_for_disconnection(&self, timeout: Duration) -> anyhow::Result<()> {
+        lib::wait_for_condition("disconnection", timeout, Duration::from_secs(2), || async {
+            match self.disconnect().await {
+                Ok(response) => match response {
+                    DisconnectResponse::Disconnecting(address) => {
+                        info!("disconnecting from destination {address}");
+                        Ok(None)
+                    }
+                    DisconnectResponse::NotConnected => {
+                        info!("successfully disconnected");
+                        Ok(Some(()))
+                    }
+                },
                 Err(_) => Ok(None),
             }
         })

@@ -58,23 +58,32 @@ pub struct SharedArgs {
     pub allow_insecure: bool,
 }
 
-#[derive(Debug, Clone, Args)]
+#[derive(Debug, Clone, Copy, Args)]
 pub struct DownloadArgs {
-    /// Endpoint that serves random bytes for download verification.
-    #[arg(
-        long = "downloadUrl",
-        env = "SYSTEM_TEST_DOWNLOAD_URL",
-        value_name = "URL",
-        default_value = "https://speed.cloudflare.com/__down"
-    )]
-    pub download_url: Url,
-
     /// Minimum download size in bytes used for the connectivity check.
     #[arg(
-        long = "downloadMinSizeBytes",
+        long = "minSizeBytes",
         env = "SYSTEM_TEST_DOWNLOAD_MIN_SIZE_BYTES",
         value_name = "SIZE_IN_BYTES",
         default_value = "16000"
     )]
-    pub download_min_size_bytes: u64,
+    pub min_size_bytes: u64,
+
+    /// Number of download attempts, each time multiplying the download size by size_factor
+    #[arg(
+        long = "attempts",
+        env = "SYSTEM_TEST_DOWNLOAD_ATTEMPTS",
+        value_name = "ATTEMPTS",
+        default_value = "5"
+    )]
+    pub attempts: u32,
+
+    /// Factor to multiply the download size after each attempt.
+    #[arg(
+        long = "sizeFactor",
+        env = "SYSTEM_TEST_DOWNLOAD_SIZE_FACTOR",
+        value_name = "SIZE_FACTOR",
+        default_value = "2"
+    )]
+    pub size_factor: u32,
 }

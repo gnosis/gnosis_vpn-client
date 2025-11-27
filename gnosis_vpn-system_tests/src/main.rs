@@ -11,7 +11,7 @@ use tracing::{error, info};
 use cli::{Cli, Command, DownloadArgs};
 use fixtures::control_client::ControlClient;
 use fixtures::lib;
-use fixtures::service_guard::ServiceGuard;
+use fixtures::service::Service;
 
 fn main() {
     let res = match hopr_lib::prepare_tokio_runtime() {
@@ -48,19 +48,19 @@ async fn main_inner() -> Result<()> {
     };
 
     let client = ControlClient::new(socket_path.clone());
-    let service = match ServiceGuard::spawn(&gnosis_bin, &cli.shared, &socket_path) {
-        Ok(process) => process,
-        Err(e) => return Err(e),
-    };
+    Service::spawn(&gnosis_bin, &cli.shared, &socket_path)?;
 
     // wait for up to 30s for service to be running
     client.wait_for_service_running(Duration::from_secs(30)).await?;
 
-    // wait for up to 30s for node to be funded (should be instant as already funded for now)
-    client.wait_for_node_funding(Duration::from_secs(30)).await?;
+    // wait for up to 60s for safe to be created
+    client.wait_for_safe_created(Duration::from_secs(60)).await?;
 
     // wait for up to 30min for the node to be in Running state
     client.wait_for_node_running(Duration::from_secs(30 * 60)).await?;
+
+    // wait for up to 30s for node to be funded (should be instant as already funded for now)
+    client.wait_for_node_funding(Duration::from_secs(30)).await?;
 
     // wait for up to 2min for destination to be ready to be used
     let destinations = client.wait_for_ready_destinations(Duration::from_secs(2 * 60)).await?;
@@ -71,45 +71,63 @@ async fn main_inner() -> Result<()> {
         .expect("destinations should not be empty")
         .clone();
 
-    let state = client.connect(destination.address).await?;
-    info!("Connection state: {:?}", state);
+    info!(
+        state = ?client.connect(destination.address).await?,
+        "Initiated connection",
+    );
 
     client
-        .wait_for_connection_established(&destination, Duration::from_secs(60))
+        .wait_for_connection_established(&destination, Duration::from_secs(90))
         .await?;
 
-    // Query public IP
-    let ip = lib::fetch_public_ip(&cli.shared.ip_echo_url, None).await?;
-    info!(public_ip = %ip, "queried public IP via echo service");
+    // connect to a different destination and perform download tests
+    // wait for up to 2min for destination to be ready to be used
+    let destinations = client.wait_for_ready_destinations(Duration::from_secs(2 * 60)).await?;
+
+    // Pick a random destination that is connectable
+    let filtered_destinations = destinations
+        .iter()
+        .filter(|d| d.address != destination.address)
+        .collect::<Vec<_>>();
+
+    let destination = filtered_destinations
+        .choose(&mut rand::rng())
+        .expect("should have at least one different destination available");
+
+    info!(
+        state = ?client.connect(destination.address).await?,
+        "Initiated connection",
+    );
+
+    client
+        .wait_for_connection_established(destination, Duration::from_secs(90))
+        .await?;
+
+    // Query public IP trough the VPN
+    let ip = lib::fetch_public_ip(&cli.shared.ip_echo_url, cli.shared.proxy.as_ref()).await?;
+    info!(public_ip = %ip, "queried public IP via the echo service");
 
     match cli.command {
         Command::Download(args) => {
-            perform_download_attempts(&args, cli.shared.proxy.as_ref(), 5, true).await?;
+            download_files(&args, cli.shared.proxy.as_ref()).await?;
         }
     }
 
-    drop(service);
+    client.wait_for_disconnection(Duration::from_secs(15)).await?;
 
     Ok(())
 }
 
-async fn perform_download_attempts(
-    args: &DownloadArgs,
-    proxy: Option<&url::Url>,
-    attempts: u32,
-    fail_fast: bool,
-) -> Result<()> {
-    for idx in 0..attempts {
-        let file_size = args.download_min_size_bytes * (2u64.pow(idx));
-        info!(%file_size, "performing sample download attempt #{}/{}", idx + 1, attempts);
+async fn download_files(args: &DownloadArgs, proxy: Option<&url::Url>) -> Result<()> {
+    for idx in 0..args.attempts {
+        let file_size = args.min_size_bytes * (args.size_factor.pow(idx) as u64);
+        info!(%file_size, "performing sample download attempt #{}/{}", idx + 1, args.attempts);
 
-        match lib::download_file(&args.download_url, file_size, proxy).await {
+        match lib::download_file(file_size, proxy).await {
             Ok(_) => info!(%file_size, "sample download succeeded"),
             Err(e) => {
                 error!(%file_size, "sample download failed {e}");
-                if fail_fast {
-                    return Err(e);
-                }
+                return Err(e);
             }
         }
     }

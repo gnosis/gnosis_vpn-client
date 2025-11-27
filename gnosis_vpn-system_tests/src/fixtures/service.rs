@@ -1,18 +1,15 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 
 use crate::cli::SharedArgs;
 use anyhow::Context;
 
-/// Owns the spawned gnosis_vpn service process and tears it down when dropped.
-pub struct ServiceGuard {
-    child: Child,
-}
+pub struct Service;
 
-impl ServiceGuard {
+impl Service {
     /// Spawns the binary with the configuration required for system tests.
-    pub fn spawn(binary: &Path, cfg: &SharedArgs, socket_path: &Path) -> anyhow::Result<Self> {
+    pub fn spawn(binary: &Path, cfg: &SharedArgs, socket_path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).context("create socket directory")?;
         }
@@ -31,17 +28,7 @@ impl ServiceGuard {
             cmd.arg("--allow-insecure");
         }
 
-        let child = cmd.spawn().context("failed to start gnosis_vpn service")?;
-        Ok(Self { child })
-    }
-}
-
-impl Drop for ServiceGuard {
-    fn drop(&mut self) {
-        // Ensure we always stop the background service at the end of the test run.
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-        }
-        let _ = self.child.wait();
+        let _ = cmd.spawn().context("failed to start gnosis_vpn service")?;
+        Ok(())
     }
 }
