@@ -1,6 +1,6 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
@@ -271,7 +271,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // ensure worker user exists
-    let user = user::Worker::from_system().map_err(|err| {
+    let user = user::Worker::from_system("gnosisvpn").map_err(|err| {
         tracing::error!(error = ?err, "error retrieving worker user");
         exitcode::NOUSER
     })?;
@@ -283,7 +283,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         .map_err(|err| {
             tracing::error!(error = ?err, "error checking WireGuard tools");
             exitcode::UNAVAILABLE
-        });
+        })?;
 
     // set up config watcher
     let config_path = match args.config_path.canonicalize() {
@@ -346,6 +346,11 @@ async fn loop_daemon(
         tracing::error!("failed to aquire stdout");
         exitcode::IOERR
     })?;
+
+    expected_reader_version
+    let reader = BufReader::new(worker_stdout);
+    let lines = reader.lines().next_line().await.unwrap();
+    tracing::info!(?lines, "worker stdout reader established");
 
     let res = worker.wait().await;
     tracing::warn!(?res, "foobi");
