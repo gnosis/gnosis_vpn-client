@@ -61,6 +61,7 @@
           ...
         }:
         let
+          fs = lib.fileset;
           pkgs = (
             import nixpkgs {
               localSystem = system;
@@ -68,6 +69,8 @@
               overlays = [ (import rust-overlay) ];
             }
           );
+          # import docker utilities for building Docker images
+          mkDockerImage = args: import ./nix/docker.nix (args // { inherit pkgs; });
 
           # Map Nix system names to Rust target triples
           # Linux targets use musl for static linking, Darwin uses standard targets
@@ -149,6 +152,13 @@
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
           };
 
+          getSecretEnv =
+            name:
+            let
+              value = builtins.getEnv name;
+            in
+            if value == "" then null else value;
+
           # Build the top-level crates of the workspace as individual derivations
           # This modular approach allows consumers to depend on and build only what
           # they need, rather than building the entire workspace as a single derivation.
@@ -157,13 +167,93 @@
           gvpn = mkPackage {
             pname = "gnosis_vpn";
             profile = "release";
+            cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
           };
 
           # Development build with faster compilation and debug symbols
           gvpn-dev = mkPackage {
             pname = "gnosis_vpn-dev";
             profile = "dev";
+            cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
           };
+
+          gvpn-system-tests = mkPackage {
+            pname = "gnosis_vpn-system-tests";
+            profile = "release";
+            cargoExtraArgs = "--bin gnosis_vpn-system-tests";
+          };
+
+          rotseeSource = fs.toSource {
+            root = ./.;
+            fileset = fs.unions [
+              ./network-config/rotsee.toml
+            ];
+          };
+
+          systemTestsSecretValues = {
+            vpnId = getSecretEnv "GNOSIS_VPN_ID";
+            vpnPass = getSecretEnv "GNOSIS_VPN_PASS";
+            vpnSafe = getSecretEnv "GNOSIS_VPN_SAFE";
+          };
+
+          mkGnosisVpnSecrets =
+            {
+              vpnId,
+              vpnPass,
+              vpnSafe,
+            }:
+            pkgs.runCommand "gnosisvpn-secret-files"
+              {
+                GNOSIS_VPN_ID = vpnId;
+                GNOSIS_VPN_PASS = vpnPass;
+                GNOSIS_VPN_SAFE = vpnSafe;
+              }
+              ''
+                parent_folder=$out/.config/gnosisvpn
+                mkdir -p $parent_folder
+                printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosisvpn-hopr.id
+                printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosisvpn-hopr.pass
+                printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosisvpn-hopr.safe
+              '';
+
+          mkSystemTestsDockerImage =
+            secrets:
+            let
+              gnosisVpnSecrets = mkGnosisVpnSecrets secrets;
+            in
+            mkDockerImage {
+              name = "gnosis-vpn-system-tests";
+              extraContents = [
+                gvpn
+                gvpn-system-tests
+                pkgs.wireguard-tools
+                pkgs.which
+              ];
+              extraFiles = [
+                rotseeSource
+                gnosisVpnSecrets
+              ];
+              extraFilesDest = "/";
+              env = [
+                "RUST_LOG=gnosis_vpn=info"
+                "GNOSISVPN_CONFIG_PATH=/network-config/rotsee.toml"
+              ];
+              Entrypoint = [
+                "gnosis_vpn-system-tests"
+                "download"
+              ];
+            };
+
+          systemTestsDockerPackages =
+            let
+              secretsProvided =
+                systemTestsSecretValues.vpnId != null
+                && systemTestsSecretValues.vpnPass != null
+                && systemTestsSecretValues.vpnSafe != null;
+            in
+            lib.optionalAttrs secretsProvided {
+              gvpn-system-tests-docker = mkSystemTestsDockerImage systemTestsSecretValues;
+            };
 
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
@@ -292,13 +382,11 @@
           packages = {
             inherit gvpn;
             inherit gvpn-dev;
+            inherit gvpn-system-tests;
             inherit pre-commit-check;
             default = gvpn;
-          };
-
-          apps = {
-            inherit generate-lockfile;
-          };
+          }
+          // systemTestsDockerPackages;
 
           devShells.default = craneLib.devShell {
             inherit pre-commit-check;
