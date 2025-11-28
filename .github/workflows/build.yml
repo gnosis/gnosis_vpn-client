@@ -65,7 +65,7 @@ jobs:
         env:
           USER: runner
       - name: Run flake checks
-        run: nix flake check          
+        run: nix flake check
       - name: Run system tests
         run: just system-tests
       - name: Build gvpn system tests docker image

@@ -67,7 +67,6 @@ let
         cp -R ${extraFilesRoot}/. "$out${extraFilesDest}/"
       '';
 
-
   # Default environment variables
   defaultEnv = [
     "NO_COLOR=true" # suppress colored log output

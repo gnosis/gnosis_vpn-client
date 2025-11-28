@@ -152,7 +152,8 @@
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
           };
 
-          requireEnv = name:
+          requireEnv =
+            name:
             let
               value = builtins.getEnv name;
             in
@@ -198,23 +199,25 @@
               vpnPass = requireEnv "GNOSIS_VPN_PASS";
               vpnSafe = requireEnv "GNOSIS_VPN_SAFE";
             in
-            pkgs.runCommand "gnosisvpn-secret-files" {
-              GNOSIS_VPN_ID = vpnId;
-              GNOSIS_VPN_PASS = vpnPass;
-              GNOSIS_VPN_SAFE = vpnSafe;
-            } ''
-              parent_folder=$out/.config/gnosisvpn
-              mkdir -p $parent_folder
-              printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosis_vpn-hopr.id
-              printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosis_vpn-hopr.pass
-              printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosis_vpn-hopr.safe
-            '';
+            pkgs.runCommand "gnosisvpn-secret-files"
+              {
+                GNOSIS_VPN_ID = vpnId;
+                GNOSIS_VPN_PASS = vpnPass;
+                GNOSIS_VPN_SAFE = vpnSafe;
+              }
+              ''
+                parent_folder=$out/.config/gnosisvpn
+                mkdir -p $parent_folder
+                printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosis_vpn-hopr.id
+                printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosis_vpn-hopr.pass
+                printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosis_vpn-hopr.safe
+              '';
 
           gvpn-system-tests-docker = mkDockerImage {
             name = "gnosis-vpn-system-tests";
-            extraContents = [ 
+            extraContents = [
               gvpn
-              gvpn-system-tests 
+              gvpn-system-tests
               pkgs.wireguard-tools
               pkgs.which
             ];

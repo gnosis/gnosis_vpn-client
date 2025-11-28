@@ -2,12 +2,12 @@ version = 4
 
 [destinations.0x7220CfE91F369bfE79F883c2891e97407D7a4D48]
 meta = { location = "USA" }
-path = { intermediates = [ "0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA" ] }
+path = { intermediates = ["0xFE3AF421afB84EED445c2B8f1892E3984D3e41eA"] }
 
 [destinations.0xcD9D0E23cD999dFC0D1400D837F8e612DbbbDFAA]
 meta = { location = "UK" }
-path = { intermediates = [ "0xc00B7d90463394eC29a080393fF09A2ED82a0F86" ] }
+path = { intermediates = ["0xc00B7d90463394eC29a080393fF09A2ED82a0F86"] }
 
 [destinations.0x12b78461da59e8317c61bd249ea0dea2aa9527de]
 meta = { location = "Brazil" }
-path = { intermediates = [ "0x6250eb481b40f4609d32de35bd9b827212713f35" ] }
+path = { intermediates = ["0x6250eb481b40f4609d32de35bd9b827212713f35"] }
