@@ -37,8 +37,3 @@ docker-stop:
 # enter docker container interactively
 docker-enter:
     docker exec --interactive --tty gnosis_vpn-client bash
-
-# builds and run the system tests
-system-tests:
-    nix build .#gvpn-system-tests
-    sudo -E RUST_LOG=gnosis_vpn=info ./result/bin/gnosis_vpn-system-tests download
