@@ -211,9 +211,9 @@
               ''
                 parent_folder=$out/.config/gnosisvpn
                 mkdir -p $parent_folder
-                printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosis_vpn-hopr.id
-                printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosis_vpn-hopr.pass
-                printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosis_vpn-hopr.safe
+                printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosisvpn-hopr.id
+                printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosisvpn-hopr.pass
+                printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosisvpn-hopr.safe
               '';
 
           mkSystemTestsDockerImage =

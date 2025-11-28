@@ -68,7 +68,6 @@ jobs:
         run: nix flake check
       - name: Build gvpn system tests docker image
         env:
-          USER: runner
           GNOSIS_VPN_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           GNOSIS_VPN_PASS: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           GNOSIS_VPN_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
