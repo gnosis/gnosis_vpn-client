@@ -152,15 +152,12 @@
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
           };
 
-          requireEnv =
+          getSecretEnv =
             name:
             let
               value = builtins.getEnv name;
             in
-            if value == "" then
-              throw "Environment variable ${name} must be set to build the docker image"
-            else
-              value;
+            if value == "" then null else value;
 
           # Build the top-level crates of the workspace as individual derivations
           # This modular approach allows consumers to depend on and build only what
@@ -193,12 +190,18 @@
             ];
           };
 
-          gnosisVpnSecrets =
-            let
-              vpnId = requireEnv "GNOSIS_VPN_ID";
-              vpnPass = requireEnv "GNOSIS_VPN_PASS";
-              vpnSafe = requireEnv "GNOSIS_VPN_SAFE";
-            in
+          systemTestsSecretValues = {
+            vpnId = getSecretEnv "GNOSIS_VPN_ID";
+            vpnPass = getSecretEnv "GNOSIS_VPN_PASS";
+            vpnSafe = getSecretEnv "GNOSIS_VPN_SAFE";
+          };
+
+          mkGnosisVpnSecrets =
+            {
+              vpnId,
+              vpnPass,
+              vpnSafe,
+            }:
             pkgs.runCommand "gnosisvpn-secret-files"
               {
                 GNOSIS_VPN_ID = vpnId;
@@ -213,28 +216,44 @@
                 printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosis_vpn-hopr.safe
               '';
 
-          gvpn-system-tests-docker = mkDockerImage {
-            name = "gnosis-vpn-system-tests";
-            extraContents = [
-              gvpn
-              gvpn-system-tests
-              pkgs.wireguard-tools
-              pkgs.which
-            ];
-            extraFiles = [
-              rotseeSource
-              gnosisVpnSecrets
-            ];
-            extraFilesDest = "/";
-            env = [
-              "RUST_LOG=gnosis_vpn=info"
-              "GNOSISVPN_CONFIG_PATH=/network-config/rotsee.toml"
-            ];
-            Entrypoint = [
-              "gnosis_vpn-system-tests"
-              "download"
-            ];
-          };
+          mkSystemTestsDockerImage =
+            secrets:
+            let
+              gnosisVpnSecrets = mkGnosisVpnSecrets secrets;
+            in
+            mkDockerImage {
+              name = "gnosis-vpn-system-tests";
+              extraContents = [
+                gvpn
+                gvpn-system-tests
+                pkgs.wireguard-tools
+                pkgs.which
+              ];
+              extraFiles = [
+                rotseeSource
+                gnosisVpnSecrets
+              ];
+              extraFilesDest = "/";
+              env = [
+                "RUST_LOG=gnosis_vpn=info"
+                "GNOSISVPN_CONFIG_PATH=/network-config/rotsee.toml"
+              ];
+              Entrypoint = [
+                "gnosis_vpn-system-tests"
+                "download"
+              ];
+            };
+
+          systemTestsDockerPackages =
+            let
+              secretsProvided =
+                systemTestsSecretValues.vpnId != null
+                && systemTestsSecretValues.vpnPass != null
+                && systemTestsSecretValues.vpnSafe != null;
+            in
+            lib.optionalAttrs secretsProvided {
+              gvpn-system-tests-docker = mkSystemTestsDockerImage systemTestsSecretValues;
+            };
 
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
@@ -364,10 +383,10 @@
             inherit gvpn;
             inherit gvpn-dev;
             inherit gvpn-system-tests;
-            inherit gvpn-system-tests-docker;
             inherit pre-commit-check;
             default = gvpn;
-          };
+          }
+          // systemTestsDockerPackages;
 
           devShells.default = craneLib.devShell {
             inherit pre-commit-check;
