@@ -137,8 +137,18 @@ pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
         }
     }
 
+    // Finally, search PATH so the Nix-installed binary can be picked up when it's symlinked globally.
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':').map(PathBuf::from) {
+            let path_candidate = dir.join(name);
+            if path_candidate.exists() {
+                return Ok(path_candidate);
+            }
+        }
+    }
+
     Err(anyhow::anyhow!(
-        "could not locate binary {name} in {candidate:?} or result/bin"
+        "could not locate binary {name} in {candidate:?}, result/bin, or PATH"
     ))
 }
 

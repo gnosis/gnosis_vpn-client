@@ -65,43 +65,22 @@ jobs:
         env:
           USER: runner
       - name: Run flake checks
-        run: nix flake check
-      - name: Prepare system test credentials
-        id: prepare-system-tests
-        shell: bash
-        env:
-          SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
-          SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
-          SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
-        run: |
-          set -euo pipefail
-
-          for var in SYSTEM_TEST_HOPRD_ID SYSTEM_TEST_HOPRD_ID_PASSWORD SYSTEM_TEST_SAFE; do
-            if [ -z "${!var}" ]; then
-              echo "Missing required secret: $var" >&2
-              exit 1
-            fi
-          done
-
-          CONFIG_HOME="$RUNNER_TEMP/gnosisvpn-system-tests"
-          CONFIG_DIR="$CONFIG_HOME/org.hoprnet.gnosisvpn"
-
-          install -d -m 700 "$CONFIG_DIR"
-
-          printf '%s' "$SYSTEM_TEST_HOPRD_ID" > "$CONFIG_DIR/gnosisvpn-hopr.id"
-          printf '%s' "$SYSTEM_TEST_HOPRD_ID_PASSWORD" > "$CONFIG_DIR/gnosisvpn-hopr.pass"
-          printf '%s' "$SYSTEM_TEST_SAFE" > "$CONFIG_DIR/gnosisvpn-hopr.safe"
-
-          chmod 600 "$CONFIG_DIR"/gnosisvpn-hopr.*
-
-          {
-            echo "config_home=$CONFIG_HOME"
-            echo "config_dir=$CONFIG_DIR"
-          } >> "$GITHUB_OUTPUT"
+        run: nix flake check          
       - name: Run system tests
-        env:
-          XDG_CONFIG_HOME: ${{ steps.prepare-system-tests.outputs.config_home }}
         run: just system-tests
+      - name: Build gvpn system tests docker image
+        env:
+          USER: runner
+          GNOSIS_VPN_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
+          GNOSIS_VPN_PASS: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
+          GNOSIS_VPN_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
+        run: nix build --impure .#gvpn-system-tests-docker -L
+      - name: Load docker image
+        run: docker load -i result
+      - name: Run gvpn system tests docker image
+        run: docker run --rm gnosis-vpn-system-tests
+        env:
+          RUST_LOG: gnosis_vpn=info
   build-binaries:
     strategy:
       matrix:
