@@ -183,77 +183,77 @@
             cargoExtraArgs = "--bin gnosis_vpn-system-tests";
           };
 
-          rotseeSource = fs.toSource {
-            root = ./.;
-            fileset = fs.unions [
-              ./network-config/rotsee.toml
-            ];
-          };
+          # rotseeSource = fs.toSource {
+          #   root = ./.;
+          #   fileset = fs.unions [
+          #     ./network-config/rotsee.toml
+          #   ];
+          # };
 
-          systemTestsSecretValues = {
-            vpnId = getSecretEnv "GNOSIS_VPN_ID";
-            vpnPass = getSecretEnv "GNOSIS_VPN_PASS";
-            vpnSafe = getSecretEnv "GNOSIS_VPN_SAFE";
-          };
+          # systemTestsSecretValues = {
+          #   vpnId = getSecretEnv "GNOSIS_VPN_ID";
+          #   vpnPass = getSecretEnv "GNOSIS_VPN_PASS";
+          #   vpnSafe = getSecretEnv "GNOSIS_VPN_SAFE";
+          # };
 
-          mkGnosisVpnSecrets =
-            {
-              vpnId,
-              vpnPass,
-              vpnSafe,
-            }:
-            pkgs.runCommand "gnosisvpn-secret-files"
-              {
-                GNOSIS_VPN_ID = vpnId;
-                GNOSIS_VPN_PASS = vpnPass;
-                GNOSIS_VPN_SAFE = vpnSafe;
-              }
-              ''
-                parent_folder=$out/.config/gnosisvpn
-                mkdir -p $parent_folder
-                printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosisvpn-hopr.id
-                printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosisvpn-hopr.pass
-                printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosisvpn-hopr.safe
-              '';
+          # mkGnosisVpnSecrets =
+          #   {
+          #     vpnId,
+          #     vpnPass,
+          #     vpnSafe,
+          #   }:
+          #   pkgs.runCommand "gnosisvpn-secret-files"
+          #     {
+          #       GNOSIS_VPN_ID = vpnId;
+          #       GNOSIS_VPN_PASS = vpnPass;
+          #       GNOSIS_VPN_SAFE = vpnSafe;
+          #     }
+          #     ''
+          #       parent_folder=$out/.config/gnosisvpn
+          #       mkdir -p $parent_folder
+          #       printf %s "$GNOSIS_VPN_ID" > $parent_folder/gnosisvpn-hopr.id
+          #       printf %s "$GNOSIS_VPN_PASS" > $parent_folder/gnosisvpn-hopr.pass
+          #       printf %s "$GNOSIS_VPN_SAFE" > $parent_folder/gnosisvpn-hopr.safe
+          #     '';
 
-          mkSystemTestsDockerImage =
-            secrets:
-            let
-              gnosisVpnSecrets = mkGnosisVpnSecrets secrets;
-            in
-            mkDockerImage {
-              name = "gnosis-vpn-system-tests";
-              extraContents = [
-                gvpn
-                gvpn-system-tests
-                pkgs.wireguard-tools
-                pkgs.which
-              ];
-              extraFiles = [
-                rotseeSource
-                gnosisVpnSecrets
-              ];
-              extraFilesDest = "/";
-              env = [
-                "RUST_LOG=gnosis_vpn=info"
-                "GNOSISVPN_CONFIG_PATH=/network-config/rotsee.toml"
-              ];
-              Entrypoint = [
-                "gnosis_vpn-system-tests"
-                "download"
-              ];
-            };
+          # mkSystemTestsDockerImage =
+          #   secrets:
+          #   let
+          #     gnosisVpnSecrets = mkGnosisVpnSecrets secrets;
+          #   in
+          #   mkDockerImage {
+          #     name = "gnosis-vpn-system-tests";
+          #     extraContents = [
+          #       gvpn
+          #       gvpn-system-tests
+          #       pkgs.wireguard-tools
+          #       pkgs.which
+          #     ];
+          #     extraFiles = [
+          #       rotseeSource
+          #       gnosisVpnSecrets
+          #     ];
+          #     extraFilesDest = "/";
+          #     env = [
+          #       "RUST_LOG=gnosis_vpn=info"
+          #       "GNOSISVPN_CONFIG_PATH=/network-config/rotsee.toml"
+          #     ];
+          #     Entrypoint = [
+          #       "gnosis_vpn-system-tests"
+          #       "download"
+          #     ];
+          #   };
 
-          systemTestsDockerPackages =
-            let
-              secretsProvided =
-                systemTestsSecretValues.vpnId != null
-                && systemTestsSecretValues.vpnPass != null
-                && systemTestsSecretValues.vpnSafe != null;
-            in
-            lib.optionalAttrs secretsProvided {
-              gvpn-system-tests-docker = mkSystemTestsDockerImage systemTestsSecretValues;
-            };
+          # systemTestsDockerPackages =
+          #   let
+          #     secretsProvided =
+          #       systemTestsSecretValues.vpnId != null
+          #       && systemTestsSecretValues.vpnPass != null
+          #       && systemTestsSecretValues.vpnSafe != null;
+          #   in
+          #   lib.optionalAttrs secretsProvided {
+          #     gvpn-system-tests-docker = mkSystemTestsDockerImage systemTestsSecretValues;
+          #   };
 
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
@@ -386,7 +386,7 @@
             inherit pre-commit-check;
             default = gvpn;
           }
-          // systemTestsDockerPackages;
+          # // systemTestsDockerPackages;
 
           devShells.default = craneLib.devShell {
             inherit pre-commit-check;

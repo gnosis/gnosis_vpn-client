@@ -37,3 +37,6 @@ docker-stop:
 # enter docker container interactively
 docker-enter:
     docker exec --interactive --tty gnosis_vpn-client bash
+
+system-tests:
+    ./scripts/run_system_tests.sh
