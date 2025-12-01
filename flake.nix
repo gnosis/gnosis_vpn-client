@@ -385,7 +385,7 @@
             inherit gvpn-system-tests;
             inherit pre-commit-check;
             default = gvpn;
-          }
+          };
           # // systemTestsDockerPackages;
 
           devShells.default = craneLib.devShell {
