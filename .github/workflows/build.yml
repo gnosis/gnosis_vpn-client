@@ -47,8 +47,10 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
-      - name: Build
+      - name: Build client
         run: nix build .#gvpn-dev -L
+      - name: Build system test dependencies
+        run: nix build .#gvpn-system-tests -L
   checks:
     name: Lint, format and unit test
     needs: build
