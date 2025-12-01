@@ -23,3 +23,6 @@ mod ticket_stats;
 pub mod prelude {
     pub use edgli::hopr_lib::Address;
 }
+
+pub const DOMAIN: &str = "vpn.gnosis.io";
+pub const REVERSE_DOMAIN: &str = "io.gnosis.vpn";
