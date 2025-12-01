@@ -71,7 +71,7 @@ jobs:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
-        run: system-tests
+        run: just system-tests
   build-binaries:
     strategy:
       matrix:

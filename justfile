@@ -39,4 +39,4 @@ docker-enter:
     docker exec --interactive --tty gnosis_vpn-client bash
 
 system-tests:
-    ./scripts/run_system_tests.sh
+    ./scripts/run-system-tests.sh
