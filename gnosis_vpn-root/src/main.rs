@@ -300,6 +300,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let mut socket_receiver = socket_channel(&args.socket_path).await?;
 
+    #[cfg(target_os = "linux")]
+    setup_linux_routing()?;
+    #[cfg(target_os = "macos")]
+    setup_macos_routing()?;
+
     let res = loop_daemon(
         &mut ctrlc_receiver,
         &mut config_receiver,
@@ -410,6 +415,9 @@ async fn loop_daemon(
             }
         }
     }
+}
+
+async fn setup_routing() -> Result<(), exitcode::ExitCode> {
 }
 
 async fn expected_reader_version(

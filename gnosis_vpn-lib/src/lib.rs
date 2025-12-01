@@ -24,5 +24,6 @@ pub mod prelude {
     pub use edgli::hopr_lib::Address;
 }
 
-pub const DOMAIN: &str = "vpn.gnosis.io";
-pub const REVERSE_DOMAIN: &str = "io.gnosis.vpn";
+pub const IDENTIFIER: &str = "com.gnosisvpn.client";
+pub const USERNAME: &str = "gnosisvpn";
+pub const GROUPNAME: &str = "gnosisvpn";
