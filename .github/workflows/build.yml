@@ -103,7 +103,9 @@ jobs:
         env:
           USER: runner
       - name: Install system test dependencies
-        run: sudo apt-get install -y wireguard just
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard just
       - name: Build system service and test binary
         run: |
           nix build .#gvpn -L # binaries created in ./result/bin/
