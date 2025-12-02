@@ -54,4 +54,4 @@ system-tests test_binary="gnosis_vpn-system-tests":
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" >"${config_dir}/gnosisvpn-hopr.pass"
     printf %s "${SYSTEM_TEST_SAFE}" >"${config_dir}/gnosisvpn-hopr.safe"
 
-    {{ test_binary }} download
+    sudo {{ test_binary }} download
