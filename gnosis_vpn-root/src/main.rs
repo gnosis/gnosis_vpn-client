@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::{self, Stdio};
 
 use gnosis_vpn_lib::command::Command as cmdCmd;
-use gnosis_vpn_lib::{socket, wg_tooling, worker};
+use gnosis_vpn_lib::{routing, socket, wg_tooling, worker};
 
 mod cli;
 
@@ -270,12 +270,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // ensure worker user exists
-    let worker = worker::Worker::from_system(&args, env!("CARGO_PKG_VERSION"))
-        .await
-        .map_err(|err| {
-            tracing::error!(error = ?err, "error retrieving worker user");
-            exitcode::NOUSER
-        })?;
+    let input = worker::Input::new(args.worker_user, args.worker_binary, env!("CARGO_PKG_VERSION"));
+    let worker = worker::Worker::from_system(input).await.map_err(|err| {
+        tracing::error!(error = ?err, "error retrieving worker user");
+        exitcode::NOUSER
+    })?;
 
     // check wireguard tooling
     wg_tooling::available()
@@ -301,10 +300,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let mut socket_receiver = socket_channel(&args.socket_path).await?;
 
-    #[cfg(target_os = "linux")]
-    setup_linux_routing()?;
-    #[cfg(target_os = "macos")]
-    setup_macos_routing()?;
+    // set up routing for mix node
+    routing::setup(&worker)?;
 
     let res = loop_daemon(
         &mut ctrlc_receiver,

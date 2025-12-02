@@ -47,6 +47,16 @@ pub struct Worker {
     pub binary: String,
 }
 
+impl Input {
+    pub fn new(user: String, binary: PathBuf, version: &str) -> Self {
+        Self {
+            user,
+            binary,
+            version: version.to_string(),
+        }
+    }
+}
+
 impl Worker {
     pub async fn from_system(input: Input) -> Result<Self, Error> {
         let worker_user = users::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
