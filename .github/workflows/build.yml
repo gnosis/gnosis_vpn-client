@@ -68,6 +68,10 @@ jobs:
       #     USER: runner
       - name: Run flake checks
         run: nix flake check
+      - name: Install WireGuard tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
