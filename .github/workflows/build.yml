@@ -62,7 +62,7 @@ jobs:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
-          CARGO_BIN_EXE_GNOSIS_VPN: ./result/bin/gnosis-vpn
+          CARGO_BIN_EXE_GNOSIS_VPN: ./result/bin/gnosis_vpn
         run: ./scripts/run-system-tests.sh
   build-binaries:
     strategy:
