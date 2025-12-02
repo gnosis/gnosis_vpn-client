@@ -22,7 +22,7 @@ on:
       runner:
         type: choice
         options:
-          - ubuntu-24.04
+          - ubuntu-22.04
           - macos-15
         required: true
         description: "GH Runner to use"
@@ -41,6 +41,20 @@ jobs:
     runs-on: ${{ github.event.inputs.runner || inputs.runner }}
     timeout-minutes: 240
     steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
       - name: Set environment variables
         id: vars
         run: |

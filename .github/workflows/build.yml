@@ -13,11 +13,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  free-disk-space:
-    name: Free Disk Space
-    runs-on: ubuntu-latest
+  build:
+    name: Build
+    runs-on: ubuntu-22.04 # Use oldest supported LTS for max compatibility
     steps:
-      - name: Free Disk Space (Ubuntu)
+      - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
         with:
           # this might remove tools that are actually needed,
@@ -31,11 +31,6 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-  build-and-checks:
-    name: Build and checks
-    needs: free-disk-space
-    runs-on: ubuntu-24.04
-    steps:
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
@@ -47,12 +42,42 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
+      - name: Build
+        run: nix build .#gvpn-dev -L
+  checks:
+    name: Lint, format and unit test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@v16
+        with:
+          name: gnosis-vpn-client
+        env:
+          USER: runner
+      - name: Run flake checks
+        run: nix flake check
       - name: Build system test
         run: |
           nix build .#gvpn -L
           nix build .#gvpn-system-tests -L
-      - name: Run flake checks
-        run: nix flake check
       - name: Install WireGuard tools
         run: |
           sudo apt-get update
@@ -69,7 +94,7 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
