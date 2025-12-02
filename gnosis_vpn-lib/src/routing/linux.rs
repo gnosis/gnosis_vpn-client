@@ -1,8 +1,12 @@
+use tokio::process::Command;
+
+use crate::worker;
+
 use super::Error;
 
 #[derive(Debug)]
 pub struct Routing {
-    worker: user::Worker,
+    worker: worker::Worker,
 }
 
 /**
@@ -10,11 +14,11 @@ pub struct Routing {
  * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
  */
 impl Routing {
-    pub fn new(worker: user::Worker) -> Result<Self, Error> {
+    pub fn new(worker: worker::Worker) -> Result<Self, Error> {
         Ok(Routing { worker })
     }
 
-    pub fn setup(&mut self) -> Result<(), Error> {
+    pub async fn setup(&mut self) -> Result<(), Error> {
         let output = Command::new("ip")
             .arg("rule")
             .arg("add")
@@ -27,14 +31,21 @@ impl Routing {
             .output()
             .await?;
 
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let status_code = output.status.code();
-            tracing::error!(%status_code, %stdout, %stderr, "Failed to add ip rule");
-            Err(Error::IpRuleSetup(status_code))
+        let stderrempty = output.stderr.is_empty();
+        match (stderrempty, output.status.success()) {
+            (true, true) => Ok(()),
+            (false, true) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!(%stderr, "Non empty stderr on successful ip rule addition");
+                Ok(())
+            }
+            (_, false) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let status_code = output.status.code();
+                tracing::error!(?status_code, %stdout, %stderr, "Error executing ip rule addition");
+                Err(Error::IpRuleSetup)
+            }
         }
     }
 }
