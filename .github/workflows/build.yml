@@ -72,23 +72,19 @@ jobs:
           name: gnosis-vpn-client
         env:
           USER: runner
-      - name: Run flake checks
-        run: nix flake check
-      - name: Build system test
+      - name: Install system test dependencies
+        run: apt-get install -y wireguard just
+      - name: Build system service and test binary
         run: |
-          nix build .#gvpn -L
-          nix build .#gvpn-system-tests -L
-      - name: Install WireGuard tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wireguard-tools
+          nix build .#gvpn -L # binaries created in ./result/bin/
+          nix build .#gvpn-system-tests -L # binaries created in ./result-1/bin/
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           CARGO_BIN_EXE_GNOSIS_VPN: ./result/bin/gnosis_vpn
-        run: ./scripts/run-system-tests.sh
+        run: just system-test ./result-1/bin/gnosis_vpn-system-tests
   build-binaries:
     strategy:
       matrix:
