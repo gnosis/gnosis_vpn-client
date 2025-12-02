@@ -22,7 +22,7 @@ on:
       runner:
         type: choice
         options:
-          - ubuntu-24.04
+          - ubuntu-22.04
           - macos-15
         required: true
         description: "GH Runner to use"
