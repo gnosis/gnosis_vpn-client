@@ -4,6 +4,8 @@ use users::os::unix::UserExt;
 
 use std::path::PathBuf;
 
+use crate::util;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Worker user not found")]

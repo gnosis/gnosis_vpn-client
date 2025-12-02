@@ -21,6 +21,7 @@ mod log_output;
 mod ping;
 mod remote_data;
 mod ticket_stats;
+mod util;
 
 pub mod prelude {
     pub use edgli::hopr_lib::Address;
