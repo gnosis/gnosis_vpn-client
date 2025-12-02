@@ -30,7 +30,7 @@ jobs:
     secrets: inherit
   comment:
     name: Comment PR
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Do not require specific version here, just use the default
     needs:
       - build-binaries
     steps:

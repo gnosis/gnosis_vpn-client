@@ -15,7 +15,7 @@ env:
 jobs:
   free-disk-space:
     name: Free Disk Space
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Do not require specific version here, just use the default
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
