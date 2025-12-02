@@ -2,10 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("ip rule setup failed")]
-    IpRuleSetup,
-    #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
+    #[error("Command error: {0}")]
+    Command(#[from] crate::util::Error),
 }
 
 #[cfg(target_os = "linux")]
