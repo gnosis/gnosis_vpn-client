@@ -37,7 +37,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-latest # Do not require specific version here, just use the default
+    runs-on: ubuntu-latest # Use default runner for utility jobs
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

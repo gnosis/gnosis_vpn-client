@@ -13,11 +13,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  free-disk-space:
-    name: Free Disk Space
-    runs-on: ubuntu-latest # Do not require specific version here, just use the default
+  build:
+    name: Build
+    needs: free-disk-space
+    runs-on: ubuntu-22.04 # Use oldest supported LTS for max compatibility
     steps:
-      - name: Free Disk Space (Ubuntu)
+      - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
         with:
           # this might remove tools that are actually needed,
@@ -31,11 +32,6 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-  build:
-    name: Build
-    needs: free-disk-space
-    runs-on: ubuntu-22.04
-    steps:
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
@@ -51,9 +47,22 @@ jobs:
         run: nix build .#gvpn-dev -L
   checks:
     name: Lint, format and unit test
-    needs: build
     runs-on: ubuntu-22.04
     steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
