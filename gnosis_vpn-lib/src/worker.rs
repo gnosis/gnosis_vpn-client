@@ -4,7 +4,7 @@ use users::os::unix::UserExt;
 
 use std::path::PathBuf;
 
-use crate::util;
+use crate::util::CommandExt;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -16,8 +16,8 @@ pub enum Error {
     NotExecutable,
     #[error("Worker binary version mismatch")]
     VersionMismatch,
-    #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
+    #[error("Command error: {0}")]
+    Command(#[from] crate::util::Error),
 }
 
 #[derive(Debug)]
@@ -55,31 +55,17 @@ impl Worker {
 
         let uid = worker_user.uid();
         let gid = worker_user.primary_group_id();
-        let actual = run_version_check(&path, uid, gid).await?;
+        let actual = Command::new(path)
+            .arg("--version")
+            .uid(uid)
+            .gid(gid)
+            .run_stdout()
+            .await?;
         if actual == input.version {
             Ok(Worker { uid, gid, binary: path })
         } else {
             tracing::error!(expected = input.version, actual = %actual, "Worker binary version mismatch");
             Err(Error::VersionMismatch)
-        }
-    }
-}
-
-async fn run_version_check(path: &PathBuf, uid: u32, gid: u32) -> Result<String, Error> {
-    let output = Command::new(path).arg("--version").uid(uid).gid(gid).output().await?;
-    let stderrempty = output.stderr.is_empty();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    match (stderrempty, output.status) {
-        (true, status) if status.success() => Ok(stdout.trim().to_string()),
-        (false, status) if status.success() => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!(%stderr, "Non empty stderr on successful version check");
-            Ok(stdout.trim().to_string())
-        }
-        (_, status) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::error!(status_code = ?status.code(), %stdout, %stderr, "Error executing version check");
-            Err(Error::NotExecutable)
         }
     }
 }
