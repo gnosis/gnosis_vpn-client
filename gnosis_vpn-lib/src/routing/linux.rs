@@ -1,5 +1,3 @@
-use crate::user;
-
 use super::Error;
 
 #[derive(Debug)]
