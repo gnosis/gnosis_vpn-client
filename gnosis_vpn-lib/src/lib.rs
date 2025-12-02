@@ -9,8 +9,10 @@ pub mod hopr;
 pub mod hopr_params;
 pub mod info;
 pub mod network;
+pub mod routing;
 pub mod socket;
 pub mod wg_tooling;
+pub mod worker;
 pub mod worker_command;
 
 mod dirs;

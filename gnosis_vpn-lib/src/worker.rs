@@ -4,8 +4,6 @@ use users::os::unix::UserExt;
 
 use std::path::PathBuf;
 
-use crate::cli::Cli;
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Worker user not found")]
@@ -18,6 +16,13 @@ pub enum Error {
     VersionMismatch,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
+}
+
+#[derive(Debug)]
+pub struct Input {
+    user: String,
+    binary: PathBuf,
+    version: String,
 }
 
 pub const USERNAME: &str = "gnosisvpn";
@@ -36,10 +41,10 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn from_system(cli: &Cli, version: &str) -> Result<Self, Error> {
-        let worker_user = users::get_user_by_name(cli.worker_user.as_str()).ok_or(Error::UserNotFound)?;
+    pub async fn from_system(input: Input) -> Result<Self, Error> {
+        let worker_user = users::get_user_by_name(input.worker_user.as_str()).ok_or(Error::UserNotFound)?;
         let home = worker_user.home_dir();
-        let path = home.join(cli.worker_binary);
+        let path = home.join(input.worker_binary);
         // check if path exists
         if !path.exists() {
             tracing::error!(path = path.display() , %home, user = worker_user.username, "Worker binary not found");
@@ -58,10 +63,10 @@ impl Worker {
             return Err(Error::NotExecutable);
         }
 
-        if stdout.trim() == version {
+        if stdout.trim() == input.version {
             Ok(Worker { uid, gid, binary: path })
         } else {
-            tracing::error!(expected = version, actual = %stdout.trim(), "Worker binary version mismatch");
+            tracing::error!(expected = input.version, actual = %stdout.trim(), "Worker binary version mismatch");
             Err(Error::VersionMismatch)
         }
     }

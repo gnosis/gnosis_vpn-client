@@ -13,10 +13,9 @@ use std::path::Path;
 use std::process::{self, Stdio};
 
 use gnosis_vpn_lib::command::Command as cmdCmd;
-use gnosis_vpn_lib::{socket, wg_tooling};
+use gnosis_vpn_lib::{socket, wg_tooling, worker};
 
 mod cli;
-mod worker;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
