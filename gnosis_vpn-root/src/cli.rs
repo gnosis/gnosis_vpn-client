@@ -7,6 +7,8 @@ use gnosis_vpn_lib::hopr_params::{self, HoprParams};
 use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::{config, hopr, socket};
 
+use crate::worker;
+
 /// Gnosis VPN system service - client application for Gnosis VPN connections
 #[derive(Clone, Debug, Parser)]
 #[command(version)]
@@ -29,9 +31,14 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
-    // TODO add cli params for worker
-    //
-    //
+    /// Username of the worker user (needs a home folder for caching and configurations)
+    #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
+    pub worker_user: String,
+
+    /// Path to the worker binary - relative to the users home folder
+    #[arg(long, env = worker::ENV_VAR_WORKER_BINARY, default_value = worker::DEFAULT_WORKER_BINARY)]
+    pub worker_binary: PathBuf,
+
     /// RPC provider URL needed for fat Hopr edge client
     #[arg(long, env = hopr::RPC_PROVIDER_ENV)]
     pub hopr_rpc_provider: Url,
