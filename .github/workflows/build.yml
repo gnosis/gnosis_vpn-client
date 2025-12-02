@@ -72,6 +72,36 @@ jobs:
           name: gnosis-vpn-client
         env:
           USER: runner
+      - name: Run flake checks
+        run: nix flake check
+  system-test:
+    name: Execute system test against rotsee network
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@v16
+        with:
+          name: gnosis-vpn-client
+        env:
+          USER: runner
       - name: Install system test dependencies
         run: apt-get install -y wireguard just
       - name: Build system service and test binary
