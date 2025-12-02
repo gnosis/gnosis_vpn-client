@@ -40,7 +40,7 @@ docker-enter:
 
 system-tests test_binary="gnosis_vpn-system-tests":
     #!/usr/bin/env bash
-      set -euo pipefail
+    set -euo pipefail
 
     : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
