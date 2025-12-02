@@ -41,7 +41,6 @@ docker-enter:
 system-tests test_binary="gnosis_vpn-system-tests":
     #!/usr/bin/env bash
       set -euo pipefail
-      set -x
 
     : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
@@ -54,4 +53,5 @@ system-tests test_binary="gnosis_vpn-system-tests":
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" >"${config_dir}/gnosisvpn-hopr.pass"
     printf %s "${SYSTEM_TEST_SAFE}" >"${config_dir}/gnosisvpn-hopr.safe"
 
+    ls -la ./result/bin ./result-1/bin
     sudo {{ test_binary }} download
