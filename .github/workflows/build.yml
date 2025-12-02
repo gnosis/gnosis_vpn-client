@@ -47,10 +47,9 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
-      - name: Build client
-        run: nix build .#gvpn-dev -L
-      - name: Build system test dependencies
-        run: nix build .#gvpn-system-tests -L
+      - name: Build system test
+        run: |
+          nix build .#gvpn .#gvpn-system-tests -L
       - name: Run flake checks
         run: nix flake check
       - name: Install WireGuard tools
@@ -62,7 +61,7 @@ jobs:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
-          CARGO_BIN_EXE_GNOSIS_VPN: ./result/bin/gnosis_vpn-dev
+          CARGO_BIN_EXE_GNOSIS_VPN: ./result/bin/gnosis_vpn
         run: ./scripts/run-system-tests.sh
   build-binaries:
     strategy:
