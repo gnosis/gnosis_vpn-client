@@ -20,7 +20,7 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
@@ -37,7 +37,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest # Use default runner for utility jobs
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
