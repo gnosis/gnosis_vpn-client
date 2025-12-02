@@ -30,16 +30,15 @@
   };
 
   outputs =
-    inputs@{
-      self,
-      flake-parts,
-      nixpkgs,
-      rust-overlay,
-      crane,
-      advisory-db,
-      treefmt-nix,
-      pre-commit,
-      ...
+    inputs@{ self
+    , flake-parts
+    , nixpkgs
+    , rust-overlay
+    , crane
+    , advisory-db
+    , treefmt-nix
+    , pre-commit
+    , ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
@@ -52,13 +51,12 @@
         "x86_64-darwin"
       ];
       perSystem =
-        {
-          config,
-          self',
-          inputs',
-          lib,
-          system,
-          ...
+        { config
+        , self'
+        , inputs'
+        , lib
+        , system
+        , ...
         }:
         let
           pkgs = (
@@ -154,8 +152,13 @@
           # they need, rather than building the entire workspace as a single derivation.
 
           # Production build with release profile optimizations
-          gvpn = mkPackage {
-            pname = "gnosis_vpn";
+          gvpn-root = mkPackage {
+            pname = "gnosis_vpn-root";
+            profile = "release";
+          };
+
+          gvpn-worker = mkPackage {
+            pname = "gnosis_vpn-worker";
             profile = "release";
           };
 
@@ -290,10 +293,11 @@
           };
 
           packages = {
-            inherit gvpn;
+            inherit gvpn-root;
+            inherit gvpn-worker;
             inherit gvpn-dev;
             inherit pre-commit-check;
-            default = gvpn;
+            default = gvpn-root;
           };
 
           apps = {
