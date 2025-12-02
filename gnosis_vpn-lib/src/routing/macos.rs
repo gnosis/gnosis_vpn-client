@@ -16,7 +16,6 @@ impl Routing {
     pub async fn setup(&mut self) -> Result<(), Error> {
         let (device, gateway) = determine_interface()?;
 
-
         let output = Command::new("ip")
             .arg("rule")
             .arg("add")
@@ -55,14 +54,30 @@ async fn determine_interface() -> Result<(String, Option<String>), Error> {
             .arg("-n")
             .arg("get")
             .arg("0.0.0.0")
-            .output()
+            .run_stdout()
             .await?;
-        if !output.stderr.is_empty() {
-            tracing::error!(
-                stderr = String::from_utf8_lossy(&output.stderr).to_string(),
-                "error running route -n get"
-            );
+
+    let stderrempty = output.stderr.is_empty();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match (stderrempty, output.status) {
+        (true, status) if status.success() => Ok(stdout.trim().to_string()),
+        (false, status) if status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(%stderr, "Non empty stderr on successful version check");
+            Ok(stdout.trim().to_string())
         }
+        (_, status) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!(status_code = ?status.code(), %stdout, %stderr, "Error executing version check");
+            Err(Error::NotExecutable)
+        }
+    }
+
+
+
+
+
+
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let parts: Vec<&str> = stdout.split_whitespace().collect();
