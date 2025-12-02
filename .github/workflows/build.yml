@@ -31,8 +31,8 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-  build:
-    name: Build
+  build-and-checks:
+    name: Build and checks
     needs: free-disk-space
     runs-on: ubuntu-24.04
     steps:
@@ -51,21 +51,21 @@ jobs:
         run: nix build .#gvpn-dev -L
       - name: Build system test dependencies
         run: nix build .#gvpn-system-tests -L
-  checks:
-    name: Lint, format and unit test
-    needs: build
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@v16
-        with:
-          name: gnosis-vpn-client
-        env:
-          USER: runner
+  # checks:
+  #   name: Lint, format and unit test
+  #   needs: build
+  #   runs-on: ubuntu-24.04
+    # steps:
+      # - name: Checkout repository
+      #   uses: actions/checkout@v6
+      # - name: Install Nix
+      #   uses: cachix/install-nix-action@v31
+      # - name: Use Nix Cache
+      #   uses: cachix/cachix-action@v16
+      #   with:
+      #     name: gnosis-vpn-client
+      #   env:
+      #     USER: runner
       - name: Run flake checks
         run: nix flake check
       - name: Run the system test
