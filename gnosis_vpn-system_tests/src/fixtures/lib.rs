@@ -109,7 +109,7 @@ pub async fn fetch_public_ip(ip_echo_url: &Url, proxy: Option<&Url>) -> anyhow::
 
 /// Attempts to resolve the a binary path for the current build profile.
 pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
-    let env_key = format!("CARGO_BIN_EXE_{}", name.replace('-', "_"));
+    let env_key = format!("CARGO_BIN_EXE_{}", name.replace('-', "_").to_uppercase());
 
     if let Ok(path) = std::env::var(env_key) {
         return Ok(PathBuf::from(path));
