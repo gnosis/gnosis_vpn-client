@@ -49,7 +49,8 @@ jobs:
           USER: runner
       - name: Build system test
         run: |
-          nix build .#gvpn .#gvpn-system-tests -L
+          nix build .#gvpn -L
+          nix build .#gvpn-system-tests -L
       - name: Run flake checks
         run: nix flake check
       - name: Install WireGuard tools
