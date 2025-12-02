@@ -25,5 +25,3 @@ pub mod prelude {
 }
 
 pub const IDENTIFIER: &str = "com.gnosisvpn.client";
-pub const USERNAME: &str = "gnosisvpn";
-pub const GROUPNAME: &str = "gnosisvpn";

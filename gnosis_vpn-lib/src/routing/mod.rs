@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("ip rule setup error - status code {0}")]
-    IpRuleSetup(u16),
+    #[error("ip rule setup failed with status code {0}")]
+    IpRuleSetup(i32),
 }
 
 #[cfg(target_os = "linux")]

@@ -1,6 +1,6 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::{AsyncRead, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
@@ -16,7 +16,7 @@ use gnosis_vpn_lib::command::Command as cmdCmd;
 use gnosis_vpn_lib::{socket, wg_tooling};
 
 mod cli;
-mod user;
+mod worker;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -271,10 +271,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // ensure worker user exists
-    let user = user::Worker::from_system("gnosisvpn").map_err(|err| {
-        tracing::error!(error = ?err, "error retrieving worker user");
-        exitcode::NOUSER
-    })?;
+    let worker = worker::Worker::from_system(&args, env!("CARGO_PKG_VERSION"))
+        .await
+        .map_err(|err| {
+            tracing::error!(error = ?err, "error retrieving worker user");
+            exitcode::NOUSER
+        })?;
 
     // check wireguard tooling
     wg_tooling::available()
@@ -327,19 +329,19 @@ async fn loop_daemon(
     ctrlc_receiver: &mut mpsc::Receiver<()>,
     config_receiver: &mut mpsc::Receiver<notify::Event>,
     socket_receiver: &mut mpsc::Receiver<UnixStream>,
-    user: user::Worker,
+    worker: worker::Worker,
     config_path: &Path,
     args: cli::Cli,
 ) -> Result<(), exitcode::ExitCode> {
     // let (mut worker_cmd_sender, mut worker_cmd_receiver) = mpsc::channel(32);
-    let mut worker = Command::new("/home/gnosisvpn/gnosis_vpn-worker")
+    let mut worker = Command::new(worker.binary.as_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .uid(user.uid)
-        .gid(user.gid)
+        .uid(worker.uid)
+        .gid(worker.gid)
         .spawn()
         .map_err(|err| {
-            tracing::error!(error = ?err, user = ?user, "unable to spawn worker process");
+            tracing::error!(error = ?err, user = ?worker, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
@@ -351,8 +353,6 @@ async fn loop_daemon(
         tracing::error!("failed to aquire stdout");
         exitcode::IOERR
     })?;
-
-    expected_reader_version(&worker_stdout, env!("CARGO_PKG_VERSION"))?;
 
     let res = worker.wait().await;
     tracing::warn!(?res, "foobi");
@@ -415,47 +415,6 @@ async fn loop_daemon(
             }
         }
     }
-}
-
-async fn setup_routing() -> Result<(), exitcode::ExitCode> {
-}
-
-async fn expected_reader_version(
-    stdout: &UnixStream,
-    expected_version: &str,
-) -> Result<(), exitcode::ExitCode> {
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    match reader.read_line(&mut line).await {
-        Ok(version_line) => {
-    // Regex explanation:
-    // version   -> matches the literal text "version"
-    // .*?       -> matches any character (non-greedy) to skip ANSI codes
-    // =         -> matches the literal "="
-    // .*?       -> matches any character (non-greedy) to skip ANSI codes/quotes
-    // "         -> matches the opening quote
-    // ([^"]+)   -> Capture Group 1: Matches anything that is NOT a quote
-    // "         -> matches the closing quote
-    let re = Regex::new(r#"version.*?=.*?"([^"]+)""#).unwrap();
-    if let Some(caps) = re.capture(version_line) {
-        tracing::info!(?caps, "caps");
-        if let Some(version) = caps.get(1) {
-            tracing::info!(?version, "version");
-            if version == expected_version {
-                return Ok(());
-            } else {
-            tracing::error!(worker_version = version, "incorrect worker version")
-                return Err(exitcode::FOOBAR);
-            }
-        }
-    }
-        },
-        Err(e) => {
-            tracing::error!(error = ?e, "error reading worker version");
-            return Err(exitcode::IOERR);
-        }
-    }
-    Ok(())
 }
 
 /// limit root service to two threads

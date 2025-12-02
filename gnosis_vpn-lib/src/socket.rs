@@ -19,11 +19,6 @@ pub enum Error {
 pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.sock";
 pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 
-// #[cfg(target_family = "windows")]
-// pub fn socket_path() -> PathBuf {
-// PathBuf::from("//./pipe/Gnosis VPN")
-// }
-
 pub async fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, Error> {
     check_path(socket_path)?;
 
