@@ -42,9 +42,9 @@ pub struct Worker {
 
 impl Worker {
     pub async fn from_system(input: Input) -> Result<Self, Error> {
-        let worker_user = users::get_user_by_name(input.worker_user.as_str()).ok_or(Error::UserNotFound)?;
+        let worker_user = users::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
         let home = worker_user.home_dir();
-        let path = home.join(input.worker_binary);
+        let path = home.join(input.binary);
         // check if path exists
         if !path.exists() {
             tracing::error!(path = path.display() , %home, user = worker_user.username, "Worker binary not found");
@@ -53,21 +53,31 @@ impl Worker {
 
         let uid = worker_user.uid();
         let gid = worker_user.primary_group_id();
-        // check if executable and version matches
-        let output = Command::new(path).arg("--version").uid(uid).gid(gid).output().await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let status_code = output.status.code();
-            tracing::error!(?status_code, %stdout, %stderr, "Failed to check worker binary version");
-            return Err(Error::NotExecutable);
-        }
-
-        if stdout.trim() == input.version {
+        let actual = run_version_check(&path, uid, gid).await?;
+        if actual == input.version {
             Ok(Worker { uid, gid, binary: path })
         } else {
-            tracing::error!(expected = input.version, actual = %stdout.trim(), "Worker binary version mismatch");
+            tracing::error!(expected = input.version, actual = %actual, "Worker binary version mismatch");
             Err(Error::VersionMismatch)
+        }
+    }
+}
+
+async fn run_version_check(path: &PathBuf, uid: u32, gid: u32) -> Result<String, Error> {
+    let output = Command::new(path).arg("--version").uid(uid).gid(gid).output().await?;
+    let stderrempty = output.stderr.is_empty();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match (stderrempty, output.status) {
+        (true, status) if status.success() => Ok(stdout.trim().to_string()),
+        (false, status) if status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(%stderr, "Non empty stderr on successful version check");
+            Ok(stdout.trim().to_string())
+        }
+        (_, status) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!(status_code = ?status.code(), %stdout, %stderr, "Error executing version check");
+            Err(Error::NotExecutable)
         }
     }
 }
