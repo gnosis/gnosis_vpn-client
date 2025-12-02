@@ -15,7 +15,6 @@ env:
 jobs:
   build:
     name: Build
-    needs: free-disk-space
     runs-on: ubuntu-22.04 # Use oldest supported LTS for max compatibility
     steps:
       - name: Free Disk Space
