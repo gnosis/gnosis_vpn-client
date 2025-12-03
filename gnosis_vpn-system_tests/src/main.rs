@@ -14,7 +14,23 @@ use fixtures::lib;
 use fixtures::service::Service;
 
 fn main() {
-    info!("starting gnosis_vpn system tests");
+    let env_filter = match tracing_subscriber::EnvFilter::try_from_default_env() {
+        Ok(filter) => filter,
+        Err(_) => tracing_subscriber::filter::EnvFilter::new("info"),
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .init();
+
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
+
     let res = match hopr_lib::prepare_tokio_runtime() {
         Ok(rt) => rt.block_on(main_inner()),
         Err(e) => {
@@ -34,13 +50,6 @@ fn main() {
 
 /// Entry point for the asynchronous system test workflow.
 async fn main_inner() -> Result<()> {
-    tracing_subscriber::fmt::init();
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "starting {}",
-        env!("CARGO_PKG_NAME")
-    );
-
     let cli = Cli::parse();
 
     let (gnosis_bin, socket_path) = match lib::prepare_configs().await {
