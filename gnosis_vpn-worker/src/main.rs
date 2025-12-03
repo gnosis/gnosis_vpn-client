@@ -1,6 +1,10 @@
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 
+use std::env;
+use std::os::unix::io::FromRawFd;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process;
 
 use gnosis_vpn_lib::command;
@@ -8,7 +12,7 @@ use gnosis_vpn_lib::config::Config;
 use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::hopr_params::HoprParams;
 use gnosis_vpn_lib::worker_command::WorkerCommand;
-use gnosis_vpn_lib::{core, external_event};
+use gnosis_vpn_lib::{core, external_event, socket};
 
 mod cli;
 // Avoid musl's default allocator due to degraded performance
@@ -17,9 +21,9 @@ mod cli;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn gather_resources() -> Result<(Config, HoprParams), exitcode::ExitCode> {
-    let stdin = BufReader::new(io::stdin());
-    let mut lines = stdin.lines();
+async fn gather_resources(stream: UnixStream) -> Result<(Config, HoprParams), exitcode::ExitCode> {
+    let reader = BufReader::new(stream);
+    let mut lines = reader.lines();
 
     let mut hopr_params: Option<HoprParams> = None;
     let mut config: Option<Config> = None;
@@ -59,13 +63,36 @@ async fn gather_resources() -> Result<(Config, HoprParams), exitcode::ExitCode> 
     Err(exitcode::NOINPUT)
 }
 
-async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
-    let (config, hopr_params) = gather_resources().await?;
+async fn daemon() -> Result<(), exitcode::ExitCode> {
+    let fd: i32 = env::var(socket::worker::ENV_VAR)
+        .map_err(|err| {
+            tracing::error!(error = %err, env = %socket::worker::ENV_VAR, "missing worker env var");
+            exitcode::NOINPUT
+        })?
+        .parse()
+        .map_err(|err| {
+            tracing::error!(error = %err, "invalid worker socket fd env var");
+            exitcode::NOINPUT
+        })?;
 
-    let stdin = BufReader::new(io::stdin());
-    let mut lines = stdin.lines();
-    let stdout = io::stdout();
-    let mut writer = BufWriter::new(stdout);
+    let initial_child_socket = unsafe { StdUnixStream::from_raw_fd(fd) };
+    let initial_child_stream = UnixStream::from_std(initial_child_socket).map_err(|err| {
+        tracing::error!(error = %err, "failed to create unix stream from socket");
+        exitcode::IOERR
+    })?;
+
+    let (config, hopr_params) = gather_resources(initial_child_stream).await?;
+
+    let child_socket = unsafe { StdUnixStream::from_raw_fd(fd) };
+    let child_stream = UnixStream::from_std(child_socket).map_err(|err| {
+        tracing::error!(error = %err, "failed to create unix stream from socket");
+        exitcode::IOERR
+    })?;
+
+    let (reader_half, writer_half) = io::split(child_stream);
+    let reader = BufReader::new(reader_half);
+    let mut lines = reader.lines();
+    let mut writer = BufWriter::new(writer_half);
 
     let core = core::Core::init(config, hopr_params).await.map_err(|err| {
         tracing::error!(error = ?err, "failed to initialize core logic");
@@ -193,8 +220,6 @@ fn main() {
 }
 
 async fn main_inner() {
-    let args = cli::parse();
-
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
     tracing::info!(
@@ -203,7 +228,7 @@ async fn main_inner() {
         env!("CARGO_PKG_NAME")
     );
 
-    match daemon(args).await {
+    match daemon().await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {
