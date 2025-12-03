@@ -15,8 +15,8 @@ pub struct Cli {
     #[arg(
         short,
         long,
-        env = socket::ENV_VAR,
-        default_value = socket::DEFAULT_PATH
+        env = socket::root::ENV_VAR,
+        default_value = socket::root::DEFAULT_PATH
     )]
     pub socket_path: PathBuf,
 
