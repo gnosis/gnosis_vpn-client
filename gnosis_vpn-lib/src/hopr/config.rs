@@ -4,6 +4,7 @@ use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
 use tokio::fs;
+use tracing::debug;
 use url::Url;
 
 use std::path::{Path, PathBuf};
@@ -118,11 +119,15 @@ network_options:
 }
 
 pub fn safe_file() -> Result<PathBuf, Error> {
-    dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)
+    let file = dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)?;
+    debug!("Using safe file at {:?}", file);
+    Ok(file)
 }
 
 fn db_file() -> Result<PathBuf, Error> {
-    dirs::config_dir(DB_FILE).map_err(Error::Dirs)
+    let file = dirs::config_dir(DB_FILE).map_err(Error::Dirs)?;
+    debug!("Using db file at {:?}", file);
+    Ok(file)
 }
 
 fn snapshot_url(network: Network) -> &'static str {
