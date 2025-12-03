@@ -314,7 +314,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         &mut socket_receiver,
         worker,
         &config_path,
-        args,
     )
     .await;
     match fs::remove_file(&socket_path).await {
@@ -332,14 +331,13 @@ async fn loop_daemon(
     socket_receiver: &mut mpsc::Receiver<UnixStream>,
     worker: worker::Worker,
     config_path: &Path,
-    args: cli::Cli,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
         exitcode::IOERR
     })?;
 
-    let mut worker = Command::new(worker.binary.to_string())
+    let mut worker = Command::new(worker.binary.clone())
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .uid(worker.uid)
         .gid(worker.gid)
@@ -353,6 +351,7 @@ async fn loop_daemon(
         tracing::error!(error = ?err, "unable to create unix stream from socket");
         exitcode::IOERR
     })?;
+
     let (reader, writer) = io::split(parent_stream);
 
     let res = worker.wait().await;
