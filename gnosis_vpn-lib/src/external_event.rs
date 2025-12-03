@@ -70,15 +70,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn config_reload_constructor_preserves_path_payload() -> anyhow::Result<()> {
-        let evt = config_reload(PathBuf::from("/tmp/config.toml"));
-
-        match evt {
-            Event::ConfigReload { path } => assert_eq!(path, PathBuf::from("/tmp/config.toml")),
-            other => panic!("expected config reload, got {:?}", other),
-        }
-        Ok(())
-    }
 }

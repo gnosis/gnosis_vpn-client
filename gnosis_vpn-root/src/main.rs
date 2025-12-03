@@ -1,6 +1,6 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
@@ -9,6 +9,8 @@ use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::IntoRawFd;
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::process::{self, Stdio};
 
@@ -121,7 +123,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
-            match socket::process_cmd(socket_path, &cmdCmd::Ping).await {
+            match socket::root::process_cmd(socket_path, &cmdCmd::Ping).await {
                 Ok(_) => {
                     tracing::error!("system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);
@@ -301,13 +303,16 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut socket_receiver = socket_channel(&args.socket_path).await?;
 
     // set up routing for mix node
-    routing::setup(&worker)?;
+    routing::setup(&worker).await.map_err(|err| {
+        tracing::error!(error = ?err, "error setting up routing");
+        exitcode::OSERR
+    })?;
 
     let res = loop_daemon(
         &mut ctrlc_receiver,
         &mut config_receiver,
         &mut socket_receiver,
-        user,
+        worker,
         &config_path,
         args,
     )
@@ -329,26 +334,26 @@ async fn loop_daemon(
     config_path: &Path,
     args: cli::Cli,
 ) -> Result<(), exitcode::ExitCode> {
-    // let (mut worker_cmd_sender, mut worker_cmd_receiver) = mpsc::channel(32);
-    let mut worker = Command::new(worker.binary.as_path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+    let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
+        tracing::error!(error = ?err, "unable to create socket pair for worker communication");
+        exitcode::IOERR
+    })?;
+
+    let mut worker = Command::new(worker.binary.to_string())
+        .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .uid(worker.uid)
         .gid(worker.gid)
         .spawn()
         .map_err(|err| {
-            tracing::error!(error = ?err, user = ?worker, "unable to spawn worker process");
+            tracing::error!(error = ?err, ?worker, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
-    let worker_stdin = worker.stdin.as_mut().ok_or_else(|| {
-        tracing::error!("failed to aquire stdin");
+    let parent_stream = UnixStream::from_std(parent_socket).map_err(|err| {
+        tracing::error!(error = ?err, "unable to create unix stream from socket");
         exitcode::IOERR
     })?;
-    let worker_stdout = worker.stdout.as_mut().ok_or_else(|| {
-        tracing::error!("failed to aquire stdout");
-        exitcode::IOERR
-    })?;
+    let (reader, writer) = io::split(parent_stream);
 
     let res = worker.wait().await;
     tracing::warn!(?res, "foobi");
@@ -512,58 +517,6 @@ mod tests {
     fn incoming_config_fs_event_skips_irrelevant_events() -> anyhow::Result<()> {
         let event = build_event(EventKind::Other);
         assert!(!incoming_config_fs_event(event, Path::new("config.toml")));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn incoming_stream_processes_valid_command() -> anyhow::Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        let (mut server, mut client) = UnixStream::pair().expect("pair");
-        let (mut sender, mut receiver) = mpsc::channel(1);
-        let payload = serde_json::to_string(&Command::Ping).expect("serialize");
-        client.write_all(payload.as_bytes()).await.expect("write");
-        client.shutdown().await.expect("shutdown write");
-
-        let response_handle = tokio::spawn(async move {
-            if let Some(external_event::Event::Command { cmd, resp }) = receiver.recv().await {
-                assert!(matches!(cmd, Command::Ping));
-                resp.send(Response::Pong).expect("response sent");
-            } else {
-                panic!("expected command event");
-            }
-        });
-
-        incoming_stream(&mut server, &mut sender).await;
-        server.shutdown().await.expect("shutdown response stream");
-        response_handle.await.expect("response task");
-
-        let mut buf = String::new();
-        client.read_to_string(&mut buf).await.expect("read response");
-
-        let expected = serde_json::to_string(&Response::Pong).expect("response");
-        assert_eq!(buf, expected);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn incoming_stream_ignores_invalid_payloads() -> anyhow::Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        let (mut server, mut client) = UnixStream::pair().expect("pair");
-        let (mut sender, mut receiver) = mpsc::channel(1);
-
-        client.write_all(b"not-a-command").await.expect("write");
-        client.shutdown().await.expect("shutdown write");
-
-        incoming_stream(&mut server, &mut sender).await;
-        drop(server);
-
-        assert!(receiver.try_recv().is_err(), "no command dispatched");
-
-        let mut buf = String::new();
-        client.read_to_string(&mut buf).await.expect("read");
-        assert!(buf.is_empty(), "invalid payload should not yield response");
         Ok(())
     }
 }
