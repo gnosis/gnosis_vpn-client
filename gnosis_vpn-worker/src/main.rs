@@ -40,15 +40,17 @@ async fn gather_resources(stream: UnixStream) -> Result<(Config, HoprParams), ex
         tracing::debug!(?cmd, "received worker command");
         match cmd {
             WorkerCommand::HoprParams { hopr_params: params } => {
-                hopr_params = Some(params);
-                if config.is_some() {
-                    return Ok((config.unwrap(), hopr_params.unwrap()));
+                if let Some(val) = config {
+                    return Ok((val, params));
+                } else {
+                    hopr_params = Some(params);
                 }
             }
             WorkerCommand::Config { config: cfg } => {
-                config = Some(cfg);
-                if hopr_params.is_some() {
-                    return Ok((config.unwrap(), hopr_params.unwrap()));
+                if let Some(val) = hopr_params {
+                    return Ok((cfg, val));
+                } else {
+                    config = Some(cfg);
                 }
             }
             WorkerCommand::Shutdown => {
