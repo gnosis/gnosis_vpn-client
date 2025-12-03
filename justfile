@@ -51,10 +51,10 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
 
     sudo mkdir -p "${config_dir}"
 
-    printf %s "${SYSTEM_TEST_HOPRD_ID}" >"${config_dir}/gnosisvpn-hopr.id"
-    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" >"${config_dir}/gnosisvpn-hopr.pass"
-    printf %s "${SYSTEM_TEST_SAFE}" >"${config_dir}/gnosisvpn-hopr.safe"
-    printf %s "${SYSTEM_TEST_CONFIG}" >"${config_dir}/config.toml"
+    sudo printf %s "${SYSTEM_TEST_HOPRD_ID}" >"${config_dir}/gnosisvpn-hopr.id"
+    sudo printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" >"${config_dir}/gnosisvpn-hopr.pass"
+    sudo printf %s "${SYSTEM_TEST_SAFE}" >"${config_dir}/gnosisvpn-hopr.safe"
+    sudo printf %s "${SYSTEM_TEST_CONFIG}" >"${config_dir}/config.toml"
 
     ls -la ./result/bin ./result-1/bin ${config_dir}
     sudo {{ test_binary }} download
