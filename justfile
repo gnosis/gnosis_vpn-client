@@ -47,13 +47,16 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
 
-    config_dir="${XDG_CONFIG_HOME:-/etc/gnosisvpn}"
-
+    config_dir="${CONFIG_DIR:-/etc/gnosisvpn}"
+    cache_dir="${CACHE_DIR:-/etc/gnosisvpn}" # TODO: update the default cache dir
+    
     sudo mkdir -p "${config_dir}"
-    printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${config_dir}/gnosisvpn-hopr.id" > /dev/null
-    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${config_dir}/gnosisvpn-hopr.pass" > /dev/null
-    printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${config_dir}/gnosisvpn-hopr.safe" > /dev/null
+    sudo mkdir -p "${cache_dir}"
+
+    printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${cache_dir}/gnosisvpn-hopr.id" > /dev/null
+    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${cache_dir}/gnosisvpn-hopr.pass" > /dev/null
+    printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${cache_dir}/gnosisvpn-hopr.safe" > /dev/null
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
     ls -la ./result/bin ./result-1/bin ${config_dir}
-    sudo {{ test_binary }} download
+    RUST_LOG=debug sudo {{ test_binary }} download
