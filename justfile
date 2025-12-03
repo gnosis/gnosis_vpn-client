@@ -46,7 +46,7 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
-
+    
     config_dir="${CONFIG_DIR:-/etc/gnosisvpn}"
     cache_dir="${XDG_CONFIG_HOME}/gnosisvpn"
 
@@ -58,5 +58,4 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${cache_dir}/gnosisvpn-hopr.safe" > /dev/null
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
-    ls -la ./result/bin ./result-1/bin ${config_dir}
-    RUST_LOG=debug sudo {{ test_binary }} download
+    sudo {{ test_binary }} download
