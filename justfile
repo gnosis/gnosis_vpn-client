@@ -56,5 +56,5 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     printf %s "${SYSTEM_TEST_SAFE}" >"${config_dir}/gnosisvpn-hopr.safe"
     printf %s "${SYSTEM_TEST_CONFIG}" >"${config_dir}/config.toml"
 
-    ls -la ./result/bin ./result-1/bin
+    ls -la ./result/bin ./result-1/bin ${config_dir}
     sudo {{ test_binary }} download
