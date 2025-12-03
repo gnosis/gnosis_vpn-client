@@ -48,7 +48,7 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
 
     config_dir="${CONFIG_DIR:-/etc/gnosisvpn}"
-    cache_dir="$XDG_CONFIG_HOME/gnosisvpn"
+    cache_dir="${XDG_CONFIG_HOME}/gnosisvpn"
 
     sudo mkdir -p "${config_dir}"
     sudo mkdir -p "${cache_dir}"
