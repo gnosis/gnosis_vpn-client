@@ -14,6 +14,7 @@ use fixtures::lib;
 use fixtures::service::Service;
 
 fn main() {
+    info!("starting gnosis_vpn system tests");
     let res = match hopr_lib::prepare_tokio_runtime() {
         Ok(rt) => rt.block_on(main_inner()),
         Err(e) => {
