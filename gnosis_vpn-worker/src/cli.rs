@@ -1,11 +1,6 @@
 use clap::Parser;
-use url::Url;
 
-use std::path::PathBuf;
 
-use gnosis_vpn_lib::hopr_params::{self, HoprParams};
-use gnosis_vpn_lib::network::Network;
-use gnosis_vpn_lib::{config, hopr, socket};
 
 /// Gnosis VPN system service - client application for Gnosis VPN connections
 #[derive(Clone, Debug, Parser)]

@@ -1,6 +1,6 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{self};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
@@ -12,7 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::IntoRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
-use std::process::{self, Stdio};
+use std::process::{self};
 
 use gnosis_vpn_lib::command::Command as cmdCmd;
 use gnosis_vpn_lib::{routing, socket, wg_tooling, worker};
