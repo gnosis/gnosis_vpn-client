@@ -1,4 +1,4 @@
-use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 
