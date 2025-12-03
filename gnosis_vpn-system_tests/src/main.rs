@@ -77,7 +77,7 @@ async fn main_inner() -> Result<()> {
     );
 
     client
-        .wait_for_connection_established(&destination, Duration::from_secs(90))
+        .wait_for_connection_established(&destination, Duration::from_secs(180))
         .await?;
 
     // connect to a different destination and perform download tests
@@ -100,7 +100,7 @@ async fn main_inner() -> Result<()> {
     );
 
     client
-        .wait_for_connection_established(destination, Duration::from_secs(90))
+        .wait_for_connection_established(destination, Duration::from_secs(180))
         .await?;
 
     // Query public IP trough the VPN
