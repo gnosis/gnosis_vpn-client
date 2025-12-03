@@ -46,7 +46,7 @@ system-tests test_binary="gnosis_vpn-system-tests":
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
 
-    config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/gnosisvpn"
+    config_dir="${XDG_CONFIG_HOME:-/etc/gnosisvpn/}"
     mkdir -p "${config_dir}"
 
     printf %s "${SYSTEM_TEST_HOPRD_ID}" >"${config_dir}/gnosisvpn-hopr.id"
