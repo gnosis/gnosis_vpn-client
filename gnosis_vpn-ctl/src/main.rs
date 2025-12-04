@@ -78,9 +78,9 @@ fn pretty_print(resp: &Response) {
             issues,
             info,
         })) => {
-            let mut str_resp = format!("Network: {}\n", info.network);
+            let mut str_resp = format!("");
             str_resp.push_str(&format!(
-                "---\nNode Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
+                "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
                 info.node_address, info.node_peer_id, info.safe_address
             ));
             str_resp.push_str(&format!(

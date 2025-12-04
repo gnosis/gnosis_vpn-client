@@ -69,11 +69,9 @@ pub enum RunMode {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprStatus {
     Running,
-    Syncing,
-    Starting,
-    Indexing,
     Initializing,
     Uninitialized,
+    Terminated,
 }
 
 // in order of priority
@@ -247,10 +245,9 @@ impl From<&Option<HoprState>> for HoprStatus {
     fn from(state: &Option<HoprState>) -> Self {
         match state {
             Some(HoprState::Running) => HoprStatus::Running,
-            Some(HoprState::Starting) => HoprStatus::Starting,
-            Some(HoprState::Indexing) => HoprStatus::Indexing,
             Some(HoprState::Initializing) => HoprStatus::Initializing,
             Some(HoprState::Uninitialized) => HoprStatus::Uninitialized,
+            Some(HoprState::Terminated) => HoprStatus::Terminated,
             None => HoprStatus::Uninitialized,
         }
     }
@@ -325,11 +322,9 @@ impl Display for HoprStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             HoprStatus::Running => write!(f, "Running"),
-            HoprStatus::Syncing => write!(f, "Syncing"),
-            HoprStatus::Starting => write!(f, "Starting"),
-            HoprStatus::Indexing => write!(f, "Indexing"),
             HoprStatus::Initializing => write!(f, "Initializing"),
             HoprStatus::Uninitialized => write!(f, "Uninitialized"),
+            HoprStatus::Terminated => write!(f, "Terminated"),
         }
     }
 }

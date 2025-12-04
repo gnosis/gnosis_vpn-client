@@ -369,7 +369,8 @@ async fn loop_daemon(
 }
 
 fn main() {
-    match hopr_lib::prepare_tokio_runtime() {
+    // no overrides for CPU and IO threads
+    match hopr_lib::prepare_tokio_runtime(None, None) {
         Ok(rt) => {
             rt.block_on(main_inner());
         }

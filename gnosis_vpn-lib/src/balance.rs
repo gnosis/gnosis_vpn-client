@@ -72,7 +72,18 @@ impl PreSafe {
         let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider)
             .await
             .map_err(Error::Chain)?;
-        let check_balance_inputs = CheckBalanceInputs::new(node_address.into(), node_address.into());
+        let check_balance_inputs = CheckBalanceInputs::new(
+            node_address.as_ref().try_into().map_err(|e| {
+                Error::Chain(ChainError::DecodeEventError(format!(
+                    "failed to convert to address: {e}"
+                )))
+            })?,
+            node_address.as_ref().try_into().map_err(|e| {
+                Error::Chain(ChainError::DecodeEventError(format!(
+                    "failed to convert to address: {e}"
+                )))
+            })?,
+        );
         let res = check_balance_inputs
             .check(&client.provider)
             .await
@@ -174,7 +185,7 @@ pub fn min_funds_threshold() -> Balance<XDai> {
 mod tests {
     use super::*;
     use crate::chain::contracts::CheckBalanceResult;
-    use alloy::primitives::U256;
+    use edgli::hopr_chain_connector::reexports::alloy::primitives::U256;
 
     #[test]
     fn converts_check_balance_result_into_presafe_balances() -> anyhow::Result<()> {
