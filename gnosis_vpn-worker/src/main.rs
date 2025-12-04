@@ -1,4 +1,4 @@
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 
@@ -9,10 +9,12 @@ use std::process;
 
 use gnosis_vpn_lib::command;
 use gnosis_vpn_lib::config::Config;
+use gnosis_vpn_lib::core::Core;
+use gnosis_vpn_lib::external_event::Event;
 use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::hopr_params::HoprParams;
-use gnosis_vpn_lib::worker_command::WorkerCommand;
-use gnosis_vpn_lib::{core, external_event, socket};
+use gnosis_vpn_lib::worker_command::{WorkerCommand, WorkerResponse};
+use gnosis_vpn_lib::{external_event, socket};
 
 mod cli;
 // Avoid musl's default allocator due to degraded performance
@@ -21,48 +23,12 @@ mod cli;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn gather_resources(stream: UnixStream) -> Result<(Config, HoprParams), exitcode::ExitCode> {
-    let reader = BufReader::new(stream);
-    let mut lines = reader.lines();
-
-    let mut hopr_params: Option<HoprParams> = None;
-    let mut config: Option<Config> = None;
-
-    // first gather necessary resources to initialize worker core loop
-    while let Some(line) = lines.next_line().await.map_err(|err| {
-        tracing::error!(error = %err, "failed reading stdin");
-        exitcode::IOERR
-    })? {
-        let cmd: WorkerCommand = serde_json::from_str(&line).map_err(|err| {
-            tracing::error!(error = %err, "failed parsing worker command");
-            exitcode::DATAERR
-        })?;
-        tracing::debug!(?cmd, "received worker command");
-        match cmd {
-            WorkerCommand::HoprParams { hopr_params: params } => {
-                if let Some(val) = config {
-                    return Ok((val, params));
-                } else {
-                    hopr_params = Some(params);
-                }
-            }
-            WorkerCommand::Config { config: cfg } => {
-                if let Some(val) = hopr_params {
-                    return Ok((cfg, val));
-                } else {
-                    config = Some(cfg);
-                }
-            }
-            WorkerCommand::Shutdown => {
-                tracing::info!("received shutdown command before initialization");
-                return Err(exitcode::OK);
-            }
-            WorkerCommand::Command { cmd } => {
-                tracing::warn!(?cmd, "received command before initialization, ignoring");
-            }
-        }
-    }
-    Err(exitcode::NOINPUT)
+#[derive(Debug)]
+enum InitState {
+    AwaitingResources,
+    AwaitingHoprParams(Config),
+    AwaitingConfig(HoprParams),
+    Ready(Config, HoprParams),
 }
 
 async fn daemon() -> Result<(), exitcode::ExitCode> {
@@ -77,14 +43,6 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
             exitcode::NOINPUT
         })?;
 
-    let initial_child_socket = unsafe { StdUnixStream::from_raw_fd(fd) };
-    let initial_child_stream = UnixStream::from_std(initial_child_socket).map_err(|err| {
-        tracing::error!(error = %err, "failed to create unix stream from socket");
-        exitcode::IOERR
-    })?;
-
-    let (config, hopr_params) = gather_resources(initial_child_stream).await?;
-
     let child_socket = unsafe { StdUnixStream::from_raw_fd(fd) };
     let child_stream = UnixStream::from_std(child_socket).map_err(|err| {
         tracing::error!(error = %err, "failed to create unix stream from socket");
@@ -96,69 +54,172 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     let mut lines = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
+    let (mut incoming_event_sender, mut incoming_event_receiver) = mpsc::channel(32);
+    let (mut outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
+
+    /*
     let core = core::Core::init(config, hopr_params).await.map_err(|err| {
         tracing::error!(error = ?err, "failed to initialize core logic");
         exitcode::OSERR
     })?;
 
-    let (mut event_sender, mut event_receiver) = mpsc::channel(32);
     tokio::spawn(async move { core.start(&mut event_receiver).await });
+    */
 
-    let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
+    // let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
     // keep sender in an Option so we can take() it exactly once
-    let mut shutdown_sender_opt: Option<oneshot::Sender<()>> = Some(shutdown_sender);
+    // let mut shutdown_sender_opt: Option<oneshot::Sender<()>> = Some(shutdown_sender);
 
+    let mut init_state = InitState::AwaitingResources;
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
             res = lines.next_line() => {
-                match res {
-                    Ok(None) => {
-                        tracing::error!("stdin closed unexpectedly");
-                        return Err(exitcode::IOERR);
-                    },
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed reading stdin");
-                        return Err(exitcode::IOERR);
-                    },
-                    Ok(Some(line)) => {
-                        let cmd: WorkerCommand = serde_json::from_str(&line).map_err(|err| {
-                            tracing::error!(error = %err, "failed parsing worker command");
-                            exitcode::DATAERR
-                        })?;
-                        tracing::debug!(?cmd, "received worker command");
-                        let resp = handle_command(cmd, &mut event_sender, &mut shutdown_sender_opt).await?;
-                        if let Some(r)  = resp {
-                            let str = serde_json::to_string(&r).map_err(|err| {
-                                tracing::error!(error = ?err, "failed to serialize response");
-                                exitcode::DATAERR
-                            })?;
-                            writer.write_all(str.as_bytes()).await.map_err(|err| {
-                                tracing::error!(error = ?err, "error writing to stdout");
-                                exitcode::IOERR
-                            })?;
-                            writer.write_all(b"\n").await.map_err(|err| {
-                                tracing::error!(error = ?err, "error appending newline to stdout");
-                                exitcode::IOERR
-                            })?;
-                            writer.flush().await.map_err(|err| {
-                                tracing::error!(error = ?err, "error flushing stdout");
-                                exitcode::IOERR
-                            })?;
-                        }
-                    }
+                let wcmd = parse_worker_command(res)?;
+                let (resp, keep_going) = incoming_for_ready(init_state, wcmd, &incoming_event_sender).await?;
+                send_response(resp, &mut writer).await?;
+                if !keep_going {
+                    tracing::info!("shutting down worker daemon");
+                    return Ok(());
                 }
             },
-            Ok(_) = &mut shutdown_receiver => {
-                tracing::info!("shutdown complete");
-                return Ok(());
-            }
+            outgoing = outgoing_event_receiver.recv() => handle_outgoing_event(outgoing),
             else => {
                 tracing::error!("unexpected channel closure");
                 return Err(exitcode::IOERR);
             }
         }
     }
+}
+
+fn parse_worker_command(res: io::Result<Option<String>>) -> Result<WorkerCommand, exitcode::ExitCode> {
+    match res {
+        Ok(None) => {
+            tracing::error!("incoming socket closed unexpectedly");
+            Err(exitcode::IOERR)
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "failed reading incoming socket");
+            Err(exitcode::IOERR)
+        }
+        Ok(Some(line)) => {
+            let cmd: WorkerCommand = serde_json::from_str(&line).map_err(|err| {
+                tracing::error!(error = %err, "failed parsing worker command");
+                exitcode::DATAERR
+            })?;
+            Ok(cmd)
+        }
+    }
+}
+
+async fn incoming_for_ready(mut init_state: InitState, cmd: WorkerCommand) -> Result<bool, exitcode::ExitCode> {
+    match (init_state, cmd) {
+        (_, WorkerCommand::Shutdown) => Ok(false),
+        (InitState::AwaitingResources, WorkerCommand::HoprParams { hopr_params }) => {
+            init_state = InitState::AwaitingConfig(hopr_params);
+            Ok(true)
+        }
+        (InitState::AwaitingResources, WorkerCommand::Config { config }) => {
+            init_state = InitState::AwaitingHoprParams(config);
+            Ok(true)
+        }
+        (InitState::AwaitingHoprParams(config), WorkerCommand::HoprParams { hopr_params }) => {
+            init_state = InitState::Ready(config, hopr_params);
+            Ok(true)
+        }
+        (InitState::AwaitingConfig(hopr_params), WorkerCommand::Config { config }) => {
+            init_state = InitState::Ready(config, hopr_params);
+            Ok(true)
+        }
+        (state, cmd) => {
+            tracing::warn!(?state, ?cmd, "received command before init complete - ignoring");
+            Ok(true)
+        }
+    }
+}
+
+/*
+        (InitState::Running(_), WorkerCommand::Shutdown) => {
+            let (sender, recv) = oneshot::channel();
+            incoming_event_sender
+                .send(Event::Shutdown { resp: sender })
+                .await
+                .map_err(|_| {
+                    tracing::warn!("event receiver already closed");
+                    exitcode::IOERR
+                })?;
+            _ = recv.await.map_err(|_| {
+                tracing::error!("event responder already closed");
+                exitcode::IOERR
+            })?;
+            Ok(WorkerResponse::Ack)
+        }
+
+
+
+
+        tracing::info!("initiate shutdown");
+        match shutdown_sender_opt.take() {
+            Some(sender) => {
+                event_sender.send(external_event::shutdown(sender)).await.map_err(|_| {
+                    tracing::warn!("event receiver already closed");
+                    exitcode::IOERR
+                })?;
+                Ok(None)
+            }
+            None => {
+                tracing::error!("shutdown sender already taken");
+                Err(exitcode::IOERR)
+            }
+        }
+    }
+    WorkerCommand::Command { cmd } => {
+        let (sender, recv) = oneshot::channel();
+        event_sender
+            .send(external_event::Event::Command { cmd, resp: sender })
+            .await
+            .map_err(|_| {
+                tracing::error!("command receiver already closed");
+                exitcode::IOERR
+            })?;
+        let resp = recv.await.map_err(|_| {
+            tracing::error!("command responder already closed");
+            exitcode::IOERR
+        })?;
+        Ok(Some(resp))
+    }
+    WorkerCommand::HoprParams { .. } => {
+        tracing::warn!("received hopr params after init - ignoring");
+        Ok(None)
+    }
+    WorkerCommand::Config { .. } => {
+        tracing::warn!("received hopr params after init - ignoring");
+        Ok(None)
+    }
+}
+*/
+
+async fn send_response(
+    resp: &WorkerResponse,
+    writer: &mut BufWriter<WriteHalf<UnixStream>>,
+) -> Result<(), exitcode::ExitCode> {
+    let serialized = serde_json::to_string(resp).map_err(|err| {
+        tracing::error!(error = ?err, "failed to serialize response");
+        exitcode::DATAERR
+    })?;
+    writer.write_all(serialized.as_bytes()).await.map_err(|err| {
+        tracing::error!(error = ?err, "error writing to stdout");
+        exitcode::IOERR
+    })?;
+    writer.write_all(b"\n").await.map_err(|err| {
+        tracing::error!(error = ?err, "error appending newline to stdout");
+        exitcode::IOERR
+    })?;
+    writer.flush().await.map_err(|err| {
+        tracing::error!(error = ?err, "error flushing stdout");
+        exitcode::IOERR
+    })?;
+    Ok(())
 }
 
 async fn handle_command(
