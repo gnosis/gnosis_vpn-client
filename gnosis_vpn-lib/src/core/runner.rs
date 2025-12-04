@@ -4,11 +4,11 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use bytesize::ByteSize;
+use edgli::hopr_chain_connector::reexports::alloy::primitives::U256;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
-use edgli::hopr_utils_chain_connector::reexports::alloy::primitives::U256;
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::Rng;
 use serde::Deserialize;

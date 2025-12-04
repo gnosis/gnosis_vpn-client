@@ -1,11 +1,11 @@
-use edgli::hopr_lib::{Balance, WxHOPR};
-use edgli::hopr_lib::{EncodedWinProb, WinningProbability};
-use edgli::hopr_utils_chain_connector::reexports::alloy::{
+use edgli::hopr_chain_connector::reexports::alloy::{
     primitives::{Address, B256, Bytes, U256, address},
     providers::Provider,
     sol,
     sol_types::SolType,
 };
+use edgli::hopr_lib::{Balance, WxHOPR};
+use edgli::hopr_lib::{EncodedWinProb, WinningProbability};
 use primitive_types::U256 as PrimitiveU256;
 
 use crate::{
@@ -267,7 +267,7 @@ pub async fn send_hopr_tokens(provider: &GnosisProvider, recipient: Address, amo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgli::hopr_utils_chain_connector::reexports::alloy::primitives::{U256, address, hex};
+    use edgli::hopr_chain_connector::reexports::alloy::primitives::{U256, address, hex};
 
     #[test]
     fn build_user_data_encodes_nonce_token_amount_and_admins() -> anyhow::Result<()> {
