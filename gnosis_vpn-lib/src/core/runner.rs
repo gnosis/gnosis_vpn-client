@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use crate::balance;
 use crate::chain::client::GnosisRpcClient;
-use crate::chain::contracts::NetworkSpecifications;
 use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use crate::chain::errors::ChainError;
 use crate::connection;
@@ -91,8 +90,8 @@ pub enum Error {
     PreSafe(#[from] balance::Error),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
-    #[error(transparent)]
-    Chain(#[from] ChainError),
+    #[error("chain error: {0}")]
+    Chain(String),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
@@ -210,17 +209,32 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::Ticke
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
-    let rpc_provider = hopr_params.rpc_provider();
-    let network = hopr_params.network();
     retry(ExponentialBackoff::default(), || async {
-        let stats = TicketStats::fetch(
+        let (ticket_price, winning_probability) = edgli::blokli::with_sefeless_blokli_connector(
             &private_key,
-            rpc_provider.as_str(),
-            &NetworkSpecifications::from_network(&network),
+            edgli::blokli::DEFAULT_BLOKLI_URL
+                .parse()
+                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            |connector| async move {
+                let ticket_price = edgli::hopr_lib::exports::api::chain::ChainValues::minimum_ticket_price(&connector)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+                let win_prob =
+                    edgli::hopr_lib::exports::api::chain::ChainValues::minimum_incoming_ticket_win_prob(&connector)
+                        .await
+                        .map_err(|e| Error::Chain(e.to_string()))?;
+
+                Ok::<_, Error>((ticket_price, win_prob))
+            },
         )
         .await
-        .map_err(Error::from)?;
-        Ok(stats)
+        .map_err(|e| Error::Chain(e.to_string()))?
+        .await?;
+
+        Ok(TicketStats {
+            ticket_price,
+            winning_probability: winning_probability.as_f64(),
+        })
     })
     .await
 }
@@ -239,26 +253,55 @@ async fn run_safe_deployment(
     let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
     let network = hopr_params.network();
     retry(ExponentialBackoff::default(), || async {
-        let mut bytes = [0u8; 32];
-        rand::rng().fill(&mut bytes);
-        let nonce = U256::from_be_bytes(bytes);
-        let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
-            .await
-            .map_err(Error::from)?;
-        let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(
-            nonce,
-            token_amount,
-            vec![node_address.as_ref().try_into().map_err(|e| {
-                Error::Chain(ChainError::DecodeEventError(format!(
-                    "failed to convert to address: {e}"
-                )))
-            })?],
-        );
-        let res = safe_module_deployment_inputs
-            .deploy(&client.provider, network.clone())
-            .await
-            .map_err(Error::from)?;
-        Ok(res)
+        // let mut bytes = [0u8; 32];
+        // rand::rng().fill(&mut bytes);
+        // let nonce = U256::from_be_bytes(bytes);
+        // let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
+        //     .await
+        //     .map_err(Error::from)?;
+        // let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(
+        //     nonce,
+        //     token_amount,
+        //     vec![node_address.as_ref().try_into().map_err(|e| {
+        //         Error::Chain(ChainError::DecodeEventError(format!(
+        //             "failed to convert to address: {e}"
+        //         )))
+        //     })?],
+        // );
+        // let res = safe_module_deployment_inputs
+        //     .deploy(&client.provider, network.clone())
+        //     .await
+        //     .map_err(Error::from)?;
+        // Ok(res)
+
+        let transaction = edgli::blokli::with_sefeless_blokli_connector(
+            &private_key,
+            edgli::blokli::DEFAULT_BLOKLI_URL
+                .parse()
+                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            |connector| async move {
+                let signed_tx = todo!();
+
+                let transaction =
+                    edgli::connector::blokli_client::BlokliTransactionClient::submit_and_confirm_transaction(
+                        connector.client(),
+                        signed_tx,
+                        3,
+                    )
+                    .await;
+
+                Ok::<_, Error>(transaction)
+            },
+        )
+        .await
+        .map_err(|e| Error::Chain(e.to_string()))?
+        .await?;
+
+        Ok(SafeModuleDeploymentResult {
+            tx_hash: todo!(),
+            safe_address: todo!(),
+            module_address: todo!(),
+        })
     })
     .await
 }
