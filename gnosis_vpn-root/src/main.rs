@@ -355,15 +355,17 @@ async fn loop_daemon(
     })?;
 
     let (reader, writer) = io::split(parent_stream);
+    let reader = BufReader::new(reader_half);
+    let mut lines_reader = reader.lines();
+    let mut writer = BufWriter::new(writer_half);
 
+    /*
     let res = worker.wait().await;
     tracing::warn!(?res, "foobi");
+    */
 
     let mut reload_cancel = CancellationToken::new();
     let mut ctrc_already_triggered = false;
-    let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
-    // keep sender in an Option so we can take() it exactly once
-    let mut shutdown_sender_opt: Option<oneshot::Sender<()>> = Some(shutdown_sender);
 
     loop {
         tokio::select! {
