@@ -16,7 +16,7 @@ use crate::core::runner::{self, Results};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::{ping, wg_tooling};
+use crate::{ping, wireguard};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -25,7 +25,7 @@ pub enum Error {
     #[error(transparent)]
     GvpnClient(#[from] gvpn_client::Error),
     #[error(transparent)]
-    WgTooling(#[from] wg_tooling::Error),
+    WireGuard(#[from] wireguard::Error),
     #[error(transparent)]
     Ping(#[from] ping::Error),
 }
@@ -34,7 +34,7 @@ pub struct Runner {
     up: connection::up::Up,
     hopr: Arc<Hopr>,
     options: Options,
-    wg_config: wg_tooling::Config,
+    wg_config: wireguard::Config,
 }
 
 #[derive(Debug)]
@@ -50,7 +50,7 @@ pub enum Progress {
     RegisterWg(String),
     CloseBridge,
     OpenPing,
-    WgTunnel(wg_tooling::WireGuard),
+    WgTunnel(wireguard::WireGuard),
     Ping,
     AdjustToMain,
 }
@@ -63,7 +63,7 @@ pub enum Setback {
 }
 
 impl Runner {
-    pub fn new(up: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(up: connection::up::Up, options: Options, wg_config: wireguard::Config, hopr: Arc<Hopr>) -> Self {
         Self {
             up,
             hopr,
@@ -84,7 +84,9 @@ impl Runner {
                 evt: progress(Progress::GenerateWg),
             })
             .await;
-        let wg = wg_tooling::WireGuard::from_config(self.wg_config.clone()).await?;
+        unimplemented!()
+        /*
+        let wg = wireguard::WireGuard::from_config(self.wg_config.clone()).await?;
 
         // 1. open bridge session
         let _ = results_sender
@@ -143,6 +145,7 @@ impl Runner {
         adjust_to_main_session(&self.hopr, &self.options, &ping_session).await?;
 
         Ok(ping_session)
+            */
     }
 }
 
@@ -240,7 +243,7 @@ async fn open_bridge_session(
 async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
-    wg: &wg_tooling::WireGuard,
+    wg: &wireguard::WireGuard,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Registration, gvpn_client::Error> {
     let input = gvpn_client::Input::new(
@@ -326,23 +329,25 @@ async fn open_ping_session(
 async fn wg_tunnel(
     registration: &Registration,
     session_client_metadata: &SessionClientMetadata,
-    wg: &wg_tooling::WireGuard,
-) -> Result<(), wg_tooling::Error> {
+    wg: &wireguard::WireGuard,
+) -> Result<(), wireguard::Error> {
     // run wg-quick down once to ensure no dangling state
-    _ = wg_tooling::down().await;
+    // _ = wg_tooling::down().await;
+    unimplemented!();
 
-    let interface_info = wg_tooling::InterfaceInfo {
+    let interface_info = wireguard::InterfaceInfo {
         address: registration.address(),
         mtu: session_client_metadata.hopr_mtu,
     };
 
-    let peer_info = wg_tooling::PeerInfo {
+    let peer_info = wireguard::PeerInfo {
         public_key: registration.server_public_key(),
         endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
     };
 
     tracing::debug!(%registration, "establishing wg tunnel");
-    wg.up(&interface_info, &peer_info).await
+    // wg.up(&interface_info, &peer_info).await
+    unimplemented!()
 }
 
 async fn ping(options: &Options) -> Result<(), ping::Error> {
