@@ -61,6 +61,7 @@
           ...
         }:
         let
+          fs = lib.fileset;
           pkgs = (
             import nixpkgs {
               localSystem = system;
@@ -149,6 +150,13 @@
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
           };
 
+          getSecretEnv =
+            name:
+            let
+              value = builtins.getEnv name;
+            in
+            if value == "" then null else value;
+
           # Build the top-level crates of the workspace as individual derivations
           # This modular approach allows consumers to depend on and build only what
           # they need, rather than building the entire workspace as a single derivation.
@@ -157,12 +165,20 @@
           gvpn = mkPackage {
             pname = "gnosis_vpn";
             profile = "release";
+            cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
           };
 
           # Development build with faster compilation and debug symbols
           gvpn-dev = mkPackage {
             pname = "gnosis_vpn-dev";
             profile = "dev";
+            cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
+          };
+
+          gvpn-system-tests = mkPackage {
+            pname = "gnosis_vpn-system-tests";
+            profile = "dev";
+            cargoExtraArgs = "--bin gnosis_vpn-system-tests";
           };
 
           pre-commit-check = pre-commit.lib.${system}.run {
@@ -292,13 +308,11 @@
           packages = {
             inherit gvpn;
             inherit gvpn-dev;
+            inherit gvpn-system-tests;
             inherit pre-commit-check;
             default = gvpn;
           };
-
-          apps = {
-            inherit generate-lockfile;
-          };
+          # // systemTestsDockerPackages;
 
           devShells.default = craneLib.devShell {
             inherit pre-commit-check;

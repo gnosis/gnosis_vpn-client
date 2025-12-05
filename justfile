@@ -37,3 +37,25 @@ docker-stop:
 # enter docker container interactively
 docker-enter:
     docker exec --interactive --tty gnosis_vpn-client bash
+
+system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
+    : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
+    : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
+    : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
+    
+    config_dir="${CONFIG_DIR:-/etc/gnosisvpn}"
+    cache_dir="${XDG_CONFIG_HOME}/gnosisvpn"
+
+    sudo mkdir -p "${config_dir}"
+    sudo mkdir -p "${cache_dir}"
+
+    printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${cache_dir}/gnosisvpn-hopr.id" > /dev/null
+    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${cache_dir}/gnosisvpn-hopr.pass" > /dev/null
+    printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${cache_dir}/gnosisvpn-hopr.safe" > /dev/null
+    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
+
+    set RUST_LOG=none,{{replace(test_binary, "-", "_")}}=info && sudo {{ test_binary }} download

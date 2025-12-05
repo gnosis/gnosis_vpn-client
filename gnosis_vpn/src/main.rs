@@ -79,7 +79,7 @@ async fn config_channel(
     let config_path = match fs::canonicalize(param_config_path).await {
         Ok(path) => path,
         Err(e) => {
-            tracing::error!(error = ?e, "error canonicalizing config path");
+            tracing::error!(error = ?e, path=?param_config_path, "error canonicalizing config path");
             return Err(exitcode::IOERR);
         }
     };
@@ -266,7 +266,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
-            tracing::error!(error = %e, "error canonicalizing config path");
+            tracing::error!(error = %e, path=?args.config_path, "error canonicalizing config path");
             return Err(exitcode::IOERR);
         }
     };
