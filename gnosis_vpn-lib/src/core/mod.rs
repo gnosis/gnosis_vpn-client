@@ -16,7 +16,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::event::Incoming;
+use crate::event::{Incoming, Outgoing};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -117,13 +117,17 @@ impl Core {
         })
     }
 
-    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Incoming>) {
+    pub async fn start(
+        mut self,
+        incoming_receiver: &mut mpsc::Receiver<Incoming>,
+        outgoing_sender: &mpsc::Sender<Outgoing>,
+    ) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
                 // React to an incoming outside event
-                Some(event) = event_receiver.recv() => {
+                Some(event) = incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
                     } else {
@@ -144,7 +148,7 @@ impl Core {
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     async fn on_event(&mut self, event: Incoming, results_sender: &mpsc::Sender<Results>) -> bool {
-        tracing::debug!(phase = ?self.phase, "on outside event");
+        tracing::debug!(phase = ?self.phase, "on incoming outside event");
         match event {
             Incoming::Shutdown => {
                 tracing::debug!("shutting down core");
@@ -169,7 +173,7 @@ impl Core {
                 false
             }
 
-            Incoming::Command { cmd } => {
+            Incoming::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {
