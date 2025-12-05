@@ -4,7 +4,7 @@ use users::os::unix::UserExt;
 
 use std::path::PathBuf;
 
-use crate::util::CommandExt;
+use crate::shell_command_ext::{self, ShellCommandExt};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -20,8 +20,8 @@ pub enum Error {
     PrimaryGroupMissing,
     #[error("Invalid worker binary path")]
     InvalidBinaryPath,
-    #[error("Command error: {0}")]
-    Command(#[from] crate::util::Error),
+    #[error("Shell command error: {0}")]
+    Command(#[from] shell_command_ext::Error),
 }
 
 #[derive(Debug)]

@@ -20,7 +20,7 @@ use crate::event::{Incoming, Outgoing};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
-use crate::{balance, log_output, wg_tooling};
+use crate::{balance, log_output, wireguard};
 
 pub mod runner;
 
