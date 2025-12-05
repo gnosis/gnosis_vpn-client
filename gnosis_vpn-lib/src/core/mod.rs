@@ -31,7 +31,7 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
     #[error("WireGuard error: {0}")]
-    WgTooling(#[from] wg_tooling::Error),
+    WireGuard(#[from] wireguard::Error),
     #[error("HOPR error: {0}")]
     Hopr(#[from] HoprError),
     #[error("Hopr config error: {0}")]
@@ -87,8 +87,8 @@ enum Phase {
 
 impl Core {
     pub async fn init(config: Config, hopr_params: HoprParams) -> Result<Core, Error> {
-        wg_tooling::available().await?;
-        wg_tooling::executable().await?;
+        // wg_tooling::available().await?;
+        // wg_tooling::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         Ok(Core {
@@ -160,7 +160,8 @@ impl Core {
                 let shutdown_tracker = TaskTracker::new();
                 shutdown_tracker.spawn(async {
                     // ensure wg is disconnected, ignore errors
-                    let _ = wg_tooling::down().await;
+                    // let _ = wg_tooling::down().await;
+                    unimplemented!();
                 });
                 if let Some(hopr) = self.hopr.clone() {
                     shutdown_tracker.spawn(async move {
