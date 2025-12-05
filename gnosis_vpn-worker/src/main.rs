@@ -42,7 +42,7 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
 
     let (reader_half, writer_half) = io::split(child_stream);
     let reader = BufReader::new(reader_half);
-    let mut lines = reader.lines();
+    let mut lines_reader = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
     let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
@@ -55,7 +55,7 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
-            res = lines.next_line() => {
+            res = lines_reader.next_line() => {
                 let wcmd = parse_worker_command(res)?;
                 if let Some(init) = init_opt.take() {
                 let next = init.incoming_cmd(wcmd);
