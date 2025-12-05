@@ -52,6 +52,10 @@ impl Destination {
         metas.sort();
         metas.join(", ")
     }
+
+    pub fn get_meta(&self, key: &str) -> String {
+        self.meta.get(key).unwrap_or(&"<unknown>".to_string()).clone()
+    }
 }
 
 impl Display for Destination {

@@ -1,11 +1,21 @@
-use std::{path::PathBuf, time::Duration};
-
 use anyhow::Context;
+use std::{path::PathBuf, time::Duration};
 use tokio::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 use url::{Url, form_urlencoded::Serializer};
 
 const BASE_DOWNLOAD_URL: &str = "https://speed.cloudflare.com/__down";
+
+/// Result of a single condition evaluation.
+#[derive(Debug)]
+pub enum ConditionCheck<T> {
+    /// Condition not satisfied yet and no partial result available.
+    Pending,
+    /// Condition not satisfied yet but we captured a partial result.
+    PendingWithValue(T),
+    /// Condition satisfied with the provided value.
+    Ready(T),
+}
 
 /// Repeatedly evaluates `check` until it yields a value or the timeout expires.
 pub async fn wait_for_condition<T, F, Fut>(
@@ -17,20 +27,32 @@ pub async fn wait_for_condition<T, F, Fut>(
 where
     T: std::fmt::Debug,
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<Option<T>>>,
+    Fut: std::future::Future<Output = anyhow::Result<ConditionCheck<T>>>,
 {
     let start = Instant::now();
+    let mut last_progress: Option<T> = None;
+
     loop {
         debug!("checking condition for {label}");
-        if let Some(result) = check().await? {
-            return Ok(result);
+        match check().await? {
+            ConditionCheck::Ready(result) => return Ok(result),
+            ConditionCheck::Pending => {}
+            ConditionCheck::PendingWithValue(result) => {
+                last_progress = Some(result);
+            }
         }
 
-        if start.elapsed() > timeout {
-            Err(anyhow::anyhow!("timeout while waiting for {label}"))?;
+        let elapsed = start.elapsed();
+        if elapsed > timeout {
+            if let Some(result) = last_progress {
+                warn!(%label, "timeout expired, returning last known progress");
+                return Ok(result);
+            }
+            Err(anyhow::anyhow!("timeout on {label}"))?;
         }
 
-        tokio::time::sleep(interval.min(timeout - start.elapsed())).await;
+        let sleep_duration = interval.min(timeout.saturating_sub(elapsed));
+        tokio::time::sleep(sleep_duration).await;
     }
 }
 
@@ -58,9 +80,9 @@ pub async fn download_file(size_bytes: u64, proxy: Option<&Url>) -> anyhow::Resu
     let mut client = reqwest::Client::builder().timeout(Duration::from_secs(60));
     if let Some(proxy_url) = proxy {
         client = client.proxy(reqwest::Proxy::all(proxy_url.as_str())?);
-        info!(url = %download_url, size_bytes, "downloading random file through proxy");
+        debug!(url = %download_url, size_bytes, "downloading random file through proxy");
     } else {
-        info!(url = %download_url, size_bytes, "downloading random file");
+        debug!(url = %download_url, size_bytes, "downloading random file");
     }
 
     let resp = client
@@ -86,7 +108,7 @@ pub async fn download_file(size_bytes: u64, proxy: Option<&Url>) -> anyhow::Resu
 
 /// Queries an IP echo endpoint (e.g. api.ipify.org) and returns the IP string.
 pub async fn fetch_public_ip(ip_echo_url: &Url, proxy: Option<&Url>) -> anyhow::Result<String> {
-    let mut client = reqwest::Client::builder().timeout(Duration::from_secs(30));
+    let mut client = reqwest::Client::builder().timeout(Duration::from_secs(60));
     if let Some(proxy_url) = proxy {
         client = client.proxy(reqwest::Proxy::all(proxy_url.as_str())?);
     }

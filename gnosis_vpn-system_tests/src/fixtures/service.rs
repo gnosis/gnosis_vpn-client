@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 
 use crate::cli::SharedArgs;
 use anyhow::Context;
+use tracing::info;
 
 pub struct Service;
 
@@ -28,7 +29,12 @@ impl Service {
             cmd.arg("--allow-insecure");
         }
 
-        let _ = cmd.spawn().context("failed to start gnosis_vpn service")?;
-        Ok(())
+        match cmd.spawn() {
+            Ok(_child) => {
+                info!("Started gnosis-vpn service");
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }

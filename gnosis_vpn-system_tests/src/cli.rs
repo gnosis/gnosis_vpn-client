@@ -86,4 +86,13 @@ pub struct DownloadArgs {
         default_value = "2"
     )]
     pub size_factor: u32,
+
+    /// Number of repetitions per file size when measuring download performance.
+    #[arg(
+        long = "downloadRepetitions",
+        env = "SYSTEM_TEST_DOWNLOAD_REPETITIONS",
+        value_name = "REPETITIONS",
+        default_value = "5"
+    )]
+    pub repetitions: usize,
 }

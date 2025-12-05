@@ -1,15 +1,17 @@
-use std::path::PathBuf;
-use std::time::Duration;
-
 use gnosis_vpn_lib::command::{
-    BalanceResponse, Command, ConnectResponse, ConnectionState, DisconnectResponse, Response, RunMode, StatusResponse,
+    BalanceResponse, Command, ConnectResponse, ConnectionState, DestinationState, DisconnectResponse, Response,
+    RunMode, StatusResponse,
 };
-use gnosis_vpn_lib::connection::destination::{Address, Destination};
-use gnosis_vpn_lib::connection::destination_health::Health;
+use gnosis_vpn_lib::connection::{
+    destination::{Address, Destination},
+    destination_health::Health,
+};
 use gnosis_vpn_lib::socket;
+use rand::seq::SliceRandom;
+use std::{path::PathBuf, time::Duration};
 use tracing::{debug, error, info, warn};
 
-use crate::fixtures::lib;
+use crate::fixtures::lib::{self, ConditionCheck};
 
 /// Thin wrapper around the gnosis_vpn control socket used during system tests.
 pub struct ControlClient {
@@ -25,10 +27,7 @@ impl ControlClient {
     /// Sends a raw command to the control socket and returns the daemon response.
     pub async fn send(&self, cmd: &Command) -> anyhow::Result<Response> {
         match socket::process_cmd(self.socket_path.as_path(), cmd).await {
-            Ok(resp) => {
-                debug!(?cmd, ?resp, "received command response");
-                Ok(resp)
-            }
+            Ok(resp) => Ok(resp),
             Err(socket::Error::ServiceNotRunning) => {
                 error!(?cmd, "service not running when sending command");
                 Err(socket::Error::ServiceNotRunning.into())
@@ -80,7 +79,7 @@ impl ControlClient {
     pub async fn disconnect(&self) -> anyhow::Result<DisconnectResponse> {
         match self.send(&Command::Disconnect).await {
             Ok(Response::Disconnect(state)) => Ok(state),
-            Ok(resp) => Err(anyhow::anyhow!("unexpected connect response {resp:?}")),
+            Ok(resp) => Err(anyhow::anyhow!("unexpected disconnect response {resp:?}")),
             Err(e) => Err(e),
         }
     }
@@ -91,9 +90,9 @@ impl ControlClient {
             match self.ping().await {
                 Ok(_) => {
                     info!("gnosis_vpn service is pingable");
-                    Ok(Some(()))
+                    Ok(ConditionCheck::Ready(()))
                 }
-                Err(_) => Ok(None),
+                Err(_) => Ok(ConditionCheck::Pending),
             }
         })
         .await?;
@@ -105,7 +104,7 @@ impl ControlClient {
         lib::wait_for_condition("safe created", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => match status.run_mode {
-                    RunMode::Init => Ok(None),
+                    RunMode::Init => Ok(ConditionCheck::Pending),
                     RunMode::PreparingSafe {
                         node_address: _,
                         node_xdai: _,
@@ -113,15 +112,15 @@ impl ControlClient {
                         funding_tool: _,
                     } => {
                         warn!("safe being prepared");
-                        Ok(None)
+                        Ok(ConditionCheck::Pending)
                     }
                     _ => {
                         info!("safe is created and ready");
-                        Ok(Some(()))
+                        Ok(ConditionCheck::Ready(()))
                     }
                 },
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
+                Ok(None) => Ok(ConditionCheck::Pending),
+                Err(_) => Ok(ConditionCheck::Pending),
             }
         })
         .await?;
@@ -134,13 +133,15 @@ impl ControlClient {
             match self.balance().await {
                 Ok(Some(BalanceResponse { node, safe, .. })) => {
                     if node.is_zero() || safe.is_zero() {
-                        Ok(None)
+                        debug!("node or safe have zero funds");
+                        Ok(ConditionCheck::Pending)
                     } else {
-                        Ok(Some(()))
+                        info!("node and safe have funds");
+                        Ok(ConditionCheck::Ready(()))
                     }
                 }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
+                Ok(None) => Ok(ConditionCheck::Pending),
+                Err(_) => Ok(ConditionCheck::Pending),
             }
         })
         .await?;
@@ -154,51 +155,51 @@ impl ControlClient {
                 Ok(Some(status)) => {
                     if matches!(status.run_mode, RunMode::Running { .. }) {
                         info!("node is in Running state");
-                        Ok(Some(()))
+                        Ok(ConditionCheck::Ready(()))
                     } else {
-                        Ok(None)
+                        debug!("node not in Running state yet");
+                        Ok(ConditionCheck::Pending)
                     }
                 }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
+                Ok(None) => Ok(ConditionCheck::Pending),
+                Err(_) => Ok(ConditionCheck::Pending),
             }
         })
         .await?;
         Ok(())
     }
 
-    /// Returns the destinations ready for connection establishment.
-    pub async fn wait_for_ready_destinations(&self, timeout: Duration) -> anyhow::Result<Vec<Destination>> {
+    /// Aggregates ready and not-ready destinations.
+    pub async fn wait_for_ready_destinations(&self, timeout: Duration) -> anyhow::Result<DestinationReadiness> {
         lib::wait_for_condition(
-            "node ready to connect destinations",
+            "node ready to reach all destinations",
             timeout,
             Duration::from_secs(10),
             || async {
                 match self.status().await {
                     Ok(Some(status)) => {
-                        let ready_dests = status
-                            .destinations
-                            .iter()
-                            .filter_map(|dest| {
-                                dest.health.as_ref().and_then(|health| {
-                                    if health.health == Health::ReadyToConnect {
-                                        Some(dest.destination.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                            })
-                            .collect::<Vec<Destination>>();
+                        let mut readiness = DestinationReadiness::from_states(status.destinations);
 
-                        if ready_dests.is_empty() {
-                            warn!("didn't find any destinations ready to connect yet");
-                            Ok(None)
-                        } else {
-                            Ok(Some(ready_dests))
+                        if readiness.ready().is_empty() {
+                            warn!("no ready destinations yet");
+                            return Ok(ConditionCheck::PendingWithValue(readiness));
                         }
+
+                        if readiness.not_ready().is_empty() {
+                            info!("all destinations are ready");
+                            readiness.shuffle_ready();
+                            return Ok(ConditionCheck::Ready(readiness));
+                        }
+
+                        warn!(
+                            ready = readiness.ready().len(),
+                            not_ready = readiness.not_ready().len(),
+                            "waiting for all destinations to be ready"
+                        );
+                        Ok(ConditionCheck::PendingWithValue(readiness))
                     }
-                    Ok(None) => Ok(None),
-                    Err(_) => Ok(None),
+                    Ok(None) => Ok(ConditionCheck::Pending),
+                    Err(_) => Ok(ConditionCheck::Pending),
                 }
             },
         )
@@ -211,7 +212,7 @@ impl ControlClient {
         destination: &Destination,
         timeout: Duration,
     ) -> anyhow::Result<()> {
-        lib::wait_for_condition("connection established", timeout, Duration::from_secs(2), || async {
+        lib::wait_for_condition("connection settlement", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => {
                     if let Some(state) = status
@@ -219,19 +220,28 @@ impl ControlClient {
                         .iter()
                         .find(|c| c.destination.address == destination.address)
                     {
-                        if matches!(state.connection_state, ConnectionState::Connected(_)) {
-                            info!("connection is established");
-                            return Ok(Some(()));
+                        let location = state.destination.get_meta("location");
+                        match &state.connection_state {
+                            ConnectionState::Connecting(_, phase) => {
+                                warn!(?phase, ?location, "connection is being established");
+                                Ok(ConditionCheck::Pending)
+                            }
+                            ConnectionState::Connected(_) => {
+                                info!(?location, "connection established successfully");
+                                Ok(ConditionCheck::Ready(()))
+                            }
+                            _ => {
+                                warn!(?location, "connection state is unknown");
+                                Ok(ConditionCheck::Pending)
+                            }
                         }
-                        warn!(
-                            "connection not established yet, current state: {:?}",
-                            state.connection_state
-                        );
+                    } else {
+                        warn!("destination not found in status response");
+                        Ok(ConditionCheck::Pending)
                     }
-                    Ok(None)
                 }
-                Ok(None) => Ok(None),
-                Err(_) => Ok(None),
+                Ok(None) => Ok(ConditionCheck::Pending),
+                Err(_) => Ok(ConditionCheck::Pending),
             }
         })
         .await?;
@@ -245,17 +255,57 @@ impl ControlClient {
                 Ok(response) => match response {
                     DisconnectResponse::Disconnecting(address) => {
                         info!("disconnecting from destination {address}");
-                        Ok(None)
+                        Ok(ConditionCheck::Pending)
                     }
                     DisconnectResponse::NotConnected => {
                         info!("successfully disconnected");
-                        Ok(Some(()))
+                        Ok(ConditionCheck::Ready(()))
                     }
                 },
-                Err(_) => Ok(None),
+                Err(_) => Ok(ConditionCheck::Pending),
             }
         })
         .await?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DestinationReadiness {
+    ready: Vec<Destination>,
+    not_ready: Vec<Destination>,
+}
+
+impl DestinationReadiness {
+    fn from_states(states: Vec<DestinationState>) -> Self {
+        let mut ready = Vec::new();
+        let mut not_ready = Vec::new();
+
+        for state in states {
+            if state
+                .health
+                .as_ref()
+                .map(|health| health.health == Health::ReadyToConnect)
+                .unwrap_or(false)
+            {
+                ready.push(state.destination);
+            } else {
+                not_ready.push(state.destination);
+            }
+        }
+
+        Self { ready, not_ready }
+    }
+
+    pub fn ready(&self) -> &[Destination] {
+        &self.ready
+    }
+
+    pub fn not_ready(&self) -> &[Destination] {
+        &self.not_ready
+    }
+
+    pub fn shuffle_ready(&mut self) {
+        self.ready.shuffle(&mut rand::rng());
     }
 }
