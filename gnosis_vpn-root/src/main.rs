@@ -18,6 +18,8 @@ use gnosis_vpn_lib::command::Command as cmdCmd;
 use gnosis_vpn_lib::{routing, socket, wg_tooling, worker};
 
 mod cli;
+mod routing;
+mod wg_tooling;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance

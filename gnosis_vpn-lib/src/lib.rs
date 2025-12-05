@@ -9,9 +9,9 @@ pub mod hopr;
 pub mod hopr_params;
 pub mod info;
 pub mod network;
-pub mod routing;
+pub mod shell_command_ext;
 pub mod socket;
-pub mod wg_tooling;
+pub mod wireguard;
 pub mod worker;
 pub mod worker_command;
 
@@ -21,7 +21,6 @@ mod log_output;
 mod ping;
 mod remote_data;
 mod ticket_stats;
-mod util;
 
 pub mod prelude {
     pub use edgli::hopr_lib::Address;
