@@ -526,7 +526,7 @@ impl Core {
                 }
             }
 
-            Results::ConnectionResult { res } => match (res, self.phase.clone()) {
+            Results::ConnectionResultPreWg { res } => match (res, self.phase.clone()) {
                 (Ok(session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
