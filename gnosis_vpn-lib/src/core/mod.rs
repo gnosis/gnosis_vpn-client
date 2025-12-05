@@ -120,7 +120,7 @@ impl Core {
     pub async fn start(
         mut self,
         incoming_receiver: &mut mpsc::Receiver<Incoming>,
-        outgoing_sender: &mpsc::Sender<Outgoing>,
+        outgoing_sender: mpsc::Sender<Outgoing>,
     ) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);

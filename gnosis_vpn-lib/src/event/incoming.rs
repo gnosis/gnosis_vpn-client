@@ -1,9 +1,13 @@
 //! This module indicates external events that will be forwarded into core application loop.
 
-use crate::command::Command;
+use crate::command::{Command, Response};
+use tokio::sync::oneshot;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Incoming {
-    Command(Command),
+    Command {
+        cmd: Command,
+        resp: oneshot::Sender<Response>,
+    },
     Shutdown,
 }

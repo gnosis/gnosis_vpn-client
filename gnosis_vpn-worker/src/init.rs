@@ -1,8 +1,6 @@
-use gnosis_vpn_lib::command::Command;
 use gnosis_vpn_lib::config::Config;
 use gnosis_vpn_lib::hopr_params::HoprParams;
 use gnosis_vpn_lib::worker_command::WorkerCommand;
-use gnosis_vpn_lib::event;
 
 #[derive(Debug, Clone)]
 pub struct Init {
@@ -15,7 +13,6 @@ enum State {
     AwaitingHoprParams(Config),
     AwaitingConfig(HoprParams),
     Ready(Config, HoprParams),
-    CoreRunning,
     Shutdown,
 }
 
@@ -26,44 +23,36 @@ impl Init {
         }
     }
 
-    pub fn is_ready(&self) -> bool {
-        matches!(self.state, State::Ready(_, _))
+    pub fn ready(&self) -> Option<(Config, HoprParams)> {
+        if let State::Ready(config, hopr_params) = &self.state {
+            Some((config.clone(), hopr_params.clone()))
+        } else {
+            None
+        }
     }
 
     pub fn is_shutdown(&self) -> bool {
         matches!(self.state, State::Shutdown)
     }
 
-    pub fn incoming_cmd(&mut self, cmd: WorkerCommand) -> Option<Command> {
+    pub fn incoming_cmd(&self, cmd: WorkerCommand) -> Self {
         match (self.state.clone(), cmd) {
-            (State::CoreRunning, WorkerCommand::Shutdown) => {
-                self.state = State::Shutdown;
-                Some(Command::Shutdown)
-            }
-            (_, WorkerCommand::Shutdown) => {
-                self.state = State::Shutdown;
-                None,
-            }
-            (State::AwaitingResources, WorkerCommand::HoprParams { hopr_params }) => {
-                self.state = State::AwaitingConfig(hopr_params);
-                None
-            }
-            (State::AwaitingResources, WorkerCommand::Config { config }) => {
-                self.state = State::AwaitingHoprParams(config);
-                None
-            }
-            (State::AwaitingHoprParams(config), WorkerCommand::HoprParams { hopr_params }) => {
-                self.state = State::Ready(config, hopr_params);
-                None
-            }
-            (State::AwaitingConfig(hopr_params), WorkerCommand::Config { config }) => {
-                self.state = State::Ready(config, hopr_params);
-                None
-            }
-            (State::Ready(_, _), WorkerCommand::Command { cmd }) => Some(cmd),
+            (_, WorkerCommand::Shutdown) => Init { state: State::Shutdown },
+            (State::AwaitingResources, WorkerCommand::HoprParams { hopr_params }) => Init {
+                state: State::AwaitingConfig(hopr_params),
+            },
+            (State::AwaitingResources, WorkerCommand::Config { config }) => Init {
+                state: State::AwaitingHoprParams(config),
+            },
+            (State::AwaitingHoprParams(config), WorkerCommand::HoprParams { hopr_params }) => Init {
+                state: State::Ready(config, hopr_params),
+            },
+            (State::AwaitingConfig(hopr_params), WorkerCommand::Config { config }) => Init {
+                state: State::Ready(config, hopr_params),
+            },
             (state, worker_command) => {
-                tracing::warn!(?state, ?worker_command, "received unexpected worker command");
-                None
+                tracing::warn!(?state, ?worker_command, "received unexpected worker command - ignoring");
+                Init { state }
             }
         }
     }

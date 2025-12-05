@@ -1,20 +1,18 @@
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 
 use std::env;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process;
 
-use gnosis_vpn_lib::command;
-use gnosis_vpn_lib::config::Config;
 use gnosis_vpn_lib::core::Core;
-use gnosis_vpn_lib::external_event::Event;
+use gnosis_vpn_lib::event::Incoming;
 use gnosis_vpn_lib::hopr::hopr_lib;
-use gnosis_vpn_lib::hopr_params::HoprParams;
+use gnosis_vpn_lib::socket;
 use gnosis_vpn_lib::worker_command::{WorkerCommand, WorkerResponse};
-use gnosis_vpn_lib::{external_event, socket};
 
 mod cli;
 mod init;
@@ -47,36 +45,46 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     let mut lines = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
-    let (mut incoming_event_sender, mut incoming_event_receiver) = mpsc::channel(32);
-    let (mut outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
+    let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
+    let (outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
 
-    /*
-    let core = core::Core::init(config, hopr_params).await.map_err(|err| {
-        tracing::error!(error = ?err, "failed to initialize core logic");
-        exitcode::OSERR
-    })?;
-
-    tokio::spawn(async move { core.start(&mut event_receiver).await });
-    */
-
-    // let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
-    // keep sender in an Option so we can take() it exactly once
-    // let mut shutdown_sender_opt: Option<oneshot::Sender<()>> = Some(shutdown_sender);
-
-    let mut init = init::Init::new();
+    let mut core_task = JoinSet::new();
+    let mut init_opt = Some(init::Init::new());
+    let mut incoming_event_receiver_opt = Some(incoming_event_receiver);
+    let mut outoing_event_sender_opt = Some(outgoing_event_sender);
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
             res = lines.next_line() => {
                 let wcmd = parse_worker_command(res)?;
-                init.incoming_cmd(wcmd);
+                if let Some(init) = init_opt.take() {
+                let next = init.incoming_cmd(wcmd);
                 send_response(WorkerResponse::Ack, &mut writer).await?;
-                if !keep_going {
+                if next.is_shutdown() {
                     tracing::info!("shutting down worker daemon");
                     return Ok(());
                 }
+                if let (Some((config, hopr_params)), Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (next.ready(), incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
+                    let core = Core::init(config, hopr_params).await.map_err(|err| {
+                        tracing::error!(error = ?err, "failed to initialize core logic");
+                        exitcode::OSERR
+                    })?;
+                    core_task.spawn(async move { core.start(&mut incoming_event_receiver, outgoing_event_sender).await });
+                } else {
+                    init_opt = Some(next);
+                }
+                } else {
+                let resp = incoming_cmd(wcmd, &mut incoming_event_sender).await?;
+                if let Some(resp) = resp {
+                    send_response(resp, &mut writer).await?;
+                }
+                }
             },
-            outgoing = outgoing_event_receiver.recv() => handle_outgoing_event(outgoing),
+            outgoing = outgoing_event_receiver.recv() => unimplemented!(),
+            Some(_) = core_task.join_next() => {
+                tracing::info!("shutting down worker daemon");
+                return Ok(());
+            }
             else => {
                 tracing::error!("unexpected channel closure");
                 return Err(exitcode::IOERR);
@@ -105,93 +113,6 @@ fn parse_worker_command(res: io::Result<Option<String>>) -> Result<WorkerCommand
     }
 }
 
-async fn incoming_for_ready(mut init_state: InitState, cmd: WorkerCommand) -> Result<bool, exitcode::ExitCode> {
-    match (init_state, cmd) {
-        (_, WorkerCommand::Shutdown) => Ok(false),
-        (InitState::AwaitingResources, WorkerCommand::HoprParams { hopr_params }) => {
-            init_state = InitState::AwaitingConfig(hopr_params);
-            Ok(true)
-        }
-        (InitState::AwaitingResources, WorkerCommand::Config { config }) => {
-            init_state = InitState::AwaitingHoprParams(config);
-            Ok(true)
-        }
-        (InitState::AwaitingHoprParams(config), WorkerCommand::HoprParams { hopr_params }) => {
-            init_state = InitState::Ready(config, hopr_params);
-            Ok(true)
-        }
-        (InitState::AwaitingConfig(hopr_params), WorkerCommand::Config { config }) => {
-            init_state = InitState::Ready(config, hopr_params);
-            Ok(true)
-        }
-        (state, cmd) => {
-            tracing::warn!(?state, ?cmd, "received command before init complete - ignoring");
-            Ok(true)
-        }
-    }
-}
-
-/*
-        (InitState::Running(_), WorkerCommand::Shutdown) => {
-            let (sender, recv) = oneshot::channel();
-            incoming_event_sender
-                .send(Event::Shutdown { resp: sender })
-                .await
-                .map_err(|_| {
-                    tracing::warn!("event receiver already closed");
-                    exitcode::IOERR
-                })?;
-            _ = recv.await.map_err(|_| {
-                tracing::error!("event responder already closed");
-                exitcode::IOERR
-            })?;
-            Ok(WorkerResponse::Ack)
-        }
-
-
-
-
-        tracing::info!("initiate shutdown");
-        match shutdown_sender_opt.take() {
-            Some(sender) => {
-                event_sender.send(external_event::shutdown(sender)).await.map_err(|_| {
-                    tracing::warn!("event receiver already closed");
-                    exitcode::IOERR
-                })?;
-                Ok(None)
-            }
-            None => {
-                tracing::error!("shutdown sender already taken");
-                Err(exitcode::IOERR)
-            }
-        }
-    }
-    WorkerCommand::Command { cmd } => {
-        let (sender, recv) = oneshot::channel();
-        event_sender
-            .send(external_event::Event::Command { cmd, resp: sender })
-            .await
-            .map_err(|_| {
-                tracing::error!("command receiver already closed");
-                exitcode::IOERR
-            })?;
-        let resp = recv.await.map_err(|_| {
-            tracing::error!("command responder already closed");
-            exitcode::IOERR
-        })?;
-        Ok(Some(resp))
-    }
-    WorkerCommand::HoprParams { .. } => {
-        tracing::warn!("received hopr params after init - ignoring");
-        Ok(None)
-    }
-    WorkerCommand::Config { .. } => {
-        tracing::warn!("received hopr params after init - ignoring");
-        Ok(None)
-    }
-}
-*/
-
 async fn send_response(
     resp: WorkerResponse,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
@@ -215,32 +136,23 @@ async fn send_response(
     Ok(())
 }
 
-async fn handle_command(
+async fn incoming_cmd(
     cmd: WorkerCommand,
-    event_sender: &mut mpsc::Sender<external_event::Event>,
-    shutdown_sender_opt: &mut Option<oneshot::Sender<()>>,
-) -> Result<Option<command::Response>, exitcode::ExitCode> {
+    event_sender: &mut mpsc::Sender<Incoming>,
+) -> Result<Option<WorkerResponse>, exitcode::ExitCode> {
     match cmd {
         WorkerCommand::Shutdown => {
             tracing::info!("initiate shutdown");
-            match shutdown_sender_opt.take() {
-                Some(sender) => {
-                    event_sender.send(external_event::shutdown(sender)).await.map_err(|_| {
-                        tracing::warn!("event receiver already closed");
-                        exitcode::IOERR
-                    })?;
-                    Ok(None)
-                }
-                None => {
-                    tracing::error!("shutdown sender already taken");
-                    Err(exitcode::IOERR)
-                }
-            }
+            event_sender.send(Incoming::Shutdown).await.map_err(|_| {
+                tracing::error!("event receiver already closed");
+                exitcode::IOERR
+            })?;
+            Ok(Some(WorkerResponse::Ack))
         }
         WorkerCommand::Command { cmd } => {
             let (sender, recv) = oneshot::channel();
             event_sender
-                .send(external_event::Event::Command { cmd, resp: sender })
+                .send(Incoming::Command { cmd, resp: sender })
                 .await
                 .map_err(|_| {
                     tracing::error!("command receiver already closed");
@@ -250,14 +162,14 @@ async fn handle_command(
                 tracing::error!("command responder already closed");
                 exitcode::IOERR
             })?;
-            Ok(Some(resp))
+            Ok(Some(WorkerResponse::Response { resp: Box::new(resp) }))
         }
         WorkerCommand::HoprParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
             Ok(None)
         }
         WorkerCommand::Config { .. } => {
-            tracing::warn!("received hopr params after init - ignoring");
+            tracing::warn!("received config after init - ignoring");
             Ok(None)
         }
     }
