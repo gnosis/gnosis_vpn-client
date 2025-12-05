@@ -16,7 +16,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::external_event::Event as ExternalEvent;
+use crate::event::Incoming;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -117,7 +117,7 @@ impl Core {
         })
     }
 
-    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<ExternalEvent>) {
+    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<Incoming>) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
@@ -143,10 +143,10 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_event(&mut self, event: ExternalEvent, results_sender: &mpsc::Sender<Results>) -> bool {
+    async fn on_event(&mut self, event: Incoming, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, "on outside event");
         match event {
-            ExternalEvent::Shutdown { resp } => {
+            Incoming::Shutdown => {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
@@ -166,13 +166,10 @@ impl Core {
                 }
                 shutdown_tracker.close();
                 shutdown_tracker.wait().await;
-                if resp.send(()).is_err() {
-                    tracing::warn!("shutdown receiver dropped");
-                }
                 false
             }
 
-            ExternalEvent::Command { cmd, resp } => {
+            Incoming::Command { cmd } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {

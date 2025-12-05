@@ -17,19 +17,12 @@ use gnosis_vpn_lib::worker_command::{WorkerCommand, WorkerResponse};
 use gnosis_vpn_lib::{external_event, socket};
 
 mod cli;
+mod init;
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-#[derive(Debug)]
-enum InitState {
-    AwaitingResources,
-    AwaitingHoprParams(Config),
-    AwaitingConfig(HoprParams),
-    Ready(Config, HoprParams),
-}
 
 async fn daemon() -> Result<(), exitcode::ExitCode> {
     let fd: i32 = env::var(socket::worker::ENV_VAR)
@@ -70,14 +63,14 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     // keep sender in an Option so we can take() it exactly once
     // let mut shutdown_sender_opt: Option<oneshot::Sender<()>> = Some(shutdown_sender);
 
-    let mut init_state = InitState::AwaitingResources;
+    let mut init = init::Init::new();
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
             res = lines.next_line() => {
                 let wcmd = parse_worker_command(res)?;
-                let (resp, keep_going) = incoming_for_ready(init_state, wcmd, &incoming_event_sender).await?;
-                send_response(resp, &mut writer).await?;
+                init.incoming_cmd(wcmd);
+                send_response(WorkerResponse::Ack, &mut writer).await?;
                 if !keep_going {
                     tracing::info!("shutting down worker daemon");
                     return Ok(());
@@ -200,10 +193,10 @@ async fn incoming_for_ready(mut init_state: InitState, cmd: WorkerCommand) -> Re
 */
 
 async fn send_response(
-    resp: &WorkerResponse,
+    resp: WorkerResponse,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
-    let serialized = serde_json::to_string(resp).map_err(|err| {
+    let serialized = serde_json::to_string(&resp).map_err(|err| {
         tracing::error!(error = ?err, "failed to serialize response");
         exitcode::DATAERR
     })?;

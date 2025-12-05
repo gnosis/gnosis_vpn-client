@@ -14,6 +14,6 @@ pub enum WorkerCommand {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerResponse {
-    Command { resp: Box<Response> },
+    Response { resp: Box<Response> },
     Ack,
 }
