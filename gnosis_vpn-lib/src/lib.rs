@@ -4,7 +4,7 @@ pub mod command;
 pub mod config;
 pub mod connection;
 pub mod core;
-pub mod external_event;
+pub mod event;
 pub mod hopr;
 pub mod hopr_params;
 pub mod info;
