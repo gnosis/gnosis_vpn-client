@@ -4,7 +4,6 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use edgli::hopr_lib::SessionClientConfig;
-use thiserror::Error;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -16,37 +15,15 @@ use crate::core::runner::{self, Results};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::ping;
 use crate::wireguard::{self, WireGuard};
 
-use super::{Event, Setback};
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error(transparent)]
-    Hopr(#[from] HoprError),
-    #[error(transparent)]
-    GvpnClient(#[from] gvpn_client::Error),
-    #[error(transparent)]
-    WireGuard(#[from] wireguard::Error),
-    #[error(transparent)]
-    Ping(#[from] ping::Error),
-}
+use super::{Error, Event, Progress, Setback};
 
 pub struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
-}
-
-#[derive(Debug)]
-pub enum Progress {
-    GenerateWg,
-    OpenBridge,
-    RegisterWg(String),
-    CloseBridge,
-    OpenPing,
 }
 
 impl Runner {
@@ -112,18 +89,6 @@ impl Runner {
 impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConnectionRunner pre WireGuard {{ {} }}", self.destination)
-    }
-}
-
-impl Display for Progress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Progress::GenerateWg => write!(f, "Generating WireGuard keypairs"),
-            Progress::OpenBridge => write!(f, "Opening bridge connection"),
-            Progress::RegisterWg(pk) => write!(f, "Registering WireGuard public key {}", pk),
-            Progress::CloseBridge => write!(f, "Closing bridge connection"),
-            Progress::OpenPing => write!(f, "Opening main connection"),
-        }
     }
 }
 
@@ -267,5 +232,5 @@ fn setback(setback: Setback) -> Event {
 }
 
 fn progress(progress: Progress) -> Event {
-    Event::ProgressPreWg(progress)
+    Event::Progress(progress)
 }

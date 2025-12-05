@@ -87,8 +87,8 @@ enum Phase {
 
 impl Core {
     pub async fn init(config: Config, hopr_params: HoprParams) -> Result<Core, Error> {
-        // wg_tooling::available().await?;
-        // wg_tooling::executable().await?;
+        wireguard::available().await?;
+        wireguard::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         Ok(Core {
@@ -120,7 +120,7 @@ impl Core {
     pub async fn start(
         mut self,
         incoming_receiver: &mut mpsc::Receiver<Incoming>,
-        outgoing_sender: mpsc::Sender<Outgoing>,
+        _outgoing_sender: mpsc::Sender<Outgoing>,
     ) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
@@ -493,11 +493,11 @@ impl Core {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
-                        connection::up::runner::Event::Progress(e) => {
+                        connection::up::Event::Progress(e) => {
                             conn.connect_progress(e);
                             self.phase = Phase::Connecting(conn);
                         }
-                        connection::up::runner::Event::Setback(e) => {
+                        connection::up::Event::Setback(e) => {
                             self.update_health(conn.destination.address, |h| h.with_error(e.to_string()));
                         }
                     },
@@ -751,7 +751,12 @@ impl Core {
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            let runner = connection::up::runner::Runner::new(conn.clone(), config_connection, config_wireguard, hopr);
+            let runner = connection::up::runner_pre_wg::Runner::new(
+                conn.destination.clone(),
+                config_connection,
+                config_wireguard,
+                hopr,
+            );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {

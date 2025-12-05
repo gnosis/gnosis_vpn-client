@@ -1,26 +1,29 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+
+use std::{io, string};
+
+use crate::dirs;
+use crate::shell_command_ext::{self, ShellCommandExt};
 
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("dependency not available: {0}")]
     NotAvailable(String),
-    #[error("dependency {0} not executable: {1}")]
-    NotExecutable(String, String),
-    #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
-    #[error("Encoding error: {0}")]
-    FromUtf8Error(#[from] std::string::FromUtf8Error),
-    #[error("TOML error: {0}")]
+    #[error("dependency not executable: {0}")]
+    NotExecutable(String),
+    #[error(transparent)]
+    IO(#[from] io::Error),
+    #[error(transparent)]
+    FromUtf8Error(#[from] string::FromUtf8Error),
+    #[error(transparent)]
     Toml(#[from] toml::ser::Error),
-    #[error("Monitoring error: {0}")]
-    Monitoring(String),
-    #[error("WG generate key error [status: {0}]: {1}")]
-    WgGenKey(i32, String),
-    #[error("WG quick error [status: {0}]: {1}")]
-    WgQuick(i32, String),
-    #[error("Project directory error: {0}")]
-    Dirs(#[from] crate::dirs::Error),
+    #[error("error generating wg key")]
+    WgGenKey,
+    #[error(transparent)]
+    Dirs(#[from] dirs::Error),
 }
 
 #[derive(Clone, Debug)]
@@ -72,7 +75,62 @@ impl Config {
 
 const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 
+pub async fn available() -> Result<(), Error> {
+    Command::new("which")
+        .arg("wg")
+        // suppress log output
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .run()
+        .await
+        .map_err(|_| Error::NotAvailable("wg".to_string()))
+}
+
+pub async fn executable() -> Result<(), Error> {
+    Command::new("wg")
+        .arg("--version")
+        // suppress stdout
+        .stdout(std::process::Stdio::null())
+        .run()
+        .await
+        .map_err(|_| Error::NotExecutable("wg".to_string()))
+}
+
+async fn generate_key() -> Result<String, Error> {
+    Command::new("wg")
+        .arg("genkey")
+        .run_stdout()
+        .await
+        .map_err(|_| Error::WgGenKey)
+}
+
+async fn public_key(priv_key: &str) -> Result<String, Error> {
+    let mut command = Command::new("wg")
+        .arg("pubkey")
+        .stdin(std::process::Stdio::piped()) // Enable piping to stdin
+        .stdout(std::process::Stdio::piped()) // Capture stdout
+        .spawn()?;
+
+    if let Some(stdin) = command.stdin.as_mut() {
+        stdin.write_all(priv_key.as_bytes()).await?
+    }
+
+    let cmd_debug = format!("{:?}", command);
+    let output = command.wait_with_output().await?;
+    shell_command_ext::stdout_from_output(cmd_debug, output).map_err(|_| Error::WgGenKey)
+}
+
 impl WireGuard {
+    pub async fn from_config(config: Config) -> Result<Self, Error> {
+        let priv_key = match config.force_private_key.clone() {
+            Some(key) => key,
+            None => generate_key().await?,
+        };
+        let public_key = public_key(&priv_key).await?;
+        let key_pair = KeyPair { priv_key, public_key };
+        Ok(WireGuard { config, key_pair })
+    }
+
     fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
         let allowed_ips = match &self.config.allowed_ips {
             Some(allowed_ips) => allowed_ips.clone(),
