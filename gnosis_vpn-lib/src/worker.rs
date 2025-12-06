@@ -20,7 +20,7 @@ pub enum Error {
     PrimaryGroupMissing,
     #[error("Invalid worker binary path")]
     InvalidBinaryPath,
-    #[error("Shell command error: {0}")]
+    #[error(transparent)]
     Command(#[from] shell_command_ext::Error),
 }
 

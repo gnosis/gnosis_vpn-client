@@ -1,11 +1,11 @@
 use thiserror::Error;
 
-use crate::{dirs, util, worker};
+use gnosis_vpn_lib::{dirs, shell_command_ext, worker};
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    Command(#[from] util::Error),
+    ShellCommand(#[from] shell_command_ext::Error),
     #[error("Unable to determine default interface")]
     NoInterface,
     #[error(transparent)]

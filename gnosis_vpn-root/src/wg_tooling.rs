@@ -3,9 +3,8 @@ use tokio::process::Command;
 
 use std::os::unix::fs::PermissionsExt;
 
-use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::{dirs, wireguard};
 
 pub async fn available() -> Result<(), wireguard::Error> {
     Command::new("which")

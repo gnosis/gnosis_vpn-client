@@ -1,9 +1,8 @@
 use tokio::fs;
 use tokio::process::Command;
 
-use crate::dirs;
-use crate::util::CommandExt;
-use crate::worker;
+use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
+use gnosis_vpn_lib::{dirs, worker};
 
 use super::Error;
 
@@ -27,7 +26,7 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
     fs::write(&conf_file, content.as_bytes()).await?;
     Command::new("pfctl")
         .arg("-a")
-        .arg(crate::IDENTIFIER)
+        .arg(gnosis_vpn_lib::IDENTIFIER)
         .arg("-f")
         .arg(conf_file)
         .run()

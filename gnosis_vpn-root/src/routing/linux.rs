@@ -1,7 +1,7 @@
 use tokio::process::Command;
 
-use crate::util::CommandExt;
-use crate::worker;
+use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
+use gnosis_vpn_lib::worker;
 
 use super::Error;
 
