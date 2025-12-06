@@ -9,10 +9,9 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process;
 
 use gnosis_vpn_lib::core::Core;
-use gnosis_vpn_lib::event::Incoming;
+use gnosis_vpn_lib::event::{IncomingCore, IncomingWorker, OutgoingCore, OutgoingWorker};
 use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::socket;
-use gnosis_vpn_lib::worker_command::{WorkerCommand, WorkerResponse};
 
 mod cli;
 mod init;
@@ -75,12 +74,25 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                 }
                 } else {
                 let resp = incoming_cmd(wcmd, &mut incoming_event_sender).await?;
-                if let Some(resp) = resp {
-                    send_response(resp, &mut writer).await?;
-                }
+                send_outgoing(resp, &mut writer).await?;
                 }
             },
-            outgoing = outgoing_event_receiver.recv() => unimplemented!(),
+            outgoing = outgoing_event_receiver.recv() => {
+                match outgoing {
+                    Some(event) => {
+                        match event {
+                            gnosis_vpn_lib::event::Outgoing::ShutdownAck => {
+                                tracing::info!("received shutdown ack from core");
+                                return Ok(());
+                            }
+                        }
+                    }
+                    None => {
+                        tracing::error!("outgoing event channel closed unexpectedly");
+                        return Err(exitcode::IOERR);
+                    }
+                }
+            }
             Some(_) = core_task.join_next() => {
                 tracing::info!("shutting down worker daemon");
                 return Ok(());
@@ -93,7 +105,7 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     }
 }
 
-fn parse_worker_command(res: io::Result<Option<String>>) -> Result<WorkerCommand, exitcode::ExitCode> {
+fn parse_incoming_worker(res: io::Result<Option<String>>) -> Result<IncomingWorker, exitcode::ExitCode> {
     match res {
         Ok(None) => {
             tracing::error!("incoming socket closed unexpectedly");
@@ -104,7 +116,7 @@ fn parse_worker_command(res: io::Result<Option<String>>) -> Result<WorkerCommand
             Err(exitcode::IOERR)
         }
         Ok(Some(line)) => {
-            let cmd: WorkerCommand = serde_json::from_str(&line).map_err(|err| {
+            let cmd: IncomingWorker = serde_json::from_str(&line).map_err(|err| {
                 tracing::error!(error = %err, "failed parsing worker command");
                 exitcode::DATAERR
             })?;
@@ -113,8 +125,8 @@ fn parse_worker_command(res: io::Result<Option<String>>) -> Result<WorkerCommand
     }
 }
 
-async fn send_response(
-    resp: WorkerResponse,
+async fn send_outgoing(
+    resp: OutgoingWorker,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(&resp).map_err(|err| {
@@ -137,22 +149,22 @@ async fn send_response(
 }
 
 async fn incoming_cmd(
-    cmd: WorkerCommand,
-    event_sender: &mut mpsc::Sender<Incoming>,
-) -> Result<Option<WorkerResponse>, exitcode::ExitCode> {
+    cmd: IncomingWorker,
+    event_sender: &mut mpsc::Sender<IncomingCore>,
+) -> Result<OutgoingWorker, exitcode::ExitCode> {
     match cmd {
-        WorkerCommand::Shutdown => {
+        IncomingWorker::Shutdown => {
             tracing::info!("initiate shutdown");
-            event_sender.send(Incoming::Shutdown).await.map_err(|_| {
+            event_sender.send(IncomingCore::Shutdown).await.map_err(|_| {
                 tracing::error!("event receiver already closed");
                 exitcode::IOERR
             })?;
-            Ok(Some(WorkerResponse::Ack))
+            Ok(Some(OutgoingWorker::Ack))
         }
-        WorkerCommand::Command { cmd } => {
+        IncomingWorker::Command { cmd } => {
             let (sender, recv) = oneshot::channel();
             event_sender
-                .send(Incoming::Command { cmd, resp: sender })
+                .send(IncomingCore::Command { cmd, resp: sender })
                 .await
                 .map_err(|_| {
                     tracing::error!("command receiver already closed");
@@ -162,15 +174,22 @@ async fn incoming_cmd(
                 tracing::error!("command responder already closed");
                 exitcode::IOERR
             })?;
-            Ok(Some(WorkerResponse::Response { resp: Box::new(resp) }))
+            Ok(Some(OutgoingWorker::Response { resp: Box::new(resp) }))
         }
-        WorkerCommand::HoprParams { .. } => {
+        IncomingWorker::HoprParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
             Ok(None)
         }
-        WorkerCommand::Config { .. } => {
+        IncomingWorker::Config { .. } => {
             tracing::warn!("received config after init - ignoring");
             Ok(None)
+        }
+        IncomingWorker::WgUpResult { res } => {
+            event_sender.send(IncomingCore::WgUpResult { res }).await.map_err(|_| {
+                tracing::error!("event receiver already closed");
+                exitcode::IOERR
+            })?;
+            Ok(Some(OutgoingWorker::Ack))
         }
     }
 }
