@@ -15,7 +15,7 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::ping;
 
-use super::{Error, Event, Progress, Setback};
+use super::{Error, Event, Progress};
 
 pub struct Runner {
     destination: Destination,
@@ -93,10 +93,6 @@ async fn adjust_to_main_session(
     tracing::debug!(bound_host = ?session_client_metadata.bound_host, "adjusting to main session");
     let surb_management = runner::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
     hopr.adjust_session(surb_management, active_client).await
-}
-
-fn setback(setback: Setback) -> Event {
-    Event::Setback(setback)
 }
 
 fn progress(progress: Progress) -> Event {

@@ -13,12 +13,12 @@ pub enum Error {
 }
 
 pub trait ShellCommandExt {
-    async fn run(&mut self) -> Result<(), Error>;
-    async fn run_stdout(&mut self) -> Result<String, Error>;
+    fn run(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send;
+    fn run_stdout(&mut self) -> impl std::future::Future<Output = Result<String, Error>> + Send;
 }
 
 pub trait ChildCommandExt {
-    async fn child_stdout(&mut self) -> Result<String, Error>;
+    fn child_stdout(&mut self) -> impl std::future::Future<Output = Result<String, Error>> + Send;
 }
 
 impl ShellCommandExt for Command {
