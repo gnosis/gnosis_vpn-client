@@ -116,59 +116,6 @@ async fn socket_stream(socket_path: &Path) -> Result<UnixStream, exitcode::ExitC
     Ok(stream)
 }
 
-/*
-async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sender<external_event::Event>) {
-    let mut msg = String::new();
-    if let Err(e) = stream.read_to_string(&mut msg).await {
-        tracing::error!(error = ?e, "error reading message");
-        return;
-    }
-
-    let cmd = match msg.parse::<Command>() {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            tracing::error!(error = ?e, %msg, "error parsing command");
-            return;
-        }
-    };
-
-    tracing::debug!(command = %cmd, "incoming command");
-
-    let (resp_sender, resp_receiver) = oneshot::channel();
-    match event_sender.send(external_event::command(cmd, resp_sender)).await {
-        Ok(()) => (),
-        Err(e) => {
-            tracing::error!(error = ?e, "error handling command");
-            return;
-        }
-    };
-
-    let resp = match resp_receiver.await {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::error!(error = ?e, "error receiving command response");
-            return;
-        }
-    };
-    let str_resp = match serde_json::to_string(&resp) {
-        Ok(res) => res,
-        Err(e) => {
-            tracing::error!(error = ?e, "error serializing response");
-            return;
-        }
-    };
-
-    if let Err(e) = stream.write_all(str_resp.as_bytes()).await {
-        tracing::error!(error = ?e, "error writing response");
-        return;
-    }
-
-    if let Err(e) = stream.flush().await {
-        tracing::error!(error = ?e, "error flushing stream");
-    }
-}
-*/
-
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // set up signal handler
     let mut ctrlc_receiver = ctrlc_channel().await?;

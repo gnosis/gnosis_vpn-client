@@ -5,6 +5,10 @@ use clap::Parser;
 #[command(version)]
 pub struct Cli {}
 
+pub fn parse() -> Cli {
+    Cli::parse()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

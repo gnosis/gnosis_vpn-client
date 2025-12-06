@@ -195,6 +195,8 @@ fn main() {
 }
 
 async fn main_inner() {
+    let _args = cli::parse();
+
     // install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
     tracing::info!(
