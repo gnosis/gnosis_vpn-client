@@ -180,7 +180,7 @@ impl Core {
                 false
             }
 
-            IncomingCore::WireGuardResult { res } => {
+            IncomingCore::WgUpResult { res } => {
                 match (res, self.phase.clone()) {
                     (Ok(()), Phase::Connecting(conn)) => {
                         tracing::info!(destination= %conn.destination,"WireGuard tunnel established");
@@ -572,8 +572,7 @@ impl Core {
                                 endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
                             };
                             let content = wg.to_file_string(&interface_info, &peer_info);
-                            let _ = self
-                                .outgoing_sender
+                            self.outgoing_sender
                                 .send(OutgoingCore::WgUp(content))
                                 .await
                                 .expect("worker outgoing channel closed - shutting down");
@@ -858,7 +857,6 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let config_connection = self.config.connection.clone();
-            let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
             let runner =
                 connection::up::runner_post_wg::Runner::new(destination, config_connection, ping_session, hopr);
@@ -881,7 +879,13 @@ impl Core {
             let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
             let results_sender = results_sender.clone();
             self.ongoing_disconnections.push(disconn.clone());
+            let outgoing_sender = self.outgoing_sender.clone();
             tokio::spawn(async move {
+                // this is a oneshot command and we do not wait for any result
+                outgoing_sender
+                    .send(OutgoingCore::WgDown)
+                    .await
+                    .expect("worker outgoing channel closed - shutting down");
                 cancel
                     .run_until_cancelled(async move {
                         runner.start(results_sender).await;

@@ -17,7 +17,7 @@ pub enum IncomingCore {
     },
     Shutdown,
     /// Result of WireGuard tooling execution
-    WireGuardResult {
+    WgUpResult {
         res: Result<(), String>,
     },
 }
@@ -41,8 +41,8 @@ pub enum IncomingWorker {
         cmd: Command,
     },
     /// Result of WireGuard tooling execution
-    WireGuardResult {
-        result: Result<(), String>,
+    WgUpResult {
+        res: Result<(), String>,
     },
     Shutdown,
 }
