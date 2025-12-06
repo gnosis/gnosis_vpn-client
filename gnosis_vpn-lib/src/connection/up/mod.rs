@@ -5,7 +5,10 @@ use std::fmt::{self, Display};
 use std::time::SystemTime;
 
 use crate::connection::destination::Destination;
+use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
+use crate::hopr::types::SessionClientMetadata;
+use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, ping, wireguard};
 
 pub mod runner_post_wg;
@@ -20,11 +23,11 @@ pub enum Event {
 #[derive(Debug)]
 pub enum Progress {
     GenerateWg,
-    OpenBridge,
-    RegisterWg(String),
-    CloseBridge,
+    OpenBridge(WireGuard),
+    RegisterWg,
+    CloseBridge(Registration),
     OpenPing,
-    WgTunnel(wireguard::WireGuard),
+    WgTunnel,
     Ping,
     AdjustToMain,
 }
@@ -56,8 +59,9 @@ pub enum Error {
 pub struct Up {
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
-    pub wg_public_key: Option<String>,
-    pub wg: Option<wireguard::WireGuard>,
+    wireguard: Option<WireGuard>,
+    registration: Option<Registration>,
+    session: Option<SessionClientMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -79,8 +83,9 @@ impl Up {
         Self {
             destination,
             phase: (SystemTime::now(), Phase::Init),
-            wg_public_key: None,
-            wg: None,
+            wireguard: None,
+            registration: None,
+            session: None,
         }
     }
 
@@ -88,20 +93,23 @@ impl Up {
         let now = SystemTime::now();
         match evt {
             Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
-            Progress::OpenBridge => self.phase = (now, Phase::OpeningBridge),
-            Progress::RegisterWg(wg_public_key) => {
-                self.phase = (now, Phase::RegisterWg);
-                self.wg_public_key = Some(wg_public_key);
-            }
-            Progress::CloseBridge => self.phase = (now, Phase::ClosingBridge),
+            Progress::OpenBridge(wg) => self.phase = (now, Phase::OpeningBridge),
+            Progress::RegisterWg => self.phase = (now, Phase::RegisterWg),
+            Progress::CloseBridge(reg) => self.phase = (now, Phase::ClosingBridge),
             Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::WgTunnel(wg) => {
+            Progress::WgTunnel => {
                 self.wg = Some(wg);
                 self.phase = (now, Phase::EstablishWgTunnel);
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain => self.phase = (now, Phase::AdjustToMain),
         }
+    }
+
+    pub fn pre_wg_connect(&mut self, wg: WireGuard, reg: Registration, session: SessionClientMetadata) {
+        self.wireguard = Some(wg);
+        self.registration = Some(reg);
+        self.session = Some(session);
     }
 
     pub fn connected(&mut self) {

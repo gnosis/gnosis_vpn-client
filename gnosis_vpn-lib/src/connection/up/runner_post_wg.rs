@@ -41,7 +41,7 @@ impl Runner {
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
-        let _ = results_sender.send(Results::ConnectionResult { res }).await;
+        let _ = results_sender.send(Results::ConnectionResultPostWg { res }).await;
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {

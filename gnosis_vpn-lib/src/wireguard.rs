@@ -3,6 +3,7 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use std::fmt::{self, Display};
 use std::{io, string};
 
 use crate::dirs;
@@ -26,7 +27,7 @@ pub enum Error {
     Dirs(#[from] dirs::Error),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireGuard {
     pub config: Config,
     pub key_pair: KeyPair,
@@ -45,7 +46,7 @@ pub struct PeerInfo {
     pub endpoint: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct KeyPair {
     pub priv_key: String,
     pub public_key: String,
@@ -166,5 +167,11 @@ AllowedIPs = {allowed_ips}
             // so we postpone optimizing on this level for now
             // mtu = interface.mtu,
         )
+    }
+}
+
+impl Display for WireGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "WireGuard {{ public_key: {} }}", self.key_pair.public_key)
     }
 }

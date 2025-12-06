@@ -28,7 +28,6 @@ use crate::chain::contracts::NetworkSpecifications;
 use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use crate::chain::errors::ChainError;
 use crate::connection;
-use crate::gvpn_client::Registration;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
@@ -71,7 +70,7 @@ pub enum Results {
         evt: connection::up::Event,
     },
     ConnectionResultPreWg {
-        res: Result<(SessionClientMetadata, Registration), connection::up::Error>,
+        res: Result<SessionClientMetadata, connection::up::Error>,
     },
     ConnectionResultPostWg {
         res: Result<(), connection::up::Error>,
@@ -407,11 +406,7 @@ impl Display for Results {
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),
             Results::ConnectionResultPreWg { res } => match res {
-                Ok((session_client_metadata, registration)) => write!(
-                    f,
-                    "ConnectionResultPreWg: Success (Destination: {}, Socket: {}, Registration: {})",
-                    session_client_metadata.destination, session_client_metadata.bound_host, registration
-                ),
+                Ok(session) => write!(f, "ConnectionResultPreWg: Success ({})", session),
                 Err(err) => write!(f, "ConnectionResultPreWg: Error({})", err),
             },
             Results::ConnectionResultPostWg { res } => match res {
