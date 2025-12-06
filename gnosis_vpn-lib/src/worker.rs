@@ -66,11 +66,11 @@ impl Worker {
         let binary = path.to_str().ok_or(Error::InvalidBinaryPath)?;
         // check if binary exists
         if !path.exists() {
-            tracing::error!(path = %binary, worker_user = %input.user, "Worker binary not found");
+            tracing::error!(path = %binary, ?worker_user, "Worker binary not found");
             return Err(Error::BinaryNotFound);
         }
         if !path.is_file() {
-            tracing::error!(path = %binary, worker_user = %input.user, "Worker binary is not a file");
+            tracing::error!(path = %binary, ?worker_user, "Worker binary is not a file");
             return Err(Error::NotExecutable);
         }
         // check if binary exists
