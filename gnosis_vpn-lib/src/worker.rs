@@ -69,7 +69,11 @@ impl Worker {
             tracing::error!(path = %binary, worker_user = %input.user, "Worker binary not found");
             return Err(Error::BinaryNotFound);
         }
-
+        if !path.is_file() {
+            tracing::error!(path = %binary, worker_user = %input.user, "Worker binary is not a file");
+            return Err(Error::NotExecutable);
+        }
+        // check if binary exists
         let uid = worker_user.uid();
         let gid = worker_user.primary_group_id();
         let group = worker_user
@@ -80,6 +84,7 @@ impl Worker {
             .ok_or(Error::PrimaryGroupMissing)?;
         let group_name = group.name().to_string_lossy().to_string();
 
+        tracing::debug!(path = %binary, ?worker_user, "Verifying worker binary executable permissions");
         let actual = Command::new(binary)
             .arg("--version")
             .uid(uid)

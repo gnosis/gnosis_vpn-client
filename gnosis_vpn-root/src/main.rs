@@ -180,7 +180,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_VERSION"),
     );
     let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
-        tracing::error!(error = ?err, "error retrieving worker user");
+        tracing::error!(error = ?err, "error determining worker user");
         exitcode::NOUSER
     })?;
 
