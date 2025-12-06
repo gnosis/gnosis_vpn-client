@@ -6,6 +6,7 @@ use gnosis_vpn_lib::{dirs, shell_command_ext, worker};
 pub enum Error {
     #[error(transparent)]
     ShellCommand(#[from] shell_command_ext::Error),
+    #[cfg(target_os = "macos")]
     #[error("Unable to determine default interface")]
     NoInterface,
     #[error(transparent)]
