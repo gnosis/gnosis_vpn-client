@@ -71,32 +71,6 @@ impl Display for Runner {
     }
 }
 
-/*
-async fn wg_tunnel(
-    registration: &Registration,
-    session_client_metadata: &SessionClientMetadata,
-    wg: &wireguard::WireGuard,
-) -> Result<(), wireguard::Error> {
-    // run wg-quick down once to ensure no dangling state
-    // _ = wg_tooling::down().await;
-    unimplemented!();
-
-    let interface_info = wireguard::InterfaceInfo {
-        address: registration.address(),
-        mtu: session_client_metadata.hopr_mtu,
-    };
-
-    let peer_info = wireguard::PeerInfo {
-        public_key: registration.server_public_key(),
-        endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
-    };
-
-    tracing::debug!(%registration, "establishing wg tunnel");
-    // wg.up(&interface_info, &peer_info).await
-    unimplemented!()
-}
-*/
-
 async fn ping(options: &Options) -> Result<(), ping::Error> {
     retry(ExponentialBackoff::default(), || async {
         tracing::debug!(?options, "attempting to ping through wg tunnel");
