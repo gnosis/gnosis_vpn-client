@@ -85,13 +85,15 @@ impl Worker {
         let group_name = group.name().to_string_lossy().to_string();
 
         tracing::debug!(path = %binary, ?worker_user, "Verifying worker binary executable permissions");
-        let actual = Command::new(binary)
+        let version_output = Command::new(binary)
             .arg("--version")
             .uid(uid)
             .gid(gid)
             .run_stdout()
             .await?;
-        if actual == input.version {
+
+        let version = version_output.split_whitespace().nth(1).unwrap_or_default();
+        if version == input.version {
             Ok(Worker {
                 uid,
                 binary: binary.to_string(),
@@ -99,7 +101,7 @@ impl Worker {
                 group_name,
             })
         } else {
-            tracing::error!(expected = input.version, actual = %actual, "Worker binary version mismatch");
+            tracing::error!(expected = input.version, found = %version, "Worker binary version mismatch");
             Err(Error::VersionMismatch)
         }
     }
