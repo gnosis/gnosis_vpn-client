@@ -20,8 +20,9 @@ pub async fn available() -> Result<(), wireguard::Error> {
 pub async fn executable() -> Result<(), wireguard::Error> {
     Command::new("wg-quick")
         .arg("-h")
-        // suppress stdout
+        // suppress stdout and stderr
         .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .run()
         .await
         .map_err(|_| wireguard::Error::NotExecutable("wg-quick".to_string()))

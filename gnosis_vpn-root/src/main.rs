@@ -1,6 +1,7 @@
 use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
-use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
@@ -66,7 +67,7 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     Ok(receiver)
 }
 
-async fn socket_stream(socket_path: &Path) -> Result<UnixStream, exitcode::ExitCode> {
+async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -100,9 +101,9 @@ async fn socket_stream(socket_path: &Path) -> Result<UnixStream, exitcode::ExitC
         exitcode::IOERR
     })?;
 
-    let stream = UnixStream::connect(socket_path).await.map_err(|e| {
-        tracing::error!(error = ?e, "error connecting to socket");
-        exitcode::IOERR
+    let listener = UnixListener::bind(socket_path).map_err(|e| {
+        tracing::error!(error = ?e, "error binding socket");
+        exitcode::OSFILE
     })?;
 
     // update permissions to allow unprivileged access
@@ -113,7 +114,7 @@ async fn socket_stream(socket_path: &Path) -> Result<UnixStream, exitcode::ExitC
             exitcode::NOPERM
         })?;
 
-    Ok(stream)
+    Ok(listener)
 }
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
@@ -156,7 +157,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // set up system socket
     let socket_path = args.socket_path.clone();
-    let socket = socket_stream(&args.socket_path).await?;
+    let socket = socket_listener(&args.socket_path).await?;
 
     // set up routing for mix node - ensure clean state by calling teardown first
     let _ = routing::teardown(&worker_user).await;
@@ -178,7 +179,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
 async fn loop_daemon(
     ctrlc_receiver: &mut mpsc::Receiver<()>,
-    socket: UnixStream,
+    socket: UnixListener,
     worker_user: &worker::Worker,
     config: Config,
     hopr_params: HoprParams,
@@ -209,18 +210,15 @@ async fn loop_daemon(
     let mut lines_reader = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
-    // root <-> system socket communication setup (UI app)
-    let (socket_reader_half, socket_writer_half) = io::split(socket);
-    let socket_reader = BufReader::new(socket_reader_half);
-    let mut socket_lines_reader = socket_reader.lines();
-    let mut socket_writer = BufWriter::new(socket_writer_half);
-
     // provide initial resources to worker
     send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
     send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
+    // root <-> system socket communication setup (UI app)
+    let mut socket_lines_reader: Option<io::Lines<BufReader<OwnedReadHalf>>> = None;
+    let mut socket_writer: Option<BufWriter<OwnedWriteHalf>> = None;
     tracing::info!("entering main daemon loop");
     loop {
         tokio::select! {
@@ -234,38 +232,48 @@ async fn loop_daemon(
                     send_to_worker(&IncomingWorker::Shutdown, &mut writer).await?;
                 }
             },
+            Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
+                let (socket_reader_half, socket_writer_half) = stream.into_split();
+                let socket_reader = BufReader::new(socket_reader_half);
+                socket_lines_reader = Some(socket_reader.lines());
+                socket_writer = Some(BufWriter::new(socket_writer_half));
+            }
             Ok(Some(line)) = lines_reader.next_line() => {
                 let cmd = parse_outgoing_worker(line)?;
                 match cmd {
-        OutgoingWorker::Ack => {
-            tracing::debug!("received worker ack");
-        }
-        OutgoingWorker::OutOfSync => {
-            tracing::error!("worker out of sync with root - exiting");
-            return Err(exitcode::UNAVAILABLE);
-        }
-        OutgoingWorker::Response { resp } => {
-            tracing::debug!(?resp, "received worker response");
-            send_to_socket(&resp, &mut socket_writer).await?;
-        }
-        OutgoingWorker::WireGuard(wg_cmd) => {
-            tracing::debug!(?wg_cmd, "received worker wireguard command");
-            match wg_cmd {
-                WireGuardCommand::WgUp( config_content ) => {
-                    // ensure down before up even if redundant
-                    let _ = wg_tooling::down().await;
-                    let res = wg_tooling::up(config_content).await.map_err(|e| e.to_string());
-                    send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
-                },
-                WireGuardCommand::WgDown => {
-                    // result does not matter here
-                    let _ = wg_tooling::down().await;
-        }
+                    OutgoingWorker::Ack => {
+                        tracing::debug!("received worker ack");
+                    }
+                    OutgoingWorker::OutOfSync => {
+                        tracing::error!("worker out of sync with root - exiting");
+                        return Err(exitcode::UNAVAILABLE);
+                    }
+                    OutgoingWorker::Response { resp } => {
+                        tracing::debug!(?resp, "received worker response");
+                        if let Some(mut writer) = socket_writer.take() {
+                        send_to_socket(&resp, &mut writer).await?;
+                        } else {
+                            tracing::error!(?resp, "failed to send response to socket - no socket connection");
+                        }
+                    }
+                    OutgoingWorker::WireGuard(wg_cmd) => {
+                        tracing::debug!(?wg_cmd, "received worker wireguard command");
+                        match wg_cmd {
+                            WireGuardCommand::WgUp( config_content ) => {
+                                // ensure down before up even if redundant
+                                let _ = wg_tooling::down().await;
+                                let res = wg_tooling::up(config_content).await.map_err(|e| e.to_string());
+                                send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
+                            },
+                            WireGuardCommand::WgDown => {
+                                // result does not matter here
+                                let _ = wg_tooling::down().await;
+                            }
+                        }
+                    },
                 }
             },
-                }
-            },
-            Ok(Some(line)) = socket_lines_reader.next_line() => {
+            Ok(Some(line)) = async { socket_lines_reader.take().unwrap().next_line().await }, if socket_lines_reader.is_some() => {
                 let cmd: cmdCmd = parse_command(line)?;
                 tracing::debug!(command = ?cmd, "received socket command");
                 send_to_worker(&IncomingWorker::Command { cmd }, &mut writer).await?;
@@ -330,10 +338,7 @@ async fn send_to_worker(
     Ok(())
 }
 
-async fn send_to_socket(
-    msg: &Response,
-    writer: &mut BufWriter<WriteHalf<UnixStream>>,
-) -> Result<(), exitcode::ExitCode> {
+async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(msg).map_err(|err| {
         tracing::error!(error = ?err, "failed to serialize response");
         exitcode::DATAERR
