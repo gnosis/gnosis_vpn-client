@@ -1,7 +1,7 @@
 use thiserror::Error;
 use tokio::process::Command;
-use users::os::unix::UserExt;
 
+use std::io;
 use std::path::PathBuf;
 
 use crate::shell_command_ext::{self, ShellCommandExt};
@@ -22,6 +22,8 @@ pub enum Error {
     InvalidBinaryPath,
     #[error(transparent)]
     Command(#[from] shell_command_ext::Error),
+    #[error(transparent)]
+    IO(#[from] io::Error),
 }
 
 #[derive(Debug)]
@@ -60,12 +62,11 @@ impl Input {
 impl Worker {
     pub async fn from_system(input: Input) -> Result<Self, Error> {
         let worker_user = users::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
-        let home = worker_user.home_dir();
-        let path = home.join(input.binary);
+        let path = input.binary.canonicalize()?;
         let binary = path.to_str().ok_or(Error::InvalidBinaryPath)?;
         // check if binary exists
         if !path.exists() {
-            tracing::error!(path = %binary, home = %home.display(), user = %input.user, "Worker binary not found");
+            tracing::error!(path = %binary, worker_user = %input.user, "Worker binary not found");
             return Err(Error::BinaryNotFound);
         }
 
