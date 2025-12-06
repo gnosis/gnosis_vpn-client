@@ -13,7 +13,6 @@ pub mod shell_command_ext;
 pub mod socket;
 pub mod wireguard;
 pub mod worker;
-pub mod worker_command;
 
 mod dirs;
 mod gvpn_client;

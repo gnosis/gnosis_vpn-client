@@ -49,11 +49,13 @@ pub enum IncomingWorker {
 
 /// Messages sent from worker to root
 #[derive(Debug, Serialize, Deserialize)]
-pub enum OutoingWorker {
+pub enum OutgoingWorker {
     /// Response to a socket command
     Response { resp: Box<Response> },
     /// Acknowledgement other incoming messages
     Ack,
+    /// Received unexpected event from root
+    OutOfSync,
     /// Instruct root to execute WireGuard tooling
     WireGuard(WireGuardCommand),
 }
