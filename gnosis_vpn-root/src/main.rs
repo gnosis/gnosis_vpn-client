@@ -11,7 +11,7 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::process::{self};
 
-use gnosis_vpn_lib::command::Command as cmdCmd;
+use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
 use gnosis_vpn_lib::event::{IncomingWorker, OutgoingWorker, WireGuardCommand};
 use gnosis_vpn_lib::{socket, worker};
 
@@ -230,11 +230,11 @@ async fn loop_daemon(
 
     let mut worker_child = Command::new(worker_user.binary.clone())
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-        .uid(worker.uid)
-        .gid(worker.gid)
+        .uid(worker_user.uid)
+        .gid(worker_user.gid)
         .spawn()
         .map_err(|err| {
-            tracing::error!(error = ?err, ?worker, "unable to spawn worker process");
+            tracing::error!(error = ?err, ?worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
@@ -281,7 +281,7 @@ async fn loop_daemon(
         }
         OutgoingWorker::Response { resp } => {
             tracing::debug!(?resp, "received worker response");
-            send_to_socket(resp, &mut socket_writer).await?;
+            send_to_socket(&resp, &mut socket_writer).await?;
         }
         OutgoingWorker::WireGuard(wg_cmd) => {
             tracing::debug!(?wg_cmd, "received worker wireguard command");
@@ -300,7 +300,7 @@ async fn loop_daemon(
             },
                 }
             },
-            Ok(status) = worker.wait() => {
+            Ok(status) = worker_child.wait() => {
                 if shutdown_ongoing {
                     if status.success() {
                         tracing::info!("worker exited cleanly");
