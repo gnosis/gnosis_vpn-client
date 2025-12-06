@@ -54,8 +54,8 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
-            res = lines_reader.next_line() => {
-                let wcmd = parse_incoming_worker(res)?;
+            Ok(Some(line)) = lines_reader.next_line() => {
+                let wcmd = parse_incoming_worker(line)?;
                 if let Some(init) = init_opt.take() {
                 let next = init.incoming_cmd(wcmd);
                 send_outgoing(OutgoingWorker::Ack, &mut writer).await?;
@@ -105,24 +105,12 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     }
 }
 
-fn parse_incoming_worker(res: io::Result<Option<String>>) -> Result<IncomingWorker, exitcode::ExitCode> {
-    match res {
-        Ok(None) => {
-            tracing::error!("incoming socket closed unexpectedly");
-            Err(exitcode::IOERR)
-        }
-        Err(err) => {
-            tracing::error!(error = %err, "failed reading incoming socket");
-            Err(exitcode::IOERR)
-        }
-        Ok(Some(line)) => {
-            let cmd: IncomingWorker = serde_json::from_str(&line).map_err(|err| {
-                tracing::error!(error = %err, "failed parsing worker command");
-                exitcode::DATAERR
-            })?;
-            Ok(cmd)
-        }
-    }
+fn parse_incoming_worker(line: String) -> Result<IncomingWorker, exitcode::ExitCode> {
+    let cmd: IncomingWorker = serde_json::from_str(&line).map_err(|err| {
+        tracing::error!(error = %err, "failed parsing incoming worker command");
+        exitcode::DATAERR
+    })?;
+    Ok(cmd)
 }
 
 async fn send_outgoing(

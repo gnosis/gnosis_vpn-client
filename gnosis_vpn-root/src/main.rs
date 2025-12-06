@@ -1,12 +1,9 @@
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::fs;
-use tokio::io::{self};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
+use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Duration, sleep};
-use tokio_util::sync::CancellationToken;
+use tokio::sync::mpsc;
 
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::IntoRawFd;
@@ -15,6 +12,7 @@ use std::path::Path;
 use std::process::{self};
 
 use gnosis_vpn_lib::command::Command as cmdCmd;
+use gnosis_vpn_lib::event::{IncomingWorker, OutgoingWorker, WireGuardCommand};
 use gnosis_vpn_lib::{socket, worker};
 
 mod cli;
@@ -66,62 +64,7 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     Ok(receiver)
 }
 
-async fn config_channel(
-    param_config_path: &Path,
-) -> Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>), exitcode::ExitCode> {
-    match param_config_path.try_exists() {
-        Ok(true) => (),
-        Ok(false) => {
-            tracing::error!(config_file = %param_config_path.display(), "cannot find configuration file");
-            return Err(exitcode::NOINPUT);
-        }
-        Err(e) => {
-            tracing::error!(error = ?e, "error checking configuration file path");
-            return Err(exitcode::IOERR);
-        }
-    };
-
-    let config_path = match fs::canonicalize(param_config_path).await {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(error = ?e, "error canonicalizing config path");
-            return Err(exitcode::IOERR);
-        }
-    };
-
-    let parent = match config_path.parent() {
-        Some(p) => p,
-        None => {
-            tracing::error!("config path has no parent");
-            return Err(exitcode::UNAVAILABLE);
-        }
-    };
-
-    let (sender, receiver) = mpsc::channel(32);
-    let mut watcher = match notify::recommended_watcher(move |res| match res {
-        Ok(event) => {
-            let _ = sender.blocking_send(event).map_err(|e| {
-                tracing::error!(error = ?e, "error sending config watch event");
-            });
-        }
-        Err(e) => tracing::error!(error = ?e, "config watch error"),
-    }) {
-        Ok(watcher) => watcher,
-        Err(e) => {
-            tracing::error!(error = ?e, "error creating config watcher");
-            return Err(exitcode::IOERR);
-        }
-    };
-
-    if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-        tracing::error!(error = ?e, "error watching config directory");
-        return Err(exitcode::IOERR);
-    }
-
-    Ok((watcher, receiver))
-}
-
-async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>, exitcode::ExitCode> {
+async fn socket_stream(socket_path: &Path) -> Result<UnixStream, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -155,9 +98,9 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>
         exitcode::IOERR
     })?;
 
-    let listener = UnixListener::bind(socket_path).map_err(|e| {
-        tracing::error!(error = ?e, "error binding socket");
-        exitcode::OSFILE
+    let stream = UnixStream::connect(socket_path).await.map_err(|e| {
+        tracing::error!(error = ?e, "error connecting to socket");
+        exitcode::IOERR
     })?;
 
     // update permissions to allow unprivileged access
@@ -168,24 +111,7 @@ async fn socket_channel(socket_path: &Path) -> Result<mpsc::Receiver<UnixStream>
             exitcode::NOPERM
         })?;
 
-    let (sender, receiver) = mpsc::channel(32);
-
-    tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    if let Err(e) = sender.send(stream).await {
-                        tracing::error!(error = ?e, "sending incoming data");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "waiting for incoming message");
-                }
-            }
-        }
-    });
-
-    Ok(receiver)
+    Ok(stream)
 }
 
 /*
@@ -241,34 +167,6 @@ async fn incoming_stream(stream: &mut UnixStream, event_sender: &mut mpsc::Sende
 }
 */
 
-// handling fs config events with a grace period to avoid duplicate reads without delay
-const CONFIG_GRACE_PERIOD: Duration = Duration::from_millis(333);
-
-fn incoming_config_fs_event(event: notify::Event, config_path: &Path) -> bool {
-    tracing::debug!(?event, ?config_path, "incoming config event");
-    match event {
-        notify::Event {
-            kind: kind @ notify::event::EventKind::Create(notify::event::CreateKind::File),
-            paths: _,
-            attrs: _,
-        }
-        | notify::Event {
-            kind: kind @ notify::event::EventKind::Remove(notify::event::RemoveKind::File),
-            paths: _,
-            attrs: _,
-        }
-        | notify::Event {
-            kind: kind @ notify::event::EventKind::Modify(notify::event::ModifyKind::Data(_)),
-            paths: _,
-            attrs: _,
-        } => {
-            tracing::debug!(?kind, "config file change detected");
-            true
-        }
-        _ => false,
-    }
-}
-
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // set up signal handler
     let mut ctrlc_receiver = ctrlc_channel().await?;
@@ -297,12 +195,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
-    // keep config watcher in scope so it does not get dropped
-    let (_config_watcher, mut config_receiver) = config_channel(&config_path).await?;
 
     // set up system socket
     let socket_path = args.socket_path.clone();
-    let mut socket_receiver = socket_channel(&args.socket_path).await?;
+    let mut socket = socket_stream(&args.socket_path).await?;
 
     // set up routing for mix node
     routing::setup(&worker).await.map_err(|err| {
@@ -310,29 +206,21 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         exitcode::OSERR
     })?;
 
-    let res = loop_daemon(
-        &mut ctrlc_receiver,
-        &mut config_receiver,
-        &mut socket_receiver,
-        worker,
-        &config_path,
-    )
-    .await;
-    match fs::remove_file(&socket_path).await {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!(error = %e, "failed removing socket");
-        }
-    }
+    let res = loop_daemon(&mut ctrlc_receiver, &mut socket, worker).await;
+
+    let _ = routing::teardown(&worker).await.map_err(|err| {
+        tracing::error!(error = ?err, "error tearing down routing");
+    });
+    let _ = fs::remove_file(&socket_path).await.map_err(|err| {
+        tracing::error!(error = ?err, "failed removing socket");
+    });
     res
 }
 
 async fn loop_daemon(
     ctrlc_receiver: &mut mpsc::Receiver<()>,
-    config_receiver: &mut mpsc::Receiver<notify::Event>,
-    socket_receiver: &mut mpsc::Receiver<UnixStream>,
+    socket: &mut UnixStream,
     worker: worker::Worker,
-    config_path: &Path,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -354,71 +242,136 @@ async fn loop_daemon(
         exitcode::IOERR
     })?;
 
-    let (reader, writer) = io::split(parent_stream);
+    // root <-> worker communication setup
+    let (reader_half, writer_half) = io::split(parent_stream);
     let reader = BufReader::new(reader_half);
     let mut lines_reader = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
-    /*
-    let res = worker.wait().await;
-    tracing::warn!(?res, "foobi");
-    */
+    // root <-> system socket communication setup (UI app)
+    let (socket_reader_half, socket_writer_half) = io::split(parent_stream);
+    let socket_reader = BufReader::new(socket_reader_half);
+    let mut socket_lines_reader = socket_reader.lines();
+    let mut socket_writer = BufWriter::new(socket_writer_half);
 
-    let mut reload_cancel = CancellationToken::new();
-    let mut ctrc_already_triggered = false;
+    let mut shutdown_ongoing = false;
 
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
-                if ctrc_already_triggered {
+                if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
                     return Err(exitcode::OK);
                 } else {
-                    ctrc_already_triggered = true;
+                    shutdown_ongoing = true;
                     tracing::info!("initiate shutdown");
-                    match shutdown_sender_opt.take() {
-                        Some(sender) => {
-                            // if event_sender.send(external_event::shutdown(sender)).await.is_err() {
-                                // tracing::warn!("event receiver already closed");
-                            // }
-                        }
-                        None => {
-                            tracing::error!("shutdown sender already taken");
-                            return Err(exitcode::IOERR);
-                        }
+                    send_to_worker(&IncomingWorker::Shutdown, &mut writer).await?;
+                }
+            },
+            Ok(Some(line)) = lines_reader.next_line() => {
+                let cmd = parse_outgoing_worker(line)?;
+                match cmd {
+        OutgoingWorker::Ack => {
+            tracing::debug!("received worker ack");
+        }
+        OutgoingWorker::OutOfSync => {
+            tracing::error!("worker out of sync with root - exiting");
+            return Err(exitcode::UNAVAILABLE);
+        }
+        OutgoingWorker::Response { resp } => {
+            tracing::debug!(?resp, "received worker response");
+            send_to_socket(resp, &mut socket_writer).await?;
+        }
+        OutgoingWorker::WireGuard(wg_cmd) => {
+            tracing::debug!(?wg_cmd, "received worker wireguard command");
+            match wg_cmd {
+                WireGuardCommand::WgUp( config_content ) => {
+                    // ensure down before up even if redundant
+                    let _ = wg_tooling::down().await;
+                    let res = wg_tooling::up(config_content).await.map_err(|e| e.to_string());
+                    send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
+                },
+                WireGuardCommand::WgDown => {
+                    // result does not matter here
+                    let _ = wg_tooling::down().await;
+        }
+                }
+            },
+                }
+            },
+            Ok(status) = worker.wait() => {
+                if shutdown_ongoing {
+                    if status.success() {
+                        tracing::info!("worker exited cleanly");
+                    } else {
+                        tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
                     }
+                    return Ok(());
+                } else {
+                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
+                    return Err(exitcode::IOERR);
                 }
-            },
-            Ok(_) = &mut shutdown_receiver => {
-                tracing::info!("shutdown complete");
-                return Ok(());
             }
-            Some(stream) = socket_receiver.recv() => {
-                // incoming_stream(&mut stream, &mut event_sender).await;
-            },
-            Some(evt) = config_receiver.recv() => {
-                if incoming_config_fs_event(evt, config_path) {
-                    reload_cancel.cancel();
-                    reload_cancel = CancellationToken::new();
-                    let cancel_token = reload_cancel.clone();
-                    // let evt_sender = event_sender.clone();
-                    let path = config_path;
-                    tokio::spawn(async move {
-                        cancel_token.run_until_cancelled(async move {
-                            sleep(CONFIG_GRACE_PERIOD).await;
-                            // if evt_sender.send(external_event::config_reload(path)).await.is_err() {
-                                // tracing::warn!("event receiver already closed");
-                            // }
-                        }).await;
-                    });
-                }
-            },
             else => {
                 tracing::error!("unexpected channel closure");
                 return Err(exitcode::IOERR);
             }
         }
     }
+}
+
+fn parse_outgoing_worker(line: String) -> Result<OutgoingWorker, exitcode::ExitCode> {
+    let cmd: OutgoingWorker = serde_json::from_str(&line).map_err(|err| {
+        tracing::error!(error = %err, "failed parsing outgoing worker command");
+        exitcode::DATAERR
+    })?;
+    Ok(cmd)
+}
+
+async fn send_to_worker(
+    msg: &IncomingWorker,
+    writer: &mut BufWriter<WriteHalf<UnixStream>>,
+) -> Result<(), exitcode::ExitCode> {
+    let serialized = serde_json::to_string(msg).map_err(|err| {
+        tracing::error!(error = ?err, "failed to serialize message");
+        exitcode::DATAERR
+    })?;
+    writer.write_all(serialized.as_bytes()).await.map_err(|err| {
+        tracing::error!(error = ?err, "error writing to UnixStream pair write half");
+        exitcode::IOERR
+    })?;
+    writer.write_all(b"\n").await.map_err(|err| {
+        tracing::error!(error = ?err, "error appending newline to UnixStream pair write half");
+        exitcode::IOERR
+    })?;
+    writer.flush().await.map_err(|err| {
+        tracing::error!(error = ?err, "error flushing UnixStream pair write half");
+        exitcode::IOERR
+    })?;
+    Ok(())
+}
+
+async fn send_to_socket(
+    msg: &Response,
+    writer: &mut BufWriter<WriteHalf<UnixStream>>,
+) -> Result<(), exitcode::ExitCode> {
+    let serialized = serde_json::to_string(msg).map_err(|err| {
+        tracing::error!(error = ?err, "failed to serialize response");
+        exitcode::DATAERR
+    })?;
+    writer.write_all(serialized.as_bytes()).await.map_err(|err| {
+        tracing::error!(error = ?err, "error writing to system socket");
+        exitcode::IOERR
+    })?;
+    writer.write_all(b"\n").await.map_err(|err| {
+        tracing::error!(error = ?err, "error appending newline to system socket");
+        exitcode::IOERR
+    })?;
+    writer.flush().await.map_err(|err| {
+        tracing::error!(error = ?err, "error flushing system socket");
+        exitcode::IOERR
+    })?;
+    Ok(())
 }
 
 /// limit root service to two threads

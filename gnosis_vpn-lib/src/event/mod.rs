@@ -68,3 +68,9 @@ pub enum WireGuardCommand {
     /// Tear down WireGuard interface
     WgDown,
 }
+
+impl AsRef<IncomingWorker> for IncomingWorker {
+    fn as_ref(&self) -> &IncomingWorker {
+        self
+    }
+}
