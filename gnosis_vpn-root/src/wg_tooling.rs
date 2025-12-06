@@ -31,57 +31,15 @@ pub async fn executable() -> Result<(), Error> {
         .map_err(|_| Error::NotExecutable("wg-quick".to_string()))
 }
 
-pub trait WireGuardExt {
-    pub async fn up(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error>
-}
-
-
-impl WireGuardExt for WireGuard {
-    pub async fn up(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
-        let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
-        let config = self.to_file_string(interface, peer);
-        let content = config.as_bytes();
-        fs::write(&conf_file, content).await?;
-        fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
-
-        let output = Command::new("wg-quick").arg("up").arg(conf_file).output().await?;
-        if !output.stdout.is_empty() {
-            tracing::info!("wg-quick up stdout: {}", String::from_utf8_lossy(&output.stdout));
-        }
-
-        if output.status.success() {
-            if !output.stderr.is_empty() {
-                // wg-quick populates stderr with info and warnings, log those in debug mode
-                tracing::debug!("wg-quick up stderr: {}", String::from_utf8_lossy(&output.stderr));
-            }
-            Ok(())
-        } else {
-            Err(Error::WgQuick(
-                output.status.code().unwrap_or_default(),
-                format!("wg-quick up failed: {}", String::from_utf8_lossy(&output.stderr)),
-            ))
-        }
-    }
+pub async fn up(config_content: String) -> Result<(), Error> {
+    let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
+    let content = config_content.as_bytes();
+    fs::write(&conf_file, content).await?;
+    fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
+    Command::new("wg-quick").arg("up").arg(conf_file).run().await
 }
 
 pub async fn down() -> Result<(), Error> {
     let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
-
-    let output = Command::new("wg-quick").arg("down").arg(conf_file).output().await?;
-    if !output.stdout.is_empty() {
-        tracing::info!("wg-quick down stdout: {}", String::from_utf8_lossy(&output.stdout));
-    }
-
-    if output.status.success() {
-        if !output.stderr.is_empty() {
-            // wg-quick populates stderr with info and warnings, log those in debug mode
-            tracing::debug!("wg-quick down stderr: {}", String::from_utf8_lossy(&output.stderr));
-        }
-        Ok(())
-    } else {
-        Err(Error::WgQuick(
-            output.status.code().unwrap_or_default(),
-            format!("wg-quick down failed: {}", String::from_utf8_lossy(&output.stderr)),
-        ))
-    }
+    Command::new("wg-quick").arg("down").arg(conf_file).run().await
 }

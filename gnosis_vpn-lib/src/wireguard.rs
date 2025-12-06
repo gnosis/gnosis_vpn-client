@@ -26,26 +26,26 @@ pub enum Error {
     Dirs(#[from] dirs::Error),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WireGuard {
     pub config: Config,
     pub key_pair: KeyPair,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InterfaceInfo {
     pub address: String,
     #[allow(dead_code)]
     pub mtu: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub public_key: String,
     pub endpoint: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KeyPair {
     pub priv_key: String,
     pub public_key: String,
@@ -131,7 +131,7 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
+    pub fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
         let allowed_ips = match &self.config.allowed_ips {
             Some(allowed_ips) => allowed_ips.clone(),
             None => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
