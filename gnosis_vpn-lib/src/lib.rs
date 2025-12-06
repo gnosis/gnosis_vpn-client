@@ -4,6 +4,7 @@ pub mod command;
 pub mod config;
 pub mod connection;
 pub mod core;
+pub mod dirs;
 pub mod event;
 pub mod hopr;
 pub mod hopr_params;
@@ -14,7 +15,6 @@ pub mod socket;
 pub mod wireguard;
 pub mod worker;
 
-mod dirs;
 mod gvpn_client;
 mod log_output;
 mod ping;

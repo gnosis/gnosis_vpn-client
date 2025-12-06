@@ -9,6 +9,8 @@ use std::{io, string};
 use crate::dirs;
 use crate::shell_command_ext::{self, ShellCommandExt};
 
+pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("dependency not available: {0}")]
@@ -25,6 +27,8 @@ pub enum Error {
     WgGenKey,
     #[error(transparent)]
     Dirs(#[from] dirs::Error),
+    #[error(transparent)]
+    ShellCommandExt(#[from] shell_command_ext::Error),
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -73,8 +77,6 @@ impl Config {
         }
     }
 }
-
-const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 
 pub async fn available() -> Result<(), Error> {
     Command::new("which")

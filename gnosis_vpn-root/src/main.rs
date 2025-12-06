@@ -15,7 +15,7 @@ use std::path::Path;
 use std::process::{self};
 
 use gnosis_vpn_lib::command::Command as cmdCmd;
-use gnosis_vpn_lib::{routing, socket, wg_tooling, worker};
+use gnosis_vpn_lib::{socket, worker};
 
 mod cli;
 mod routing;
