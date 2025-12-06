@@ -16,7 +16,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::event::{Incoming, Outgoing};
+use crate::event::{IncomingCore, OutgoingCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -119,8 +119,8 @@ impl Core {
 
     pub async fn start(
         mut self,
-        incoming_receiver: &mut mpsc::Receiver<Incoming>,
-        _outgoing_sender: mpsc::Sender<Outgoing>,
+        incoming_receiver: &mut mpsc::Receiver<IncomingCore>,
+        _outgoing_sender: mpsc::Sender<OutgoingCore>,
     ) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
@@ -147,10 +147,10 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_event(&mut self, event: Incoming, results_sender: &mpsc::Sender<Results>) -> bool {
+    async fn on_event(&mut self, event: IncomingCore, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, "on incoming outside event");
         match event {
-            Incoming::Shutdown => {
+            IncomingCore::Shutdown => {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
@@ -174,7 +174,7 @@ impl Core {
                 false
             }
 
-            Incoming::Command { cmd, resp } => {
+            IncomingCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {

@@ -38,10 +38,10 @@ impl Runner {
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
-        let _ = results_sender.send(Results::ConnectionResult { res }).await;
+        let _ = results_sender.send(Results::ConnectionResultPreWg { res }).await;
     }
 
-    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(SessionClientMetadata, Registration), Error> {
+    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 0. generate wg keys
         let _ = results_sender
             .send(Results::ConnectionEvent {
@@ -49,11 +49,12 @@ impl Runner {
             })
             .await;
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
+        let public_key = wg.key_pair.public_key.clone();
 
         // 1. open bridge session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: progress(Progress::OpenBridge),
+                evt: progress(Progress::OpenBridge(wg)),
             })
             .await;
         let bridge_session = open_bridge_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
@@ -61,15 +62,15 @@ impl Runner {
         // 2. register wg public key
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: progress(Progress::RegisterWg(wg.key_pair.public_key.clone())),
+                evt: progress(Progress::RegisterWg),
             })
             .await;
-        let registration = register(&self.options, &bridge_session, &wg, &results_sender).await?;
+        let registration = register(&self.options, &bridge_session, public_key, &results_sender).await?;
 
         // 3. close bridge session
         let _ = results_sender
             .send(Results::ConnectionEvent {
-                evt: progress(Progress::CloseBridge),
+                evt: progress(Progress::CloseBridge(registration)),
             })
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
@@ -80,9 +81,8 @@ impl Runner {
                 evt: progress(Progress::OpenPing),
             })
             .await;
-        let ping_session = open_ping_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
-
-        Ok((ping_session, registration))
+        let session = open_ping_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+        Ok(session)
     }
 }
 
@@ -144,11 +144,11 @@ async fn open_bridge_session(
 async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
-    wg: &wireguard::WireGuard,
+    public_key: String,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Registration, gvpn_client::Error> {
     let input = gvpn_client::Input::new(
-        wg.key_pair.public_key.clone(),
+        public_key,
         session_client_metadata.bound_host.port(),
         options.timeouts.http,
     );
