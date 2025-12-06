@@ -68,19 +68,19 @@ pub fn parse() -> Cli {
     Cli::parse()
 }
 
-impl From<Cli> for HoprParams {
-    fn from(cli: Cli) -> Self {
-        let network = cli.hopr_network;
-        let rpc_provider = cli.hopr_rpc_provider;
-        let config_mode = match cli.hopr_config_path {
+impl From<&Cli> for HoprParams {
+    fn from(cli: &Cli) -> Self {
+        let network = cli.hopr_network.clone();
+        let rpc_provider = cli.hopr_rpc_provider.clone();
+        let config_mode = match cli.hopr_config_path.clone() {
             Some(path) => hopr_params::ConfigFileMode::Manual(path),
             None => hopr_params::ConfigFileMode::Generated,
         };
         let allow_insecure = cli.allow_insecure;
 
         HoprParams::new(
-            cli.hopr_identity_file,
-            cli.hopr_identity_pass,
+            cli.hopr_identity_file.clone(),
+            cli.hopr_identity_pass.clone(),
             config_mode,
             network,
             rpc_provider,

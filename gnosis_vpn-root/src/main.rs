@@ -12,7 +12,9 @@ use std::path::Path;
 use std::process::{self};
 
 use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
+use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{IncomingWorker, OutgoingWorker, WireGuardCommand};
+use gnosis_vpn_lib::hopr_params::HoprParams;
 use gnosis_vpn_lib::{socket, worker};
 
 mod cli;
@@ -172,7 +174,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // ensure worker user exists
-    let input = worker::Input::new(args.worker_user, args.worker_binary, env!("CARGO_PKG_VERSION"));
+    let input = worker::Input::new(
+        args.worker_user.clone(),
+        args.worker_binary.clone(),
+        env!("CARGO_PKG_VERSION"),
+    );
     let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
         tracing::error!(error = ?err, "error retrieving worker user");
         exitcode::NOUSER
@@ -187,7 +193,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::UNAVAILABLE
         })?;
 
-    // set up config watcher
+    // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
@@ -195,10 +201,15 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
+    let config = config::read(config_path.as_path()).await.map_err(|err| {
+        tracing::error!(error = ?err, "unable to read initial configuration file");
+        exitcode::NOINPUT
+    })?;
+    let hopr_params = HoprParams::from(&args);
 
     // set up system socket
     let socket_path = args.socket_path.clone();
-    let mut socket = socket_stream(&args.socket_path).await?;
+    let socket = socket_stream(&args.socket_path).await?;
 
     // set up routing for mix node - ensure clean state by calling teardown first
     let _ = routing::teardown(&worker_user).await;
@@ -207,7 +218,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         exitcode::OSERR
     })?;
 
-    let res = loop_daemon(&mut ctrlc_receiver, &mut socket, &worker_user).await;
+    let res = loop_daemon(&mut ctrlc_receiver, socket, &worker_user, config, hopr_params).await;
 
     let _ = routing::teardown(&worker_user).await.map_err(|err| {
         tracing::error!(error = ?err, "error tearing down routing");
@@ -220,8 +231,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
 async fn loop_daemon(
     ctrlc_receiver: &mut mpsc::Receiver<()>,
-    socket: &mut UnixStream,
+    socket: UnixStream,
     worker_user: &worker::Worker,
+    config: Config,
+    hopr_params: HoprParams,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -250,13 +263,18 @@ async fn loop_daemon(
     let mut writer = BufWriter::new(writer_half);
 
     // root <-> system socket communication setup (UI app)
-    let (socket_reader_half, socket_writer_half) = io::split(parent_stream);
+    let (socket_reader_half, socket_writer_half) = io::split(socket);
     let socket_reader = BufReader::new(socket_reader_half);
     let mut socket_lines_reader = socket_reader.lines();
     let mut socket_writer = BufWriter::new(socket_writer_half);
 
-    let mut shutdown_ongoing = false;
+    // provide initial resources to worker
+    send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
+    send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
 
+    // enter main loop
+    let mut shutdown_ongoing = false;
+    tracing::info!("entering main daemon loop");
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
@@ -300,6 +318,11 @@ async fn loop_daemon(
             },
                 }
             },
+            Ok(Some(line)) = socket_lines_reader.next_line() => {
+                let cmd: cmdCmd = parse_command(line)?;
+                tracing::debug!(command = ?cmd, "received socket command");
+                send_to_worker(&IncomingWorker::Command { cmd }, &mut writer).await?;
+            }
             Ok(status) = worker_child.wait() => {
                 if shutdown_ongoing {
                     if status.success() {
@@ -324,6 +347,14 @@ async fn loop_daemon(
 fn parse_outgoing_worker(line: String) -> Result<OutgoingWorker, exitcode::ExitCode> {
     let cmd: OutgoingWorker = serde_json::from_str(&line).map_err(|err| {
         tracing::error!(error = %err, "failed parsing outgoing worker command");
+        exitcode::DATAERR
+    })?;
+    Ok(cmd)
+}
+
+fn parse_command(line: String) -> Result<cmdCmd, exitcode::ExitCode> {
+    let cmd: cmdCmd = serde_json::from_str(&line).map_err(|err| {
+        tracing::error!(error = %err, "failed parsing incoming socket command");
         exitcode::DATAERR
     })?;
     Ok(cmd)
