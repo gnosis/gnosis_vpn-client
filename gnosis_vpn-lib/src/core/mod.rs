@@ -51,8 +51,11 @@ pub enum Error {
 pub struct Core {
     // config data
     config: Config,
+
+    // static data
     hopr_params: HoprParams,
     node_address: Address,
+    outgoing_sender: mpsc::Sender<OutgoingCore>,
 
     // cancellation tokens
     cancel_balances: CancellationToken,
@@ -86,7 +89,11 @@ enum Phase {
 }
 
 impl Core {
-    pub async fn init(config: Config, hopr_params: HoprParams) -> Result<Core, Error> {
+    pub async fn init(
+        config: Config,
+        hopr_params: HoprParams,
+        outgoing_sender: mpsc::Sender<OutgoingCore>,
+    ) -> Result<Core, Error> {
         wireguard::available().await?;
         wireguard::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
@@ -94,8 +101,11 @@ impl Core {
         Ok(Core {
             // config data
             config,
+
+            // static data
             hopr_params,
             node_address,
+            outgoing_sender,
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
@@ -117,11 +127,7 @@ impl Core {
         })
     }
 
-    pub async fn start(
-        mut self,
-        incoming_receiver: &mut mpsc::Receiver<IncomingCore>,
-        _outgoing_sender: mpsc::Sender<OutgoingCore>,
-    ) {
+    pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<IncomingCore>) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
@@ -555,9 +561,30 @@ impl Core {
                 tracing::debug!(?res, "handling pre wg connection runner result");
                 match (res, self.phase.clone()) {
                     (Ok(session), Phase::Connecting(mut conn)) => {
-                        let evt = connection::up::Progress::WgTunnel(session);
-                        conn.connect_progress(evt);
-                        self.phase = Phase::Connecting(conn);
+                        if let (Some(wg), Some(reg)) = (conn.wireguard.clone(), conn.registration.clone()) {
+                            let interface_info = wireguard::InterfaceInfo {
+                                address: reg.address(),
+                                mtu: session.hopr_mtu,
+                            };
+
+                            let peer_info = wireguard::PeerInfo {
+                                public_key: reg.server_public_key(),
+                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+                            };
+                            let content = wg.to_file_string(&interface_info, &peer_info);
+                            let _ = self
+                                .outgoing_sender
+                                .send(OutgoingCore::WgUp(content))
+                                .await
+                                .expect("worker outgoing channel closed - shutting down");
+                            let evt = connection::up::Progress::WgTunnel(session);
+                            conn.connect_progress(evt);
+                            self.phase = Phase::Connecting(conn);
+                        } else {
+                            tracing::error!(%conn, "missing WireGuard or registration data for connection - disconnecting");
+                            self.target_destination = None;
+                            self.act_on_target(results_sender);
+                        }
                     }
                     (Err(err), Phase::Connecting(conn)) => {
                         tracing::error!(%conn, %err, "Opening ping session failed - disconnecting");
