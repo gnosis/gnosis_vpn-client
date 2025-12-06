@@ -23,3 +23,18 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
         .await
         .map_err(Error::from)
 }
+
+pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
+    Command::new("ip")
+        .arg("rule")
+        .arg("del")
+        .arg("uidrange")
+        .arg(format!("{}-{}", worker.uid, worker.uid))
+        .arg("lookup")
+        .arg("main")
+        .arg("priority")
+        .arg("100")
+        .run()
+        .await
+        .map_err(Error::from)
+}

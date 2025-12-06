@@ -173,7 +173,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // ensure worker user exists
     let input = worker::Input::new(args.worker_user, args.worker_binary, env!("CARGO_PKG_VERSION"));
-    let worker = worker::Worker::from_system(input).await.map_err(|err| {
+    let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
         tracing::error!(error = ?err, "error retrieving worker user");
         exitcode::NOUSER
     })?;
@@ -200,15 +200,16 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let mut socket = socket_stream(&args.socket_path).await?;
 
-    // set up routing for mix node
-    routing::setup(&worker).await.map_err(|err| {
+    // set up routing for mix node - ensure clean state by calling teardown first
+    let _ = routing::teardown(&worker_user).await;
+    routing::setup(&worker_user).await.map_err(|err| {
         tracing::error!(error = ?err, "error setting up routing");
         exitcode::OSERR
     })?;
 
-    let res = loop_daemon(&mut ctrlc_receiver, &mut socket, worker).await;
+    let res = loop_daemon(&mut ctrlc_receiver, &mut socket, &worker_user).await;
 
-    let _ = routing::teardown(&worker).await.map_err(|err| {
+    let _ = routing::teardown(&worker_user).await.map_err(|err| {
         tracing::error!(error = ?err, "error tearing down routing");
     });
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
@@ -220,14 +221,14 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 async fn loop_daemon(
     ctrlc_receiver: &mut mpsc::Receiver<()>,
     socket: &mut UnixStream,
-    worker: worker::Worker,
+    worker_user: &worker::Worker,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
         exitcode::IOERR
     })?;
 
-    let mut worker = Command::new(worker.binary.clone())
+    let mut worker_child = Command::new(worker_user.binary.clone())
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .uid(worker.uid)
         .gid(worker.gid)

@@ -29,3 +29,13 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
 pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
     macos::setup(worker).await
 }
+
+#[cfg(target_os = "linux")]
+pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
+    linux::teardown(worker).await
+}
+
+#[cfg(target_os = "macos")]
+pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
+    macos::teardown(worker).await
+}
