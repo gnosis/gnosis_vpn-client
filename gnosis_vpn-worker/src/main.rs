@@ -1,4 +1,4 @@
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process;
 
 use gnosis_vpn_lib::core::Core;
-use gnosis_vpn_lib::event::{IncomingCore, IncomingWorker, OutgoingCore, OutgoingWorker};
+use gnosis_vpn_lib::event::{IncomingCore, IncomingWorker, OutgoingCore, OutgoingWorker, WireGuardCommand};
 use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::socket;
 
@@ -55,20 +55,20 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     loop {
         tokio::select! {
             res = lines_reader.next_line() => {
-                let wcmd = parse_worker_command(res)?;
+                let wcmd = parse_incoming_worker(res)?;
                 if let Some(init) = init_opt.take() {
                 let next = init.incoming_cmd(wcmd);
-                send_response(WorkerResponse::Ack, &mut writer).await?;
+                send_outgoing(OutgoingWorker::Ack, &mut writer).await?;
                 if next.is_shutdown() {
                     tracing::info!("shutting down worker daemon");
                     return Ok(());
                 }
                 if let (Some((config, hopr_params)), Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (next.ready(), incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
-                    let core = Core::init(config, hopr_params).await.map_err(|err| {
+                    let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
                         tracing::error!(error = ?err, "failed to initialize core logic");
                         exitcode::OSERR
                     })?;
-                    core_task.spawn(async move { core.start(&mut incoming_event_receiver, outgoing_event_sender).await });
+                    core_task.spawn(async move { core.start(&mut incoming_event_receiver).await });
                 } else {
                     init_opt = Some(next);
                 }
@@ -81,10 +81,10 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                 match outgoing {
                     Some(event) => {
                         match event {
-                            gnosis_vpn_lib::event::Outgoing::ShutdownAck => {
-                                tracing::info!("received shutdown ack from core");
-                                return Ok(());
-                            }
+                            OutgoingCore::WgUp(content) =>
+                                send_outgoing(OutgoingWorker::WireGuard(WireGuardCommand::WgUp(content)), &mut writer).await?,
+                                OutgoingCore::WgDown =>
+                                send_outgoing(OutgoingWorker::WireGuard(WireGuardCommand::WgDown), &mut writer).await?,
                         }
                     }
                     None => {
@@ -159,7 +159,7 @@ async fn incoming_cmd(
                 tracing::error!("event receiver already closed");
                 exitcode::IOERR
             })?;
-            Ok(Some(OutgoingWorker::Ack))
+            Ok(OutgoingWorker::Ack)
         }
         IncomingWorker::Command { cmd } => {
             let (sender, recv) = oneshot::channel();
@@ -174,22 +174,22 @@ async fn incoming_cmd(
                 tracing::error!("command responder already closed");
                 exitcode::IOERR
             })?;
-            Ok(Some(OutgoingWorker::Response { resp: Box::new(resp) }))
+            Ok(OutgoingWorker::Response { resp: Box::new(resp) })
         }
         IncomingWorker::HoprParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
-            Ok(None)
+            Ok(OutgoingWorker::OutOfSync)
         }
         IncomingWorker::Config { .. } => {
             tracing::warn!("received config after init - ignoring");
-            Ok(None)
+            Ok(OutgoingWorker::OutOfSync)
         }
         IncomingWorker::WgUpResult { res } => {
             event_sender.send(IncomingCore::WgUpResult { res }).await.map_err(|_| {
                 tracing::error!("event receiver already closed");
                 exitcode::IOERR
             })?;
-            Ok(Some(OutgoingWorker::Ack))
+            Ok(OutgoingWorker::Ack)
         }
     }
 }
