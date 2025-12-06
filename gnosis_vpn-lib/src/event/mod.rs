@@ -18,7 +18,7 @@ pub enum IncomingCore {
     Shutdown,
     /// Result of WireGuard tooling execution
     WireGuardResult {
-        result: Result<(), String>,
+        res: Result<(), String>,
     },
 }
 

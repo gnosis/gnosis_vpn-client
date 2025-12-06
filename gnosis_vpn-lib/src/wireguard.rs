@@ -175,3 +175,9 @@ impl Display for WireGuard {
         write!(f, "WireGuard {{ public_key: {} }}", self.key_pair.public_key)
     }
 }
+
+impl fmt::Debug for WireGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "WireGuard {{ public_key: {} }}", self.key_pair.public_key)
+    }
+}
