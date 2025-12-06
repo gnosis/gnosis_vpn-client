@@ -174,6 +174,31 @@ impl Core {
                 false
             }
 
+            IncomingCore::WireGuardResult { res } => {
+                match (res, self.phase.clone()) {
+                    (Ok(()), Phase::Connecting(conn)) => {
+                        tracing::info!(destination= %conn.destination,"WireGuard tunnel established");
+                        let destination = conn.destination.clone();
+                        if let Some(ping_session) = conn.session {
+                            self.spawn_connection_runner_post_wg(destination, ping_session, results_sender);
+                        } else {
+                            tracing::error!(%conn, "missing ping session for post-wg runner - disconnecting from target");
+                            self.target_destination = None;
+                            self.act_on_target(results_sender);
+                        }
+                    }
+                    (Err(err), Phase::Connecting(conn)) => {
+                        tracing::error!(%conn, %err, "WireGuard tunnel establishment failed - disconnecting");
+                        self.target_destination = None;
+                        self.act_on_target(results_sender);
+                    }
+                    (res, phase) => {
+                        tracing::warn!(?phase, ?res, "unexpected WireGuard result in current phase - ignoring");
+                    }
+                }
+                true
+            }
+
             IncomingCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
@@ -526,8 +551,31 @@ impl Core {
                 }
             }
 
-            Results::ConnectionResultPreWg { res } => match (res, self.phase.clone()) {
-                (Ok(session), Phase::Connecting(mut conn)) => {
+            Results::ConnectionResultPreWg { res } => {
+                tracing::debug!(?res, "handling pre wg connection runner result");
+                match (res, self.phase.clone()) {
+                    (Ok(session), Phase::Connecting(mut conn)) => {
+                        let evt = connection::up::Progress::WgTunnel(session);
+                        conn.connect_progress(evt);
+                        self.phase = Phase::Connecting(conn);
+                    }
+                    (Err(err), Phase::Connecting(conn)) => {
+                        tracing::error!(%conn, %err, "Opening ping session failed - disconnecting");
+                        self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
+                        self.target_destination = None;
+                        self.act_on_target(results_sender);
+                    }
+                    (Ok(_), phase) => {
+                        tracing::warn!(?phase, "unawaited opening ping session succeeded");
+                    }
+                    (Err(err), phase) => {
+                        tracing::warn!(?phase, %err, "connection failed in unexpecting state");
+                    }
+                }
+            }
+
+            Results::ConnectionResultPostWg { res } => match (res, self.phase.clone()) {
+                (Ok(()), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
@@ -537,8 +585,13 @@ impl Core {
                         conn.destination.pretty_print_path(),
                         log_output::address(&conn.destination.address)
                     );
-                    log_output::print_session_established(route.as_str());
-                    self.spawn_session_monitoring(session, results_sender);
+                    if let Some(session) = conn.session.clone() {
+                        log_output::print_session_established(route.as_str());
+                        self.spawn_session_monitoring(session, results_sender);
+                    } else {
+                        tracing::error!(%conn, "missing session metadata after connection established - disconnecting");
+                        self.disconnect_from_connection(&conn, results_sender);
+                    }
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -549,7 +602,7 @@ impl Core {
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
-                        tracing::info!(%dest, "removing target destination due to connection error");
+                        tracing::info!(%dest, "disconnecting from target destination due to connection error");
                         self.target_destination = None;
                         self.act_on_target(results_sender);
                     }
@@ -744,7 +797,7 @@ impl Core {
         }
     }
 
-    fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_connection_runner_pre_wg(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
@@ -759,6 +812,30 @@ impl Core {
             );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner.start(results_sender).await;
+                    })
+                    .await;
+            });
+        }
+    }
+
+    fn spawn_connection_runner_post_wg(
+        &mut self,
+        destination: Destination,
+        ping_session: SessionClientMetadata,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_connection.clone();
+            let config_connection = self.config.connection.clone();
+            let config_wireguard = self.config.wireguard.clone();
+            let hopr = hopr.clone();
+            let runner =
+                connection::up::runner_post_wg::Runner::new(destination, config_connection, ping_session, hopr);
+            let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
@@ -811,7 +888,7 @@ impl Core {
                 if let Some(health) = self.destination_health.get(&dest.address) {
                     if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), results_sender);
+                        self.spawn_connection_runner_pre_wg(dest.clone(), results_sender);
                     } else if health.is_unrecoverable() {
                         tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
                     } else {

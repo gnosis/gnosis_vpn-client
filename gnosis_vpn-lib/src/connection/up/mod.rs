@@ -27,7 +27,7 @@ pub enum Progress {
     RegisterWg,
     CloseBridge(Registration),
     OpenPing,
-    WgTunnel,
+    WgTunnel(SessionClientMetadata),
     Ping,
     AdjustToMain,
 }
@@ -59,9 +59,9 @@ pub enum Error {
 pub struct Up {
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
-    wireguard: Option<WireGuard>,
-    registration: Option<Registration>,
-    session: Option<SessionClientMetadata>,
+    pub wireguard: Option<WireGuard>,
+    pub registration: Option<Registration>,
+    pub session: Option<SessionClientMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -93,23 +93,23 @@ impl Up {
         let now = SystemTime::now();
         match evt {
             Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
-            Progress::OpenBridge(wg) => self.phase = (now, Phase::OpeningBridge),
+            Progress::OpenBridge(wg) => {
+                self.phase = (now, Phase::OpeningBridge);
+                self.wireguard = Some(wg);
+            }
             Progress::RegisterWg => self.phase = (now, Phase::RegisterWg),
-            Progress::CloseBridge(reg) => self.phase = (now, Phase::ClosingBridge),
+            Progress::CloseBridge(reg) => {
+                self.phase = (now, Phase::ClosingBridge);
+                self.registration = Some(reg);
+            }
             Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::WgTunnel => {
-                self.wg = Some(wg);
+            Progress::WgTunnel(session) => {
                 self.phase = (now, Phase::EstablishWgTunnel);
+                self.session = Some(session);
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain => self.phase = (now, Phase::AdjustToMain),
         }
-    }
-
-    pub fn pre_wg_connect(&mut self, wg: WireGuard, reg: Registration, session: SessionClientMetadata) {
-        self.wireguard = Some(wg);
-        self.registration = Some(reg);
-        self.session = Some(session);
     }
 
     pub fn connected(&mut self) {
@@ -160,13 +160,13 @@ impl Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Progress::GenerateWg => write!(f, "Generating WireGuard keypairs"),
-            Progress::OpenBridge => write!(f, "Opening bridge connection"),
-            Progress::RegisterWg(pk) => write!(f, "Registering WireGuard public key {}", pk),
-            Progress::CloseBridge => write!(f, "Closing bridge connection"),
+            Progress::OpenBridge(_) => write!(f, "Opening bridge connection"),
+            Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
+            Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
             Progress::OpenPing => write!(f, "Opening main connection"),
             Progress::WgTunnel(_) => write!(f, "Establishing WireGuard tunnel"),
-            Progress::Ping => write!(f, "Verifying connectivity via ping"),
-            Progress::AdjustToMain => write!(f, "Adjusting to main session"),
+            Progress::Ping => write!(f, "Verifying established connection"),
+            Progress::AdjustToMain => write!(f, "Upgrading for general traffic"),
         }
     }
 }

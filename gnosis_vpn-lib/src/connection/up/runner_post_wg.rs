@@ -45,7 +45,8 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // check ping
+        // 5. establish wg tunnel done from root
+        // 6. check ping
         let _ = results_sender
             .send(Results::ConnectionEvent {
                 evt: progress(Progress::Ping),
@@ -53,7 +54,7 @@ impl Runner {
             .await;
         ping(&self.options).await?;
 
-        // adjust to main session
+        // 7. adjust to main session
         let _ = results_sender
             .send(Results::ConnectionEvent {
                 evt: progress(Progress::AdjustToMain),
