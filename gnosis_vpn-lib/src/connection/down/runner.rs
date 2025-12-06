@@ -14,7 +14,7 @@ use crate::core::runner::{self, Results};
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::{ping, wg_tooling};
+use crate::ping;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -22,8 +22,6 @@ pub enum Error {
     Hopr(#[from] HoprError),
     #[error(transparent)]
     GvpnClient(#[from] gvpn_client::Error),
-    #[error(transparent)]
-    WgTooling(#[from] wg_tooling::Error),
     #[error(transparent)]
     Ping(#[from] ping::Error),
 }
@@ -58,26 +56,14 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 0. disconnect wg tunnel
-        let _ = results_sender
-            .send(Results::DisconnectionEvent {
-                wg_public_key: self.down.wg_public_key.clone(),
-                evt: Event::DisconnectWg,
-            })
-            .await;
-        let res = wg_tooling::down().await;
-        // log error if we actually had a tunnel
-        if let (Some(_wg), Err(err)) = (self.down.wg(), res) {
-            tracing::error!("disconnecting WireGuard failed: {}", err);
-        }
-
+        // 0. disconnect wg tunnel done from root
+        // 1. open bridge session
         let _ = results_sender
             .send(Results::DisconnectionEvent {
                 wg_public_key: self.down.wg_public_key.clone(),
                 evt: Event::OpenBridge,
             })
             .await;
-        // 1. open bridge session
         let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options).await?;
 
         // 2. unregister wg public key

@@ -15,7 +15,7 @@ use std::vec::Vec;
 use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
-use crate::wg_tooling::Config as WireGuardConfig;
+use crate::wireguard::Config as WireGuardConfig;
 
 const MAX_HOPS: u8 = 3;
 

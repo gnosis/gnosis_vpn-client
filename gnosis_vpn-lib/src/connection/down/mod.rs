@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use crate::connection;
 use crate::connection::destination::Destination;
-use crate::{log_output, wg_tooling};
+use crate::log_output;
 
 pub mod runner;
 
@@ -18,7 +18,6 @@ pub struct Down {
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
     pub wg_public_key: String,
-    wg: Option<wg_tooling::WireGuard>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -37,12 +36,11 @@ impl TryFrom<&connection::up::Up> for Down {
     type Error = &'static str;
 
     fn try_from(value: &connection::up::Up) -> Result<Self, Self::Error> {
-        if let Some(wg_public_key) = value.wg_public_key.clone() {
+        if let Some(wg) = value.wireguard.clone() {
             Ok(Self {
                 destination: value.destination.clone(),
                 phase: (SystemTime::now(), Phase::Disconnecting),
-                wg_public_key,
-                wg: value.wg.clone(),
+                wg_public_key: wg.key_pair.public_key,
             })
         } else {
             Err("Cannot convert Up to Down: missing WireGuard public key")
@@ -51,10 +49,6 @@ impl TryFrom<&connection::up::Up> for Down {
 }
 
 impl Down {
-    pub fn wg(&self) -> Option<wg_tooling::WireGuard> {
-        self.wg.clone()
-    }
-
     pub fn disconnect_evt(&mut self, evt: runner::Event) {
         let now = SystemTime::now();
         match evt {

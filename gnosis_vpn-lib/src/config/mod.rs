@@ -7,7 +7,7 @@ use std::path::Path;
 use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
-use crate::wg_tooling::Config as WireGuardConfig;
+use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
 mod v4;
