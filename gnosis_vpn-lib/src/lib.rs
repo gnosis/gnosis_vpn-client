@@ -25,4 +25,4 @@ pub mod prelude {
     pub use edgli::hopr_lib::Address;
 }
 
-pub const IDENTIFIER: &str = "com.gnosisvpn.client";
+pub const IDENTIFIER: &str = "com.gnosisvpn.gnosisvpnclient";

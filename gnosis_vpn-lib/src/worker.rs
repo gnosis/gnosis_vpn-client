@@ -1,5 +1,6 @@
 use thiserror::Error;
 use tokio::process::Command;
+use users::os::unix::UserExt;
 
 use std::io;
 use std::path::PathBuf;
@@ -47,6 +48,7 @@ pub struct Worker {
     pub gid: u32,
     pub group_name: String,
     pub binary: String,
+    pub home: PathBuf,
 }
 
 impl Input {
@@ -94,11 +96,13 @@ impl Worker {
 
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
+            let home = worker_user.home_dir().to_path_buf();
             Ok(Worker {
                 uid,
                 binary: binary.to_string(),
                 gid,
                 group_name,
+                home,
             })
         } else {
             tracing::error!(expected = input.version, found = %version, "Worker binary version mismatch");

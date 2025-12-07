@@ -202,7 +202,9 @@ async fn loop_daemon(
     }
 
     let mut worker_child = Command::new(worker_user.binary.clone())
+        .current_dir(&worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
+        .env("HOME", &worker_user.home)
         .uid(worker_user.uid)
         .gid(worker_user.gid)
         .spawn()
@@ -337,7 +339,6 @@ async fn send_to_worker(
     msg: &IncomingWorker,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
-    tracing::debug!(?msg, "sending message to worker");
     let serialized = serde_json::to_string(msg).map_err(|err| {
         tracing::error!(msg = ?msg, error = ?err, "failed to serialize message");
         exitcode::DATAERR
