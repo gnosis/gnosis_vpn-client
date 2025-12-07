@@ -173,13 +173,20 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let res = loop_daemon(&mut ctrlc_receiver, socket, &worker_user, config, hopr_params).await;
 
+    // restore wg if connected
+    if let Ok(true) = res {
+        let _ = wg_tooling::down().await.map_err(|err| {
+            tracing::error!(error = ?err, "error during wg-quick down on shutdown");
+        });
+    }
+    // restore routing - log errors
     let _ = routing::teardown(&worker_user).await.map_err(|err| {
-        tracing::error!(error = ?err, "error tearing down routing");
+        tracing::error!(error = ?err, "error tearing down routing on shutdown");
     });
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
-        tracing::error!(error = ?err, "failed removing socket");
+        tracing::error!(error = ?err, "failed removing socket on shutdown");
     });
-    res
+    res.map(|_| ())
 }
 
 async fn loop_daemon(
@@ -188,7 +195,7 @@ async fn loop_daemon(
     worker_user: &worker::Worker,
     config: Config,
     hopr_params: HoprParams,
-) -> Result<(), exitcode::ExitCode> {
+) -> Result<bool, exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
         exitcode::IOERR
@@ -235,6 +242,7 @@ async fn loop_daemon(
     send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
+    let mut wg_connected = false;
     let mut shutdown_ongoing = false;
     // root <-> system socket communication setup (UI app)
     let mut socket_lines_reader: Option<io::Lines<BufReader<OwnedReadHalf>>> = None;
@@ -245,7 +253,7 @@ async fn loop_daemon(
             Some(_) = ctrlc_receiver.recv() => {
                 if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
-                    return Err(exitcode::OK);
+                    return Ok(wg_connected);
                 } else {
                     shutdown_ongoing = true;
                     tracing::info!("initiate shutdown");
@@ -280,6 +288,7 @@ async fn loop_daemon(
                         tracing::debug!(?wg_cmd, "received worker wireguard command");
                         match wg_cmd {
                             WireGuardCommand::WgUp( config_content ) => {
+                                wg_connected = true;
                                 // ensure down before up even if redundant
                                 // set up wireguard - ensure it was down first
                                 match wg_tooling::down().await {
@@ -298,6 +307,7 @@ async fn loop_daemon(
                                         tracing::error!(error = ?err, "error during wg-quick down");
                                     }
                                 }
+                                wg_connected = false;
                             }
                         }
                     },
@@ -315,7 +325,7 @@ async fn loop_daemon(
                     } else {
                         tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
                     }
-                    return Ok(());
+                    return Ok(wg_connected);
                 } else {
                     tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
                     return Err(exitcode::IOERR);
