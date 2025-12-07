@@ -120,7 +120,7 @@ jobs:
           rm Cargo.toml.bak
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
-          nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
+          nix build .#packages.${{ steps.vars.outputs.architecture}}.gnosis_vpn -L
           mkdir -p binaries
           ls -al ./result/bin/
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
