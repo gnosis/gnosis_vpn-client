@@ -78,7 +78,7 @@ pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
         .arg("MARK")
         .arg("--set-mark")
         .arg(MARK)
-        .run()
+        .spawn_no_capture()
         .await;
     let res2 = Command::new("iptables")
         .arg("-t")
@@ -92,18 +92,17 @@ pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
         .arg("-j")
         .arg("CONNMARK")
         .arg("--save-mark")
-        .run()
+        .spawn_no_capture()
         .await;
     let res3 = Command::new("iptables")
         .arg("-t")
         .arg("mangle")
         .arg("-D")
         .arg("PREROUTING")
-        .arg("1")
         .arg("-j")
         .arg("CONNMARK")
         .arg("--restore-mark")
-        .run()
+        .spawn_no_capture()
         .await;
     res1.and(res2).and(res3)?;
     Ok(())
@@ -152,8 +151,8 @@ pub async fn add_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
         .arg("priority")
         .arg("90")
         .spawn_no_capture()
-        .await
-        .map_err(Error::from)?;
+        .await?;
+
     // add rull affecting outgoing user packages
     // ip rule add uidrange 992-992 lookup main priority 100
     Command::new("ip")
@@ -166,8 +165,8 @@ pub async fn add_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
         .arg("priority")
         .arg("100")
         .spawn_no_capture()
-        .await
-        .map_err(Error::from)?;
+        .await?;
+
     Ok(())
 }
 
@@ -183,8 +182,7 @@ pub async fn del_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
         .arg("priority")
         .arg("90")
         .spawn_no_capture()
-        .await
-        .map_err(Error::from);
+        .await;
     let res2 = Command::new("ip")
         .arg("rule")
         .arg("del")
@@ -195,8 +193,7 @@ pub async fn del_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
         .arg("priority")
         .arg("100")
         .spawn_no_capture()
-        .await
-        .map_err(Error::from);
+        .await;
     res1.and(res2)?;
     Ok(())
 }
