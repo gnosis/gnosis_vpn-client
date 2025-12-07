@@ -299,10 +299,6 @@
             inherit gnosis_vpn-worker;
             inherit gnosis_vpn-dev;
             inherit pre-commit-check;
-            default = [
-              gnosis_vpn-root
-              gnosis_vpn-worker
-            ];
           };
 
           apps = {
