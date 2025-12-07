@@ -293,6 +293,7 @@
             inherit gnosis_vpn;
             inherit gnosis_vpn-dev;
             inherit pre-commit-check;
+            default = gnosis_vpn;
           };
 
           apps = {
