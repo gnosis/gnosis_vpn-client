@@ -17,6 +17,8 @@ pub enum Error {
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{add_ip_rules, del_ip_rules};
 
 #[cfg(target_os = "macos")]
 mod macos;

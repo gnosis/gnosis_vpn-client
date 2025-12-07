@@ -289,15 +289,30 @@ async fn loop_daemon(
                         match wg_cmd {
                             WireGuardCommand::WgUp( config_content ) => {
                                 wg_connected = true;
-                                // ensure down before up even if redundant
-                                // set up wireguard - ensure it was down first
+                                // ensure we run down before going up to ensure clean slate
+                                // on linux we need to add ip rules after wg-quick up ran - taking
+                                // it down in reverse order
+                                #[cfg(target_os = "linux")]
+                                match routing::del_ip_rules(worker_user).await {
+                                    Ok(_) => tracing::warn!("removed ip rules from previous connection"),
+                                    Err(err) => {
+                                        tracing::debug!(error = ?err, "expected error during ip rule removal before wg-quick up");
+                                    }
+                                }
                                 match wg_tooling::down().await {
                                     Ok(_) => tracing::warn!("took down wireguard interface from previous connection"),
                                     Err(err) => {
                                         tracing::debug!(error = ?err, "expected error during wg-quick down before setting it up again");
                                     }
                                 }
-                                let res = wg_tooling::up(config_content).await.map_err(|e| e.to_string());
+                                let res_wgquick = wg_tooling::up(config_content).await.map_err(|e| format!("wg-quick up error: {}", e));
+                                // on linux adding additional ip rules after wg-quick up
+                                #[cfg(target_os = "linux")]
+                                let res_iprule = routing::add_ip_rules(worker_user).await.map_err(|e| format!("ip rule add error: {}", e));
+                                #[cfg(target_os = "linux")]
+                                let res = res_wgquick.and(res_iprule);
+                                #[cfg(target_os = "macos")]
+                                let res = res_wgquick;
                                 send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
                             },
                             WireGuardCommand::WgDown => {
