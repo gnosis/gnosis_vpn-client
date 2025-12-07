@@ -281,13 +281,23 @@ async fn loop_daemon(
                         match wg_cmd {
                             WireGuardCommand::WgUp( config_content ) => {
                                 // ensure down before up even if redundant
-                                let _ = wg_tooling::down().await;
+                                // set up wireguard - ensure it was down first
+                                match wg_tooling::down().await {
+                                    Ok(_) => tracing::warn!("took down wireguard interface from previous connection"),
+                                    Err(err) => {
+                                        tracing::debug!(error = ?err, "expected error during wg-quick down before setting it up again");
+                                    }
+                                }
                                 let res = wg_tooling::up(config_content).await.map_err(|e| e.to_string());
                                 send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
                             },
                             WireGuardCommand::WgDown => {
-                                // result does not matter here
-                                let _ = wg_tooling::down().await;
+                                match wg_tooling::down().await {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        tracing::error!(error = ?err, "error during wg-quick down");
+                                    }
+                                }
                             }
                         }
                     },
