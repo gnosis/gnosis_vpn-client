@@ -22,6 +22,7 @@ mod init;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn daemon() -> Result<(), exitcode::ExitCode> {
+    tracing::debug!("accessing unix socket from fd");
     let fd: i32 = env::var(socket::worker::ENV_VAR)
         .map_err(|err| {
             tracing::error!(error = %err, env = %socket::worker::ENV_VAR, "missing worker env var");
@@ -34,11 +35,16 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
         })?;
 
     let child_socket = unsafe { StdUnixStream::from_raw_fd(fd) };
+    child_socket.set_nonblocking(true).map_err(|err| {
+        tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
+        exitcode::IOERR
+    })?;
     let child_stream = UnixStream::from_std(child_socket).map_err(|err| {
         tracing::error!(error = %err, "failed to create unix stream from socket");
         exitcode::IOERR
     })?;
 
+    tracing::debug!("splitting unix stream into reader and writer halves");
     let (reader_half, writer_half) = io::split(child_stream);
     let reader = BufReader::new(reader_half);
     let mut lines_reader = reader.lines();
@@ -57,24 +63,26 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
             Ok(Some(line)) = lines_reader.next_line() => {
                 let wcmd = parse_incoming_worker(line)?;
                 if let Some(init) = init_opt.take() {
-                let next = init.incoming_cmd(wcmd);
-                send_outgoing(OutgoingWorker::Ack, &mut writer).await?;
-                if next.is_shutdown() {
-                    tracing::info!("shutting down worker daemon");
-                    return Ok(());
-                }
-                if let (Some((config, hopr_params)), Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (next.ready(), incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
-                    let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
-                        tracing::error!(error = ?err, "failed to initialize core logic");
-                        exitcode::OSERR
-                    })?;
-                    core_task.spawn(async move { core.start(&mut incoming_event_receiver).await });
+                    let next = init.incoming_cmd(wcmd);
+                    send_outgoing(OutgoingWorker::Ack, &mut writer).await?;
+                    if next.is_shutdown() {
+                        tracing::info!("shutting down worker daemon");
+                        return Ok(());
+                    }
+                    if let Some((config, hopr_params)) = next.ready() {
+                        if let (Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
+                            let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
+                                tracing::error!(error = ?err, "failed to initialize core logic");
+                                exitcode::OSERR
+                            })?;
+                            core_task.spawn(async move { core.start(&mut incoming_event_receiver).await });
+                        }
+                    } else {
+                        init_opt = Some(next);
+                    }
                 } else {
-                    init_opt = Some(next);
-                }
-                } else {
-                let resp = incoming_cmd(wcmd, &mut incoming_event_sender).await?;
-                send_outgoing(resp, &mut writer).await?;
+                    let resp = incoming_cmd(wcmd, &mut incoming_event_sender).await?;
+                    send_outgoing(resp, &mut writer).await?;
                 }
             },
             outgoing = outgoing_event_receiver.recv() => {

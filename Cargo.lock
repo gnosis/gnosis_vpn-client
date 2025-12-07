@@ -3976,6 +3976,7 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
+ "libc",
  "mimalloc",
  "notify",
  "serde",

@@ -7,7 +7,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::IntoRawFd;
+use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::process::{self};
@@ -194,6 +194,13 @@ async fn loop_daemon(
         exitcode::IOERR
     })?;
 
+    // remove the "Close-On-Exec" flag to avoid premature socket closure by root
+    let fd = child_socket.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+    }
+
     let mut worker_child = Command::new(worker_user.binary.clone())
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .uid(worker_user.uid)
@@ -215,14 +222,15 @@ async fn loop_daemon(
     })?;
 
     // root <-> worker communication setup
+    tracing::debug!("splitting unix stream into reader and writer halves");
     let (reader_half, writer_half) = io::split(parent_stream);
     let reader = BufReader::new(reader_half);
     let mut lines_reader = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
     // provide initial resources to worker
-    // send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
-    // send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
+    send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
+    send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
@@ -329,6 +337,7 @@ async fn send_to_worker(
     msg: &IncomingWorker,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
+    tracing::debug!(?msg, "sending message to worker");
     let serialized = serde_json::to_string(msg).map_err(|err| {
         tracing::error!(msg = ?msg, error = ?err, "failed to serialize message");
         exitcode::DATAERR

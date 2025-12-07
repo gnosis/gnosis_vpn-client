@@ -16,6 +16,7 @@ thiserror.workspace = true
 tokio.workspace = true
 serde.workspace = true
 tokio-util.workspace = true
+libc.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
