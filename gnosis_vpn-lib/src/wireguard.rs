@@ -36,8 +36,6 @@ pub struct WireGuard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InterfaceInfo {
     pub address: String,
-    #[allow(dead_code)]
-    pub mtu: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -126,19 +124,12 @@ impl WireGuard {
     }
 
     pub fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
-        let allowed_ips = match &self.config.allowed_ips {
-            Some(allowed_ips) => allowed_ips.clone(),
-            None => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
-        };
         let listen_port_line = self
             .config
             .listen_port
             .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
 
-        // WireGuard has differently sized packets not exactly adhering to MTU
-        // so we postpone optimizing on this level for now
-        // MTU = {mtu}
         format!(
             "[Interface]
 PrivateKey = {private_key}
@@ -148,17 +139,13 @@ Address = {address}
 [Peer]
 PublicKey = {public_key}
 Endpoint = {endpoint}
-AllowedIPs = {allowed_ips}
+AllowedIPs = 0.0.0.0/0
 ",
             private_key = self.key_pair.priv_key,
             address = interface.address,
             public_key = peer.public_key,
             endpoint = peer.endpoint,
-            allowed_ips = allowed_ips,
             listen_port_line = listen_port_line,
-            // WireGuard has differnently sized packets not exactly adhering to MTU
-            // so we postpone optimizing on this level for now
-            // mtu = interface.mtu,
         )
     }
 }

@@ -562,11 +562,7 @@ impl Core {
                 match (res, self.phase.clone()) {
                     (Ok(session), Phase::Connecting(mut conn)) => {
                         if let (Some(wg), Some(reg)) = (conn.wireguard.clone(), conn.registration.clone()) {
-                            let interface_info = wireguard::InterfaceInfo {
-                                address: reg.address(),
-                                mtu: session.hopr_mtu,
-                            };
-
+                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
                             let peer_info = wireguard::PeerInfo {
                                 public_key: reg.server_public_key(),
                                 endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
