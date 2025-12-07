@@ -41,7 +41,7 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
         .map_err(Error::from)
 }
 
-pub async fn teardown() -> Result<(), Error> {
+pub async fn teardown(_worker: &worker::Worker) -> Result<(), Error> {
     let cmd = Command::new("pfctl")
         .arg("-a")
         .arg(gnosis_vpn_lib::IDENTIFIER)
