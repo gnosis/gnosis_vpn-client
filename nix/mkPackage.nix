@@ -25,8 +25,8 @@
   commonArgs,
 }:
 {
-  pname,
   # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
+  pname,
   profile ? "release",
   # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
   cargoExtraArgs ? "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl",

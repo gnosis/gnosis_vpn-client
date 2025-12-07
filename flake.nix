@@ -154,13 +154,8 @@
           # they need, rather than building the entire workspace as a single derivation.
 
           # Production build with release profile optimizations
-          gnosis_vpn-root = mkPackage {
-            pname = "gnosis_vpn-root";
-            profile = "release";
-          };
-
-          gnosis_vpn-worker = mkPackage {
-            pname = "gnosis_vpn-worker";
+          gnosis_vpn = mkPackage {
+            pname = "gnosis_vpn";
             profile = "release";
           };
 
@@ -295,8 +290,7 @@
           };
 
           packages = {
-            inherit gnosis_vpn-root;
-            inherit gnosis_vpn-worker;
+            inherit gnosis_vpn;
             inherit gnosis_vpn-dev;
             inherit pre-commit-check;
           };
