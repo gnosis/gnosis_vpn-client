@@ -13,13 +13,13 @@ const ID_PASS: &str = "gnosisvpn-hopr.pass";
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Hopr key pair error: {0}")]
+    #[error(transparent)]
     KeyPair(#[from] KeyPairError),
     #[error("Unable to determine project directories")]
     ProjectDirs,
-    #[error("IO error: {0}")]
+    #[error(transparent)]
     IO(#[from] std::io::Error),
-    #[error("Project directory error: {0}")]
+    #[error(transparent)]
     Dirs(#[from] crate::dirs::Error),
 }
 
