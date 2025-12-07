@@ -35,19 +35,21 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
 }
 
 pub async fn teardown() -> Result<(), Error> {
-    Command::new("pfctl")
+    let cmd = Command::new("pfctl")
         .arg("-a")
         .arg(gnosis_vpn_lib::IDENTIFIER)
         .arg("-F")
         .arg("all")
-        .run()
+        .spawn_no_capture()
         .await
-        .map_err(Error::from)?;
+        .map_err(Error::from);
 
     let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
     if conf_file.exists() {
         let _ = fs::remove_file(conf_file).await;
     }
+
+    cmd?;
 
     Ok(())
 }

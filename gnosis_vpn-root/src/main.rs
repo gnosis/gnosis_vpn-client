@@ -160,7 +160,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket = socket_listener(&args.socket_path).await?;
 
     // set up routing for mix node - ensure clean state by calling teardown first
-    let _ = routing::teardown(&worker_user).await;
+    match routing::teardown(&worker_user).await {
+        Ok(_) => tracing::warn!("cleaned up routing from previous instance"),
+        Err(err) => {
+            tracing::debug!(error = ?err, "expected error during pre-start routing teardown");
+        }
+    }
     routing::setup(&worker_user).await.map_err(|err| {
         tracing::error!(error = ?err, "error setting up routing");
         exitcode::OSERR
@@ -199,6 +204,11 @@ async fn loop_daemon(
             exitcode::IOERR
         })?;
 
+    parent_socket.set_nonblocking(true).map_err(|err| {
+        tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
+        exitcode::IOERR
+    })?;
+
     let parent_stream = UnixStream::from_std(parent_socket).map_err(|err| {
         tracing::error!(error = ?err, "unable to create unix stream from socket");
         exitcode::IOERR
@@ -211,8 +221,8 @@ async fn loop_daemon(
     let mut writer = BufWriter::new(writer_half);
 
     // provide initial resources to worker
-    send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
-    send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
+    // send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
+    // send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
@@ -320,11 +330,11 @@ async fn send_to_worker(
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(msg).map_err(|err| {
-        tracing::error!(error = ?err, "failed to serialize message");
+        tracing::error!(msg = ?msg, error = ?err, "failed to serialize message");
         exitcode::DATAERR
     })?;
     writer.write_all(serialized.as_bytes()).await.map_err(|err| {
-        tracing::error!(error = ?err, "error writing to UnixStream pair write half");
+        tracing::error!(serialized = ?serialized, error = ?err, "error writing to UnixStream pair write half");
         exitcode::IOERR
     })?;
     writer.write_all(b"\n").await.map_err(|err| {

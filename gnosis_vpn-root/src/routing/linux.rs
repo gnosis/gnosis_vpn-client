@@ -34,7 +34,7 @@ pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
         .arg("main")
         .arg("priority")
         .arg("100")
-        .run()
+        .spawn_no_capture()
         .await
         .map_err(Error::from)
 }
