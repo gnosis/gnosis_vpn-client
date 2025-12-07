@@ -13,10 +13,6 @@ pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("dependency not available: {0}")]
-    NotAvailable(String),
-    #[error("dependency not executable: {0}")]
-    NotExecutable(String),
     #[error(transparent)]
     IO(#[from] io::Error),
     #[error(transparent)]
@@ -81,22 +77,17 @@ impl Config {
 pub async fn available() -> Result<(), Error> {
     Command::new("which")
         .arg("wg")
-        // suppress log output
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .run()
+        .spawn_no_capture()
         .await
-        .map_err(|_| Error::NotAvailable("wg".to_string()))
+        .map_err(Error::from)
 }
 
 pub async fn executable() -> Result<(), Error> {
     Command::new("wg")
         .arg("--version")
-        // suppress stdout
-        .stdout(std::process::Stdio::null())
-        .run()
+        .spawn_no_capture()
         .await
-        .map_err(|_| Error::NotExecutable("wg".to_string()))
+        .map_err(Error::from)
 }
 
 async fn generate_key() -> Result<String, Error> {

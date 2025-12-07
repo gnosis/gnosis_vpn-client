@@ -9,23 +9,17 @@ use gnosis_vpn_lib::{dirs, wireguard};
 pub async fn available() -> Result<(), wireguard::Error> {
     Command::new("which")
         .arg("wg-quick")
-        // suppress log output
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .run()
+        .spawn_no_capture()
         .await
-        .map_err(|_| wireguard::Error::NotAvailable("wg-quick".to_string()))
+        .map_err(wireguard::Error::from)
 }
 
 pub async fn executable() -> Result<(), wireguard::Error> {
     Command::new("wg-quick")
         .arg("-h")
-        // suppress stdout and stderr
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .run()
+        .spawn_no_capture()
         .await
-        .map_err(|_| wireguard::Error::NotExecutable("wg-quick".to_string()))
+        .map_err(wireguard::Error::from)
 }
 
 pub async fn up(config_content: String) -> Result<(), wireguard::Error> {
