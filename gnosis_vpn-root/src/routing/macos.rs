@@ -14,16 +14,23 @@ const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
  */
 pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
     let (device, gateway) = interface().await?;
-    let interface_str = match gateway {
+
+    let route_to = match gateway {
         Some(gw) => format!("({} {})", device, gw),
         None => format!("({})", device),
     };
+
     let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
+
     let content = format!(
-        "pass out route-to ({interface_str}) from any to any group {group_name}",
-        group_name = worker.group_name
+        "pass out route-to {route_to} from any to any group {group_name} nat-to ({device})",
+        route_to = route_to,
+        group_name = worker.group_name,
+        device = device
     );
+
     fs::write(&conf_file, content.as_bytes()).await?;
+
     Command::new("pfctl")
         .arg("-a")
         .arg(gnosis_vpn_lib::IDENTIFIER)
