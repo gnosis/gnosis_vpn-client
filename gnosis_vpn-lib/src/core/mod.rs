@@ -404,6 +404,9 @@ impl Core {
             Results::PreSafe { res } => match res {
                 Ok(presafe) => {
                     tracing::info!(%presafe, "on presafe balance");
+                    self.phase = Phase::CreatingSafe {
+                        presafe: Some(presafe.clone()),
+                    };
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
                         tracing::warn!("insufficient funds to start safe deployment - waiting");
                         self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
