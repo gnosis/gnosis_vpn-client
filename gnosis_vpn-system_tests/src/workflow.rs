@@ -7,7 +7,7 @@ use crate::{
     cli::{Cli, Command},
     download,
     fixtures::{control_client::ControlClient, lib, service::Service},
-    report::{DestinationTable, RowStatus},
+    report::{ReportTable, RowStatus},
 };
 use gnosis_vpn_lib::connection::destination::Destination;
 
@@ -49,7 +49,7 @@ impl SystemTestWorkflow {
             "destinations ready to be used",
         );
 
-        let mut readiness_report = DestinationTable::new(&[]);
+        let mut readiness_report = ReportTable::new("destination", &[]);
         for destination in readiness.ready() {
             readiness_report.add_row(destination.get_meta("location"), RowStatus::Ready, Vec::new());
         }
@@ -58,7 +58,7 @@ impl SystemTestWorkflow {
         }
         info!("\n\n{}", readiness_report.render());
 
-        let mut connection_report = DestinationTable::new(&[]);
+        let mut connection_report = ReportTable::new("destination", &[]);
         let successful_destinations = self
             .verify_all_destinations(readiness.ready(), &mut connection_report)
             .await?;
@@ -91,7 +91,7 @@ impl SystemTestWorkflow {
     async fn verify_all_destinations(
         &self,
         destinations: &[Destination],
-        report: &mut DestinationTable,
+        report: &mut ReportTable,
     ) -> Result<Vec<Destination>> {
         let mut successful = Vec::new();
         for destination in destinations {

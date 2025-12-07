@@ -58,4 +58,4 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${cache_dir}/gnosisvpn-hopr.safe" > /dev/null
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
-    set RUST_LOG=none,{{replace(test_binary, "-", "_")}}=info && sudo {{ test_binary }} download
+    sudo {{ test_binary }} download

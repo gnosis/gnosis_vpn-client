@@ -110,7 +110,7 @@ jobs:
           sudo apt-get install -y wireguard just
       - name: Build system service and test binary
         run: |
-          nix build .#gvpn .#gvpn-system-tests -L # binaries created in ./result/bin/ and ./result-1/bin/
+          nix build .#gvpn-dev .#gvpn-system-tests -L # binaries created in ./result/bin/ and ./result-1/bin/
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
@@ -118,7 +118,7 @@ jobs:
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
           CARGO_BIN_EXE_GNOSIS_VPN: ./result/bin/gnosis_vpn
-          RUST_LOG: debug
+          RUST_LOG: none,gnosis_vpn_system_tests=info
         run: just system-tests ./result-1/bin/gnosis_vpn-system-tests rotsee
   build-binaries:
     strategy:

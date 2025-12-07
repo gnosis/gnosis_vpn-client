@@ -1,14 +1,16 @@
 use std::fmt::Write;
 
 #[derive(Debug, Clone)]
-pub struct DestinationTable {
+pub struct ReportTable {
+    label_header: String,
     extra_headers: Vec<String>,
     rows: Vec<DestinationRow>,
 }
 
-impl DestinationTable {
-    pub fn new(extra_headers: &[&str]) -> Self {
+impl ReportTable {
+    pub fn new(label_header: &str, extra_headers: &[&str]) -> Self {
         Self {
+            label_header: label_header.to_string(),
             extra_headers: extra_headers.iter().map(|h| h.to_string()).collect(),
             rows: Vec::new(),
         }
@@ -27,7 +29,7 @@ impl DestinationTable {
             return "(none)".to_string();
         }
 
-        let mut headers = vec!["destination".to_string(), "status".to_string(), "details".to_string()];
+        let mut headers = vec![self.label_header.clone(), "status".to_string(), "details".to_string()];
         headers.extend(self.extra_headers.iter().cloned());
 
         let rows = self

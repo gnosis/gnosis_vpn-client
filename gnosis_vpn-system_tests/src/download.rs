@@ -5,11 +5,11 @@ use tracing::{error, info};
 use crate::{
     cli::DownloadArgs,
     fixtures::lib,
-    report::{DestinationTable, RowStatus},
+    report::{ReportTable, RowStatus},
 };
 
 pub async fn run_downloads(cli: &crate::cli::SharedArgs, args: &DownloadArgs) -> Result<()> {
-    let mut report = DestinationTable::new(&["Avg (s)", "Min (s)", "Max (s)", "Successes", "Failures"]);
+    let mut report = ReportTable::new("file size", &["avg (s)", "min (s)", "max (s)", "successes", "failures"]);
     let mut had_total_failure = false;
 
     for idx in 0..args.attempts {
