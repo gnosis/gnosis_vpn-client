@@ -30,14 +30,14 @@ impl Default for PingOptions {
 }
 
 #[tracing::instrument(name = "ping", ret)]
-pub fn ping(opts: &PingOptions) -> Result<(), Error> {
-    ping::ping(
-        opts.address,
-        Some(opts.timeout),   // default timeout 4 sec
-        Some(opts.ttl),       // ttl - number of jumps
-        None,                 // ident - Identifier
-        Some(opts.seq_count), // Seq Count
-        None,                 // Custom Payload
-    )
-    .map_err(Error::PingFailed)
+pub fn ping(opts: &PingOptions) -> Result<Duration, Error> {
+    // NOTE: DGRAM ping might not work on ARCH Linux
+    let mut ping = ping::new(opts.address);
+    ping.timeout(opts.timeout)
+        .ttl(opts.ttl)
+        .seq_cnt(opts.seq_count)
+        .socket_type(ping::DGRAM)
+        .send()
+        .map(|p| p.rtt)
+        .map_err(Error::from)
 }

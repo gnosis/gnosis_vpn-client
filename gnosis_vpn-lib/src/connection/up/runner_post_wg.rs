@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::connection::destination::Destination;
 use crate::connection::options::Options;
@@ -52,7 +53,8 @@ impl Runner {
                 evt: progress(Progress::Ping),
             })
             .await;
-        ping(&self.options).await?;
+        let round_trip_time = ping(&self.options).await?;
+        tracing::debug!(?round_trip_time, "ping successful");
 
         // 7. adjust to main session
         let _ = results_sender
@@ -71,11 +73,11 @@ impl Display for Runner {
     }
 }
 
-async fn ping(options: &Options) -> Result<(), ping::Error> {
+async fn ping(options: &Options) -> Result<Duration, ping::Error> {
     retry(ExponentialBackoff::default(), || async {
         tracing::debug!(?options, "attempting to ping through wg tunnel");
-        ping::ping(&options.ping_options)?;
-        Ok(())
+        let res = ping::ping(&options.ping_options)?;
+        Ok(res)
     })
     .await
 }
