@@ -175,6 +175,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // restore wg if connected
     if let Ok(true) = res {
+        #[cfg(target_os = "linux")]
+        let _ = routing::del_ip_rules(&worker_user).await.map_err(|err| {
+            tracing::error!(error = ?err, "error removing ip rules on shutdown");
+        });
         let _ = wg_tooling::down().await.map_err(|err| {
             tracing::error!(error = ?err, "error during wg-quick down on shutdown");
         });
