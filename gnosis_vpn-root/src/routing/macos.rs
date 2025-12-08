@@ -17,15 +17,14 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
 
     let route_to = match gateway {
         Some(gw) => format!("{} {}", device, gw),
-        None => format!("{}", device),
+        None => device,
     };
 
     let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
-
     let content = format!(
         r#"
-        set skip on lo0
-        pass out quick user {uid} route-to ({route_to}) keep state
+set skip on lo0
+pass out quick user {uid} route-to ({route_to}) keep state
     "#,
         route_to = route_to,
         uid = worker.uid,
