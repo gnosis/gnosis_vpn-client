@@ -75,8 +75,8 @@ async fn interface() -> Result<(String, Option<String>), Error> {
 
 fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
     let parts: Vec<&str> = output.split_whitespace().collect();
-    let device_index = parts.iter().position(|&x| x == "interface");
-    let via_index = parts.iter().position(|&x| x == "gateway");
+    let device_index = parts.iter().position(|&x| x == "interface:");
+    let via_index = parts.iter().position(|&x| x == "gateway:");
     let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
         Some(dev) => dev.to_string(),
         None => {
@@ -89,7 +89,6 @@ fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
     Ok((device, gateway))
 }
 
-fn parse_interfac
 #[cfg(test)]
 mod tests {
     #[test]
@@ -108,6 +107,7 @@ mod tests {
         let (device, gateway) = super::parse_interface(output)?;
 
         assert_eq!(device, "en1");
-        assert_eq!(gateway, Some("192.168.178.1"));
+        assert_eq!(gateway, Some("192.168.178.1".to_string()));
+        Ok(())
     }
 }
