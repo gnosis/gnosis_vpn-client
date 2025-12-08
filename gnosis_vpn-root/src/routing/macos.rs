@@ -16,17 +16,19 @@ pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
     let (device, gateway) = interface().await?;
 
     let route_to = match gateway {
-        Some(gw) => format!("({} {})", device, gw),
-        None => format!("({})", device),
+        Some(gw) => format!("{} {}", device, gw),
+        None => format!("{}", device),
     };
 
     let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
 
     let content = format!(
-        "pass out route-to {route_to} from any to any group {group_name} nat-to ({device})",
+        r#"
+        set skip on lo0
+        pass out quick user {uid} route-to ({route_to}) keep state
+    "#,
         route_to = route_to,
-        group_name = worker.group_name,
-        device = device
+        uid = worker.uid,
     );
 
     fs::write(&conf_file, content.as_bytes()).await?;
