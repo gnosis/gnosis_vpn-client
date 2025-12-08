@@ -69,6 +69,11 @@ async fn interface() -> Result<(String, Option<String>), Error> {
         .run_stdout()
         .await?;
 
+    let res = parse_interface(&output)?;
+    Ok(res)
+}
+
+fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
     let parts: Vec<&str> = output.split_whitespace().collect();
     let device_index = parts.iter().position(|&x| x == "interface");
     let via_index = parts.iter().position(|&x| x == "gateway");
@@ -82,4 +87,27 @@ async fn interface() -> Result<(String, Option<String>), Error> {
 
     let gateway = via_index.and_then(|idx| parts.get(idx + 1)).map(|gw| gw.to_string());
     Ok((device, gateway))
+}
+
+fn parse_interfac
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses_interface_gateway() -> anyhow::Result<()> {
+        let output = r#"
+           route to: default
+        destination: default
+               mask: default
+            gateway: 192.168.178.1
+          interface: en1
+              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+         recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
+               0         0         0         0         0         0      1500         0
+        "#;
+
+        let (device, gateway) = super::parse_interface(output)?;
+
+        assert_eq!(device, "en1");
+        assert_eq!(gateway, Some("192.168.178.1"));
+    }
 }
