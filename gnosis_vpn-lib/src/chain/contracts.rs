@@ -147,7 +147,6 @@ pub struct SafeModuleDeploymentInputs {
 
 #[derive(Clone, Debug)]
 pub struct SafeModuleDeploymentResult {
-    pub tx_hash: B256,
     pub safe_address: Address,
     pub module_address: Address,
 }
@@ -211,7 +210,6 @@ impl SafeModuleDeploymentInputs {
         };
 
         Ok(SafeModuleDeploymentResult {
-            tx_hash: receipt.transaction_hash,
             safe_address: safe_log.instance,
             module_address: module_log.instance,
         })

@@ -1,7 +1,8 @@
 use bytesize::ByteSize;
 use edgli::{
     hopr_lib::{
-        Address, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget, SurbBalancerConfig, errors::HoprLibError
+        Address, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget, SurbBalancerConfig,
+        errors::HoprLibError,
     },
     run_hopr_edge_node,
 };

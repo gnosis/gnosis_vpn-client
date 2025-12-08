@@ -5,6 +5,7 @@ use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use bytesize::ByteSize;
 use edgli::hopr_chain_connector::reexports::alloy::primitives::U256;
+use edgli::hopr_lib::exports::api::chain::{ChainReadSafeOperations, SafeSelector};
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
@@ -23,9 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::balance;
-use crate::chain::client::GnosisRpcClient;
 use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
-use crate::chain::errors::ChainError;
 use crate::connection;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
@@ -33,6 +32,8 @@ use crate::hopr_params::{self, HoprParams};
 use crate::log_output;
 use crate::remote_data;
 use crate::ticket_stats::{self, TicketStats};
+
+const SAFE_RETRIEVAL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -46,7 +47,7 @@ pub enum Results {
         res: Result<balance::PreSafe, Error>,
     },
     TicketStats {
-        res: Result<ticket_stats::TicketStats, Error>,
+        res: Result<TicketStats, Error>,
     },
     SafeDeployment {
         res: Result<SafeModuleDeploymentResult, Error>,
@@ -205,7 +206,7 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     .await
 }
 
-async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::TicketStats, Error> {
+async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
@@ -274,6 +275,7 @@ async fn run_safe_deployment(
         //     .map_err(Error::from)?;
         // Ok(res)
 
+        // Deploy safe
         let transaction = edgli::blokli::with_sefeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
@@ -297,10 +299,27 @@ async fn run_safe_deployment(
         .map_err(|e| Error::Chain(e.to_string()))?
         .await?;
 
+        // Retrieve safe
+        let safe = edgli::blokli::with_sefeless_blokli_connector(
+            &private_key,
+            edgli::blokli::DEFAULT_BLOKLI_URL
+                .parse()
+                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            |connector| async move {
+                let safe = connector
+                    .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
+                    .await?;
+
+                Ok::<_, Error>(safe)
+            },
+        )
+        .await
+        .map_err(|e| Error::Chain(e.to_string()))?
+        .await?;
+
         Ok(SafeModuleDeploymentResult {
-            tx_hash: todo!(),
-            safe_address: todo!(),
-            module_address: todo!(),
+            safe_address: safe.address,
+            module_address: safe.module,
         })
     })
     .await
