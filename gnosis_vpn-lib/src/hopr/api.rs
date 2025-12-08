@@ -86,7 +86,7 @@ impl Hopr {
                     if channel.balance < threshold {
                         tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
                         self.hopr
-                            .fund_channel(&channel.get_id(), amount)
+                            .fund_channel(channel.get_id(), amount)
                             .await
                             .map(|_| ())
                             .map_err(HoprError::HoprLib)

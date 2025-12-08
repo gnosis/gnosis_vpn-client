@@ -211,7 +211,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
     retry(ExponentialBackoff::default(), || async {
-        let (ticket_price, winning_probability) = edgli::blokli::with_sefeless_blokli_connector(
+        let (ticket_price, winning_probability) = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
                 .parse()
@@ -253,6 +253,7 @@ async fn run_safe_deployment(
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
     let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
     let network = hopr_params.network();
+
     retry(ExponentialBackoff::default(), || async {
         // let mut bytes = [0u8; 32];
         // rand::rng().fill(&mut bytes);
@@ -276,7 +277,7 @@ async fn run_safe_deployment(
         // Ok(res)
 
         // Deploy safe
-        let transaction = edgli::blokli::with_sefeless_blokli_connector(
+        let transaction = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
                 .parse()
@@ -300,7 +301,7 @@ async fn run_safe_deployment(
         .await?;
 
         // Retrieve safe
-        let safe = edgli::blokli::with_sefeless_blokli_connector(
+        let safe = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
                 .parse()
@@ -308,19 +309,17 @@ async fn run_safe_deployment(
             |connector| async move {
                 let safe = connector
                     .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
-                    .await?;
+                    .await;
 
                 Ok::<_, Error>(safe)
             },
         )
         .await
         .map_err(|e| Error::Chain(e.to_string()))?
-        .await?;
+        .await?
+        .map_err(|e| Error::Chain(e.to_string()))?;
 
-        Ok(SafeModuleDeploymentResult {
-            safe_address: safe.address,
-            module_address: safe.module,
-        })
+        Ok(SafeModuleDeploymentResult::new(safe.address, safe.module))
     })
     .await
 }

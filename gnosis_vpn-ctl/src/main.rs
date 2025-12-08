@@ -78,7 +78,7 @@ fn pretty_print(resp: &Response) {
             issues,
             info,
         })) => {
-            let mut str_resp = format!("");
+            let mut str_resp = String::new();
             str_resp.push_str(&format!(
                 "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
                 info.node_address, info.node_peer_id, info.safe_address

@@ -4,7 +4,7 @@ use edgli::hopr_chain_connector::reexports::alloy::{
     sol,
     sol_types::SolType,
 };
-use edgli::hopr_lib::{Balance, WxHOPR};
+use edgli::hopr_lib::{Address as HoprAddress, Balance, WxHOPR};
 use edgli::hopr_lib::{EncodedWinProb, WinningProbability};
 use primitive_types::U256 as PrimitiveU256;
 
@@ -149,6 +149,15 @@ pub struct SafeModuleDeploymentInputs {
 pub struct SafeModuleDeploymentResult {
     pub safe_address: Address,
     pub module_address: Address,
+}
+
+impl SafeModuleDeploymentResult {
+    pub fn new(safe_address: HoprAddress, module_address: HoprAddress) -> Self {
+        Self {
+            safe_address: Address::try_from(safe_address.as_ref()).unwrap(),
+            module_address: Address::try_from(module_address.as_ref()).unwrap(),
+        }
+    }
 }
 
 impl SafeModuleDeploymentInputs {
