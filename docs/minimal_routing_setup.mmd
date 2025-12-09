@@ -1,0 +1,22 @@
+---
+title: Minimal Routing Setup
+---
+erDiagram
+    User ||--o{ VPN: "routes traffic through"
+    Root ||--o{ VPN: "routes traffic through"
+    Worker ||--o{ Internet: "routes traffic through"
+
+    User {
+        using UIapp
+        user User
+        group users
+    }
+    Root {
+        running SystemService
+        user root
+    }
+    Worker {
+        running EdgeClient
+        user gnosisvpn
+        group gnosisvpn
+    }
