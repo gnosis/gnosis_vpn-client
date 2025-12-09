@@ -1,0 +1,24 @@
+---
+title: Current Gnosis VPN architecture overview
+---
+flowchart
+    UI["`**UI App**
+    - runs in user context
+    `"]
+    Root["`**Root System Service**
+    - runs as root
+    - sets up routing
+    - wg-quick up/down
+    - spawns worker
+    `" ]
+    Worker["`**Worker Process**
+    - runs as gnosisvpn (unprivileged)
+    - contains all application logic
+    - runs hopr edge client
+    `"]
+    SystemSocket(((named Unixsocket)))
+    WorkerSocket(((unnamed Unixsocket pair)))
+    UI <--> SystemSocket
+    Root <--> SystemSocket
+    Root <--> WorkerSocket
+    WorkerSocket <--> Worker
