@@ -1,5 +1,8 @@
 # Routing solutions
 
+NOTE: generally wg-quick needs to be executed before any routing adaptions.
+Otherwise the script is quite clever and injusts it's rules with higher priority.
+
 ## Linux potential solution 1: fwmark + ip rule
 
 - setsocketopts marks all packets with an fwmark
