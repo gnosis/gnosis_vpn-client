@@ -1,14 +1,9 @@
-use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::ChainKeypair;
 pub use edgli::hopr_lib::{Balance, WxHOPR, XDai};
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
 
-use crate::chain::client::GnosisRpcClient;
-use crate::chain::contracts::{CheckBalanceInputs, CheckBalanceResult};
 use crate::chain::errors::ChainError;
 
 // in order of priority
@@ -67,31 +62,6 @@ pub struct PreSafe {
     pub node_wxhopr: Balance<WxHOPR>,
 }
 
-impl PreSafe {
-    pub async fn fetch(priv_key: &ChainKeypair, rpc_provider: &str, node_address: Address) -> Result<Self, Error> {
-        let client = GnosisRpcClient::with_url(priv_key.clone(), rpc_provider)
-            .await
-            .map_err(Error::Chain)?;
-        let check_balance_inputs = CheckBalanceInputs::new(
-            node_address.as_ref().try_into().map_err(|e| {
-                Error::Chain(ChainError::DecodeEventError(format!(
-                    "failed to convert to address: {e}"
-                )))
-            })?,
-            node_address.as_ref().try_into().map_err(|e| {
-                Error::Chain(ChainError::DecodeEventError(format!(
-                    "failed to convert to address: {e}"
-                )))
-            })?,
-        );
-        let res = check_balance_inputs
-            .check(&client.provider)
-            .await
-            .map_err(Error::Chain)?;
-        Ok(res.into())
-    }
-}
-
 impl Default for PreSafe {
     fn default() -> Self {
         Self {
@@ -107,18 +77,18 @@ impl Display for PreSafe {
     }
 }
 
-impl From<CheckBalanceResult> for PreSafe {
-    fn from(result: CheckBalanceResult) -> Self {
-        let xdai_bytes: [u8; 32] = result.native_token_balance.to_be_bytes::<32>();
-        let xdai_u256 = U256::from_big_endian(&xdai_bytes);
-        let wxhopr_bytes: [u8; 32] = result.hopr_token_balance.to_be_bytes::<32>();
-        let wxhopr_u256 = U256::from_big_endian(&wxhopr_bytes);
-        Self {
-            node_xdai: Balance::<XDai>::from(xdai_u256),
-            node_wxhopr: Balance::<WxHOPR>::from(wxhopr_u256),
-        }
-    }
-}
+// impl From<CheckBalanceResult> for PreSafe {
+//     fn from(result: CheckBalanceResult) -> Self {
+//         let xdai_bytes: [u8; 32] = result.native_token_balance.to_be_bytes::<32>();
+//         let xdai_u256 = U256::from_big_endian(&xdai_bytes);
+//         let wxhopr_bytes: [u8; 32] = result.hopr_token_balance.to_be_bytes::<32>();
+//         let wxhopr_u256 = U256::from_big_endian(&wxhopr_bytes);
+//         Self {
+//             node_xdai: Balance::<XDai>::from(xdai_u256),
+//             node_wxhopr: Balance::<WxHOPR>::from(wxhopr_u256),
+//         }
+//     }
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Balances {
@@ -184,21 +154,7 @@ pub fn min_funds_threshold() -> Balance<XDai> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::contracts::CheckBalanceResult;
     use edgli::hopr_chain_connector::reexports::alloy::primitives::U256;
-
-    #[test]
-    fn converts_check_balance_result_into_presafe_balances() -> anyhow::Result<()> {
-        let result = CheckBalanceResult {
-            hopr_token_balance: U256::from(20),
-            native_token_balance: U256::from(10),
-        };
-        let presafe = PreSafe::from(result);
-
-        assert_eq!(presafe.node_xdai, Balance::<XDai>::from(10u64));
-        assert_eq!(presafe.node_wxhopr, Balance::<WxHOPR>::from(20u64));
-        Ok(())
-    }
 
     #[test]
     fn to_funding_issues_marks_unfunded_when_all_balances_zero() -> anyhow::Result<()> {

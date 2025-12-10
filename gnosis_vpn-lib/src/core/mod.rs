@@ -418,7 +418,14 @@ impl Core {
 
             Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
-                    self.spawn_store_safe(deployment.into(), results_sender);
+                    self.spawn_store_safe(
+                        edgli::hopr_lib::SafeModule {
+                            safe_address: deployment.safe_address,
+                            module_address: deployment.module_address,
+                            ..Default::default()
+                        },
+                        results_sender,
+                    );
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");

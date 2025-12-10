@@ -4,14 +4,14 @@
 use backoff::ExponentialBackoff;
 use backoff::future::retry;
 use bytesize::ByteSize;
-use edgli::hopr_chain_connector::reexports::alloy::primitives::U256;
 use edgli::hopr_lib::exports::api::chain::{ChainReadSafeOperations, SafeSelector};
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::{Address, Balance, IntoEndian, WxHOPR, XDai};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
+use edgli::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use human_bandwidth::re::bandwidth::Bandwidth;
-use rand::Rng;
+use rand::{Rng, random};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::balance;
-use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use crate::connection;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
@@ -195,13 +194,38 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     tracing::debug!("starting presafe balance runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider();
     let node_address = keys.chain_key.public().to_address();
     retry(ExponentialBackoff::default(), || async {
-        let presafe = balance::PreSafe::fetch(&private_key, rpc_provider.as_str(), node_address)
-            .await
-            .map_err(Error::from)?;
-        Ok(presafe)
+        let (balance_wxhopr, balance_xdai) = edgli::blokli::with_safeless_blokli_connector(
+            &private_key,
+            edgli::blokli::DEFAULT_BLOKLI_URL
+                .parse()
+                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            |connector| async move {
+                let balance_wxhopr = edgli::hopr_lib::exports::api::chain::ChainValues::balance::<
+                    WxHOPR,
+                    edgli::hopr_lib::Address,
+                >(&connector, node_address)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+                let balance_xdai = edgli::hopr_lib::exports::api::chain::ChainValues::balance::<
+                    XDai,
+                    edgli::hopr_lib::Address,
+                >(&connector, node_address)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+
+                Ok::<_, Error>((balance_wxhopr, balance_xdai))
+            },
+        )
+        .await
+        .map_err(|e| Error::Chain(e.to_string()))?
+        .await?;
+
+        Ok(balance::PreSafe {
+            node_xdai: balance_xdai,
+            node_wxhopr: balance_wxhopr,
+        })
     })
     .await
 }
@@ -247,48 +271,34 @@ async fn run_safe_deployment(
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider();
     let node_address = keys.chain_key.public().to_address();
     let token_u256 = presafe.node_wxhopr.amount();
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
-    let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
-    let network = hopr_params.network();
+    let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
+    let nonce = edgli::hopr_lib::U256::from(random::<u64>());
 
     retry(ExponentialBackoff::default(), || async {
-        // let mut bytes = [0u8; 32];
-        // rand::rng().fill(&mut bytes);
-        // let nonce = U256::from_be_bytes(bytes);
-        // let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
-        //     .await
-        //     .map_err(Error::from)?;
-        // let safe_module_deployment_inputs = SafeModuleDeploymentInputs::new(
-        //     nonce,
-        //     token_amount,
-        //     vec![node_address.as_ref().try_into().map_err(|e| {
-        //         Error::Chain(ChainError::DecodeEventError(format!(
-        //             "failed to convert to address: {e}"
-        //         )))
-        //     })?],
-        // );
-        // let res = safe_module_deployment_inputs
-        //     .deploy(&client.provider, network.clone())
-        //     .await
-        //     .map_err(Error::from)?;
-        // Ok(res)
-
         // Deploy safe
-        let transaction = edgli::blokli::with_safeless_blokli_connector(
+        let _tx_hash = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
                 .parse()
                 .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
             |connector| async move {
-                let signed_tx = todo!();
+                let inputs = SafeModuleDeploymentInputs {
+                    token_amount,
+                    nonce,
+                    admins: vec![node_address],
+                };
+
+                let signed_tx = edgli::blokli::safe_creation_payload_generator(&connector, inputs)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
 
                 let transaction =
                     edgli::connector::blokli_client::BlokliTransactionClient::submit_and_confirm_transaction(
                         connector.client(),
-                        signed_tx,
+                        signed_tx.as_ref(),
                         3,
                     )
                     .await;
@@ -319,7 +329,10 @@ async fn run_safe_deployment(
         .await?
         .map_err(|e| Error::Chain(e.to_string()))?;
 
-        Ok(SafeModuleDeploymentResult::new(safe.address, safe.module))
+        Ok(SafeModuleDeploymentResult {
+            safe_address: safe.address,
+            module_address: safe.module,
+        })
     })
     .await
 }

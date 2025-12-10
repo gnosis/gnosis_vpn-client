@@ -1,4 +1,3 @@
-pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
 use edgli::hopr_lib::{Balance, WxHOPR};
 use rand::Rng;
 use serde_yaml;
@@ -9,9 +8,10 @@ use url::Url;
 use std::path::{Path, PathBuf};
 
 use crate::balance;
-use crate::chain::contracts::SafeModuleDeploymentResult;
 use crate::dirs;
 use crate::network::Network;
+
+pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
 
 const DB_FILE: &str = "gnosisvpn-hopr.db";
 const SAFE_FILE: &str = "gnosisvpn-hopr.safe";
@@ -28,15 +28,15 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-impl From<SafeModuleDeploymentResult> for SafeModule {
-    fn from(result: SafeModuleDeploymentResult) -> Self {
-        Self {
-            safe_address: result.safe_address.0.0.into(),
-            module_address: result.module_address.0.0.into(),
-            ..Default::default()
-        }
-    }
-}
+// impl From<SafeModuleDeploymentResult> for SafeModule {
+//     fn from(result: SafeModuleDeploymentResult) -> Self {
+//         Self {
+//             safe_address: result.safe_address.0.0.into(),
+//             module_address: result.module_address.0.0.into(),
+//             ..Default::default()
+//         }
+//     }
+// }
 
 pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     let content = fs::read_to_string(path).await.map_err(|e| {

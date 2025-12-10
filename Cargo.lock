@@ -2448,13 +2448,14 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=c2ab8a8640cdcaf035e0478d491268175e0da03e#c2ab8a8640cdcaf035e0478d491268175e0da03e"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=7ec0db38124b35e751dc41b01b63de22984ab0ac#7ec0db38124b35e751dc41b01b63de22984ab0ac"
 dependencies = [
  "anyhow",
  "async-signal",
  "cfg-if",
  "clap",
  "futures",
+ "hopli",
  "hopr-chain-connector",
  "hopr-db-node",
  "hopr-lib",
@@ -4230,6 +4231,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "hopli"
+version = "1.0.0"
+source = "git+https://github.com/hoprnet/hopli/?rev=23300eae543295ff34dc764c869050a7add32820#23300eae543295ff34dc764c869050a7add32820"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "hex-literal",
+ "hopr-bindings 4.1.0",
+ "hopr-chain-types 0.10.0",
+ "hopr-crypto-keypair 0.4.1 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-internal-types 0.14.0",
+ "hopr-primitive-types 0.9.1",
+ "lazy_static",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "hopr-api"
 version = "0.5.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
@@ -4238,12 +4266,12 @@ dependencies = [
  "auto_impl",
  "chrono",
  "futures",
- "hopr-chain-types",
+ "hopr-chain-types 0.11.0",
  "hopr-crypto-packet",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-platform",
- "hopr-primitive-types",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "multiaddr",
  "strum 0.27.2",
  "thiserror 2.0.17",
@@ -4263,8 +4291,35 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
+version = "4.0.0"
+source = "git+https://github.com/hoprnet/contracts?rev=cc74253f4226fdca9f3ac4147e7ee0ac9b629c7c#cc74253f4226fdca9f3ac4147e7ee0ac9b629c7c"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "const_format",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum 0.27.2",
+]
+
+[[package]]
+name = "hopr-bindings"
 version = "4.0.1"
 source = "git+https://github.com/hoprnet/contracts?rev=c8fd165#c8fd1659dac83fa328d17e9cfffea307466b8109"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "const_format",
+ "serde",
+ "serde_json",
+ "serde_with",
+]
+
+[[package]]
+name = "hopr-bindings"
+version = "4.1.0"
+source = "git+https://github.com/hoprnet/contracts?rev=95289351c46a0ffd0644728a47a279ade36549fb#95289351c46a0ffd0644728a47a279ade36549fb"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4291,10 +4346,10 @@ dependencies = [
  "futures-time",
  "hopr-api",
  "hopr-async-runtime",
- "hopr-chain-types",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-primitive-types",
+ "hopr-chain-types 0.11.0",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
+ "hopr-primitive-types 0.10.0",
  "moka",
  "parking_lot",
  "petgraph",
@@ -4308,16 +4363,36 @@ dependencies = [
 
 [[package]]
 name = "hopr-chain-types"
+version = "0.10.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "hex-literal",
+ "hopr-bindings 4.0.0",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-internal-types 0.14.0",
+ "hopr-primitive-types 0.9.1",
+ "lazy_static",
+ "multiaddr",
+ "serde",
+ "serde_with",
+ "strum 0.27.2",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "hopr-chain-types"
 version = "0.11.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
 dependencies = [
  "anyhow",
  "async-trait",
  "hex-literal",
- "hopr-bindings",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-primitive-types",
+ "hopr-bindings 4.0.1",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
+ "hopr-primitive-types 0.10.0",
  "lazy_static",
  "multiaddr",
  "serde",
@@ -4332,10 +4407,29 @@ version = "0.4.1"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
 dependencies = [
  "hex",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-platform",
- "hopr-primitive-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tracing",
+ "typenum",
+ "uuid",
+]
+
+[[package]]
+name = "hopr-crypto-keypair"
+version = "0.4.1"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "hex",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-primitive-types 0.9.1",
  "scrypt",
  "serde",
  "serde_json",
@@ -4352,11 +4446,11 @@ source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74
 dependencies = [
  "flagset",
  "hex",
- "hopr-crypto-random",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-crypto-sphinx",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-primitive-types",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
+ "hopr-primitive-types 0.10.0",
  "serde",
  "serde_bytes",
  "strum 0.27.2",
@@ -4374,6 +4468,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hopr-crypto-random"
+version = "0.3.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "generic-array 1.3.5",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "hopr-crypto-sphinx"
 version = "0.11.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
@@ -4382,9 +4485,9 @@ dependencies = [
  "curve25519-dalek",
  "elliptic-curve",
  "generic-array 1.3.5",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-primitive-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "k256",
  "serde",
  "serde_bytes",
@@ -4409,8 +4512,8 @@ dependencies = [
  "ed25519-dalek",
  "generic-array 1.3.5",
  "hex",
- "hopr-crypto-random",
- "hopr-primitive-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "k256",
  "libp2p-identity",
  "poly1305",
@@ -4427,6 +4530,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "hopr-crypto-types"
+version = "0.8.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "aes",
+ "blake3",
+ "chacha20",
+ "cipher",
+ "crypto_box",
+ "ctr",
+ "curve25519-dalek",
+ "digest 0.10.7",
+ "ed25519-dalek",
+ "generic-array 1.3.5",
+ "hex",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-primitive-types 0.9.1",
+ "k256",
+ "libp2p-identity",
+ "poly1305",
+ "primitive-types 0.14.0",
+ "secp256k1 0.31.1",
+ "sha2",
+ "sha3",
+ "subtle",
+ "thiserror 2.0.17",
+ "typenum",
+ "zeroize",
+]
+
+[[package]]
 name = "hopr-db-entity"
 version = "0.6.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
@@ -4434,10 +4568,10 @@ dependencies = [
  "anyhow",
  "clap",
  "hex",
- "hopr-crypto-types",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-db-migration",
- "hopr-internal-types",
- "hopr-primitive-types",
+ "hopr-internal-types 0.16.0",
+ "hopr-primitive-types 0.10.0",
  "sea-orm",
  "sea-orm-cli",
  "sea-orm-migration",
@@ -4469,14 +4603,14 @@ dependencies = [
  "hex",
  "hopr-api",
  "hopr-crypto-packet",
- "hopr-crypto-types",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-db-entity",
  "hopr-db-migration",
- "hopr-internal-types",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
  "hopr-parallelize",
- "hopr-platform",
- "hopr-primitive-types",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "lazy_static",
  "moka",
  "sea-orm",
@@ -4490,15 +4624,34 @@ dependencies = [
 
 [[package]]
 name = "hopr-internal-types"
+version = "0.14.0"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "aquamarine",
+ "async-trait",
+ "hex-literal",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7)",
+ "hopr-primitive-types 0.9.1",
+ "multiaddr",
+ "num_enum",
+ "smart-default",
+ "strum 0.27.2",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
+name = "hopr-internal-types"
 version = "0.16.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
 dependencies = [
  "aquamarine",
  "async-trait",
  "hex-literal",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-primitive-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "multiaddr",
  "num_enum",
  "serde",
@@ -4527,16 +4680,16 @@ dependencies = [
  "hopr-api",
  "hopr-async-runtime",
  "hopr-chain-connector",
- "hopr-crypto-keypair",
- "hopr-crypto-random",
- "hopr-crypto-types",
+ "hopr-crypto-keypair 0.4.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-db-node",
- "hopr-internal-types",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
  "hopr-network-types",
  "hopr-parallelize",
- "hopr-platform",
- "hopr-primitive-types",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "hopr-transport",
  "lazy_static",
  "serde",
@@ -4570,11 +4723,11 @@ dependencies = [
  "hickory-resolver",
  "hopr-async-runtime",
  "hopr-crypto-packet",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "lazy_static",
  "libp2p-identity",
  "multiaddr",
@@ -4607,6 +4760,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "hopr-platform"
+version = "0.2.1"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "hopr-primitive-types"
+version = "0.9.1"
+source = "git+https://github.com/hoprnet/hoprnet?rev=a79a32c6c8f95ade97d11b2edf43f1dd670765e7#a79a32c6c8f95ade97d11b2edf43f1dd670765e7"
+dependencies = [
+ "bigdecimal",
+ "chrono",
+ "float-cmp",
+ "hex",
+ "lazy_static",
+ "primitive-types 0.14.0",
+ "regex",
+ "serde",
+ "serde_bytes",
+ "sha3",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "hopr-primitive-types"
 version = "0.10.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
@@ -4630,7 +4809,7 @@ version = "1.0.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189#94d8f76101ffae8f1e9dd93fe74f859b08141189"
 dependencies = [
  "hopr-crypto-packet",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "serde",
  "serde_bytes",
  "strum 0.27.2",
@@ -4652,12 +4831,12 @@ dependencies = [
  "hex",
  "hopr-api",
  "hopr-crypto-packet",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
  "hopr-network-types",
  "hopr-parallelize",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "humantime-serde",
  "moka",
  "parking_lot",
@@ -4687,9 +4866,9 @@ dependencies = [
  "hashbrown 0.16.1",
  "hopr-async-runtime",
  "hopr-crypto-packet",
- "hopr-crypto-random",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-metrics",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "lazy_static",
  "parking_lot",
  "pin-project",
@@ -4730,11 +4909,11 @@ dependencies = [
  "hopr-api",
  "hopr-async-runtime",
  "hopr-crypto-packet",
- "hopr-crypto-types",
- "hopr-internal-types",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
  "hopr-network-types",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "hopr-protocol-app",
  "hopr-protocol-hopr",
  "hopr-transport-identity",
@@ -4772,7 +4951,7 @@ source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74
 dependencies = [
  "futures",
  "futures-timer",
- "hopr-crypto-random",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-metrics",
  "lazy_static",
  "smart-default",
@@ -4787,12 +4966,12 @@ source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74
 dependencies = [
  "futures",
  "hopr-api",
- "hopr-crypto-random",
- "hopr-crypto-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-metrics",
  "hopr-network-types",
- "hopr-platform",
- "hopr-primitive-types",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "humantime-serde",
  "lazy_static",
  "libp2p-identity",
@@ -4812,7 +4991,7 @@ source = "git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74
 dependencies = [
  "async-trait",
  "futures",
- "hopr-internal-types",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
  "hopr-network-types",
  "hopr-transport-identity",
@@ -4836,12 +5015,12 @@ dependencies = [
  "futures-concurrency",
  "hex",
  "hopr-async-runtime",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
  "hopr-network-types",
- "hopr-platform",
- "hopr-primitive-types",
+ "hopr-platform 0.2.1 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-primitive-types 0.10.0",
  "hopr-protocol-app",
  "humantime-serde",
  "libp2p-identity",
@@ -4869,13 +5048,13 @@ dependencies = [
  "hopr-api",
  "hopr-async-runtime",
  "hopr-crypto-packet",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
  "hopr-network-types",
  "hopr-parallelize",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "hopr-protocol-app",
  "hopr-protocol-hopr",
  "hopr-transport-identity",
@@ -4905,12 +5084,12 @@ dependencies = [
  "futures-time",
  "hopr-async-runtime",
  "hopr-crypto-packet",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
+ "hopr-crypto-random 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
+ "hopr-internal-types 0.16.0",
  "hopr-metrics",
  "hopr-network-types",
- "hopr-primitive-types",
+ "hopr-primitive-types 0.10.0",
  "hopr-protocol-app",
  "hopr-protocol-session",
  "hopr-protocol-start",
@@ -4940,7 +5119,7 @@ dependencies = [
  "futures-time",
  "hopr-api",
  "hopr-async-runtime",
- "hopr-crypto-types",
+ "hopr-crypto-types 0.8.0 (git+https://github.com/hoprnet/hoprnet?rev=94d8f76101ffae8f1e9dd93fe74f859b08141189)",
  "hopr-lib",
  "hopr-network-types",
  "hopr-transport",
@@ -7657,6 +7836,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpassword"
+version = "7.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66d4c8b64f049c6721ec8ccec37ddfc3d641c4a7fca57e8f2a89de509c73df39"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7692,6 +7882,16 @@ dependencies = [
  "nix",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7cc970b249fbe527d6e02e0a227762c9108b2f49d81094fe357ffc6d14d7f6f"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
