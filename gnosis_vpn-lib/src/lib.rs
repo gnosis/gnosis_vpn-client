@@ -8,7 +8,6 @@ pub mod external_event;
 pub mod hopr;
 pub mod hopr_params;
 pub mod info;
-pub mod network;
 pub mod socket;
 
 mod dirs;

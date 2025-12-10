@@ -38,12 +38,6 @@ behavior:
 host:
   address: !Domain 45u1451o2i45124512345.example.com # anything really, will be announced, but cannot be contacted
   port: 9090 # local port for p2p
-db:
-  data: <PATH_TO_CONFIG_DIR_STRUCTURE>/data/
-chain:
-  network: rotsee
-  provider: https://gnosis-rpc.publicnode.com
-  announce: true
 safe_module:
   safe_address: <SAFE ADDRESS>
   module_address: <MODULE ADDRESS>

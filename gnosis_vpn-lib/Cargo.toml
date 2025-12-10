@@ -17,7 +17,6 @@ human-bandwidth = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 humantime-serde.workspace = true
 ping.workspace = true
-primitive-types.workspace = true
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true

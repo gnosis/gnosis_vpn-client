@@ -77,19 +77,6 @@ impl Display for PreSafe {
     }
 }
 
-// impl From<CheckBalanceResult> for PreSafe {
-//     fn from(result: CheckBalanceResult) -> Self {
-//         let xdai_bytes: [u8; 32] = result.native_token_balance.to_be_bytes::<32>();
-//         let xdai_u256 = U256::from_big_endian(&xdai_bytes);
-//         let wxhopr_bytes: [u8; 32] = result.hopr_token_balance.to_be_bytes::<32>();
-//         let wxhopr_u256 = U256::from_big_endian(&wxhopr_bytes);
-//         Self {
-//             node_xdai: Balance::<XDai>::from(xdai_u256),
-//             node_wxhopr: Balance::<WxHOPR>::from(wxhopr_u256),
-//         }
-//     }
-// }
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Balances {
     pub node_xdai: Balance<XDai>,

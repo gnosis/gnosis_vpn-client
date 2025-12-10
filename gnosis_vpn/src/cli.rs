@@ -1,10 +1,8 @@
 use clap::Parser;
-use url::Url;
 
 use std::path::PathBuf;
 
 use gnosis_vpn_lib::hopr_params::{self, HoprParams};
-use gnosis_vpn_lib::network::Network;
 use gnosis_vpn_lib::{config, hopr, socket};
 
 /// Gnosis VPN system service - client application for Gnosis VPN connections
@@ -29,13 +27,8 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
-    /// RPC provider URL needed for fat Hopr edge client
-    #[arg(long, env = hopr::RPC_PROVIDER_ENV)]
-    pub hopr_rpc_provider: Url,
-
-    /// Hopr network
-    #[arg(long, env = hopr::NETWORK_ENV, default_value = "dufour")]
-    pub hopr_network: Network,
+    // TODO: add blokli instance override here?
+    /// HERE
 
     /// Hopr edge client configuration path
     #[arg( long, env = hopr::CONFIG_ENV, default_value = None) ]
@@ -60,8 +53,6 @@ pub fn parse() -> Cli {
 
 impl From<Cli> for HoprParams {
     fn from(cli: Cli) -> Self {
-        let network = cli.hopr_network;
-        let rpc_provider = cli.hopr_rpc_provider;
         let config_mode = match cli.hopr_config_path {
             Some(path) => hopr_params::ConfigFileMode::Manual(path),
             None => hopr_params::ConfigFileMode::Generated,
@@ -72,8 +63,6 @@ impl From<Cli> for HoprParams {
             cli.hopr_identity_file,
             cli.hopr_identity_pass,
             config_mode,
-            network,
-            rpc_provider,
             allow_insecure,
         )
     }
@@ -86,8 +75,6 @@ mod tests {
     fn base_args() -> Vec<&'static str> {
         vec![
             "gnosis_vpn",
-            "--hopr-rpc-provider",
-            "https://example.com",
             "--socket-path",
             "/tmp/gnosis.socket",
             "--config-path",
@@ -98,26 +85,16 @@ mod tests {
     #[test]
     fn parses_cli_with_minimum_arguments() -> anyhow::Result<()> {
         let args = Cli::try_parse_from(base_args())?;
-        assert_eq!(args.hopr_network, Network::Dufour);
         assert!(args.hopr_config_path.is_none());
 
         Ok(())
     }
 
     #[test]
-    fn cli_parse_fails_when_rpc_provider_missing() -> anyhow::Result<()> {
-        assert!(Cli::try_parse_from(["gnosis_vpn"]).is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn hopr_params_conversion_preserves_network_and_security_flags() -> anyhow::Result<()> {
+    fn hopr_params_conversion_preserves_and_security_flags() -> anyhow::Result<()> {
         let cli = Cli {
             socket_path: PathBuf::from("/tmp/socket"),
             config_path: PathBuf::from("/tmp/config"),
-            hopr_rpc_provider: Url::parse("https://hopr.net").expect("url"),
-            hopr_network: Network::Rotsee,
             hopr_config_path: Some(PathBuf::from("/tmp/hopr-config")),
             hopr_identity_file: Some(PathBuf::from("/tmp/id")),
             hopr_identity_pass: Some("secret-pass".into()),
@@ -125,8 +102,6 @@ mod tests {
         };
 
         let params = HoprParams::from(cli.clone());
-        assert_eq!(params.network(), cli.hopr_network);
-        assert_eq!(params.rpc_provider(), cli.hopr_rpc_provider);
         assert!(params.allow_insecure());
 
         Ok(())

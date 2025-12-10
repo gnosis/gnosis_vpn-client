@@ -2,12 +2,10 @@ use edgli::hopr_lib::config::HoprLibConfig;
 use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use thiserror::Error;
 use tokio::fs;
-use url::Url;
 
 use std::path::PathBuf;
 
 use crate::hopr::{config, identity};
-use crate::network::Network;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -24,8 +22,6 @@ pub struct HoprParams {
     identity_file: Option<PathBuf>,
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
-    network: Network,
-    rpc_provider: Url,
     allow_insecure: bool,
 }
 
@@ -40,16 +36,12 @@ impl HoprParams {
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
-        network: Network,
-        rpc_provider: Url,
         allow_insecure: bool,
     ) -> Self {
         Self {
             identity_file,
             identity_pass,
             config_mode,
-            network,
-            rpc_provider,
             allow_insecure,
         }
     }
@@ -114,18 +106,8 @@ impl HoprParams {
             // use user provided configuration path
             ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
             // check status of config generation
-            ConfigFileMode::Generated => config::generate(self.network(), self.rpc_provider(), ticket_value)
-                .await
-                .map_err(Error::from),
+            ConfigFileMode::Generated => config::generate(ticket_value).await.map_err(Error::from),
         }
-    }
-
-    pub fn rpc_provider(&self) -> Url {
-        self.rpc_provider.clone()
-    }
-
-    pub fn network(&self) -> Network {
-        self.network.clone()
     }
 
     pub fn allow_insecure(&self) -> bool {
@@ -141,12 +123,8 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::runtime::Runtime;
 
-    fn sample_url() -> Url {
-        Url::parse("https://example.com").expect("valid url")
-    }
-
     fn params_with_mode(mode: ConfigFileMode) -> HoprParams {
-        HoprParams::new(None, None, mode, Network::Dufour, sample_url(), true)
+        HoprParams::new(None, None, mode, true)
     }
 
     fn rt() -> Runtime {
