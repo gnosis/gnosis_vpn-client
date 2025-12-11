@@ -14,9 +14,14 @@ const MARK: &str = "0xDEAD";
  */
 pub async fn setup(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
     // 1. generate wg quick content
-    //let wg_quick_content = wg_data.wg.to_file_string(&wg_data.interface_info, &wg_data.peer_info);
+    let wg_quick_content = wg_data.wg.to_file_string(
+        &wg_data.interface_info,
+        &wg_data.peer_info,
+        // true to route all traffic
+        false
+    );
     // 2. run wg-quick up
-    //  wg_tooling::up(wg_quick_content).await?;
+    wg_tooling::up(wg_quick_content).await?;
     Ok(())
 }
 

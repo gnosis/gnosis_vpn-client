@@ -1,8 +1,9 @@
-use tokio::fs;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{dirs, worker};
+use gnosis_vpn_lib::{dirs, event, worker};
+
+use crate::wg_tooling;
 
 use super::Error;
 
@@ -12,11 +13,16 @@ const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
  * Refactor logic to use:
  * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
  */
-pub async fn setup(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
+pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
     // 1. generate wg quick content
-    //let wg_quick_content = wg_data.wg.to_file_string(&wg_data.interface_info, &wg_data.peer_info);
+    let wg_quick_content = wg_data.wg.to_file_string(
+        &wg_data.interface_info,
+        &wg_data.peer_info,
+        // true to route all traffic
+        false
+    );
     // 2. run wg-quick up
-    //  wg_tooling::up(wg_quick_content).await?;
+    wg_tooling::up(wg_quick_content).await?;
     // 3. determine interface
     // let (device, gateway) = interface().await?;
     Ok(())
@@ -24,7 +30,7 @@ pub async fn setup(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result
 
 pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
     // 1. run wg-quick down
-    //  wg_tooling::down().await?;
+    wg_tooling::down().await?;
     Ok(())
 }
 

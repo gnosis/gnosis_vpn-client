@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, event, shell_command_ext, worker};
+use gnosis_vpn_lib::{dirs, event, shell_command_ext, wireguard, worker};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -14,10 +14,12 @@ pub enum Error {
     #[cfg(target_os = "macos")]
     #[error("Unable to determine default interface")]
     NoInterface,
-    #[error(transparent)]
+    #[error("Directories error: {0}")]
     Dirs(#[from] dirs::Error),
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
+    #[error("wg-quick error: {0}")]
+    WgTooling(#[from] wireguard::Error)
 }
 
 pub struct Routing {

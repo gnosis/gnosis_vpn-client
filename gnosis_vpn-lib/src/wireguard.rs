@@ -127,12 +127,18 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {
+    pub fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo, route_all_traffic: bool) -> String {
         let listen_port_line = self
             .config
             .listen_port
             .map(|port| format!("ListenPort = {port}\n"))
             .unwrap_or_default();
+
+        let allowed_ips = match (route_all_traffic, &self.config.allowed_ips) {
+            (true, _) => "0.0.0.0/0".to_string(),
+            (_, Some(allowed_ips)) => allowed_ips.clone(),
+            _ => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
+        };
 
         format!(
             "[Interface]
@@ -143,13 +149,14 @@ Address = {address}
 [Peer]
 PublicKey = {public_key}
 Endpoint = {endpoint}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = {allowed_ips}
 ",
             private_key = self.key_pair.priv_key,
             address = interface.address,
             public_key = peer.public_key,
             endpoint = peer.endpoint,
             listen_port_line = listen_port_line,
+            allowed_ips = allowed_ips,
         )
     }
 }
