@@ -1,12 +1,14 @@
-use tokio::process::Command;
+//use tokio::process::Command;
+
+// use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
+// use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::{event, worker};
 
 use crate::wg_tooling;
-use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{event, wireguard, worker};
 
 use super::Error;
 
-const MARK: &str = "0xDEAD";
+// const MARK: &str = "0xDEAD";
 
 /**
  * Refactor logic to use:
