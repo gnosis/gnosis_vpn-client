@@ -1,7 +1,8 @@
 use tokio::process::Command;
 
+use crate::wg_tooling;
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{wireguard, worker};
+use gnosis_vpn_lib::{event, wireguard, worker};
 
 use super::Error;
 
@@ -11,104 +12,22 @@ const MARK: &str = "0xDEAD";
  * Refactor logic to use:
  * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
  */
-pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
-    // setup is run outside of connection context and only applies global firewall routing
-    // mark outgoing packages of worker process user
-    // iptables -t mangle -A OUTPUT -m owner --uid-owner 992 -j MARK --set-mark 0xDEAD;
-    Command::new("iptables")
-        .arg("-t")
-        .arg("mangle")
-        .arg("-A")
-        .arg("OUTPUT")
-        .arg("-m")
-        .arg("owner")
-        .arg("--uid-owner")
-        .arg(format!("{}", worker.uid))
-        .arg("-j")
-        .arg("MARK")
-        .arg("--set-mark")
-        .arg(MARK)
-        .run()
-        .await?;
-
-    // save mark of those outgoing packages
-    // iptables -t mangle -A OUTPUT -m mark --mark 0xDEAD -j CONNMARK --save-mark;
-    Command::new("iptables")
-        .arg("-t")
-        .arg("mangle")
-        .arg("-A")
-        .arg("OUTPUT")
-        .arg("-m")
-        .arg("mark")
-        .arg("--mark")
-        .arg(MARK)
-        .arg("-j")
-        .arg("CONNMARK")
-        .arg("--save-mark")
-        .run()
-        .await?;
-    // restore mark on incoming packages belonging to those connections, so they can bypass routing
-    // iptables -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
-    Command::new("iptables")
-        .arg("-t")
-        .arg("mangle")
-        .arg("-I")
-        .arg("PREROUTING")
-        .arg("1")
-        .arg("-j")
-        .arg("CONNMARK")
-        .arg("--restore-mark")
-        .run()
-        .await?;
+pub async fn setup(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
+    // 1. generate wg quick content
+    //let wg_quick_content = wg_data.wg.to_file_string(&wg_data.interface_info, &wg_data.peer_info);
+    // 2. run wg-quick up
+    //  wg_tooling::up(wg_quick_content).await?;
     Ok(())
 }
 
-pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
-    // run all teardown commands before evaluated results
-    let res1 = Command::new("iptables")
-        .arg("-t")
-        .arg("mangle")
-        .arg("-D")
-        .arg("OUTPUT")
-        .arg("-m")
-        .arg("owner")
-        .arg("--uid-owner")
-        .arg(format!("{}", worker.uid))
-        .arg("-j")
-        .arg("MARK")
-        .arg("--set-mark")
-        .arg(MARK)
-        .spawn_no_capture()
-        .await;
-    let res2 = Command::new("iptables")
-        .arg("-t")
-        .arg("mangle")
-        .arg("-D")
-        .arg("OUTPUT")
-        .arg("-m")
-        .arg("mark")
-        .arg("--mark")
-        .arg(MARK)
-        .arg("-j")
-        .arg("CONNMARK")
-        .arg("--save-mark")
-        .spawn_no_capture()
-        .await;
-    let res3 = Command::new("iptables")
-        .arg("-t")
-        .arg("mangle")
-        .arg("-D")
-        .arg("PREROUTING")
-        .arg("-j")
-        .arg("CONNMARK")
-        .arg("--restore-mark")
-        .spawn_no_capture()
-        .await;
-    res1.and(res2).and(res3)?;
+pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
+    // 1. run wg-quick down
+    //  wg_tooling::down().await?;
     Ok(())
 }
 
-pub async fn add_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
+/*
+async fn add_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
     // except wireguard subnet from bypassing traffic
     // wg show wg0_gnosisvpn fwmark
     let interface_parts: Vec<&str> = wireguard::WG_CONFIG_FILE.split('.').collect();
@@ -167,10 +86,59 @@ pub async fn add_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
         .spawn_no_capture()
         .await?;
 
+    // setup is run outside of connection context and only applies global firewall routing
+    // mark outgoing packages of worker process user
+    // iptables -t mangle -A OUTPUT -m owner --uid-owner 992 -j MARK --set-mark 0xDEAD;
+    Command::new("iptables")
+        .arg("-t")
+        .arg("mangle")
+        .arg("-A")
+        .arg("OUTPUT")
+        .arg("-m")
+        .arg("owner")
+        .arg("--uid-owner")
+        .arg(format!("{}", worker.uid))
+        .arg("-j")
+        .arg("MARK")
+        .arg("--set-mark")
+        .arg(MARK)
+        .run()
+        .await?;
+
+    // save mark of those outgoing packages
+    // iptables -t mangle -A OUTPUT -m mark --mark 0xDEAD -j CONNMARK --save-mark;
+    Command::new("iptables")
+        .arg("-t")
+        .arg("mangle")
+        .arg("-A")
+        .arg("OUTPUT")
+        .arg("-m")
+        .arg("mark")
+        .arg("--mark")
+        .arg(MARK)
+        .arg("-j")
+        .arg("CONNMARK")
+        .arg("--save-mark")
+        .run()
+        .await?;
+    // restore mark on incoming packages belonging to those connections, so they can bypass routing
+    // iptables -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
+    Command::new("iptables")
+        .arg("-t")
+        .arg("mangle")
+        .arg("-I")
+        .arg("PREROUTING")
+        .arg("1")
+        .arg("-j")
+        .arg("CONNMARK")
+        .arg("--restore-mark")
+        .run()
+        .await?;
+
     Ok(())
 }
 
-pub async fn del_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
+async fn del_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
     // run all del commands before evaluated results
     let res1 = Command::new("ip")
         .arg("rule")
@@ -195,5 +163,48 @@ pub async fn del_ip_rules(worker: &worker::Worker) -> Result<(), Error> {
         .spawn_no_capture()
         .await;
     res1.and(res2)?;
+
+    // run all teardown commands before evaluated results
+    let res1 = Command::new("iptables")
+        .arg("-t")
+        .arg("mangle")
+        .arg("-D")
+        .arg("OUTPUT")
+        .arg("-m")
+        .arg("owner")
+        .arg("--uid-owner")
+        .arg(format!("{}", worker.uid))
+        .arg("-j")
+        .arg("MARK")
+        .arg("--set-mark")
+        .arg(MARK)
+        .spawn_no_capture()
+        .await;
+    let res2 = Command::new("iptables")
+        .arg("-t")
+        .arg("mangle")
+        .arg("-D")
+        .arg("OUTPUT")
+        .arg("-m")
+        .arg("mark")
+        .arg("--mark")
+        .arg(MARK)
+        .arg("-j")
+        .arg("CONNMARK")
+        .arg("--save-mark")
+        .spawn_no_capture()
+        .await;
+    let res3 = Command::new("iptables")
+        .arg("-t")
+        .arg("mangle")
+        .arg("-D")
+        .arg("PREROUTING")
+        .arg("-j")
+        .arg("CONNMARK")
+        .arg("--restore-mark")
+        .spawn_no_capture()
+        .await;
+    res1.and(res2).and(res3)?;
     Ok(())
 }
+*/

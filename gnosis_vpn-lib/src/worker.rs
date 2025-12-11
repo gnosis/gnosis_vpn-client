@@ -42,7 +42,7 @@ pub const DEFAULT_WORKER_USER: &str = USERNAME;
 pub const ENV_VAR_WORKER_BINARY: &str = "GNOSISVPN_WORKER_BINARY";
 pub const ENV_VAR_WORKER_USER: &str = "GNOSISVPN_WORKER_USER";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Worker {
     pub uid: u32,
     pub gid: u32,

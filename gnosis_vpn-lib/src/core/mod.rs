@@ -16,7 +16,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::event::{IncomingCore, OutgoingCore};
+use crate::event::{self, IncomingCore, OutgoingCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -570,9 +570,13 @@ impl Core {
                                 public_key: reg.server_public_key(),
                                 endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
                             };
-                            let content = wg.to_file_string(&interface_info, &peer_info);
+                            let wg_data = event::WgData {
+                                wg,
+                                peer_info,
+                                interface_info,
+                            };
                             self.outgoing_sender
-                                .send(OutgoingCore::WgUp(content))
+                                .send(OutgoingCore::WgUp(wg_data))
                                 .await
                                 .expect("worker outgoing channel closed - shutting down");
                             let evt = connection::up::Progress::WgTunnel(session);

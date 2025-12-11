@@ -12,6 +12,23 @@ const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
  * Refactor logic to use:
  * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
  */
+pub async fn setup(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
+    // 1. generate wg quick content
+    //let wg_quick_content = wg_data.wg.to_file_string(&wg_data.interface_info, &wg_data.peer_info);
+    // 2. run wg-quick up
+    //  wg_tooling::up(wg_quick_content).await?;
+    // 3. determine interface
+    // let (device, gateway) = interface().await?;
+    Ok(())
+}
+
+pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
+    // 1. run wg-quick down
+    //  wg_tooling::down().await?;
+    Ok(())
+}
+
+/*
 pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
     let (device, gateway) = interface().await?;
 
@@ -61,6 +78,8 @@ pub async fn teardown(_worker: &worker::Worker) -> Result<(), Error> {
 
     Ok(())
 }
+
+*/
 
 async fn interface() -> Result<(String, Option<String>), Error> {
     let output = Command::new("route")

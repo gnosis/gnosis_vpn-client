@@ -113,6 +113,10 @@ async fn public_key(priv_key: &str) -> Result<String, Error> {
 }
 
 impl WireGuard {
+    pub fn new(config: Config, key_pair: KeyPair) -> Self {
+        WireGuard { config, key_pair }
+    }
+
     pub async fn from_config(config: Config) -> Result<Self, Error> {
         let priv_key = match config.force_private_key.clone() {
             Some(key) => key,

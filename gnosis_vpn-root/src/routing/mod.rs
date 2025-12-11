@@ -1,6 +1,11 @@
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, shell_command_ext, worker};
+use gnosis_vpn_lib::{dirs, event, shell_command_ext, worker};
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -15,30 +20,33 @@ pub enum Error {
     IO(#[from] std::io::Error),
 }
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-pub use linux::{add_ip_rules, del_ip_rules};
-
-#[cfg(target_os = "macos")]
-mod macos;
-
-#[cfg(target_os = "linux")]
-pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
-    linux::setup(worker).await
+pub struct Routing {
+    worker: worker::Worker,
+    wg_data: event::WgData,
 }
 
-#[cfg(target_os = "macos")]
-pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
-    macos::setup(worker).await
-}
+impl Routing {
+    pub fn new(worker: worker::Worker, wg_data: event::WgData) -> Self {
+        Self { worker, wg_data }
+    }
 
-#[cfg(target_os = "linux")]
-pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
-    linux::teardown(worker).await
-}
+    pub async fn setup(&self) -> Result<(), Error> {
+        #[cfg(target_os = "linux")]
+        linux::setup(&self.worker, &self.wg_data).await?;
 
-#[cfg(target_os = "macos")]
-pub async fn teardown(worker: &worker::Worker) -> Result<(), Error> {
-    macos::teardown(worker).await
+        #[cfg(target_os = "macos")]
+        macos::setup(&self.worker, &self.wg_data).await?;
+
+        Ok(())
+    }
+
+    pub async fn teardown(&self) -> Result<(), Error> {
+        #[cfg(target_os = "linux")]
+        linux::teardown(&self.worker, &self.wg_data).await?;
+
+        #[cfg(target_os = "macos")]
+        macos::teardown(&self.worker, &self.wg_data).await?;
+
+        Ok(())
+    }
 }

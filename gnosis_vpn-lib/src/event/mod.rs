@@ -6,6 +6,7 @@ use tokio::sync::oneshot;
 use crate::command::{Command, Response};
 use crate::config::Config;
 use crate::hopr_params::HoprParams;
+use crate::wireguard::{self, WireGuard};
 
 /// Messages sent from worker to core application logic
 #[derive(Debug)]
@@ -64,9 +65,16 @@ pub enum OutgoingWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WireGuardCommand {
     /// generated WireGuard configuration file
-    WgUp(String),
+    WgUp(WgData),
     /// Tear down WireGuard interface
     WgDown,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WgData {
+    pub wg: WireGuard,
+    pub interface_info: wireguard::InterfaceInfo,
+    pub peer_info: wireguard::PeerInfo,
 }
 
 impl AsRef<IncomingWorker> for IncomingWorker {

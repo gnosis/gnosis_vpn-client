@@ -22,6 +22,8 @@ mod cli;
 mod routing;
 mod wg_tooling;
 
+use routing::Routing;
+
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
@@ -159,32 +161,22 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let socket = socket_listener(&args.socket_path).await?;
 
-    // set up routing for mix node - ensure clean state by calling teardown first
-    // match routing::teardown(&worker_user).await {
-    //     Ok(_) => tracing::warn!("cleaned up routing from previous instance"),
-    //     Err(err) => {
-    //         tracing::debug!(error = ?err, "expected error during pre-start routing teardown");
-    //     }
-    // }
-    // routing::setup(&worker_user).await.map_err(|err| {
-    //     tracing::error!(error = ?err, "error setting up routing");
-    //     exitcode::OSERR
-    // })?;
+    let mut routing: Option<Routing> = None;
+    let res = loop_daemon(
+        &mut ctrlc_receiver,
+        socket,
+        &worker_user,
+        config,
+        hopr_params,
+        &mut routing,
+    )
+    .await;
 
-    let res = loop_daemon(&mut ctrlc_receiver, socket, &worker_user, config, hopr_params).await;
-
-    // restore wg if connected
-    if let Ok(true) = res {
-        #[cfg(target_os = "linux")]
-        let _ = routing::del_ip_rules(&worker_user).await.map_err(|err| {
-            tracing::error!(error = ?err, "error removing ip rules on shutdown");
-        });
+    // restore routing if connected
+    if let Some(routing) = routing {
         // restore routing - log errors
-        let _ = routing::teardown(&worker_user).await.map_err(|err| {
+        let _ = routing.teardown().await.map_err(|err| {
             tracing::error!(error = ?err, "error tearing down routing on shutdown");
-        });
-        let _ = wg_tooling::down().await.map_err(|err| {
-            tracing::error!(error = ?err, "error during wg-quick down on shutdown");
         });
     }
 
@@ -200,7 +192,8 @@ async fn loop_daemon(
     worker_user: &worker::Worker,
     config: Config,
     hopr_params: HoprParams,
-) -> Result<bool, exitcode::ExitCode> {
+    routing: &mut Option<Routing>,
+) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
         exitcode::IOERR
@@ -247,18 +240,18 @@ async fn loop_daemon(
     send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
-    let mut wg_connected = false;
     let mut shutdown_ongoing = false;
     // root <-> system socket communication setup (UI app)
     let mut socket_lines_reader: Option<io::Lines<BufReader<OwnedReadHalf>>> = None;
     let mut socket_writer: Option<BufWriter<OwnedWriteHalf>> = None;
+
     tracing::info!("entering main daemon loop");
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
                 if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
-                    return Ok(wg_connected);
+                    return Ok(());
                 } else {
                     shutdown_ongoing = true;
                     tracing::info!("initiate shutdown");
@@ -292,47 +285,20 @@ async fn loop_daemon(
                     OutgoingWorker::WireGuard(wg_cmd) => {
                         tracing::debug!(?wg_cmd, "received worker wireguard command");
                         match wg_cmd {
-                            WireGuardCommand::WgUp( config_content ) => {
-                                wg_connected = true;
+                            WireGuardCommand::WgUp( wg_data ) => {
                                 // ensure we run down before going up to ensure clean slate
-                                // on linux we need to add ip rules after wg-quick up ran - taking
-                                // it down in reverse order
-                                // #[cfg(target_os = "linux")]
-                                // match routing::del_ip_rules(worker_user).await {
-                                //     Ok(_) => tracing::warn!("removed ip rules from previous connection"),
-                                //     Err(err) => {
-                                //         tracing::debug!(error = ?err, "expected error during ip rule removal before wg-quick up");
-                                //     }
-                                // }
-
-                                match routing::teardown(worker_user).await {
-                                    Ok(_) => tracing::warn!("cleaned up routing from previous instance"),
-                                    Err(err) => {
-                                        tracing::debug!(error = ?err, "expected error during pre-start routing teardown");
+                                if let Some(routing) = routing {
+                                    match routing.teardown().await {
+                                        Ok(_) => tracing::warn!("cleaned up routing from previous instance"),
+                                        Err(err) => {
+                                            tracing::debug!(error = ?err, "expected error during pre-start routing teardown");
+                                        }
                                     }
                                 }
 
-                                match wg_tooling::down().await {
-                                    Ok(_) => tracing::warn!("took down wireguard interface from previous connection"),
-                                    Err(err) => {
-                                        tracing::debug!(error = ?err, "expected error during wg-quick down before setting it up again");
-                                    }
-                                }
-
-
-                                let res_wgquick = wg_tooling::up(config_content).await.map_err(|e| format!("wg-quick up error: {}", e));
-
-                                let res_setup = routing::setup(worker_user).await.map_err(|e| format!("routing setup error: {}", e));
-
-                                let res = res_wgquick.and(res_setup);
-
-                                // on linux adding additional ip rules after wg-quick up
-                                // #[cfg(target_os = "linux")]
-                                // let res_iprule = routing::add_ip_rules(worker_user).await.map_err(|e| format!("ip rule add error: {}", e));
-                                // #[cfg(target_os = "linux")]
-                                // let res = res_wgquick.and(res_iprule);
-                                // #[cfg(target_os = "macos")]
-                                // let res = res_wgquick;
+                                let new_routing = Routing::new(worker_user.clone(), wg_data);
+                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                *routing = Some(new_routing);
                                 send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
                             },
                             WireGuardCommand::WgDown => {
@@ -342,7 +308,7 @@ async fn loop_daemon(
                                         tracing::error!(error = ?err, "error during wg-quick down");
                                     }
                                 }
-                                wg_connected = false;
+                                *routing = None;
                             }
                         }
                     },
@@ -360,7 +326,7 @@ async fn loop_daemon(
                     } else {
                         tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
                     }
-                    return Ok(wg_connected);
+                    return Ok(());
                 } else {
                     tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
                     return Err(exitcode::IOERR);
