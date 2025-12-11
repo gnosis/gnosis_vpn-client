@@ -1,13 +1,14 @@
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{dirs, event, worker};
+// use gnosis_vpn_lib::dirs;
+use gnosis_vpn_lib::{event, worker};
 
 use crate::wg_tooling;
 
 use super::Error;
 
-const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
+// const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
 
 /**
  * Refactor logic to use:
@@ -24,7 +25,7 @@ pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<
     // 2. run wg-quick up
     wg_tooling::up(wg_quick_content).await?;
     // 3. determine interface
-    // let (device, gateway) = interface().await?;
+    let (_device, _gateway) = interface().await?;
     Ok(())
 }
 
