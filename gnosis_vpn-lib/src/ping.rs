@@ -31,13 +31,15 @@ impl Default for PingOptions {
 
 #[tracing::instrument(name = "ping", ret)]
 pub fn ping(opts: &PingOptions) -> Result<Duration, Error> {
-    // NOTE: DGRAM ping might not work on ARCH Linux
-    let mut ping = ping::new(opts.address);
-    ping.timeout(opts.timeout)
-        .ttl(opts.ttl)
-        .seq_cnt(opts.seq_count)
-        .socket_type(ping::DGRAM)
-        .send()
-        .map(|p| p.rtt)
-        .map_err(Error::from)
+    let mut builder = ping::new(opts.address);
+    let mut ping = builder.timeout(opts.timeout).ttl(opts.ttl).seq_cnt(opts.seq_count);
+    #[cfg(target_os = "linux")]
+    {
+        ping = ping.socket_type(ping::RAW);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ping = ping.socket_type(ping::DGRAM);
+    }
+    ping.send().map(|p| p.rtt).map_err(Error::from)
 }
