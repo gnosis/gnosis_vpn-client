@@ -29,6 +29,7 @@ impl Default for PingOptions {
     }
 }
 
+#[allow(dead_code)]
 #[tracing::instrument(name = "ping", ret)]
 pub fn ping(opts: &PingOptions) -> Result<Duration, Error> {
     let mut builder = ping::new(opts.address);

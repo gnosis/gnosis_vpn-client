@@ -1,20 +1,17 @@
 //! The runner module for `core::connection::up` struct.
 //! It handles state transitions after wg tunnel established and  forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::connection::destination::Destination;
 use crate::connection::options::Options;
 use crate::core::runner::{self, Results};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::ping;
+// use crate::ping;
 
 use super::{Error, Event, Progress};
 
@@ -53,8 +50,8 @@ impl Runner {
                 evt: progress(Progress::Ping),
             })
             .await;
-        let round_trip_time = ping(&self.options).await?;
-        tracing::debug!(?round_trip_time, "ping successful");
+        // let round_trip_time = ping(&self.options).await?;
+        // tracing::debug!(?round_trip_time, "ping successful");
 
         // 7. adjust to main session
         let _ = results_sender
@@ -73,6 +70,7 @@ impl Display for Runner {
     }
 }
 
+/*
 async fn ping(options: &Options) -> Result<Duration, ping::Error> {
     retry(ExponentialBackoff::default(), || async {
         tracing::debug!(?options, "attempting to ping through wg tunnel");
@@ -81,6 +79,7 @@ async fn ping(options: &Options) -> Result<Duration, ping::Error> {
     })
     .await
 }
+*/
 
 async fn adjust_to_main_session(
     hopr: &Hopr,
