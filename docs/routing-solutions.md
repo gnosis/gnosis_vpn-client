@@ -1,7 +1,8 @@
 # Routing solutions
 
 NOTE: generally wg-quick needs to be executed before any routing adaptions.
-Otherwise the script is quite clever and injusts it's rules with higher priority.
+Otherwise the script is quite clever and injusts it's rules with higher
+priority.
 
 ## Linux potential solution 1: fwmark + ip rule
 
@@ -9,6 +10,7 @@ Otherwise the script is quite clever and injusts it's rules with higher priority
 - ip rule specifies routing table based on fwmark
 
 Problem:
+
 - requires socket level access
 - incoming traffic routing
 
@@ -20,6 +22,7 @@ Problem:
 - ip rule specifies routing table based on uid and fwmark (not sure if needed)
 
 Problem:
+
 - relies on iptables firewall
 - works only for child process
 - does not work system wide
@@ -32,6 +35,7 @@ Problem:
 - since stateful firewall incoming packets should be rerouted the same
 
 Problem:
+
 - does not seem to work at all
 - all system traffic seems to be routet regardless of pf settings
 - pf firewall not necessarily enabled on macOS by default

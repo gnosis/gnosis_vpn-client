@@ -18,7 +18,7 @@ pub async fn setup(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result
         &wg_data.interface_info,
         &wg_data.peer_info,
         // true to route all traffic
-        false
+        false,
     );
     // 2. run wg-quick up
     wg_tooling::up(wg_quick_content).await?;

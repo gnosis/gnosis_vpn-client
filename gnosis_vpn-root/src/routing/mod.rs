@@ -19,7 +19,7 @@ pub enum Error {
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
-    WgTooling(#[from] wireguard::Error)
+    WgTooling(#[from] wireguard::Error),
 }
 
 pub struct Routing {
