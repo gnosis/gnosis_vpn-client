@@ -122,6 +122,7 @@ jobs:
         run: |
           nix build .#packages.${{ steps.vars.outputs.architecture}}.gvpn -L
           mkdir -p binaries
+          ls -al ./result/bin/
           cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
           cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
