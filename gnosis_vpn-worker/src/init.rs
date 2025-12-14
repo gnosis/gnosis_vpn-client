@@ -13,7 +13,6 @@ enum State {
     AwaitingHoprParams(Config),
     AwaitingConfig(HoprParams),
     Ready(Config, HoprParams),
-    Shutdown,
 }
 
 impl Init {
@@ -31,13 +30,8 @@ impl Init {
         }
     }
 
-    pub fn is_shutdown(&self) -> bool {
-        matches!(self.state, State::Shutdown)
-    }
-
     pub fn incoming_cmd(&self, cmd: IncomingWorker) -> Self {
         match (self.state.clone(), cmd) {
-            (_, IncomingWorker::Shutdown) => Init { state: State::Shutdown },
             (State::AwaitingResources, IncomingWorker::HoprParams { hopr_params }) => Init {
                 state: State::AwaitingConfig(hopr_params),
             },

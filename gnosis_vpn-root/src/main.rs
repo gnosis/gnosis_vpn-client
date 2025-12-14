@@ -253,9 +253,9 @@ async fn loop_daemon(
                     tracing::info!("force shutdown immediately");
                     return Ok(());
                 } else {
-                    shutdown_ongoing = true;
+                    // child will receive event as well - waiting for it to shutdown
                     tracing::info!("initiate shutdown");
-                    send_to_worker(&IncomingWorker::Shutdown, &mut writer).await?;
+                    shutdown_ongoing = true;
                 }
             },
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {

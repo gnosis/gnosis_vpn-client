@@ -30,22 +30,13 @@ pub type OutgoingCore = WireGuardCommand;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IncomingWorker {
     /// Startup parameters for hoprd
-    HoprParams {
-        hopr_params: HoprParams,
-    },
+    HoprParams { hopr_params: HoprParams },
     /// Configuration file
-    Config {
-        config: Config,
-    },
+    Config { config: Config },
     /// Socket command received by root
-    Command {
-        cmd: Command,
-    },
+    Command { cmd: Command },
     /// Result of WireGuard tooling execution
-    WgUpResult {
-        res: Result<(), String>,
-    },
-    Shutdown,
+    WgUpResult { res: Result<(), String> },
 }
 
 /// Messages sent from worker to root

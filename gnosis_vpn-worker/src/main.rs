@@ -1,5 +1,6 @@
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::UnixStream;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 
@@ -21,7 +22,49 @@ mod init;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
+    let (sender, receiver) = mpsc::channel(32);
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
+        tracing::error!(error = ?e, "error setting up SIGINT handler");
+        exitcode::IOERR
+    })?;
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
+        tracing::error!(error = ?e, "error setting up SIGTERM handler");
+        exitcode::IOERR
+    })?;
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Some(_) = sigint.recv() => {
+                    tracing::debug!("received SIGINT");
+                    if sender.send(()).await.is_err() {
+                        tracing::warn!("sigint: receiver closed");
+                        break;
+                    }
+                },
+                Some(_) = sigterm.recv() => {
+                    tracing::debug!("received SIGTERM");
+                    if sender.send(()).await.is_err() {
+                        tracing::warn!("sigterm: receiver closed");
+                        break;
+                    }
+                },
+                else => {
+                    tracing::warn!("sigint and sigterm streams closed");
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(receiver)
+}
+
 async fn daemon() -> Result<(), exitcode::ExitCode> {
+    // set up signal handler
+    let mut ctrlc_receiver = ctrlc_channel().await?;
+
     tracing::debug!("accessing unix socket from fd");
     let fd: i32 = env::var(socket::worker::ENV_VAR)
         .map_err(|err| {
@@ -60,15 +103,23 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
+            Some(_) = ctrlc_receiver.recv() => {
+                tracing::info!("initiate shutdown");
+                // try sending, receiving will fail if core was not yet initialized
+                match incoming_event_sender.send(IncomingCore::Shutdown).await {
+                    Ok(_) => tracing::debug!("sent shutdown to core"),
+                    Err(_) => {
+                        tracing::debug!("core not yet started");
+                        return Ok(());
+                    }
+                }
+        },
             Ok(Some(line)) = lines_reader.next_line() => {
+                tracing::debug!(line = %line, "incoming from root service");
                 let wcmd = parse_incoming_worker(line)?;
                 if let Some(init) = init_opt.take() {
                     let next = init.incoming_cmd(wcmd);
                     send_outgoing(OutgoingWorker::Ack, &mut writer).await?;
-                    if next.is_shutdown() {
-                        tracing::info!("shutting down worker daemon");
-                        return Ok(());
-                    }
                     if let Some((config, hopr_params)) = next.ready() {
                         if let (Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
                             let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
@@ -86,6 +137,7 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                 }
             },
             outgoing = outgoing_event_receiver.recv() => {
+                tracing::debug!("outgoing event from core");
                 match outgoing {
                     Some(event) => {
                         match event {
@@ -149,14 +201,6 @@ async fn incoming_cmd(
     event_sender: &mut mpsc::Sender<IncomingCore>,
 ) -> Result<OutgoingWorker, exitcode::ExitCode> {
     match cmd {
-        IncomingWorker::Shutdown => {
-            tracing::info!("initiate shutdown");
-            event_sender.send(IncomingCore::Shutdown).await.map_err(|_| {
-                tracing::error!("event receiver already closed");
-                exitcode::IOERR
-            })?;
-            Ok(OutgoingWorker::Ack)
-        }
         IncomingWorker::Command { cmd } => {
             let (sender, recv) = oneshot::channel();
             event_sender
