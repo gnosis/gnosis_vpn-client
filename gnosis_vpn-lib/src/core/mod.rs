@@ -163,20 +163,15 @@ impl Core {
                 self.cancel_channel_tasks.cancel();
                 self.cancel_connection.cancel();
                 self.cancel_for_shutdown.cancel();
-                let shutdown_tracker = TaskTracker::new();
-                shutdown_tracker.spawn(async {
-                    // ensure wg is disconnected, ignore errors
-                    // let _ = wg_tooling::down().await;
-                    unimplemented!();
-                });
                 if let Some(hopr) = self.hopr.clone() {
+                    let shutdown_tracker = TaskTracker::new();
                     shutdown_tracker.spawn(async move {
                         tracing::debug!("shutting down hopr");
                         hopr.shutdown().await;
                     });
+                    shutdown_tracker.close();
+                    shutdown_tracker.wait().await;
                 }
-                shutdown_tracker.close();
-                shutdown_tracker.wait().await;
                 false
             }
 
