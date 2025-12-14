@@ -1,6 +1,6 @@
 use thiserror::Error;
 use tokio::process::Command;
-use users::os::unix::UserExt;
+use uzers::os::unix::UserExt;
 
 use std::io;
 use std::path::PathBuf;
@@ -63,7 +63,7 @@ impl Input {
 
 impl Worker {
     pub async fn from_system(input: Input) -> Result<Self, Error> {
-        let worker_user = users::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
+        let worker_user = uzers::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
         let path = input.binary.canonicalize()?;
         let binary = path.to_str().ok_or(Error::InvalidBinaryPath)?;
         // check if binary exists
