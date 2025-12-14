@@ -96,6 +96,8 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
     let (outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
 
+    // enter main loop
+    let mut shutdown_ongoing = false;
     let mut core_task = JoinSet::new();
     let mut init_opt = Some(init::Init::new());
     let mut incoming_event_receiver_opt = Some(incoming_event_receiver);
@@ -104,16 +106,21 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
-                tracing::info!("initiate shutdown");
-                // try sending, receiving will fail if core was not yet initialized
-                match incoming_event_sender.send(IncomingCore::Shutdown).await {
-                    Ok(_) => tracing::debug!("sent shutdown to core"),
-                    Err(_) => {
-                        tracing::debug!("core not yet started");
-                        return Ok(());
-                    }
+                if shutdown_ongoing {
+                    tracing::info!("force shutdown immediately");
+                    return Ok(());
                 }
-        },
+                tracing::info!("initiate shutdown");
+                if core_task.is_empty() {
+                    tracing::debug!("core not yet started");
+                    return Ok(());
+                }
+                shutdown_ongoing = true;
+                incoming_event_sender.send(IncomingCore::Shutdown).await.map_err(|_| {
+                    tracing::error!("command receiver already closed");
+                    exitcode::IOERR
+                })?;
+            },
             Ok(Some(line)) = lines_reader.next_line() => {
                 tracing::debug!(line = %line, "incoming from root service");
                 let wcmd = parse_incoming_worker(line)?;
@@ -137,9 +144,9 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                 }
             },
             outgoing = outgoing_event_receiver.recv() => {
-                tracing::debug!("outgoing event from core");
                 match outgoing {
                     Some(event) => {
+                        tracing::debug!(?event, "outgoing event from core");
                         match event {
                             OutgoingCore::WgUp(content) =>
                                 send_outgoing(OutgoingWorker::WireGuard(WireGuardCommand::WgUp(content)), &mut writer).await?,
@@ -148,8 +155,10 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                         }
                     }
                     None => {
-                        tracing::error!("outgoing event channel closed unexpectedly");
-                        return Err(exitcode::IOERR);
+                        if !shutdown_ongoing {
+                            tracing::error!("outgoing event channel closed unexpectedly");
+                            return Err(exitcode::IOERR);
+                        }
                     }
                 }
             }

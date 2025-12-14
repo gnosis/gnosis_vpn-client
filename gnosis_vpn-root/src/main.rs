@@ -252,11 +252,10 @@ async fn loop_daemon(
                 if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
                     return Ok(());
-                } else {
-                    // child will receive event as well - waiting for it to shutdown
-                    tracing::info!("initiate shutdown");
-                    shutdown_ongoing = true;
                 }
+                // child will receive event as well - waiting for it to shutdown
+                tracing::info!("initiate shutdown");
+                shutdown_ongoing = true;
             },
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
