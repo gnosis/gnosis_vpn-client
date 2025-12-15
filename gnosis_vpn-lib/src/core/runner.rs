@@ -2,8 +2,7 @@
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
 use alloy::primitives::U256;
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
+use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
@@ -200,12 +199,13 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     let private_key = keys.chain_key.clone();
     let rpc_provider = hopr_params.rpc_provider();
     let node_address = keys.chain_key.public().to_address();
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let presafe = balance::PreSafe::fetch(&private_key, rpc_provider.as_str(), node_address)
             .await
             .map_err(Error::from)?;
         Ok(presafe)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -215,7 +215,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::Ticke
     let private_key = keys.chain_key;
     let rpc_provider = hopr_params.rpc_provider();
     let network = hopr_params.network();
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let stats = TicketStats::fetch(
             &private_key,
             rpc_provider.as_str(),
@@ -225,6 +225,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::Ticke
         .map_err(Error::from)?;
         Ok(stats)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -241,7 +242,7 @@ async fn run_safe_deployment(
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
     let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
     let network = hopr_params.network();
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let mut bytes = [0u8; 32];
         rand::rng().fill(&mut bytes);
         let nonce = U256::from_be_bytes(bytes);
@@ -256,6 +257,7 @@ async fn run_safe_deployment(
             .map_err(Error::from)?;
         Ok(res)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -269,7 +271,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
     let headers = remote_data::json_headers();
     let body = json!({ "address": node_address.to_string(), "code": code, });
     tracing::debug!(%url, ?headers, %body, "Posting funding tool");
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let res = client
             .post(url.clone())
             .json(&body)
@@ -311,6 +313,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
         let res = result?;
         Ok(res)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -329,10 +332,11 @@ async fn run_fund_channel(
     let amount = balance::funding_amount(ticket_value);
     let threshold = balance::min_stake_threshold(ticket_value);
     tracing::debug!(%address, %amount, %threshold, "starting fund channel runner");
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         hopr.ensure_channel_open_and_funded(address, amount, threshold).await?;
         Ok(())
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
