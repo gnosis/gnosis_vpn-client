@@ -10,7 +10,6 @@ license = { workspace = true }
 clap.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
-libc.workspace = true
 notify.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -21,7 +20,10 @@ url.workspace = true
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
-mimalloc = { workspace = true }
+mimalloc.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
