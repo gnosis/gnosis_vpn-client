@@ -7,6 +7,11 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "linux")]
+use linux::{setup, teardown};
+#[cfg(target_os = "macos")]
+use macos::{setup, teardown};
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -33,22 +38,10 @@ impl Routing {
     }
 
     pub async fn setup(&self) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
-        linux::setup(&self.worker, &self.wg_data).await?;
-
-        #[cfg(target_os = "macos")]
-        macos::setup(&self.worker, &self.wg_data).await?;
-
-        Ok(())
+        setup(&self.worker, &self.wg_data).await
     }
 
     pub async fn teardown(&self) -> Result<(), Error> {
-        #[cfg(target_os = "linux")]
-        linux::teardown(&self.worker, &self.wg_data).await?;
-
-        #[cfg(target_os = "macos")]
-        macos::teardown(&self.worker, &self.wg_data).await?;
-
-        Ok(())
+        teardown(&self.worker, &self.wg_data).await
     }
 }
