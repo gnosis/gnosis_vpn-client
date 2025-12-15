@@ -1,5 +1,7 @@
 # Testing
 
+NOTE: Needs an extra user/group named gnosisvpn/gnosisvpn
+
 In order to test the binary, some functionality can be overriden. Typically,
 this is done by injecting a custom `hopr` configuration or overriding
 environment variables.
@@ -64,7 +66,7 @@ safe_module:
 4. run the gnosis_vpn daemon application:
 
 ```shell
-sudo RUST_BACKTRACE=1 RUST_LOG=info gnosis_vpn -c <PATH_TO_VPN_FILES>/gvpn-staging.toml --hopr-config-path <PATH_TO_CONFIG_DIR_STRUCTURE>/conf/hopr.cfg.yaml
+sudo RUST_LOG=info gnosis_vpn-root -c <PATH_TO_VPN_FILES>/gvpn-staging.toml --hopr-config-path <PATH_TO_CONFIG_DIR_STRUCTURE>/conf/hopr.cfg.yaml
 ```
 
 5. check the status:
