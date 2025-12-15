@@ -121,14 +121,19 @@ jobs:
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix build .#packages.${{ steps.vars.outputs.architecture}}.gnosis_vpn -L
+          suffix=${{ steps.vars.outputs.architecture}}
           mkdir -p binaries
-          ls -al ./result/bin/
-          cp ./result/bin/gnosis_vpn binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-          cp ./result/bin/gnosis_vpn-ctl binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
+          for f in ./result/bin/*; do
+            echo "Copying binary $(basename $f) to binaries/$(basename $f)-${suffix}"
+            cp $f binaries/$(basename $f)-${suffix}
+          done
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
+            suffix=${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
             mkdir -p binaries/upload
-            cp binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
-            cp binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} binaries/upload/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
+            for f in ./result/bin/*; do
+              echo "Additionally copying binary $(basename $f) to binaries/upload/$(basename $f)-${suffix}"
+              cp $f binaries/upload/$(basename $f)-${suffix}
+            done
           fi
       - name: Sign binary on darwin architectures
         if: endsWith(steps.vars.outputs.architecture, '-darwin')
@@ -146,21 +151,26 @@ jobs:
           security find-identity -v -p codesigning build.keychain
           CERT_INFO=$(security find-identity -v -p codesigning build.keychain)
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
-          codesign --sign "${CERT_ID}" --options runtime --timestamp binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-          codesign --sign "${CERT_ID}" --options runtime --timestamp binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
-          codesign --verify --deep --strict --verbose=4 binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-          codesign --verify --deep --strict --verbose=4 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
-          shasum -a 256 binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.sha256
-          shasum -a 256 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
+          suffix=${{ steps.vars.outputs.architecture}}
+          for f in binaries/*; do
+            echo "Signing binary $(basename $f) with certificate ID ${CERT_ID}"
+            codesign --sign "${CERT_ID}" --options runtime --timestamp $f
+            echo "Verifying signature for binary $(basename $f)"
+            codesign --verify --deep --strict --verbose=4 $f
+            echo "Generating SHA256 checksum for binary $(basename $f)"
+            shasum -a 256 $f > ${f}.sha256
+          done
       - name: Sign binary on linux architectures
         if: endsWith(steps.vars.outputs.architecture, '-linux')
         run: |
           set -o errexit -o nounset -o pipefail
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-          gpg --armor --output binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.asc --detach-sign binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-          shasum -a 256 binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.sha256
-          gpg --armor --output binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.asc --detach-sign binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
-          shasum -a 256 binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}} > binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
+          for f in binaries/*; do
+            echo "Signing binary $(basename $f) with GPG key"
+            gpg --armor --output ${f}.asc --detach-sign $f
+            echo "Generating SHA256 checksum for binary $(basename $f)"
+            shasum -a 256 $f > ${f}.sha256
+          done
       - name: Setup GCP
         if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
@@ -170,16 +180,10 @@ jobs:
       - name: Publish Artifact registry
         if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
         run: |
-          gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}
-          gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}
-          if [[ "${{ inputs.version_type }}" == "release" ]]; then
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.sha256
-            if [[ "${{ steps.vars.outputs.architecture }}" == *-linux ]]; then
-              gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-${{ steps.vars.outputs.architecture}}.asc
-              gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=binaries/gnosis_vpn-ctl-${{ steps.vars.outputs.architecture}}.asc
-            fi
-          fi
+          for f in binaries/*; do
+            echo "Uploading binary $(basename $f) to Artifact Registry"
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.binary_version }} --package=gnosis_vpn --source=$f
+          done
       - name: Upload ${{ steps.vars.outputs.architecture }} binaries
         if: steps.version.outputs.publish_type == 'workflow'
         uses: actions/upload-artifact@v5
