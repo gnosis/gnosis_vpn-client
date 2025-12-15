@@ -41,6 +41,10 @@ pub struct Cli {
     #[arg(long, env = worker::ENV_VAR_WORKER_BINARY, default_value = worker::DEFAULT_WORKER_BINARY)]
     pub worker_binary: PathBuf,
 
+    /// Path to the worker binary - relative to the users home folder
+    #[arg(long, env = worker::ENV_VAR_WORKER_BINARY, default_value = worker::DEFAULT_WORKER_BINARY)]
+    pub worker_binary: PathBuf,
+
     /// Hopr edge client configuration path
     #[arg( long, env = hopr::CONFIG_ENV, default_value = None) ]
     pub hopr_config_path: Option<PathBuf>,
@@ -100,5 +104,4 @@ mod tests {
 
         Ok(())
     }
-
 }
