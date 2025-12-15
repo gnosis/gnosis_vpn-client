@@ -1,7 +1,6 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use alloy::primitives::U256;
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::api::chain::{ChainReadSafeOperations, SafeSelector};
@@ -282,7 +281,7 @@ async fn run_safe_deployment(
     let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
     let nonce = edgli::hopr_lib::U256::from(random::<u64>());
 
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         // Deploy safe
         let _tx_hash = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
