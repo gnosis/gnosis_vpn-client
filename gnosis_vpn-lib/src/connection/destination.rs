@@ -53,8 +53,8 @@ impl Destination {
         metas.join(", ")
     }
 
-    pub fn get_meta(&self, key: &str) -> String {
-        self.meta.get(key).unwrap_or(&"<unknown>".to_string()).clone()
+    pub fn get_meta(&self, key: &str) -> Option<String> {
+        self.meta.get(key).cloned()
     }
 }
 

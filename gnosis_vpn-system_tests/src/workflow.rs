@@ -51,10 +51,18 @@ impl SystemTestWorkflow {
 
         let mut readiness_report = ReportTable::new("destination", &[]);
         for destination in readiness.ready() {
-            readiness_report.add_row(destination.get_meta("location"), RowStatus::Ready, Vec::new());
+            readiness_report.add_row(
+                destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                RowStatus::Ready,
+                Vec::new(),
+            );
         }
         for destination in readiness.not_ready() {
-            readiness_report.add_row(destination.get_meta("location"), RowStatus::NotReady, Vec::new());
+            readiness_report.add_row(
+                destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                RowStatus::NotReady,
+                Vec::new(),
+            );
         }
         info!("\n\n{}", readiness_report.render());
 
@@ -98,13 +106,17 @@ impl SystemTestWorkflow {
             match self.try_connect(destination, CONNECTION_TIMEOUT).await {
                 Ok(_) => {
                     info!(dest = %destination, "connection established");
-                    report.add_row(destination.get_meta("location"), RowStatus::Success, Vec::new());
+                    report.add_row(
+                        destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                        RowStatus::Success,
+                        Vec::new(),
+                    );
                     successful.push(destination.clone());
                 }
                 Err(error) => {
                     error!(dest = %destination, ?error, "failed to establish connection");
                     report.add_row(
-                        destination.get_meta("location"),
+                        destination.get_meta("location").unwrap_or("<unknown>".to_string()),
                         RowStatus::Failure(format!("{error:?}")),
                         Vec::new(),
                     );

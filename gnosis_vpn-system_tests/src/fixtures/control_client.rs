@@ -220,7 +220,10 @@ impl ControlClient {
                         .iter()
                         .find(|c| c.destination.address == destination.address)
                     {
-                        let location = state.destination.get_meta("location");
+                        let location = state
+                            .destination
+                            .get_meta("location")
+                            .unwrap_or("<unknown>".to_string());
                         match &state.connection_state {
                             ConnectionState::Connecting(_, phase) => {
                                 warn!(?phase, ?location, "connection is being established");
