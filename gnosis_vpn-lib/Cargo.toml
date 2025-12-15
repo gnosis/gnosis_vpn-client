@@ -10,7 +10,7 @@ license = { workspace = true }
 alloy.workspace = true
 anyhow.workspace = true
 async-lock.workspace = true
-backoff.workspace = true
+backon.workspace = true
 bytesize = { workspace = true, features = ["serde"] }
 directories.workspace = true
 edgli.workspace = true
