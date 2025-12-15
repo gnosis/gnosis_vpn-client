@@ -1,0 +1,28 @@
+[package]
+name = "gnosis_vpn-root"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap.workspace = true
+exitcode.workspace = true
+gnosis_vpn-lib.workspace = true
+libc.workspace = true
+notify.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+
+# Target-specific dependencies for memory allocators
+[target.'cfg(target_os = "linux")'.dependencies]
+mimalloc = { workspace = true }
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile = "3.23.0"

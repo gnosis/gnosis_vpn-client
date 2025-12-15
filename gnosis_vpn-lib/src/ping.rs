@@ -1,8 +1,10 @@
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Clone, Debug, PartialEq)]
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PingOptions {
     pub address: IpAddr,
     pub timeout: Duration,
@@ -27,15 +29,18 @@ impl Default for PingOptions {
     }
 }
 
+#[allow(dead_code)]
 #[tracing::instrument(name = "ping", ret)]
-pub fn ping(opts: &PingOptions) -> Result<(), Error> {
-    ping::ping(
-        opts.address,
-        Some(opts.timeout),   // default timeout 4 sec
-        Some(opts.ttl),       // ttl - number of jumps
-        None,                 // ident - Identifier
-        Some(opts.seq_count), // Seq Count
-        None,                 // Custom Payload
-    )
-    .map_err(Error::PingFailed)
+pub fn ping(opts: &PingOptions) -> Result<Duration, Error> {
+    let mut builder = ping::new(opts.address);
+    let mut ping = builder.timeout(opts.timeout).ttl(opts.ttl).seq_cnt(opts.seq_count);
+    #[cfg(target_os = "linux")]
+    {
+        ping = ping.socket_type(ping::RAW);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ping = ping.socket_type(ping::DGRAM);
+    }
+    ping.send().map(|p| p.rtt).map_err(Error::from)
 }

@@ -1,0 +1,16 @@
+---
+title: Connection Sequence
+---
+sequenceDiagram
+    UI->>Root: Initiate Connect
+    Root->>Worker: Initiate Connect
+    Worker->>Root: Ack Initiate Connect
+    Root->>UI: Ack Connect
+    Worker-->>Hoprd: Open TCP session
+    Worker-->>Hoprd: Register WG Pubkey
+    Worker-->>Hoprd: Close TCP session
+    Worker-->>Hoprd: Open UDP session
+    Worker->>Root: request wg-quick up
+    Root->>Worker: result of routing setup
+    Worker-->>Hoprd: (run ping on connection)
+    Worker-->>Hoprd: adjust UDP session

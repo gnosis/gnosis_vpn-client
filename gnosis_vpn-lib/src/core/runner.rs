@@ -67,10 +67,13 @@ pub enum Results {
     },
     HoprRunning,
     ConnectionEvent {
-        evt: connection::up::runner::Event,
+        evt: connection::up::Event,
     },
-    ConnectionResult {
-        res: Result<SessionClientMetadata, connection::up::runner::Error>,
+    ConnectionResultPreWg {
+        res: Result<SessionClientMetadata, connection::up::Error>,
+    },
+    ConnectionResultPostWg {
+        res: Result<(), connection::up::Error>,
     },
     DisconnectionEvent {
         wg_public_key: String,
@@ -402,9 +405,13 @@ impl Display for Results {
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),
-            Results::ConnectionResult { res } => match res {
-                Ok(_) => write!(f, "ConnectionResult: Success"),
-                Err(err) => write!(f, "ConnectionResult: Error({})", err),
+            Results::ConnectionResultPreWg { res } => match res {
+                Ok(session) => write!(f, "ConnectionResultPreWg: Success ({})", session),
+                Err(err) => write!(f, "ConnectionResultPreWg: Error({})", err),
+            },
+            Results::ConnectionResultPostWg { res } => match res {
+                Ok(_) => write!(f, "ConnectionResultPostWg: Success"),
+                Err(err) => write!(f, "ConnectionResultPostWg: Error({})", err),
             },
             Results::DisconnectionEvent { wg_public_key, evt } => {
                 write!(f, "DisconnectionEvent ({}): {}", wg_public_key, evt)

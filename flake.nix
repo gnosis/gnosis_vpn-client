@@ -162,20 +162,20 @@
           # they need, rather than building the entire workspace as a single derivation.
 
           # Production build with release profile optimizations
-          gvpn = mkPackage {
+          gnosis_vpn = mkPackage {
             pname = "gnosis_vpn";
             profile = "release";
             cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
           };
 
           # Development build with faster compilation and debug symbols
-          gvpn-dev = mkPackage {
+          gnosis_vpn-dev = mkPackage {
             pname = "gnosis_vpn-dev";
             profile = "dev";
             cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
           };
 
-          gvpn-system-tests = mkPackage {
+          gnosis_vpn-system-tests = mkPackage {
             pname = "gnosis_vpn-system-tests";
             profile = "dev";
             cargoExtraArgs = "--bin gnosis_vpn-system-tests";
@@ -255,7 +255,7 @@
 
           checks = {
             # Build the dev crates as part of `nix flake check` for convenience
-            inherit gvpn-dev;
+            inherit gnosis_vpn-dev;
 
             # Run clippy (and deny all warnings) on the workspace source,
             # again, reusing the dependency artifacts from above.
@@ -306,11 +306,11 @@
           };
 
           packages = {
-            inherit gvpn;
-            inherit gvpn-dev;
-            inherit gvpn-system-tests;
+            inherit gnosis_vpn;
+            inherit gnosis_vpn-dev;
+            inherit gnosis_vpn-system-tests;
             inherit pre-commit-check;
-            default = gvpn;
+            default = gnosis_vpn;
           };
           # // systemTestsDockerPackages;
 

@@ -128,6 +128,6 @@ fn response_errors(err: reqwest::Error) -> Error {
 
 impl Display for Registration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "WgRegistration[{}]", self.ip)
+        write!(f, "WgRegistration {{ ip: {} }}", self.ip)
     }
 }

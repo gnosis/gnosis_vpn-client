@@ -9,18 +9,27 @@
 #     profile = "release";
 #   };
 {
-  craneLib, # Crane library instance with custom Rust toolchain
-  lib, # nixpkgs library utilities
-  pkgs, # package repo
-  targetForSystem, # Target triple for the current system (e.g., "x86_64-unknown-linux-musl")
-  cargoArtifacts, # Pre-built cargo dependencies for caching
-  version, # Package version extracted from Cargo.toml
-  commonArgs, # Common build arguments including buildInputs and nativeBuildInputs
+  # Crane library instance with custom Rust toolchain
+  craneLib,
+  # nixpkgs library utilities
+  lib,
+  # package repo
+  pkgs,
+  # Target triple for the current system (e.g., "x86_64-unknown-linux-musl")
+  targetForSystem,
+  # Pre-built cargo dependencies for caching
+  cargoArtifacts,
+  # Package version extracted from Cargo.toml
+  version,
+  # Common build arguments including buildInputs and nativeBuildInputs
+  commonArgs,
 }:
 {
-  pname, # Package name (e.g., "gnosis_vpn" or "gnosis_vpn-dev")
+  # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
+  pname,
   profile ? "release", # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
-  cargoExtraArgs ? "--bin gnosis_vpn --bin gnosis_vpn-ctl --bin gnosis_vpn-system-tests", # Build only binary crates in workspace
+  cargoExtraArgs ? "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl",
+  # Build only binary crates in workspace
   ... # Any additional arguments are passed through to craneLib.buildPackage
 }@args:
 let
@@ -36,7 +45,8 @@ let
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-system_tests)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-lib)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-ctl)
-      (craneLib.fileset.commonCargoSources ../gnosis_vpn)
+      (craneLib.fileset.commonCargoSources ../gnosis_vpn-root)
+      (craneLib.fileset.commonCargoSources ../gnosis_vpn-worker)
     ];
   };
 

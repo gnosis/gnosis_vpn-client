@@ -24,14 +24,12 @@ async-lock = { version = "3.4.1" }
 backoff = { version = "0.4.0", features = ["tokio"] }
 bytesize = "2.3.0"
 clap = { version = "4.5.53", features = ["derive", "env"] }
-crossbeam-channel = "0.5.15"
-ctrlc = { version = "3.5.1", features = ["termination"] }
 directories = "6.0.0"
 exitcode = "1.1.2"
-hex = "0.4.3"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
+libc = "0.2.0"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
@@ -54,8 +52,8 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a5b84a233e9
 ] }
 serde_with = "3.16.0"
 serde_yaml = "0.9.34"
-uuid = { version = "1.18.1", features = ["v4"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
+uzers = "0.12.1"
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 

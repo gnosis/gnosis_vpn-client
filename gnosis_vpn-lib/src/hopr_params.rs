@@ -1,5 +1,6 @@
 use edgli::hopr_lib::config::HoprLibConfig;
 use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
 use url::Url;
@@ -19,7 +20,7 @@ pub enum Error {
     Config(#[from] config::Error),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HoprParams {
     identity_file: Option<PathBuf>,
     identity_pass: Option<String>,
@@ -29,7 +30,7 @@ pub struct HoprParams {
     allow_insecure: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConfigFileMode {
     Manual(PathBuf),
     Generated,

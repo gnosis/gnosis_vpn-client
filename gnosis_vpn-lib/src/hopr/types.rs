@@ -1,8 +1,10 @@
+use edgli::hopr_lib::{Address, IpProtocol, RoutingOptions};
+use serde::{Deserialize, Serialize};
+
+use std::fmt::{self, Display};
 use std::net::SocketAddr;
 
-use edgli::hopr_lib::{Address, IpProtocol, RoutingOptions};
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Response body for creating a new client session.
 pub struct SessionClientMetadata {
     /// Target of the Session.
@@ -51,5 +53,15 @@ impl PartialEq for SessionClientMetadata {
             && self.return_path == other.return_path
             && self.protocol == other.protocol
             && self.bound_host == other.bound_host
+    }
+}
+
+impl Display for SessionClientMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SessionClientMetadata {{ target: {}, destination: {}, protocol: {:?}, bound_host: {} }}",
+            self.target, self.destination, self.protocol, self.bound_host
+        )
     }
 }
