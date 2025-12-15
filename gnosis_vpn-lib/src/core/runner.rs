@@ -1,8 +1,8 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
+use alloy::primitives::U256;
+use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::api::chain::{ChainReadSafeOperations, SafeSelector};
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
@@ -198,7 +198,7 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
     let node_address = keys.chain_key.public().to_address();
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let (balance_wxhopr, balance_xdai) = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
@@ -230,6 +230,7 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
             node_wxhopr: balance_wxhopr,
         })
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -237,7 +238,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let (ticket_price, winning_probability) = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
             edgli::blokli::DEFAULT_BLOKLI_URL
@@ -264,6 +265,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
             winning_probability: winning_probability.as_f64(),
         })
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -277,6 +279,7 @@ async fn run_safe_deployment(
     let node_address = keys.chain_key.public().to_address();
     let token_u256 = presafe.node_wxhopr.amount();
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
+<<<<<<< HEAD
     let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
     let nonce = edgli::hopr_lib::U256::from(random::<u64>());
 
@@ -337,6 +340,7 @@ async fn run_safe_deployment(
             module_address: safe.module,
         })
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -350,7 +354,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
     let headers = remote_data::json_headers();
     let body = json!({ "address": node_address.to_string(), "code": code, });
     tracing::debug!(%url, ?headers, %body, "Posting funding tool");
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         let res = client
             .post(url.clone())
             .json(&body)
@@ -392,6 +396,7 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
         let res = result?;
         Ok(res)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -412,10 +417,11 @@ async fn run_fund_channel(
     let amount = balance::funding_amount(ticket_value);
     let threshold = balance::min_stake_threshold(ticket_value);
     tracing::debug!(%address, %amount, %threshold, "starting fund channel runner");
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         hopr.ensure_channel_open_and_funded(address, amount, threshold).await?;
         Ok(())
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
