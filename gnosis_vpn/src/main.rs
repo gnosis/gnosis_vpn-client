@@ -298,7 +298,7 @@ async fn loop_daemon(
     let hopr_params = hopr_params::HoprParams::from(args.clone());
     let config_path = args.config_path.clone();
     let (mut event_sender, mut event_receiver) = mpsc::channel(32);
-    let core = match core::Core::init(&config_path, hopr_params).await {
+    let core = match core::Core::init(&config_path, hopr_params, args.export_wg_config_path.clone()).await {
         Ok(core) => core,
         Err(e) => {
             tracing::error!(error = ?e, "failed to initialize core logic");

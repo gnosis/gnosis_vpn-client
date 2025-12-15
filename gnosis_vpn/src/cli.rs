@@ -49,6 +49,10 @@ pub struct Cli {
     #[arg( long, env = hopr::ID_PASS_ENV, default_value = None)]
     pub hopr_identity_pass: Option<String>,
 
+    /// Skip applying WireGuard configuration, but export the generated config to the specified path
+    #[arg(long, default_value = None)]
+    pub export_wg_config_path: Option<PathBuf>,
+
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
     pub allow_insecure: bool,
@@ -121,6 +125,7 @@ mod tests {
             hopr_config_path: Some(PathBuf::from("/tmp/hopr-config")),
             hopr_identity_file: Some(PathBuf::from("/tmp/id")),
             hopr_identity_pass: Some("secret-pass".into()),
+            export_wg_config_path: Some(PathBuf::from("/tmp/wg-config")),
             allow_insecure: true,
         };
 

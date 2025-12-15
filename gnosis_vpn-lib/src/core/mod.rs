@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -63,6 +63,7 @@ pub struct Core {
 
     // user provided data
     target_destination: Option<Destination>,
+    export_wg_config_path: Option<PathBuf>,
 
     // runtime data
     phase: Phase,
@@ -87,7 +88,11 @@ enum Phase {
 }
 
 impl Core {
-    pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
+    pub async fn init(
+        config_path: &Path,
+        hopr_params: HoprParams,
+        export_wg_config_path: Option<PathBuf>,
+    ) -> Result<Core, Error> {
         let config = config::read(config_path).await?;
         wg_tooling::available().await?;
         wg_tooling::executable().await?;
@@ -107,6 +112,7 @@ impl Core {
 
             // user provided data
             target_destination: None,
+            export_wg_config_path,
 
             // runtime data
             phase: Phase::Initial,
@@ -781,7 +787,13 @@ impl Core {
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            let runner = connection::up::runner::Runner::new(conn.clone(), config_connection, config_wireguard, hopr);
+            let runner = connection::up::runner::Runner::new(
+                conn.clone(),
+                config_connection,
+                config_wireguard,
+                hopr,
+                self.export_wg_config_path.clone(),
+            );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {

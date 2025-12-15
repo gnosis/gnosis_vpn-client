@@ -1,4 +1,5 @@
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -160,10 +161,7 @@ impl WireGuard {
 
     pub async fn up(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> Result<(), Error> {
         let conf_file = dirs::cache_dir(WG_CONFIG_FILE)?;
-        let config = self.to_file_string(interface, peer);
-        let content = config.as_bytes();
-        fs::write(&conf_file, content).await?;
-        fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
+        self.write_config(interface, peer, &conf_file).await?;
 
         let output = Command::new("wg-quick").arg("up").arg(conf_file).output().await?;
         if !output.stdout.is_empty() {
@@ -182,6 +180,29 @@ impl WireGuard {
                 format!("wg-quick up failed: {}", String::from_utf8_lossy(&output.stderr)),
             ))
         }
+    }
+
+    pub async fn export_config<P: AsRef<Path>>(
+        &self,
+        interface: &InterfaceInfo,
+        peer: &PeerInfo,
+        path: P,
+    ) -> Result<(), Error> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+        self.write_config(interface, peer, path).await
+    }
+
+    async fn write_config(&self, interface: &InterfaceInfo, peer: &PeerInfo, path: &Path) -> Result<(), Error> {
+        let config = self.to_file_string(interface, peer);
+        let content = config.as_bytes();
+        fs::write(path, content).await?;
+        fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
+        Ok(())
     }
 
     fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo) -> String {

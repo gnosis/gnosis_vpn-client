@@ -8,6 +8,8 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::connection;
@@ -35,6 +37,7 @@ pub struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wg_tooling::Config,
+    wg_export_config_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -63,12 +66,19 @@ pub enum Setback {
 }
 
 impl Runner {
-    pub fn new(up: connection::up::Up, options: Options, wg_config: wg_tooling::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(
+        up: connection::up::Up,
+        options: Options,
+        wg_config: wg_tooling::Config,
+        hopr: Arc<Hopr>,
+        wg_export_config_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             up,
             hopr,
             options,
             wg_config,
+            wg_export_config_path,
         }
     }
 
@@ -124,15 +134,19 @@ impl Runner {
                 evt: progress(Progress::WgTunnel(wg.clone())),
             })
             .await;
-        wg_tunnel(&registration, &ping_session, &wg).await?;
+        if let Some(path) = &self.wg_export_config_path {
+            export_wg_config(&registration, &ping_session, &wg, path.as_path()).await?;
+        } else {
+            wg_tunnel(&registration, &ping_session, &wg).await?;
 
-        // 6. check ping
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::Ping),
-            })
-            .await;
-        ping(&self.options).await?;
+            // 6. check ping
+            let _ = results_sender
+                .send(Results::ConnectionEvent {
+                    evt: progress(Progress::Ping),
+                })
+                .await;
+            ping(&self.options).await?;
+        }
 
         // 7. adjust to main session
         let _ = results_sender
@@ -331,6 +345,38 @@ async fn wg_tunnel(
     // run wg-quick down once to ensure no dangling state
     _ = wg_tooling::down().await;
 
+    let (interface_info, peer_info) = wg_context(registration, session_client_metadata, WgEndpointStrategy::Loopback);
+
+    tracing::debug!(%registration, "establishing wg tunnel");
+    wg.up(&interface_info, &peer_info).await
+}
+
+async fn export_wg_config(
+    registration: &Registration,
+    session_client_metadata: &SessionClientMetadata,
+    wg: &wg_tooling::WireGuard,
+    path: &Path,
+) -> Result<(), wg_tooling::Error> {
+    let (interface_info, peer_info) = wg_context(
+        registration,
+        session_client_metadata,
+        WgEndpointStrategy::SessionBoundHost,
+    );
+    tracing::info!(path = %path.display(), "exporting wireguard config");
+    wg.export_config(&interface_info, &peer_info, path).await
+}
+
+#[derive(Clone, Copy)]
+enum WgEndpointStrategy {
+    Loopback,
+    SessionBoundHost,
+}
+
+fn wg_context(
+    registration: &Registration,
+    session_client_metadata: &SessionClientMetadata,
+    endpoint_strategy: WgEndpointStrategy,
+) -> (wg_tooling::InterfaceInfo, wg_tooling::PeerInfo) {
     let interface_info = wg_tooling::InterfaceInfo {
         address: registration.address(),
         mtu: session_client_metadata.hopr_mtu,
@@ -338,11 +384,34 @@ async fn wg_tunnel(
 
     let peer_info = wg_tooling::PeerInfo {
         public_key: registration.server_public_key(),
-        endpoint: format!("127.0.0.1:{}", session_client_metadata.bound_host.port()),
+        endpoint: format_peer_endpoint(session_client_metadata.bound_host, endpoint_strategy),
     };
 
-    tracing::debug!(%registration, "establishing wg tunnel");
-    wg.up(&interface_info, &peer_info).await
+    (interface_info, peer_info)
+}
+
+fn format_peer_endpoint(bound_host: SocketAddr, strategy: WgEndpointStrategy) -> String {
+    match strategy {
+        WgEndpointStrategy::Loopback => format!("127.0.0.1:{}", bound_host.port()),
+        WgEndpointStrategy::SessionBoundHost => match bound_host {
+            SocketAddr::V4(addr) => {
+                let ip = sanitize_ipv4(*addr.ip());
+                format!("{ip}:{}", addr.port())
+            }
+            SocketAddr::V6(addr) => {
+                let ip = sanitize_ipv6(*addr.ip());
+                format!("[{ip}]:{}", addr.port())
+            }
+        },
+    }
+}
+
+fn sanitize_ipv4(ip: Ipv4Addr) -> Ipv4Addr {
+    if ip.is_unspecified() { Ipv4Addr::LOCALHOST } else { ip }
+}
+
+fn sanitize_ipv6(ip: Ipv6Addr) -> Ipv6Addr {
+    if ip.is_unspecified() { Ipv6Addr::LOCALHOST } else { ip }
 }
 
 async fn ping(options: &Options) -> Result<(), ping::Error> {
