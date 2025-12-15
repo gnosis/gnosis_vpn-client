@@ -279,7 +279,6 @@ async fn run_safe_deployment(
     let node_address = keys.chain_key.public().to_address();
     let token_u256 = presafe.node_wxhopr.amount();
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
-<<<<<<< HEAD
     let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
     let nonce = edgli::hopr_lib::U256::from(random::<u64>());
 
