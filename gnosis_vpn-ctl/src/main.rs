@@ -17,7 +17,7 @@ async fn main() {
     let args = cli::parse();
 
     let cmd: Command = args.command.into();
-    let resp = match socket::process_cmd(&args.socket_path, &cmd).await {
+    let resp = match socket::root::process_cmd(&args.socket_path, &cmd).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("Error processing {cmd}: {e}");

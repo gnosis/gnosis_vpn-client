@@ -1,10 +1,15 @@
-use std::io;
-use std::path::Path;
+/// Module for communicating with the Gnosis VPN root service over a Unix domain socket.
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
+use std::io;
+use std::path::Path;
+
 use crate::command::{Command, Response};
+
+pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.sock";
+pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -15,14 +20,6 @@ pub enum Error {
     #[error(transparent)]
     IO(#[from] io::Error),
 }
-
-pub const DEFAULT_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.sock";
-pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
-
-// #[cfg(target_family = "windows")]
-// pub fn socket_path() -> PathBuf {
-// PathBuf::from("//./pipe/Gnosis VPN")
-// }
 
 pub async fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, Error> {
     check_path(socket_path)?;

@@ -43,7 +43,7 @@ jobs:
         env:
           USER: runner
       - name: Build
-        run: nix build .#gvpn-dev -L
+        run: nix build .#gnosis_vpn-dev -L
   checks:
     name: Lint, format and unit test
     runs-on: ubuntu-22.04

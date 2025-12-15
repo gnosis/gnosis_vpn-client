@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,11 +16,11 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::external_event::Event as ExternalEvent;
+use crate::event::{self, IncomingCore, OutgoingCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
-use crate::{balance, log_output, wg_tooling};
+use crate::{balance, log_output, wireguard};
 
 pub mod runner;
 
@@ -32,7 +31,7 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Config(#[from] config::Error),
     #[error("WireGuard error: {0}")]
-    WgTooling(#[from] wg_tooling::Error),
+    WireGuard(#[from] wireguard::Error),
     #[error("HOPR error: {0}")]
     Hopr(#[from] HoprError),
     #[error("Hopr config error: {0}")]
@@ -52,8 +51,11 @@ pub enum Error {
 pub struct Core {
     // config data
     config: Config,
+
+    // static data
     hopr_params: HoprParams,
     node_address: Address,
+    outgoing_sender: mpsc::Sender<OutgoingCore>,
 
     // cancellation tokens
     cancel_balances: CancellationToken,
@@ -87,17 +89,23 @@ enum Phase {
 }
 
 impl Core {
-    pub async fn init(config_path: &Path, hopr_params: HoprParams) -> Result<Core, Error> {
-        let config = config::read(config_path).await?;
-        wg_tooling::available().await?;
-        wg_tooling::executable().await?;
+    pub async fn init(
+        config: Config,
+        hopr_params: HoprParams,
+        outgoing_sender: mpsc::Sender<OutgoingCore>,
+    ) -> Result<Core, Error> {
+        wireguard::available().await?;
+        wireguard::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         Ok(Core {
             // config data
             config,
+
+            // static data
             hopr_params,
             node_address,
+            outgoing_sender,
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
@@ -119,13 +127,13 @@ impl Core {
         })
     }
 
-    pub async fn start(mut self, event_receiver: &mut mpsc::Receiver<ExternalEvent>) {
+    pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<IncomingCore>) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
                 // React to an incoming outside event
-                Some(event) = event_receiver.recv() => {
+                Some(event) = incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
                     } else {
@@ -145,66 +153,54 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_event(&mut self, event: ExternalEvent, results_sender: &mpsc::Sender<Results>) -> bool {
-        tracing::debug!(phase = ?self.phase, "on outside event");
+    async fn on_event(&mut self, event: IncomingCore, results_sender: &mpsc::Sender<Results>) -> bool {
+        tracing::debug!(phase = ?self.phase, "on incoming outside event");
         match event {
-            ExternalEvent::Shutdown { resp } => {
+            IncomingCore::Shutdown => {
                 tracing::debug!("shutting down core");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
                 self.cancel_channel_tasks.cancel();
                 self.cancel_connection.cancel();
                 self.cancel_for_shutdown.cancel();
-                let shutdown_tracker = TaskTracker::new();
-                shutdown_tracker.spawn(async {
-                    // ensure wg is disconnected, ignore errors
-                    let _ = wg_tooling::down().await;
-                });
                 if let Some(hopr) = self.hopr.clone() {
+                    let shutdown_tracker = TaskTracker::new();
                     shutdown_tracker.spawn(async move {
                         tracing::debug!("shutting down hopr");
                         hopr.shutdown().await;
                     });
-                }
-                shutdown_tracker.close();
-                shutdown_tracker.wait().await;
-                if resp.send(()).is_err() {
-                    tracing::warn!("shutdown receiver dropped");
+                    shutdown_tracker.close();
+                    shutdown_tracker.wait().await;
                 }
                 false
             }
 
-            ExternalEvent::ConfigReload { path } => {
-                match self.phase {
-                    Phase::ShuttingDown => {
-                        tracing::warn!("ignoring configuration reload - shutting down");
+            IncomingCore::WgUpResult { res } => {
+                match (res, self.phase.clone()) {
+                    (Ok(()), Phase::Connecting(conn)) => {
+                        tracing::info!(destination= %conn.destination,"WireGuard tunnel established");
+                        let destination = conn.destination.clone();
+                        if let Some(ping_session) = conn.session {
+                            self.spawn_connection_runner_post_wg(destination, ping_session, results_sender);
+                        } else {
+                            tracing::error!(%conn, "missing ping session for post-wg runner - disconnecting from target");
+                            self.target_destination = None;
+                            self.act_on_target(results_sender);
+                        }
                     }
-                    Phase::Initial | Phase::CreatingSafe { .. } | Phase::Starting | Phase::HoprSyncing => {
-                        let config = match config::read(&path).await {
-                            Ok(cfg) => cfg,
-                            Err(err) => {
-                                tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
-                                return true;
-                            }
-                        };
-                        self.config = config;
+                    (Err(err), Phase::Connecting(conn)) => {
+                        tracing::error!(%conn, %err, "WireGuard tunnel establishment failed - disconnecting");
+                        self.target_destination = None;
+                        self.act_on_target(results_sender);
                     }
-                    Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                        let config = match config::read(&path).await {
-                            Ok(cfg) => cfg,
-                            Err(err) => {
-                                tracing::warn!(%err, "failed to read configuration - keeping existing configuration");
-                                return true;
-                            }
-                        };
-                        self.config = config;
-                        self.reset_to_hopr_running(results_sender);
+                    (res, phase) => {
+                        tracing::warn!(?phase, ?res, "unexpected WireGuard result in current phase - ignoring");
                     }
                 }
                 true
             }
 
-            ExternalEvent::Command { cmd, resp } => {
+            IncomingCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {
@@ -403,6 +399,9 @@ impl Core {
             Results::PreSafe { res } => match res {
                 Ok(presafe) => {
                     tracing::info!(%presafe, "on presafe balance");
+                    self.phase = Phase::CreatingSafe {
+                        presafe: Some(presafe.clone()),
+                    };
                     if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
                         tracing::warn!("insufficient funds to start safe deployment - waiting");
                         self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
@@ -523,11 +522,11 @@ impl Core {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
-                        connection::up::runner::Event::Progress(e) => {
+                        connection::up::Event::Progress(e) => {
                             conn.connect_progress(e);
                             self.phase = Phase::Connecting(conn);
                         }
-                        connection::up::runner::Event::Setback(e) => {
+                        connection::up::Event::Setback(e) => {
                             self.update_health(conn.destination.address, |h| h.with_error(e.to_string()));
                         }
                     },
@@ -556,8 +555,51 @@ impl Core {
                 }
             }
 
-            Results::ConnectionResult { res } => match (res, self.phase.clone()) {
-                (Ok(session), Phase::Connecting(mut conn)) => {
+            Results::ConnectionResultPreWg { res } => {
+                tracing::debug!(?res, "handling pre wg connection runner result");
+                match (res, self.phase.clone()) {
+                    (Ok(session), Phase::Connecting(mut conn)) => {
+                        if let (Some(wg), Some(reg)) = (conn.wireguard.clone(), conn.registration.clone()) {
+                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
+                            let peer_info = wireguard::PeerInfo {
+                                public_key: reg.server_public_key(),
+                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+                            };
+                            let wg_data = event::WgData {
+                                wg,
+                                peer_info,
+                                interface_info,
+                            };
+                            self.outgoing_sender
+                                .send(OutgoingCore::WgUp(wg_data))
+                                .await
+                                .expect("worker outgoing channel closed - shutting down");
+                            let evt = connection::up::Progress::WgTunnel(session);
+                            conn.connect_progress(evt);
+                            self.phase = Phase::Connecting(conn);
+                        } else {
+                            tracing::error!(%conn, "missing WireGuard or registration data for connection - disconnecting");
+                            self.target_destination = None;
+                            self.act_on_target(results_sender);
+                        }
+                    }
+                    (Err(err), Phase::Connecting(conn)) => {
+                        tracing::error!(%conn, %err, "Opening ping session failed - disconnecting");
+                        self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
+                        self.target_destination = None;
+                        self.act_on_target(results_sender);
+                    }
+                    (Ok(_), phase) => {
+                        tracing::warn!(?phase, "unawaited opening ping session succeeded");
+                    }
+                    (Err(err), phase) => {
+                        tracing::warn!(?phase, %err, "connection failed in unexpecting state");
+                    }
+                }
+            }
+
+            Results::ConnectionResultPostWg { res } => match (res, self.phase.clone()) {
+                (Ok(()), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
@@ -567,8 +609,13 @@ impl Core {
                         conn.destination.pretty_print_path(),
                         log_output::address(&conn.destination.address)
                     );
-                    log_output::print_session_established(route.as_str());
-                    self.spawn_session_monitoring(session, results_sender);
+                    if let Some(session) = conn.session.clone() {
+                        log_output::print_session_established(route.as_str());
+                        self.spawn_session_monitoring(session, results_sender);
+                    } else {
+                        tracing::error!(%conn, "missing session metadata after connection established - disconnecting");
+                        self.disconnect_from_connection(&conn, results_sender);
+                    }
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -579,7 +626,7 @@ impl Core {
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
-                        tracing::info!(%dest, "removing target destination due to connection error");
+                        tracing::info!(%dest, "disconnecting from target destination due to connection error");
                         self.target_destination = None;
                         self.act_on_target(results_sender);
                     }
@@ -774,16 +821,44 @@ impl Core {
         }
     }
 
-    fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_connection_runner_pre_wg(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            let runner = connection::up::runner::Runner::new(conn.clone(), config_connection, config_wireguard, hopr);
+            let runner = connection::up::runner_pre_wg::Runner::new(
+                conn.destination.clone(),
+                config_connection,
+                config_wireguard,
+                hopr,
+            );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner.start(results_sender).await;
+                    })
+                    .await;
+            });
+        }
+    }
+
+    fn spawn_connection_runner_post_wg(
+        &mut self,
+        destination: Destination,
+        ping_session: SessionClientMetadata,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_connection.clone();
+            let config_connection = self.config.connection.clone();
+            let hopr = hopr.clone();
+            let runner =
+                connection::up::runner_post_wg::Runner::new(destination, config_connection, ping_session, hopr);
+            let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
@@ -802,7 +877,13 @@ impl Core {
             let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
             let results_sender = results_sender.clone();
             self.ongoing_disconnections.push(disconn.clone());
+            let outgoing_sender = self.outgoing_sender.clone();
             tokio::spawn(async move {
+                // this is a oneshot command and we do not wait for any result
+                outgoing_sender
+                    .send(OutgoingCore::WgDown)
+                    .await
+                    .expect("worker outgoing channel closed - shutting down");
                 cancel
                     .run_until_cancelled(async move {
                         runner.start(results_sender).await;
@@ -836,7 +917,7 @@ impl Core {
                 if let Some(health) = self.destination_health.get(&dest.address) {
                     if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), results_sender);
+                        self.spawn_connection_runner_pre_wg(dest.clone(), results_sender);
                     } else if health.is_unrecoverable() {
                         tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
                     } else {
@@ -881,19 +962,6 @@ impl Core {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
             self.act_on_target(results_sender);
         }
-    }
-
-    fn reset_to_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
-        match self.phase.clone() {
-            Phase::Connected(conn) | Phase::Connecting(conn) => {
-                self.disconnect_from_connection(&conn, results_sender);
-            }
-            _ => (),
-        }
-        self.cancel_channel_tasks.cancel();
-        self.cancel_channel_tasks = CancellationToken::new();
-        self.destination_health.clear();
-        self.on_hopr_running(results_sender);
     }
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
