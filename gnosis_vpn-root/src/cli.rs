@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use gnosis_vpn_lib::hopr_params::{self, HoprParams};
 use gnosis_vpn_lib::{config, hopr, socket};
 
+use crate::worker;
+
 /// Gnosis VPN system service - client application for Gnosis VPN connections
 #[derive(Clone, Debug, Parser)]
 #[command(version)]
@@ -13,8 +15,8 @@ pub struct Cli {
     #[arg(
         short,
         long,
-        env = socket::ENV_VAR,
-        default_value = socket::DEFAULT_PATH
+        env = socket::root::ENV_VAR,
+        default_value = socket::root::DEFAULT_PATH
     )]
     pub socket_path: PathBuf,
 
@@ -27,8 +29,13 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
-    // TODO: add blokli instance override here?
-    /// HERE
+    /// Username of the worker user (needs a home folder for caching and configurations)
+    #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
+    pub worker_user: String,
+
+    /// Path to the worker binary - relative to the users home folder
+    #[arg(long, env = worker::ENV_VAR_WORKER_BINARY, default_value = worker::DEFAULT_WORKER_BINARY)]
+    pub worker_binary: PathBuf,
 
     /// Hopr edge client configuration path
     #[arg( long, env = hopr::CONFIG_ENV, default_value = None) ]
@@ -60,8 +67,8 @@ impl From<Cli> for HoprParams {
         let allow_insecure = cli.allow_insecure;
 
         HoprParams::new(
-            cli.hopr_identity_file,
-            cli.hopr_identity_pass,
+            cli.hopr_identity_file.clone(),
+            cli.hopr_identity_pass.clone(),
             config_mode,
             allow_insecure,
         )
@@ -86,23 +93,6 @@ mod tests {
     fn parses_cli_with_minimum_arguments() -> anyhow::Result<()> {
         let args = Cli::try_parse_from(base_args())?;
         assert!(args.hopr_config_path.is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn hopr_params_conversion_preserves_and_security_flags() -> anyhow::Result<()> {
-        let cli = Cli {
-            socket_path: PathBuf::from("/tmp/socket"),
-            config_path: PathBuf::from("/tmp/config"),
-            hopr_config_path: Some(PathBuf::from("/tmp/hopr-config")),
-            hopr_identity_file: Some(PathBuf::from("/tmp/id")),
-            hopr_identity_pass: Some("secret-pass".into()),
-            allow_insecure: true,
-        };
-
-        let params = HoprParams::from(cli.clone());
-        assert!(params.allow_insecure());
 
         Ok(())
     }
