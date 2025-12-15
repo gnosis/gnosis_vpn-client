@@ -129,10 +129,11 @@ jobs:
           done
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             suffix=${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
-            mkdir -p binaries/upload
+            # keep these out of binaries folder to easily glob over binaries folder in later steps
+            mkdir -p upload-github-artifacts
             for f in ./result/bin/*; do
-              echo "Additionally copying binary $(basename $f) to binaries/upload/$(basename $f)-${suffix}"
-              cp $f binaries/upload/$(basename $f)-${suffix}
+              echo "Additionally copying binary $(basename $f) to upload-github-artifacts/$(basename $f)-${suffix}"
+              cp $f upload-github-artifacts/$(basename $f)-${suffix}
             done
           fi
       - name: Sign binary on darwin architectures
@@ -189,4 +190,4 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: binary-${{ steps.vars.outputs.architecture }}
-          path: ${{ github.workspace }}/binaries/upload/*
+          path: ${{ github.workspace }}/github-upload-artifacts/*
