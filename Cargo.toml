@@ -20,6 +20,7 @@ exitcode = "1.1.2"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
+libc = "0.2.0"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
@@ -45,6 +46,7 @@ hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "38dace
 serde_with = "3.16.1"
 serde_yaml = "0.9.34"
 tokio-util = { version = "0.7.17", features = ["rt"] }
+uzers = "0.12.1"
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 

@@ -154,13 +154,13 @@
           # they need, rather than building the entire workspace as a single derivation.
 
           # Production build with release profile optimizations
-          gvpn = mkPackage {
+          gnosis_vpn = mkPackage {
             pname = "gnosis_vpn";
             profile = "release";
           };
 
           # Development build with faster compilation and debug symbols
-          gvpn-dev = mkPackage {
+          gnosis_vpn-dev = mkPackage {
             pname = "gnosis_vpn-dev";
             profile = "dev";
           };
@@ -239,7 +239,7 @@
 
           checks = {
             # Build the dev crates as part of `nix flake check` for convenience
-            inherit gvpn-dev;
+            inherit gnosis_vpn-dev;
 
             # Run clippy (and deny all warnings) on the workspace source,
             # again, reusing the dependency artifacts from above.
@@ -290,10 +290,10 @@
           };
 
           packages = {
-            inherit gvpn;
-            inherit gvpn-dev;
+            inherit gnosis_vpn;
+            inherit gnosis_vpn-dev;
             inherit pre-commit-check;
-            default = gvpn;
+            default = gnosis_vpn;
           };
 
           apps = {
