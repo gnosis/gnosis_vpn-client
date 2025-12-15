@@ -3939,6 +3939,7 @@ name = "gnosis_vpn-lib"
 version = "0.56.2"
 dependencies = [
  "anyhow",
+ "async-lock",
  "backon",
  "bytesize",
  "directories",
@@ -3976,10 +3977,12 @@ dependencies = [
  "libc",
  "mimalloc",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
