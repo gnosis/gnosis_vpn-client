@@ -20,7 +20,7 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
@@ -37,7 +37,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest # Use default runner for utility jobs
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -61,25 +61,26 @@ jobs:
           echo "Generating release notes"
           gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
           echo "Preparing binaries for upload"
+          binaries=(gnosis_vpn-worker gnosis_vpn-root gnosis_vpn-client)
           for architecture in "${architectures[@]}"; do
               echo "Downloading from GCP binary for ${architecture}"
-              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture} --destination=./binaries --local-filename=gnosis_vpn-${architecture}
-              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture} --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}
-              echo "Uploading binary for ${architecture}"
-              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}" --clobber
-              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}" --clobber
-              echo "Downloading signatures and checksums for ${architecture}"
-              if [[ "${architecture}" == *-linux ]]; then
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.asc --destination=./binaries --local-filename=gnosis_vpn-${architecture}.asc
-                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.asc --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.asc
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.asc" --clobber
-                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.asc" --clobber
-              fi
-              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-${architecture}.sha256
-              gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:gnosis_vpn-ctl-${architecture}.sha256 --destination=./binaries --local-filename=gnosis_vpn-ctl-${architecture}.sha256
-              echo "Uploading signatures and checksums for ${architecture}"
-              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-${architecture}.sha256" --clobber
-              gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/gnosis_vpn-ctl-${architecture}.sha256" --clobber
+              for b in "${binaries[@]}"; do
+                binary=${b}-${architecture}
+                echo "Downloading binary ${binary}"
+                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:${binary} --destination=./binaries --local-filename=${binary}
+                echo "Uploading binary ${binary}"
+                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/${binary}" --clobber
+                if [[ "${architecture}" == *-linux ]]; then
+                  echo "Downloading signature for ${binary}"
+                  gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:${binary}.asc --destination=./binaries --local-filename=${binary}.asc
+                  echo "Uploading signature for ${binary}"
+                  gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/${binary}.asc" --clobber
+                fi
+                echo "Downloading checksum for ${binary}"
+                gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.environment.outputs.release_version }}:${binary}.sha256 --destination=./binaries --local-filename=${binary}.sha256
+                echo "Uploading checksum for ${binary}"
+                gh release upload v${{ steps.environment.outputs.release_version }} "$PWD/binaries/${binary}.sha256" --clobber
+              done
           done
           echo "Release v${{ steps.environment.outputs.release_version }} created and binaries uploaded"
         env:
