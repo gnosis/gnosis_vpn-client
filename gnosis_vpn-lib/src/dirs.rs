@@ -3,10 +3,6 @@ use thiserror::Error;
 
 use std::{fs, io, path::PathBuf};
 
-const DOMAIN: &str = "org";
-const COMPANY: &str = "hoprnet";
-const PRODUCT: &str = "gnosisvpn";
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Unable to determine project directories")]
@@ -15,20 +11,28 @@ pub enum Error {
     IO(#[from] io::Error),
 }
 
-fn project() -> Option<ProjectDirs> {
-    ProjectDirs::from(DOMAIN, COMPANY, PRODUCT)
+fn project() -> Result<ProjectDirs, Error> {
+    let reverse_domain = crate::IDENTIFIER;
+    let parts: Vec<&str> = reverse_domain.split('.').collect();
+    if parts.len() < 2 {
+        return Err(Error::NoProjectDirs);
+    }
+    let dirs = ProjectDirs::from(parts[0], parts[1], parts[2]);
+    dirs.ok_or(Error::NoProjectDirs)
 }
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
-    let p_dirs = project().ok_or(Error::NoProjectDirs)?;
-    let cache_dir = p_dirs.cache_dir();
+    let pdir = project()?;
+    let cache_dir = pdir.cache_dir();
+    tracing::debug!("Ensuring cache directory: {}", cache_dir.display());
     fs::create_dir_all(cache_dir)?;
     Ok(cache_dir.join(file))
 }
 
 pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let p_dirs = project().ok_or(Error::NoProjectDirs)?;
-    let config_dir = p_dirs.config_dir();
+    let pdir = project()?;
+    let config_dir = pdir.config_dir();
+    tracing::debug!("Ensuring config directory: {}", config_dir.display());
     fs::create_dir_all(config_dir)?;
     Ok(config_dir.join(file))
 }

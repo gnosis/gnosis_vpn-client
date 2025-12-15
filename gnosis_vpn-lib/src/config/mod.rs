@@ -1,4 +1,6 @@
 use edgli::hopr_lib::{Address, GeneralError};
+use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 use thiserror::Error;
 
 use std::collections::HashMap;
@@ -6,7 +8,7 @@ use std::path::Path;
 use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
-use crate::wg_tooling::Config as WireGuardConfig;
+use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
 mod v4;
@@ -14,9 +16,11 @@ mod v4;
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 
-#[derive(Debug, PartialEq)]
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub connection: ConnectionOptions,
+    #[serde_as(as = "std::collections::HashMap<DisplayFromStr, _>")]
     pub destinations: HashMap<Address, Destination>,
     pub wireguard: WireGuardConfig,
 }

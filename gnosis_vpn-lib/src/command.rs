@@ -13,7 +13,7 @@ use crate::connection::destination_health::DestinationHealth;
 use crate::info::Info;
 use crate::log_output;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
     Connect(Address),
@@ -25,7 +25,7 @@ pub enum Command {
     FundingTool(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
     Connect(ConnectResponse),
@@ -36,13 +36,13 @@ pub enum Response {
     Empty,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub run_mode: RunMode,
     pub destinations: Vec<DestinationState>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RunMode {
     /// Initial start
     Init,
@@ -66,7 +66,7 @@ pub enum RunMode {
     Shutdown,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprStatus {
     Running,
     Initializing,
@@ -75,14 +75,14 @@ pub enum HoprStatus {
 }
 
 // in order of priority
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FundingState {
     Querying,               // currently checking balances to determine FundingState
     TopIssue(FundingIssue), // there is at least one issue
     WellFunded,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ConnectResponse {
     Connecting(Destination),
     WaitingToConnect(Destination, Option<DestinationHealth>),
@@ -90,20 +90,20 @@ pub enum ConnectResponse {
     AddressNotFound,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum DisconnectResponse {
     Disconnecting(Destination),
     NotConnected,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
     pub health: Option<DestinationHealth>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ConnectionState {
     None,
     Connecting(SystemTime, connection::up::Phase),
@@ -111,7 +111,7 @@ pub enum ConnectionState {
     Disconnecting(SystemTime, connection::down::Phase),
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BalanceResponse {
     pub node: Balance<XDai>,
     pub safe: Balance<WxHOPR>,
