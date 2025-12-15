@@ -26,7 +26,9 @@ pub enum IncomingCore {
 /// Messages sent from core application logic to worker
 pub type OutgoingCore = WireGuardCommand;
 
-/// Messages sent from root to workerq
+/// Messages sent from root to worker
+/// This enum gets serialized/deserialized between processes, so we allow large enum variants here.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IncomingWorker {
     /// Startup parameters for hoprd
