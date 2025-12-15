@@ -8,7 +8,6 @@ license = { workspace = true }
 
 [dependencies]
 anyhow.workspace = true
-async-lock.workspace = true
 backon.workspace = true
 bytesize = { workspace = true, features = ["serde"] }
 directories.workspace = true
