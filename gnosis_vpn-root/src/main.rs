@@ -155,6 +155,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         tracing::error!(error = ?err, "unable to read initial configuration file");
         exitcode::NOINPUT
     })?;
+
     let hopr_params = HoprParams::from(&args);
 
     // set up system socket

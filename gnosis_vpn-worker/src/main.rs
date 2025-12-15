@@ -244,7 +244,7 @@ async fn incoming_cmd(
 }
 
 fn main() {
-    match hopr_lib::prepare_tokio_runtime() {
+    match hopr_lib::prepare_tokio_runtime(None, None) {
         Ok(rt) => {
             rt.block_on(main_inner());
         }
