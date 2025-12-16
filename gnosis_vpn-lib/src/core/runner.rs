@@ -197,11 +197,10 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
     let node_address = keys.chain_key.public().to_address();
+    let url = hopr_params.blokli_url_with_fallback(edgli::blokli::DEFAULT_BLOKLI_URL)?;
     (|| async {
-        let (balance_wxhopr, balance_xdai) = edgli::blokli::with_safeless_blokli_connector(
-            &private_key,
-            hopr_params.blokli_url.clone(),
-            |connector| async move {
+        let (balance_wxhopr, balance_xdai) =
+            edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
                 let balance_wxhopr = edgli::hopr_lib::exports::api::chain::ChainValues::balance::<
                     WxHOPR,
                     edgli::hopr_lib::Address,
@@ -216,11 +215,10 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
                 .map_err(|e| Error::Chain(e.to_string()))?;
 
                 Ok::<_, Error>((balance_wxhopr, balance_xdai))
-            },
-        )
-        .await
-        .map_err(|e| Error::Chain(e.to_string()))?
-        .await?;
+            })
+            .await
+            .map_err(|e| Error::Chain(e.to_string()))?
+            .await?;
 
         Ok(balance::PreSafe {
             node_xdai: balance_xdai,
@@ -235,11 +233,10 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
+    let url = hopr_params.blokli_url_with_fallback(edgli::blokli::DEFAULT_BLOKLI_URL)?;
     (|| async {
-        let (ticket_price, winning_probability) = edgli::blokli::with_safeless_blokli_connector(
-            &private_key,
-            hopr_params.blokli_url.clone(),
-            |connector| async move {
+        let (ticket_price, winning_probability) =
+            edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
                 let ticket_price = edgli::hopr_lib::exports::api::chain::ChainValues::minimum_ticket_price(&connector)
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))?;
@@ -249,11 +246,10 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
                         .map_err(|e| Error::Chain(e.to_string()))?;
 
                 Ok::<_, Error>((ticket_price, win_prob))
-            },
-        )
-        .await
-        .map_err(|e| Error::Chain(e.to_string()))?
-        .await?;
+            })
+            .await
+            .map_err(|e| Error::Chain(e.to_string()))?
+            .await?;
 
         Ok(TicketStats {
             ticket_price,
@@ -276,13 +272,12 @@ async fn run_safe_deployment(
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
     let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
     let nonce = edgli::hopr_lib::U256::from(random::<u64>());
+    let url = hopr_params.blokli_url_with_fallback(edgli::blokli::DEFAULT_BLOKLI_URL)?;
 
     (|| async {
         // Deploy safe
-        let _tx_hash = edgli::blokli::with_safeless_blokli_connector(
-            &private_key,
-            hopr_params.blokli_url.clone(),
-            |connector| async move {
+        let _tx_hash =
+            edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
                 let inputs = SafeModuleDeploymentInputs {
                     token_amount,
                     nonce,
@@ -302,24 +297,19 @@ async fn run_safe_deployment(
                     .await;
 
                 Ok::<_, Error>(transaction)
-            },
-        )
-        .await
-        .map_err(|e| Error::Chain(e.to_string()))?
-        .await?;
+            })
+            .await
+            .map_err(|e| Error::Chain(e.to_string()))?
+            .await?;
 
         // Retrieve safe
-        let safe = edgli::blokli::with_safeless_blokli_connector(
-            &private_key,
-            hopr_params.blokli_url.clone(),
-            |connector| async move {
-                let safe = connector
-                    .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
-                    .await;
+        let safe = edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
+            let safe = connector
+                .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
+                .await;
 
-                Ok::<_, Error>(safe)
-            },
-        )
+            Ok::<_, Error>(safe)
+        })
         .await
         .map_err(|e| Error::Chain(e.to_string()))?
         .await?

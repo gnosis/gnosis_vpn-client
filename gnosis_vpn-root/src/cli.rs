@@ -51,7 +51,8 @@ pub struct Cli {
     pub hopr_identity_pass: Option<String>,
 
     /// Blokli URL used for on chain queries
-    pub hopr_blokli_url: Url,
+    #[arg( long, env = hopr::ID_PASS_ENV, default_value = None)]
+    pub hopr_blokli_url: Option<Url>,
 
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
@@ -75,7 +76,7 @@ impl From<&Cli> for HoprParams {
             cli.hopr_identity_pass.clone(),
             config_mode,
             allow_insecure,
-            cli.hopr_blokli_url.clone(),
+            cli.hopr_blokli_url,
         )
     }
 }

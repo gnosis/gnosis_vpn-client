@@ -11,12 +11,14 @@ use crate::hopr::{config, identity};
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("HOPR identity error: {0}")]
     HoprIdentity(#[from] identity::Error),
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error(transparent)]
+    #[error("HOPR config error: {0}")]
     Config(#[from] config::Error),
+    #[error("URL parse error: {0}")]
+    UrlParse(#[from] url::ParseError),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,7 +27,7 @@ pub struct HoprParams {
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
-    pub blokli_url: Url,
+    blokli_url: Option<Url>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,7 +42,7 @@ impl HoprParams {
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
         allow_insecure: bool,
-        blokli_url: Url,
+        blokli_url: Option<Url>,
     ) -> Self {
         Self {
             identity_file,
@@ -117,6 +119,13 @@ impl HoprParams {
 
     pub fn allow_insecure(&self) -> bool {
         self.allow_insecure
+    }
+
+    pub fn blokli_url_with_fallback(&self, fallback: &str) -> Result<Url, Error> {
+        match self.blokli_url {
+            Some(ref url) => Ok(url.clone()),
+            None => Url::parse(fallback).map_err(Error::from),
+        }
     }
 }
 
