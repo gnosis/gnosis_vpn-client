@@ -1,4 +1,5 @@
 use clap::Parser;
+use url::Url;
 
 use std::path::PathBuf;
 
