@@ -200,9 +200,7 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     (|| async {
         let (balance_wxhopr, balance_xdai) = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
-            edgli::blokli::DEFAULT_BLOKLI_URL
-                .parse()
-                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            hopr_params.blokli_url.clone(),
             |connector| async move {
                 let balance_wxhopr = edgli::hopr_lib::exports::api::chain::ChainValues::balance::<
                     WxHOPR,
@@ -240,9 +238,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     (|| async {
         let (ticket_price, winning_probability) = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
-            edgli::blokli::DEFAULT_BLOKLI_URL
-                .parse()
-                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            hopr_params.blokli_url.clone(),
             |connector| async move {
                 let ticket_price = edgli::hopr_lib::exports::api::chain::ChainValues::minimum_ticket_price(&connector)
                     .await
@@ -285,9 +281,7 @@ async fn run_safe_deployment(
         // Deploy safe
         let _tx_hash = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
-            edgli::blokli::DEFAULT_BLOKLI_URL
-                .parse()
-                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            hopr_params.blokli_url.clone(),
             |connector| async move {
                 let inputs = SafeModuleDeploymentInputs {
                     token_amount,
@@ -317,9 +311,7 @@ async fn run_safe_deployment(
         // Retrieve safe
         let safe = edgli::blokli::with_safeless_blokli_connector(
             &private_key,
-            edgli::blokli::DEFAULT_BLOKLI_URL
-                .parse()
-                .map_err(|e: url::ParseError| Error::Chain(e.to_string()))?,
+            hopr_params.blokli_url.clone(),
             |connector| async move {
                 let safe = connector
                     .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)

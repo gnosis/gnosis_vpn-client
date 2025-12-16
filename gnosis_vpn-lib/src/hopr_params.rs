@@ -3,6 +3,7 @@ use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
+use url::Url;
 
 use std::path::PathBuf;
 
@@ -24,6 +25,7 @@ pub struct HoprParams {
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
+    pub blokli_url: Url,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,12 +40,14 @@ impl HoprParams {
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
         allow_insecure: bool,
+        blokli_url: Url,
     ) -> Self {
         Self {
             identity_file,
             identity_pass,
             config_mode,
             allow_insecure,
+            blokli_url,
         }
     }
 
