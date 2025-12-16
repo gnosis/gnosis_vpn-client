@@ -11,10 +11,12 @@ consisting of:
 
 ## General concept
 
-The client offers three binaries, `gnosis_vpn-root`, `gnosis_vpn-worker` and `gnosis_vpn-ctl`.
-The client system service (`gnosis_vpn-root`) runs with root privileges and takes care of routing setup.
-It spawn the worker process (`gnosis_vpn-worker`) which is responsible for the application logic.
-The control application (`gnosis_vpn-ctl`) is used to manage the client and its connections.
+The client offers three binaries, `gnosis_vpn-root`, `gnosis_vpn-worker` and
+`gnosis_vpn-ctl`. The client system service (`gnosis_vpn-root`) runs with root
+privileges and takes care of routing setup. It spawn the worker process
+(`gnosis_vpn-worker`) which is responsible for the application logic. The
+control application (`gnosis_vpn-ctl`) is used to manage the client and its
+connections.
 
 ## Installation
 
