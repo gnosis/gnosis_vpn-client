@@ -276,44 +276,34 @@ async fn run_safe_deployment(
 
     (|| async {
         // Deploy safe
-        let _tx_hash =
-            edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
-                let inputs = SafeModuleDeploymentInputs {
-                    token_amount,
-                    nonce,
-                    admins: vec![node_address],
-                };
-
-                let signed_tx = edgli::blokli::safe_creation_payload_generator(&connector, inputs)
-                    .await
-                    .map_err(|e| Error::Chain(e.to_string()))?;
-
-                let transaction =
-                    edgli::connector::blokli_client::BlokliTransactionClient::submit_and_confirm_transaction(
-                        connector.client(),
-                        signed_tx.as_ref(),
-                        3,
-                    )
-                    .await;
-
-                Ok::<_, Error>(transaction)
-            })
-            .await
-            .map_err(|e| Error::Chain(e.to_string()))?
-            .await?;
-
-        // Retrieve safe
         let safe = edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
+            let inputs = SafeModuleDeploymentInputs {
+                token_amount,
+                nonce,
+                admins: vec![node_address],
+            };
+
+            let signed_tx = edgli::blokli::safe_creation_payload_generator(&connector, inputs)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+
+            let transaction = edgli::connector::blokli_client::BlokliTransactionClient::submit_transaction(
+                connector.client(),
+                signed_tx.as_ref(),
+            )
+            .await;
+            tracing::debug!(?transaction, "safe deployment transaction submitted");
+
             let safe = connector
                 .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
-                .await;
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
 
             Ok::<_, Error>(safe)
         })
         .await
         .map_err(|e| Error::Chain(e.to_string()))?
-        .await?
-        .map_err(|e| Error::Chain(e.to_string()))?;
+        .await?;
 
         Ok(SafeModuleDeploymentResult {
             safe_address: safe.address,
