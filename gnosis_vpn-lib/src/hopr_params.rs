@@ -138,7 +138,7 @@ mod tests {
     use tokio::runtime::Runtime;
 
     fn params_with_mode(mode: ConfigFileMode) -> HoprParams {
-        HoprParams::new(None, None, mode, true)
+        HoprParams::new(None, None, mode, true, None)
     }
 
     fn rt() -> Runtime {

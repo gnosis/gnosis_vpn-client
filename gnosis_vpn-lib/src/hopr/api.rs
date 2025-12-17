@@ -1,10 +1,10 @@
 use bytesize::ByteSize;
 use edgli::{
     hopr_lib::{
-        Address, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget, SurbBalancerConfig,
-        errors::HoprLibError,
+        Address, HoprBalance, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget,
+        SurbBalancerConfig, errors::HoprLibError,
     },
-    run_hopr_edge_node,
+    run_hopr_edge_node_with_edge_strategies,
 };
 use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
@@ -51,11 +51,16 @@ impl Hopr {
         db_data_dir: &std::path::Path,
         keys: edgli::hopr_lib::HoprKeys,
     ) -> Result<Self, HoprError> {
-        // HoprBlockchainSafeConnector<BlokliClient>
         tracing::debug!("running hopr edge node");
-        let hopr = run_hopr_edge_node(cfg, db_data_dir, keys)
-            .await
-            .map_err(|e| HoprError::Construction(e.to_string()))?;
+        let (hopr, _processes) = run_hopr_edge_node_with_edge_strategies(
+            cfg,
+            db_data_dir,
+            keys,
+            HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
+            HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
+        )
+        .await
+        .map_err(|e| HoprError::Construction(e.to_string()))?;
 
         tracing::debug!("hopr edge node finished setup");
         Ok(Self {

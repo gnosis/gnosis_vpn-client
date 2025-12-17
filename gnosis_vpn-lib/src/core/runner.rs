@@ -3,7 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::api::chain::{ChainReadSafeOperations, SafeSelector};
+use edgli::hopr_lib::api::chain::{ChainReadSafeOperations, SafeSelector};
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, IntoEndian, WxHOPR, XDai};
@@ -201,16 +201,16 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     (|| async {
         let (balance_wxhopr, balance_xdai) =
             edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
-                let balance_wxhopr = edgli::hopr_lib::exports::api::chain::ChainValues::balance::<
+                let balance_wxhopr = edgli::hopr_lib::api::chain::ChainValues::balance::<
                     WxHOPR,
                     edgli::hopr_lib::Address,
                 >(&connector, node_address)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
-                let balance_xdai = edgli::hopr_lib::exports::api::chain::ChainValues::balance::<
-                    XDai,
-                    edgli::hopr_lib::Address,
-                >(&connector, node_address)
+                let balance_xdai = edgli::hopr_lib::api::chain::ChainValues::balance::<XDai, edgli::hopr_lib::Address>(
+                    &connector,
+                    node_address,
+                )
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
 
@@ -237,13 +237,12 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     (|| async {
         let (ticket_price, winning_probability) =
             edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
-                let ticket_price = edgli::hopr_lib::exports::api::chain::ChainValues::minimum_ticket_price(&connector)
+                let ticket_price = edgli::hopr_lib::api::chain::ChainValues::minimum_ticket_price(&connector)
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))?;
-                let win_prob =
-                    edgli::hopr_lib::exports::api::chain::ChainValues::minimum_incoming_ticket_win_prob(&connector)
-                        .await
-                        .map_err(|e| Error::Chain(e.to_string()))?;
+                let win_prob = edgli::hopr_lib::api::chain::ChainValues::minimum_incoming_ticket_win_prob(&connector)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
 
                 Ok::<_, Error>((ticket_price, win_prob))
             })
@@ -283,7 +282,7 @@ async fn run_safe_deployment(
                 admins: vec![node_address],
             };
 
-            let signed_tx = edgli::blokli::safe_creation_payload_generator(&connector, inputs)
+            let signed_tx = edgli::blokli::safe_creation_payload_generator(&private_key, &connector, inputs)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
 
