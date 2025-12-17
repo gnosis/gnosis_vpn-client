@@ -273,41 +273,52 @@ async fn run_safe_deployment(
     let nonce = edgli::hopr_lib::U256::from(random::<u64>());
     let url = hopr_params.blokli_url_with_fallback(edgli::blokli::DEFAULT_BLOKLI_URL)?;
 
-    (|| async {
-        // Deploy safe
-        let safe = edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| async move {
-            let inputs = SafeModuleDeploymentInputs {
-                token_amount,
-                nonce,
-                admins: vec![node_address],
-            };
+    (|| {
+        let private_key = private_key.clone();
+        let url = url.clone();
+        async move {
+            // Deploy safe
+            let private_key_inner = private_key.clone();
+            let safe =
+                edgli::blokli::with_safeless_blokli_connector(&private_key, url.clone(), |connector| {
+                    let private_key_inner = private_key_inner.clone();
+                    async move {
+                        let inputs = SafeModuleDeploymentInputs {
+                            token_amount,
+                            nonce,
+                            admins: vec![node_address],
+                        };
 
-            let signed_tx = edgli::blokli::safe_creation_payload_generator(&private_key, &connector, inputs)
+                        let signed_tx =
+                            edgli::blokli::safe_creation_payload_generator(&private_key_inner, &connector, inputs)
+                                .await
+                                .map_err(|e| Error::Chain(e.to_string()))?;
+
+                        let transaction =
+                            edgli::connector::blokli_client::BlokliTransactionClient::submit_transaction(
+                                connector.client(),
+                                signed_tx.as_ref(),
+                            )
+                            .await;
+                        tracing::debug!(?transaction, "safe deployment transaction submitted");
+
+                        let safe = connector
+                            .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
+                            .await
+                            .map_err(|e| Error::Chain(e.to_string()))?;
+
+                        Ok::<_, Error>(safe)
+                    }
+                })
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .await?;
 
-            let transaction = edgli::connector::blokli_client::BlokliTransactionClient::submit_transaction(
-                connector.client(),
-                signed_tx.as_ref(),
-            )
-            .await;
-            tracing::debug!(?transaction, "safe deployment transaction submitted");
-
-            let safe = connector
-                .await_safe_deployment(SafeSelector::Owner(node_address), SAFE_RETRIEVAL_TIMEOUT)
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
-
-            Ok::<_, Error>(safe)
-        })
-        .await
-        .map_err(|e| Error::Chain(e.to_string()))?
-        .await?;
-
-        Ok(SafeModuleDeploymentResult {
-            safe_address: safe.address,
-            module_address: safe.module,
-        })
+            Ok(SafeModuleDeploymentResult {
+                safe_address: safe.address,
+                module_address: safe.module,
+            })
+        }
     })
     .retry(ExponentialBuilder::default())
     .await
