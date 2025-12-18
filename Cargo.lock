@@ -3946,7 +3946,6 @@ dependencies = [
  "bytesize",
  "directories",
  "edgli",
- "futures-util",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",
@@ -3991,11 +3990,9 @@ dependencies = [
 name = "gnosis_vpn-worker"
 version = "0.56.2"
 dependencies = [
- "anyhow",
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
- "libc",
  "mimalloc",
  "serde_json",
  "tokio",
