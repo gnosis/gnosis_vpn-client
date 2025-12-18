@@ -53,7 +53,7 @@
 //! ```
 //!
 //! 5. Teardown Script remove_libp2p_split_routing.sh
-//! 
+//!
 //! ```
 //! #!/bin/bash
 //! set -e
@@ -100,7 +100,7 @@ pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<
         &wg_data.interface_info,
         &wg_data.peer_info,
         // true to route all traffic
-        false,
+        false, // START WITH TRUE TO KILL YOURSELF
     );
     // 2. run wg-quick up
     wg_tooling::up(wg_quick_content).await?;
