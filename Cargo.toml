@@ -18,6 +18,7 @@ clap = { version = "4.5.53", features = ["derive", "env"] }
 directories = "6.0.0"
 exitcode = "1.1.2"
 humantime = "2.3.0"
+futures-util = "0.3.31"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
 libc = "0.2.177"

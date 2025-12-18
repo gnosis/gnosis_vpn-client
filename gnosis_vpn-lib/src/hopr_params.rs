@@ -154,7 +154,7 @@ mod tests {
         fs::write(temp.path(), yaml).expect("write config");
 
         let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
-        let cfg = rt().block_on(params.to_config(Balance::<WxHOPR>::default()))?;
+        let cfg = rt().block_on(params.to_config())?;
 
         assert_eq!(cfg, config);
         Ok(())
@@ -167,7 +167,7 @@ mod tests {
 
         let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
         let err = rt()
-            .block_on(params.to_config(Balance::<WxHOPR>::default()))
+            .block_on(params.to_config())
             .expect_err("invalid config should bubble up parse error");
 
         assert!(matches!(err, Error::Config(_)));

@@ -6,6 +6,7 @@ use edgli::{
         SurbBalancerConfig, errors::HoprLibError,
     },
 };
+use futures_util::future::AbortHandle;
 use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
@@ -21,7 +22,7 @@ use std::{
 use std::{net::SocketAddr, sync::Arc};
 
 use crate::{
-    balance::Balances,
+    balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
     ticket_stats::TicketStats,
@@ -54,14 +55,6 @@ impl Hopr {
         tracing::debug!("running hopr edge node");
         let edge_node = Edgli::new(cfg, db_data_dir, keys)
             .await
-            .map_err(|e| HoprError::Construction(e.to_string()))?;
-
-        // TODO: @ronny: move wherever you want the reactor to be started
-        let strategy_process = edge_node
-            .run_reactor_from_cfg(edgli::strategy::default_edge_client_telemetry_reactor_cfg(
-                HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
-                HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
-            ))
             .map_err(|e| HoprError::Construction(e.to_string()))?;
 
         tracing::debug!("hopr edge node finished setup");
@@ -314,7 +307,7 @@ impl Hopr {
             .collect::<Vec<_>>()
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
         tracing::debug!("adjust hopr session");
         let session_id = SessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
@@ -401,7 +394,7 @@ impl Hopr {
         self.edgli.status()
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
         tracing::debug!("query hopr connected peers");
         let peer_ids = self.edgli.network_connected_peers().await?;
@@ -418,6 +411,17 @@ impl Hopr {
             }
         }
         Ok(addresses)
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub fn start_telemetry_reactor(&self, ticket_value: HoprBalance) -> Result<AbortHandle, HoprError> {
+        let cfg = edgli::strategy::default_edge_client_telemetry_reactor_cfg(
+            balance::min_stake_threshold(ticket_value),
+            balance::funding_amount(ticket_value),
+        );
+        self.edgli
+            .run_reactor_from_cfg(cfg)
+            .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

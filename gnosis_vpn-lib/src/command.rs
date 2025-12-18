@@ -53,9 +53,7 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
     },
-    /// Before config generation
-    ValueingTicket,
-    /// Subsequent service start up in this state and after preparing safe
+    /// Hopr started, determining ticket value for strategies
     Warmup { hopr_status: HoprStatus },
     /// Normal operation where connections can be made
     Running {
@@ -257,7 +255,6 @@ impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RunMode::Init => write!(f, "Initializing"),
-            RunMode::ValueingTicket => write!(f, "Determine ticket value"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,

@@ -3946,6 +3946,7 @@ dependencies = [
  "bytesize",
  "directories",
  "edgli",
+ "futures-util",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",
