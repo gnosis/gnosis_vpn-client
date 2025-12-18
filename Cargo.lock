@@ -2445,7 +2445,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=92621f7aa64d82accdc4cea35984208c36fbeb32#92621f7aa64d82accdc4cea35984208c36fbeb32"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=fa61b7132bb9e0fde0e34733817e865cba7adbae#fa61b7132bb9e0fde0e34733817e865cba7adbae"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2458,6 +2458,7 @@ dependencies = [
  "hopr-db-node",
  "hopr-lib",
  "hopr-strategy",
+ "lazy_static",
  "mimalloc",
  "serde_json",
  "serde_yaml",

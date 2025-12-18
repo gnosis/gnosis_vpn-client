@@ -121,11 +121,8 @@ impl HoprParams {
         self.allow_insecure
     }
 
-    pub fn blokli_url_with_fallback(&self, fallback: &str) -> Result<Url, Error> {
-        match self.blokli_url {
-            Some(ref url) => Ok(url.clone()),
-            None => Url::parse(fallback).map_err(Error::from),
-        }
+    pub fn blokli_url(&self) -> Option<Url> {
+        self.blokli_url.clone()
     }
 }
 

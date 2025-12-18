@@ -1,10 +1,10 @@
 use bytesize::ByteSize;
 use edgli::{
+    Edgli,
     hopr_lib::{
         Address, HoprBalance, IpProtocol, SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget,
         SurbBalancerConfig, errors::HoprLibError,
     },
-    run_hopr_edge_node_with_edge_strategies,
 };
 use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
@@ -40,7 +40,7 @@ pub enum ChannelError {
 }
 
 pub struct Hopr {
-    hopr: Arc<edgli::HoprEdgeClient>,
+    edgli: Arc<edgli::Edgli>,
     open_listeners: Arc<ListenerJoinHandles>,
 }
 
@@ -52,19 +52,21 @@ impl Hopr {
         keys: edgli::hopr_lib::HoprKeys,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
-        let (hopr, _processes) = run_hopr_edge_node_with_edge_strategies(
-            cfg,
-            db_data_dir,
-            keys,
-            HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
-            HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
-        )
-        .await
-        .map_err(|e| HoprError::Construction(e.to_string()))?;
+        let edge_node = Edgli::new(cfg, db_data_dir, keys)
+            .await
+            .map_err(|e| HoprError::Construction(e.to_string()))?;
+
+        // TODO: @ronny: move wherever you want the reactor to be started
+        let strategy_process = edge_node
+            .run_reactor_from_cfg(edgli::strategy::default_edge_client_telemetry_reactor_cfg(
+                HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
+                HoprBalance::default(), // TODO: @ronny: replace with an actual configuration value
+            ))
+            .map_err(|e| HoprError::Construction(e.to_string()))?;
 
         tracing::debug!("hopr edge node finished setup");
         Ok(Self {
-            hopr,
+            edgli: Arc::new(edge_node),
             open_listeners: Default::default(),
         })
     }
@@ -83,14 +85,14 @@ impl Hopr {
         threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
     ) -> Result<(), ChannelError> {
         tracing::debug!("ensure hopr channel funding");
-        let channels_from_me = self.hopr.channels_from(&self.hopr.me_onchain()).await?;
+        let channels_from_me = self.edgli.channels_from(&self.edgli.me_onchain()).await?;
 
         if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
             match channel.status {
                 edgli::hopr_lib::ChannelStatus::Open => {
                     if channel.balance < threshold {
                         tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
-                        self.hopr
+                        self.edgli
                             .fund_channel(channel.get_id(), amount)
                             .await
                             .map(|_| ())
@@ -106,7 +108,7 @@ impl Hopr {
                 }
                 edgli::hopr_lib::ChannelStatus::Closed => {
                     tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is closed, opening a new one");
-                    self.hopr
+                    self.edgli
                         .open_channel(&target, amount)
                         .await
                         .map(|_| ())
@@ -116,7 +118,7 @@ impl Hopr {
             }
         } else {
             tracing::debug!(destination = %target, %amount, "no existing channel found, opening a new one");
-            self.hopr
+            self.edgli
                 .open_channel(&target, amount)
                 .await
                 .map(|_| ())
@@ -176,7 +178,6 @@ impl Hopr {
 
         let listener_id = ListenerId(protocol, bind_host);
 
-        let hopr = self.hopr.clone();
         let open_listeners = self.open_listeners.clone();
         if bind_host.port() > 0 && open_listeners.as_ref().0.contains_key(&listener_id) {
             return Err(HoprError::Construction("listener already exists".into()));
@@ -191,7 +192,7 @@ impl Hopr {
             IpProtocol::TCP => create_tcp_client_binding(
                 bind_host,
                 port_range,
-                hopr.clone(),
+                self.edgli.as_hopr(),
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
@@ -204,7 +205,7 @@ impl Hopr {
             IpProtocol::UDP => create_udp_client_binding(
                 bind_host,
                 port_range,
-                hopr.clone(),
+                self.edgli.as_hopr(),
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
@@ -320,7 +321,7 @@ impl Hopr {
 
         // NOTE: known bug: adjust session does not update self.open_listeners which leads to
         // outdated info being reported by list_sessions
-        self.hopr
+        self.edgli
             .update_session_surb_balancer_config(&session_id, balancer_cfg)
             .await
             .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
@@ -330,9 +331,9 @@ impl Hopr {
     pub fn info(&self) -> Info {
         tracing::debug!("query hopr info");
         Info {
-            node_address: self.hopr.me_onchain(),
-            node_peer_id: self.hopr.me_peer_id().to_string(),
-            safe_address: self.hopr.get_safe_config().safe_address,
+            node_address: self.edgli.me_onchain(),
+            node_peer_id: self.edgli.me_peer_id().to_string(),
+            safe_address: self.edgli.get_safe_config().safe_address,
         }
     }
 
@@ -340,11 +341,11 @@ impl Hopr {
     pub async fn balances(&self) -> Result<Balances, HoprError> {
         tracing::debug!("query hopr balances");
         Ok(Balances {
-            node_xdai: self.hopr.get_balance().await?,
-            safe_wxhopr: self.hopr.get_safe_balance().await?,
+            node_xdai: self.edgli.get_balance().await?,
+            safe_wxhopr: self.edgli.get_safe_balance().await?,
             channels_out_wxhopr: self
-                .hopr
-                .channels_from(&self.hopr.me_onchain())
+                .edgli
+                .channels_from(&self.edgli.me_onchain())
                 .await?
                 .into_iter()
                 .filter_map(|ch| {
@@ -389,24 +390,24 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
         tracing::debug!("query hopr ticket price");
-        let ticket_price = self.hopr.get_ticket_price().await?;
-        let winning_probability = self.hopr.get_minimum_incoming_ticket_win_probability().await?;
+        let ticket_price = self.edgli.get_ticket_price().await?;
+        let winning_probability = self.edgli.get_minimum_incoming_ticket_win_probability().await?;
         Ok(TicketStats::new(ticket_price, winning_probability.into()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub fn status(&self) -> edgli::hopr_lib::state::HoprState {
         tracing::debug!("query hopr status");
-        self.hopr.status()
+        self.edgli.status()
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
         tracing::debug!("query hopr connected peers");
-        let peer_ids = self.hopr.network_connected_peers().await?;
+        let peer_ids = self.edgli.network_connected_peers().await?;
         let mut set = JoinSet::new();
         for p in peer_ids {
-            let hopr = self.hopr.clone();
+            let hopr = self.edgli.clone();
             set.spawn(async move { hopr.peerid_to_chain_key(&p).await });
         }
 
