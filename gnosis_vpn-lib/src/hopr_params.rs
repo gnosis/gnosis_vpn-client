@@ -1,5 +1,5 @@
+use edgli::hopr_lib::HoprKeys;
 use edgli::hopr_lib::config::HoprLibConfig;
-use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
@@ -108,12 +108,12 @@ impl HoprParams {
         identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
     }
 
-    pub async fn to_config(&self, ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
+    pub async fn to_config(&self) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             // use user provided configuration path
             ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
             // check status of config generation
-            ConfigFileMode::Generated => config::generate(ticket_value).await.map_err(Error::from),
+            ConfigFileMode::Generated => config::generate().await.map_err(Error::from),
         }
     }
 

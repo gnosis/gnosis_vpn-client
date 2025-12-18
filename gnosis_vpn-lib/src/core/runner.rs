@@ -143,8 +143,8 @@ pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: 
     let _ = results_sender.send(Results::SafePersisted).await;
 }
 
-pub async fn hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params, ticket_value).await;
+pub async fn hopr(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
+    let res = run_hopr(hopr_params).await;
     let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
@@ -332,9 +332,9 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
+async fn run_hopr(hopr_params: HoprParams) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = hopr_params.to_config(ticket_value).await?;
+    let cfg = hopr_params.to_config().await?;
     let keys = hopr_params.calc_keys().await?;
     Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys)
         .await

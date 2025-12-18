@@ -1,4 +1,3 @@
-use edgli::hopr_lib::{Balance, WxHOPR};
 use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
@@ -6,7 +5,6 @@ use tokio::fs;
 
 use std::path::{Path, PathBuf};
 
-use crate::balance;
 use crate::dirs;
 
 pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
@@ -25,16 +23,6 @@ pub enum Error {
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
 }
-
-// impl From<SafeModuleDeploymentResult> for SafeModule {
-//     fn from(result: SafeModuleDeploymentResult) -> Self {
-//         Self {
-//             safe_address: result.safe_address.0.0.into(),
-//             module_address: result.module_address.0.0.into(),
-//             ..Default::default()
-//         }
-//     }
-// }
 
 pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     let content = fs::read_to_string(path).await.map_err(|e| {
@@ -58,47 +46,23 @@ pub fn has_safe() -> bool {
     safe_file().is_ok_and(|path| path.exists())
 }
 
-// TODO: needs to be updated to reflect to most recent config changes in hopr-lib
-pub async fn generate(ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
+pub async fn generate() -> Result<HoprLibConfig, Error> {
     let safe_module: SafeModule = match fs::read_to_string(safe_file()?).await {
         Ok(content) => serde_yaml::from_str::<SafeModule>(&content)?,
         Err(e) => return Err(Error::IO(e)),
     };
     let content = format!(
         r##"
-# db:
-#     data: {db_file}
 host:
     port: {port}
     address: !Domain edge.example.com
 safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
-# strategy:
-#     on_fail_continue: true
-#     strategies:
-#         - !AutoFunding
-#           funding_amount: {funding_amount}
-#           min_stake_threshold: {min_stake_threshold}
-#         - !ClosureFinalizer
-#           max_closure_overdue: 300
-# network_options:
-#     # Minimum delay (seconds) will be multiplied by backoff, it will be half the actual minimum value.
-#     min_delay: 1
-#     max_delay: 30 # down from 300, means that at most 30 seconds will be the maximum backed off timeout in case of failed probes
-#     # Minimum score to add a node to the routing table
-#     node_score_auto_path_threshold: 0.90 # down from 0.95
-#     # Maximum latency for the first hop in ms
-#     max_first_hop_latency_threshold: 400 # up from 250
-#     # Indicates how long (in seconds) a node is considered "ignored"
-#     ignore_timeframe: 0 # down from 2 minutes
 "##,
-        db_file = db_file()?.to_string_lossy(),
         port = rand::rng().random_range(20000..65000),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
-        funding_amount = balance::funding_amount(ticket_value),
-        min_stake_threshold = balance::min_stake_threshold(ticket_value),
     );
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
