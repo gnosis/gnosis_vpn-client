@@ -22,7 +22,7 @@ mod cli;
 mod routing;
 mod wg_tooling;
 
-use crate::routing::Routing;
+use routing::Routing;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -155,6 +155,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         tracing::error!(error = ?err, "unable to read initial configuration file");
         exitcode::NOINPUT
     })?;
+
     let hopr_params = HoprParams::from(&args);
 
     // set up system socket

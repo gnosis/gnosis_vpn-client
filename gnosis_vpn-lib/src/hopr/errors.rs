@@ -23,9 +23,12 @@ pub enum HoprError {
     #[error("Ambiguous client for session")]
     SessionAmbiguousClient,
 
-    #[error("Faile to extract telemetry: {0}")]
+    #[error("Failed to extract telemetry: {0}")]
     Telemetry(String),
 
     #[error("No ticket price available")]
     NoTicketPrice,
+
+    #[error("Failed to start telemetry reactor: {0}")]
+    TelemetryReactorStart(String),
 }
