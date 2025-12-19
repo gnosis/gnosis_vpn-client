@@ -41,14 +41,16 @@ pub enum Setback {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("Hopr error: {0}")]
     Hopr(#[from] HoprError),
-    #[error(transparent)]
+    #[error("Gvpn client error: {0}")]
     GvpnClient(#[from] gvpn_client::Error),
-    #[error(transparent)]
+    #[error("WireGuard error: {0}")]
     WireGuard(#[from] wireguard::Error),
-    #[error(transparent)]
+    #[error("Ping error: {0}")]
     Ping(#[from] ping::Error),
+    #[error("Critical error: {0}")]
+    Runtime(String),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.
@@ -76,6 +78,12 @@ pub enum Phase {
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
+}
+
+impl Error {
+    pub fn is_ping_error(&self) -> bool {
+        matches!(self, Error::Ping(_))
+    }
 }
 
 impl Up {

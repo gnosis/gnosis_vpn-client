@@ -124,11 +124,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // ensure worker user exists
-    let input = worker::Input::new(
-        args.worker_user.clone(),
-        args.worker_binary.clone(),
-        env!("CARGO_PKG_VERSION"),
-    );
+    let input = worker::Input::new( args.worker_user.clone(), args.worker_binary.clone(), env!("CARGO_PKG_VERSION"));
     let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
         tracing::error!(error = ?err, "error determining worker user");
         exitcode::NOUSER
@@ -142,6 +138,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             tracing::error!(error = ?err, "error checking WireGuard tools");
             exitcode::UNAVAILABLE
         })?;
+
+    // tear down any previous routing - ignore expected error
+    let _ = routing.teardown().await.map(|_| {
+        tracing::warn!("cleaned up routing from previous daemon instance")
+    });
 
     // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
@@ -166,7 +167,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
     });
-    res.map(|_| ())
+
+    res
 }
 
 async fn loop_daemon(

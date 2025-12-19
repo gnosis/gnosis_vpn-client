@@ -26,7 +26,7 @@ pub enum IncomingCore {
 /// Messages sent from core application logic to worker
 pub type OutgoingCore = WireGuardCommand;
 
-/// Messages sent from root to workerq
+/// Messages sent from root to worker
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IncomingWorker {
     /// Startup parameters for hoprd
