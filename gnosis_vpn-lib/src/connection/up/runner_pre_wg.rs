@@ -1,7 +1,7 @@
 //! The runner module for `core::connection::up` struct.
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use backon::{ExponentialBuilder, Retryable};
+use backon::{FibonacciBuilder, ExponentialBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
 use tokio::sync::mpsc;
 
@@ -40,7 +40,7 @@ impl Runner {
         let _ = results_sender.send(Results::ConnectionResultPreWg { res }).await;
     }
 
-    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
+    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let _ = results_sender
             .send(Results::ConnectionEvent {
@@ -81,6 +81,103 @@ impl Runner {
             })
             .await;
         let session = open_ping_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+
+        // 5. establish wg tunnel
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::WgTunnel(session))),
+            })
+            .await;
+
+        // 5a. request wg tunnel from root
+        let (tx, rx) = oneshot::channel();
+        let _ = results_sender.send(Results::RequestDynamicWgTunnel {
+            wg_data,
+            resp: tx,
+        }).await;
+
+        // await response with timeout
+        tokio::select!(
+            res = rx => {
+                match res {
+                    Ok(Ok(())) => {
+                        self.run_after_wg_tunnel_established(&results_sender).await?;
+                    }
+                    Ok(Err(err)) => {
+                        tracing::error!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel");
+                        self.run_fallback_to_static_wg_tunnel(&results_sender).await?;
+                    }
+                    Err(err) => {
+                        tracing::error!(error = ?err, "channel closed unexpectedly while waiting for dynamically routed WireGuard tunnel");
+                        return Err(Error::Runtime("Channel closed unexpectedly".to_string()));
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(60)) => {
+                tracing::error!("Timed out waiting for response for dynamically routed WireGuard tunnel establishment");
+                return Err(Error::Runtime("Timed out waiting for response".to_string()));
+            }
+        );
+    }
+
+    async fn run_after_wg_tunnel_established(
+        // 6. check ping
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::Ping),
+            })
+            .await;
+
+        // 6a. request ping from root
+        let ping_res =
+        (|| async {
+        let (tx, rx) = oneshot::channel();
+        let _ = results_sender.send(Results::RequestPing {
+            options: self.options.clone(),
+            resp: tx,
+        }).await;
+
+        // await response with timeout
+        tokio::select!(
+            res = rx => {
+                match res {
+                    Ok(Ok(round_trip_time)) => {
+                        tracing::debug!(?round_trip_time, "ping successful");
+                        Ok(round_trip_time)
+                    }
+                    Ok(Err(err)) => {
+                        tracing::error!(error = ?err, "failed to ping through WireGuard tunnel");
+                        Err(Error::Ping(err));
+                    }
+                    Err(err) => {
+                        tracing::error!(error = ?err, "channel closed unexpectedly while waiting for ping response");
+                        Err(Error::Runtime("Channel closed unexpectedly".to_string()));
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                tracing::error!("Timed out waiting for ping response");
+                return Err(Error::Runtime("Timed out waiting for ping response".to_string()));
+            }
+        )
+    }).retry(FibonacciBuilder::default())
+        .when(|err: &Error| err.is_ping_error())
+            .notify(|err: &Error, dur: Duration| {
+                let _ = results_sender.send(Results::ConnectionEvent { evt: setback(Setback::Ping(err.to_string())), }).await;
+                tracing::debug!("retrying ping after {:?}", dur);
+            })
+        .await;
+        // let round_trip_time = ping(&self.options).await?;
+        // tracing::debug!(?round_trip_time, "ping successful");
+
+        // 7. adjust to main session
+        let _ = results_sender
+            .send(Results::ConnectionEvent {
+                evt: progress(Progress::AdjustToMain),
+            })
+            .await;
+        adjust_to_main_session(&self.hopr, &self.options, &self.ping_session).await?;
+        Ok(())
         Ok(session)
     }
 }
@@ -118,7 +215,7 @@ async fn open_bridge_session(
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open bridge session");
-        let res = hopr
+        hopr
             .open_session(
                 destination.address,
                 options.sessions.bridge.target.clone(),
@@ -126,18 +223,16 @@ async fn open_bridge_session(
                 Some(1),
                 cfg.clone(),
             )
-            .await;
-        if let Err(e) = &res {
-            let _ = results_sender
-                .send(Results::ConnectionEvent {
-                    evt: setback(Setback::OpenBridge(e.to_string())),
-                })
-                .await;
-        }
-        let ret_val = res?;
-        Ok(ret_val)
+            .await
+    }).retry(ExponentialBuilder::default())
+    .when(|err: &HoprError>| {
+        tracing::error!(error = ?err, "when on open");
+        true
     })
-    .retry(ExponentialBuilder::default())
+    .notify(|err: &HoprError, dur: Duration| {
+            let _ = results_sender.send(Results::ConnectionEvent { evt: setback(Setback::OpenBridge(err.to_string())), }).await;
+            tracing::debug!("retrying open bridge session after {:?}", dur);
+    })
     .await
 }
 
