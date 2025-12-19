@@ -260,7 +260,7 @@ async fn run_safe_deployment(
         let url = url.clone();
         let private_key = private_key.clone();
         async move {
-            Ok(edgli::blokli::SafelessInteractor::new(url, &private_key)
+            edgli::blokli::SafelessInteractor::new(url, &private_key)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?
                 .deploy_safe(SafeModuleDeploymentInputs {
@@ -269,7 +269,7 @@ async fn run_safe_deployment(
                     admins: vec![node_address],
                 })
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))?)
+                .map_err(|e| Error::Chain(e.to_string()))
         }
     })
     .retry(ExponentialBuilder::default())
