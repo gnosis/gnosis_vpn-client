@@ -141,7 +141,6 @@ pub fn min_funds_threshold() -> Balance<XDai> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgli::hopr_chain_connector::reexports::alloy::primitives::U256;
 
     #[test]
     fn to_funding_issues_marks_unfunded_when_all_balances_zero() -> anyhow::Result<()> {
