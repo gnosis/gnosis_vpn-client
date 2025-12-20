@@ -59,6 +59,7 @@ pub enum Error {
 /// And avoid duplicating structs in both `core` and `connection` modules.
 #[derive(Clone, Debug)]
 pub struct Up {
+    // TODO phase out this struct of in between storage
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
     pub wireguard: Option<WireGuard>,

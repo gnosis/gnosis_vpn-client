@@ -3,10 +3,12 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, ExponentialBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
-use tokio::sync::mpsc;
+use tokio::sync::{oneshot, mpsc};
+
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::connection::destination::Destination;
 use crate::connection::options::Options;
@@ -15,6 +17,7 @@ use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
+use crate::event::RespondableRequestToRoot;
 
 use super::{Error, Event, Progress, Setback};
 
@@ -37,129 +40,90 @@ impl Runner {
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
-        let _ = results_sender.send(Results::ConnectionResultPreWg { res }).await;
+        let _ = results_sender.send(Results::ConnectionResult { res }).await;
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. generate wg keys
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::GenerateWg),
-            })
+            .send(progress(Progress::GenerateWg))
             .await;
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
         let public_key = wg.key_pair.public_key.clone();
 
         // 1. open bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::OpenBridge(wg)),
-            })
+            .send(progress(Progress::OpenBridge(wg)))
             .await;
         let bridge_session = open_bridge_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
 
         // 2. register wg public key
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::RegisterWg),
-            })
+            .send(progress(Progress::RegisterWg))
             .await;
         let registration = register(&self.options, &bridge_session, public_key, &results_sender).await?;
 
         // 3. close bridge session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::CloseBridge(registration)),
-            })
+            .send(progress(Progress::CloseBridge(registration)))
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
 
         // 4. open ping session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::OpenPing),
-            })
+            .send(progress(Progress::OpenPing))
             .await;
         let session = open_ping_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
 
         // 5. establish wg tunnel
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::WgTunnel(session))),
-            })
+            .send(progress(Progress::WgTunnel(session)))
             .await;
 
-        // 5a. request wg tunnel from root
+        // 5a. request dynamic wg tunnel from root
         let (tx, rx) = oneshot::channel();
-        let _ = results_sender.send(Results::RequestDynamicWgTunnel {
-            wg_data,
-            resp: tx,
-        }).await;
+                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
+                            let peer_info = wireguard::PeerInfo {
+                                public_key: reg.server_public_key(),
+                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+                            };
+                            let wg_data = event::WgData {
+                                wg,
+                                peer_info,
+                                interface_info,
+                            };
+        let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx, })).await;
+        let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
 
-        // await response with timeout
-        tokio::select!(
-            res = rx => {
-                match res {
-                    Ok(Ok(())) => {
-                        self.run_after_wg_tunnel_established(&results_sender).await?;
-                    }
-                    Ok(Err(err)) => {
+        match res {
+            Ok(()) => {
+                self.run_after_wg_tunnel_established(&results_sender).await
+            },
+                Err(err) => {
                         tracing::error!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel");
-                        self.run_fallback_to_static_wg_tunnel(&results_sender).await?;
-                    }
-                    Err(err) => {
-                        tracing::error!(error = ?err, "channel closed unexpectedly while waiting for dynamically routed WireGuard tunnel");
-                        return Err(Error::Runtime("Channel closed unexpectedly".to_string()));
-                    }
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_secs(60)) => {
-                tracing::error!("Timed out waiting for response for dynamically routed WireGuard tunnel establishment");
-                return Err(Error::Runtime("Timed out waiting for response".to_string()));
-            }
-        );
+                        self.run_fallback_to_static_wg_tunnel(&results_sender).await
+            },
+        }
     }
 
-    async fn run_after_wg_tunnel_established(
+    async fn run_fallback_to_static_wg_tunnel(&self, results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
+        // 5b. gather announced peer ids
+        peer_ips = self.peers().await?;
+        // 5c. request static wg tunnel from root
+        let (tx, rx) = oneshot::channel();
+        let _ = results_sender.send(Results::RequestStaticWgTunnel { wg_data, peer_ips, resp: tx, }).await;
+        await_with_timeout(rx, Duration::from_secs(60)).await?;
+
+        self.run_after_wg_tunnel_established(&results_sender).await
+    }
+
+    async fn run_after_wg_tunnel_established(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 6. check ping
-        let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::Ping),
-            })
-            .await;
+        let _ = results_sender.send(Results::ConnectionEvent {evt: progress(Progress::Ping) }).await;
 
         // 6a. request ping from root
-        let ping_res =
-        (|| async {
-        let (tx, rx) = oneshot::channel();
-        let _ = results_sender.send(Results::RequestPing {
-            options: self.options.clone(),
-            resp: tx,
-        }).await;
-
-        // await response with timeout
-        tokio::select!(
-            res = rx => {
-                match res {
-                    Ok(Ok(round_trip_time)) => {
-                        tracing::debug!(?round_trip_time, "ping successful");
-                        Ok(round_trip_time)
-                    }
-                    Ok(Err(err)) => {
-                        tracing::error!(error = ?err, "failed to ping through WireGuard tunnel");
-                        Err(Error::Ping(err));
-                    }
-                    Err(err) => {
-                        tracing::error!(error = ?err, "channel closed unexpectedly while waiting for ping response");
-                        Err(Error::Runtime("Channel closed unexpectedly".to_string()));
-                    }
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                tracing::error!("Timed out waiting for ping response");
-                return Err(Error::Runtime("Timed out waiting for ping response".to_string()));
-            }
-        )
+        let round_trip_time = self.ping().await?;
+        /*
     }).retry(FibonacciBuilder::default())
         .when(|err: &Error| err.is_ping_error())
             .notify(|err: &Error, dur: Duration| {
@@ -167,8 +131,10 @@ impl Runner {
                 tracing::debug!("retrying ping after {:?}", dur);
             })
         .await;
+        */
         // let round_trip_time = ping(&self.options).await?;
-        // tracing::debug!(?round_trip_time, "ping successful");
+
+        tracing::info!(?round_trip_time, "ping successful");
 
         // 7. adjust to main session
         let _ = results_sender
@@ -178,7 +144,6 @@ impl Runner {
             .await;
         adjust_to_main_session(&self.hopr, &self.options, &self.ping_session).await?;
         Ok(())
-        Ok(session)
     }
 }
 
@@ -324,10 +289,78 @@ async fn open_ping_session(
     .await
 }
 
+async fn adjust_to_main_session(
+    hopr: &Hopr,
+    options: &Options,
+    session_client_metadata: &SessionClientMetadata,
+) -> Result<(), HoprError> {
+    let active_client = match session_client_metadata.active_clients.as_slice() {
+        [] => return Err(HoprError::SessionNotFound),
+        [client] => client.clone(),
+        _ => return Err(HoprError::SessionAmbiguousClient),
+    };
+    tracing::debug!(bound_host = ?session_client_metadata.bound_host, "adjusting to main session");
+    let surb_management = runner::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
+    hopr.adjust_session(surb_management, active_client).await
+}
+
 fn setback(setback: Setback) -> Event {
     Event::Setback(setback)
 }
 
-fn progress(progress: Progress) -> Event {
-    Event::Progress(progress)
+fn progress(progress: Progress) -> Results {
+    Results::ConnectionEvent(Event::Progress(progress))
 }
+
+async fn await_with_timeout<T>(rx: tokio::sync::oneshot::Receiver<T>, duration: Duration) -> Result<T, Error> {
+        tokio::select!(
+            res = rx => res.map_err(|_| Error::Runtime("Channel closed unexpectedly".to_string())),
+            _ = tokio::time::sleep(duration) => {
+                Err(Error::Runtime("Timed out waiting for response".to_string()))
+            }
+        )
+}
+/*
+            Results::ConnectionResult { res } => {
+                tracing::debug!(?res, "handling pre wg connection runner result");
+                match (res, self.phase.clone()) {
+                    (Ok(session), Phase::Connecting(mut conn)) => {
+                        if let (Some(wg), Some(reg)) = (conn.wireguard.clone(), conn.registration.clone()) {
+                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
+                            let peer_info = wireguard::PeerInfo {
+                                public_key: reg.server_public_key(),
+                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+                            };
+                            let wg_data = event::WgData {
+                                wg,
+                                peer_info,
+                                interface_info,
+                            };
+                            self.outgoing_sender
+                                .send(OutgoingCore::WgUp(wg_data))
+                                .await
+                                .expect("worker outgoing channel closed - shutting down");
+                            let evt = connection::up::Progress::WgTunnel(session);
+                            conn.connect_progress(evt);
+                            self.phase = Phase::Connecting(conn);
+                        } else {
+                            tracing::error!(%conn, "missing WireGuard or registration data for connection - disconnecting");
+                            self.target_destination = None;
+                            self.act_on_target(results_sender);
+                        }
+                    }
+                    (Err(err), Phase::Connecting(conn)) => {
+                        tracing::error!(%conn, %err, "Opening ping session failed - disconnecting");
+                        self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
+                        self.target_destination = None;
+                        self.act_on_target(results_sender);
+                    }
+                    (Ok(_), phase) => {
+                        tracing::warn!(?phase, "unawaited opening ping session succeeded");
+                    }
+                    (Err(err), phase) => {
+                        tracing::warn!(?phase, %err, "connection failed in unexpecting state");
+                    }
+                }
+            }
+*/
