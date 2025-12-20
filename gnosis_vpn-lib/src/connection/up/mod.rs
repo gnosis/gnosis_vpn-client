@@ -11,8 +11,7 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, ping, wireguard};
 
-pub mod runner_post_wg;
-pub mod runner_pre_wg;
+pub mod runner;
 
 #[derive(Debug)]
 pub enum Event {

@@ -20,6 +20,8 @@ pub enum WorkerToCore {
         resp: oneshot::Sender<Response>,
     },
     Shutdown,
+    /// Result of a request to root
+    ResponseFromRoot(ResponseFromRoot),
 }
 
 /// Messages sent from core application logic to worker
