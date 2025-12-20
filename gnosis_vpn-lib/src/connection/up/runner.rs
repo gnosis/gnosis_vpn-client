@@ -75,54 +75,42 @@ impl Runner {
             .await;
         let session = open_ping_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
 
-        // 5. establish wg tunnel
-        let _ = results_sender
-            .send(progress(Progress::WgTunnel(session)))
-            .await;
-
         // 5a. request dynamic wg tunnel from root
-        let (tx, rx) = oneshot::channel();
-                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
-                            let peer_info = wireguard::PeerInfo {
-                                public_key: reg.server_public_key(),
-                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
-                            };
-                            let wg_data = event::WgData {
-                                wg,
-                                peer_info,
-                                interface_info,
-                            };
-        let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx, })).await;
-        let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
+        let _ = results_sender
+            .send(progress(Progress::DynamicWgTunnel(session)))
+            .await;
+        let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
 
         match res {
             Ok(()) => {
                 self.run_after_wg_tunnel_established(&results_sender).await
             },
                 Err(err) => {
-                        tracing::error!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel");
+                        tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
                         self.run_fallback_to_static_wg_tunnel(&results_sender).await
             },
         }
     }
 
     async fn run_fallback_to_static_wg_tunnel(&self, results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
-        // 5b. gather announced peer ids
-        peer_ips = self.peers().await?;
-        // 5c. request static wg tunnel from root
-        let (tx, rx) = oneshot::channel();
-        let _ = results_sender.send(Results::RequestStaticWgTunnel { wg_data, peer_ips, resp: tx, }).await;
-        await_with_timeout(rx, Duration::from_secs(60)).await?;
+        // 5b. gather ips of all announced peers
+        let _ = results_sender
+            .send(progress(Progress::PeerIps(session)))
+            .await;
+        let peer_ips = gather_peer_ips(&self.hopr, &self.destination, &self.options, &results_sender).await?;
 
+        // 5c. request static wg tunnel from root
+        let _ = results_sender
+            .send(progress(Progress::StaticWgTunnel(peer_ips.clone())))
+            .await;
+        request_static_wg_tunnel(&wg, &registration, peer_ips.clone(), &results_sender).await?;
         self.run_after_wg_tunnel_established(&results_sender).await
     }
 
     async fn run_after_wg_tunnel_established(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 6. check ping
-        let _ = results_sender.send(Results::ConnectionEvent {evt: progress(Progress::Ping) }).await;
-
-        // 6a. request ping from root
-        let round_trip_time = self.ping().await?;
+        // 6. request ping from root
+        let _ = results_sender.send(progress(Progress::Ping)).await;
+        let round_trip_time = request_ping(&self.options, &results_sender).await?;
         /*
     }).retry(FibonacciBuilder::default())
         .when(|err: &Error| err.is_ping_error())
@@ -138,12 +126,10 @@ impl Runner {
 
         // 7. adjust to main session
         let _ = results_sender
-            .send(Results::ConnectionEvent {
-                evt: progress(Progress::AdjustToMain),
-            })
+            .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
         adjust_to_main_session(&self.hopr, &self.options, &self.ping_session).await?;
-        Ok(())
+        Ok(session)
     }
 }
 
@@ -288,6 +274,21 @@ async fn open_ping_session(
     .retry(ExponentialBuilder::default())
     .await
 }
+
+async fn request_dynamic_wg_tunnel(
+        let (tx, rx) = oneshot::channel();
+                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
+                            let peer_info = wireguard::PeerInfo {
+                                public_key: reg.server_public_key(),
+                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+                            };
+                            let wg_data = event::WgData {
+                                wg,
+                                peer_info,
+                                interface_info,
+                            };
+        let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx, })).await;
+        let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
 
 async fn adjust_to_main_session(
     hopr: &Hopr,
