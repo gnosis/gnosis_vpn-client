@@ -275,7 +275,7 @@ async fn open_ping_session(
     .await
 }
 
-async fn request_dynamic_wg_tunnel(
+async fn request_dynamic_wg_tunnel() {
         let (tx, rx) = oneshot::channel();
                             let interface_info = wireguard::InterfaceInfo { address: reg.address() };
                             let peer_info = wireguard::PeerInfo {
@@ -289,6 +289,7 @@ async fn request_dynamic_wg_tunnel(
                             };
         let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx, })).await;
         let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
+}
 
 async fn adjust_to_main_session(
     hopr: &Hopr,

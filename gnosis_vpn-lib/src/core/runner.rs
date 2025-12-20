@@ -27,8 +27,8 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
 use crate::log_output;
-use crate::remote_data;
 use crate::ticket_stats::{self, TicketStats};
+use crate::{event, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -61,14 +61,10 @@ pub enum Results {
         res: Result<Vec<Address>, Error>,
     },
     HoprRunning,
-    ConnectionEvent {
-        evt: connection::up::Event,
-    },
-    ConnectionResultPreWg {
+    ConnectionEvent(connection::up::Event),
+    ConnectionRequestToRoot(event::RespondableRequestToRoot),
+    ConnectionResult {
         res: Result<SessionClientMetadata, connection::up::Error>,
-    },
-    ConnectionResultPostWg {
-        res: Result<(), connection::up::Error>,
     },
     DisconnectionEvent {
         wg_public_key: String,
@@ -425,15 +421,17 @@ impl Display for Results {
                 Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
-            Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),
-            Results::ConnectionResultPreWg { res } => match res {
-                Ok(session) => write!(f, "ConnectionResultPreWg: Success ({})", session),
-                Err(err) => write!(f, "ConnectionResultPreWg: Error({})", err),
+            Results::ConnectionEvent(evt) => {
+                write!(f, "ConnectionEvent: {}", evt)
+            }
+            Results::ConnectionRequestToRoot(req) => {
+                write!(f, "ConnectionRequestToRoot: {:?}", req)
+            }
+            Results::ConnectionResult { res } => match res {
+                Ok(_) => write!(f, "ConnectionResult: Success"),
+                Err(err) => write!(f, "ConnectionResult: Error({})", err),
             },
-            Results::ConnectionResultPostWg { res } => match res {
-                Ok(_) => write!(f, "ConnectionResultPostWg: Success"),
-                Err(err) => write!(f, "ConnectionResultPostWg: Error({})", err),
-            },
+
             Results::DisconnectionEvent { wg_public_key, evt } => {
                 write!(f, "DisconnectionEvent ({}): {}", wg_public_key, evt)
             }
