@@ -4,6 +4,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use std::fmt::{self, Display};
+use std::net::Ipv4Addr;
 use std::{io, string};
 
 use crate::dirs;

@@ -10,6 +10,7 @@ use futures_util::future::AbortHandle;
 use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
+use multiaddr::Protocol;
 use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -21,6 +22,7 @@ use std::{
 };
 use std::{net::SocketAddr, sync::Arc};
 
+use crate::peer::Peer;
 use crate::{
     balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
