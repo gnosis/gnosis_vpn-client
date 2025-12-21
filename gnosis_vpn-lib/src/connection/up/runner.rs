@@ -5,10 +5,10 @@ use backon::{FibonacciBuilder, ExponentialBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
 use tokio::sync::{oneshot, mpsc};
 
-
 use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::Duration;
+use std::net::Ipv4Addr;
 
 use crate::connection::destination::Destination;
 use crate::connection::options::Options;
@@ -17,7 +17,7 @@ use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
-use crate::event::RespondableRequestToRoot;
+use crate::event::{self, RespondableRequestToRoot};
 
 use super::{Error, Event, Progress, Setback};
 
@@ -87,23 +87,21 @@ impl Runner {
             },
                 Err(err) => {
                         tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                        self.run_fallback_to_static_wg_tunnel(&results_sender).await
+                        self.run_fallback_to_static_wg_tunnel(wg, registration, session, results_sender).await
             },
         }
     }
 
-    async fn run_fallback_to_static_wg_tunnel(&self, results_sender: &mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
+    async fn run_fallback_to_static_wg_tunnel(&self, wg: WireGuard, registration: Registration, session: SessionClientMetadata, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 5b. gather ips of all announced peers
-        let _ = results_sender
-            .send(progress(Progress::PeerIps))
-            .await;
-        let peer_ips = gather_peer_ips(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+        let _ = results_sender .send(progress(Progress::PeerIps)) .await;
+        let peer_ips = gather_peer_ips(&self.hopr).await?;
 
         // 5c. request static wg tunnel from root
         let _ = results_sender
-            .send(progress(Progress::StaticWgTunnel(peer_ips.clone())))
+            .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
-        request_static_wg_tunnel(&wg, &registration, peer_ips.clone(), &results_sender).await?;
+        request_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await?;
         self.run_after_wg_tunnel_established(&results_sender).await
     }
 
@@ -275,25 +273,47 @@ async fn open_ping_session(
     .await
 }
 
-        async fn request_dynamic_wg_tunnel(wg: &WireGuard, registration: &Registration, session: &SessionClientMetadata,
-    results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
+        async fn request_dynamic_wg_tunnel(wg: &WireGuard, registration: &Registration, session: &SessionClientMetadata, results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
-                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
+                            let interface_info = wireguard::InterfaceInfo { address: registration.address() };
                             let peer_info = wireguard::PeerInfo {
-                                public_key: reg.server_public_key(),
+                                public_key: registration.server_public_key(),
                                 endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
                             };
-                            let wg_data = event::WgData {
-                                wg,
+                            let wg_data = event::WireGuardData {
+                                wg: wg.clone(),
                                 peer_info,
                                 interface_info,
                             };
         let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx, })).await;
         let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
+        res.map_err(|e| Error::RootRequest(e))
 }
 
-        async fn  gather_peer_ips(&self.hopr, &self.destination, &self.options, &results_sender) {
-        }
+async fn  request_static_wg_tunnel(wg: &WireGuard, registration: &Registration, session: &SessionClientMetadata, peer_ips: Vec<Ipv4Addr>, results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+                            let interface_info = wireguard::InterfaceInfo { address: registration.address()  };
+                            let peer_info = wireguard::PeerInfo {
+                                public_key: registration.server_public_key(),
+                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+                            };
+                            let wg_data = event::WireGuardData {
+                                wg: wg.clone(),
+                                peer_info,
+                                interface_info,
+                            };
+        let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::StaticWgRouting { wg_data, peer_ips, resp: tx, })).await;
+        let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
+        res.map_err(|e| Error::RootRequest(e))
+}
+
+async fn  gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
+    // TODO make minimum score customizable
+    let peers = hopr.announced_peers(0.1f64).await?;
+    let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
+    Ok(peer_ips)
+}
+
 async fn adjust_to_main_session(
     hopr: &Hopr,
     options: &Options,

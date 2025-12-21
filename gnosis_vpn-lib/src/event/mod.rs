@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use crate::command::{Command, Response};
@@ -66,7 +67,7 @@ pub enum RespondableRequestToRoot {
     },
     StaticWgRouting {
         wg_data: WireGuardData,
-        peer_ips: Vec<String>,
+        peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<(), String>>,
     },
     TearDownWg {
@@ -101,7 +102,7 @@ pub enum RequestToRoot {
     },
     StaticWgRouting {
         wg_data: WireGuardData,
-        peer_ips: Vec<String>,
+        peer_ips: Vec<Ipv4Addr>,
     },
     TearDownWg,
     Ping {

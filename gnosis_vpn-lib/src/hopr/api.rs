@@ -11,6 +11,7 @@ use edgli::{
     },
     run_hopr_edge_node,
 };
+use multiaddr::Protocol;
 use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -19,6 +20,7 @@ use tracing::instrument;
 use std::fmt::{self, Display};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 
+use crate::peer::Peer;
 use crate::{
     balance::Balances,
     hopr::{HoprError, types::SessionClientMetadata},

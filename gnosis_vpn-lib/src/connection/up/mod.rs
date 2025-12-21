@@ -28,7 +28,7 @@ pub enum Progress {
     OpenPing,
     DynamicWgTunnel(SessionClientMetadata),
     PeerIps,
-    StaticWgTunnel(Vec<String>),
+    StaticWgTunnel(uint16),
     Ping,
     AdjustToMain,
 }
@@ -52,6 +52,8 @@ pub enum Error {
     Ping(#[from] ping::Error),
     #[error("Critical error: {0}")]
     Runtime(String),
+    #[error("Root request error: {0}")]
+    RootRequest(String),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.

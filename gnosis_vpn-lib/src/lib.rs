@@ -17,6 +17,7 @@ pub mod worker;
 
 mod gvpn_client;
 mod log_output;
+mod peer;
 mod ping;
 mod remote_data;
 mod ticket_stats;
