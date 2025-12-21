@@ -43,7 +43,7 @@ impl Runner {
         let _ = results_sender.send(Results::ConnectionResult { res }).await;
     }
 
-    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
+    async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 0. generate wg keys
         let _ = results_sender
             .send(progress(Progress::GenerateWg))
@@ -92,10 +92,10 @@ impl Runner {
         }
     }
 
-    async fn run_fallback_to_static_wg_tunnel(&self, results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
+    async fn run_fallback_to_static_wg_tunnel(&self, results_sender: &mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 5b. gather ips of all announced peers
         let _ = results_sender
-            .send(progress(Progress::PeerIps(session)))
+            .send(progress(Progress::PeerIps))
             .await;
         let peer_ips = gather_peer_ips(&self.hopr, &self.destination, &self.options, &results_sender).await?;
 
@@ -107,7 +107,7 @@ impl Runner {
         self.run_after_wg_tunnel_established(&results_sender).await
     }
 
-    async fn run_after_wg_tunnel_established(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
+    async fn run_after_wg_tunnel_established(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 6. request ping from root
         let _ = results_sender.send(progress(Progress::Ping)).await;
         let round_trip_time = request_ping(&self.options, &results_sender).await?;
@@ -275,7 +275,8 @@ async fn open_ping_session(
     .await
 }
 
-async fn request_dynamic_wg_tunnel() {
+        async fn request_dynamic_wg_tunnel(wg: &WireGuard, registration: &Registration, session: &SessionClientMetadata,
+    results_sender: &mpsc::Sender<Results>) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
                             let interface_info = wireguard::InterfaceInfo { address: reg.address() };
                             let peer_info = wireguard::PeerInfo {
@@ -291,6 +292,8 @@ async fn request_dynamic_wg_tunnel() {
         let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
 }
 
+        async fn  gather_peer_ips(&self.hopr, &self.destination, &self.options, &results_sender) {
+        }
 async fn adjust_to_main_session(
     hopr: &Hopr,
     options: &Options,
