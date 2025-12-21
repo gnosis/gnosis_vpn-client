@@ -17,6 +17,7 @@ hopr-utils-session.workspace = true
 human-bandwidth = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 humantime-serde.workspace = true
+multiaddr.workspace = true
 ping.workspace = true
 rand.workspace = true
 regex.workspace = true
