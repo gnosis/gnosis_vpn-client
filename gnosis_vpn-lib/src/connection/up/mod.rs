@@ -26,7 +26,9 @@ pub enum Progress {
     RegisterWg,
     CloseBridge(Registration),
     OpenPing,
-    WgTunnel(SessionClientMetadata),
+    DynamicWgTunnel(SessionClientMetadata),
+    PeerIps,
+    StaticWgTunnel(Vec<String>),
     Ping,
     AdjustToMain,
 }
