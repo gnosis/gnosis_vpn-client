@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
 use crate::gvpn_client::Registration;
@@ -28,9 +28,9 @@ pub enum Progress {
     OpenPing,
     DynamicWgTunnel(SessionClientMetadata),
     PeerIps,
-    StaticWgTunnel(uint16),
+    StaticWgTunnel(u16),
     Ping,
-    AdjustToMain,
+    AdjustToMain(Duration),
 }
 
 #[derive(Debug)]

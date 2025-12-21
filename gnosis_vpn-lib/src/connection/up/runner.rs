@@ -102,10 +102,10 @@ impl Runner {
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
         request_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await?;
-        self.run_after_wg_tunnel_established(&results_sender).await
+        self.run_after_wg_tunnel_established(wg, registration, session, results_sender).await
     }
 
-    async fn run_after_wg_tunnel_established(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
+    async fn run_after_wg_tunnel_established(&self, wg: WireGuard, registration: Registration, session: SessionClientMetadata, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 6. request ping from root
         let _ = results_sender.send(progress(Progress::Ping)).await;
         let round_trip_time = request_ping(&self.options, &results_sender).await?;
@@ -120,13 +120,11 @@ impl Runner {
         */
         // let round_trip_time = ping(&self.options).await?;
 
-        tracing::info!(?round_trip_time, "ping successful");
-
         // 7. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
-        adjust_to_main_session(&self.hopr, &self.options, &self.ping_session).await?;
+        adjust_to_main_session(&self.hopr, &self.options, &session).await?;
         Ok(session)
     }
 }
@@ -313,6 +311,24 @@ async fn  gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
     let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
     Ok(peer_ips)
 }
+
+async fn request_ping(options: Options, results_sender: &mpsc::Sender<Results>) -> Result<Duration, Error> {
+        (|| async {
+            let (tx, rx) = oneshot::channel();
+        let _ = results_sender.send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::Ping {options, resp: tx})).await;
+        let res = await_with_timeout(rx, Duration::from_secs(30)).await?;
+            if let Err(e) = &res { let _ = results_sender .send(Results::ConnectionEvent { evt: setback(Setback::Ping(e.to_string())) }).await; }
+            res
+        })
+   .retry(FibonacciBuilder::default())
+        .when(|err: &Error| err.is_ping_error())
+            .notify(|err: &Error, dur: Duration| {
+                let _ = results_sender.send(Results::ConnectionEvent { evt: setback(Setback::Ping(err.to_string())), }).await;
+                tracing::debug!("retrying ping after {:?}", dur);
+            })
+        .await;
+    }
+
 
 async fn adjust_to_main_session(
     hopr: &Hopr,
