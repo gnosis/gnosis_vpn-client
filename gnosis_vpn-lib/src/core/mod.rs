@@ -16,7 +16,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::event::{CoreToWorker, ResponseFromRoot, RootToWorker, WorkerToCore};
+use crate::event::{CoreToWorker, RequestToRoot, RespondableRequestToRoot, ResponseFromRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -136,7 +136,8 @@ impl Core {
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
-                // React to an incoming outside event
+
+                // React to an incoming worker events
                 Some(event) = incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
@@ -144,10 +145,12 @@ impl Core {
                         break;
                     }
                 }
+
                 // React to internal results from longer lasting runner computations
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
                 }
+
                 else => {
                     tracing::warn!("event receiver closed");
                     break;
@@ -156,6 +159,7 @@ impl Core {
         }
     }
 
+    /// receive an event from the worker main thread
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     async fn on_event(&mut self, event: WorkerToCore, results_sender: &mpsc::Sender<Results>) -> bool {
         match event {
@@ -183,58 +187,33 @@ impl Core {
                 match resp {
                     ResponseFromRoot::DynamicWgRouting { res } => {
                         if let Some(responder) = self.responder_unit.take() {
-                            let _ = responder.send(res);
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for dynamic wg routing response");
+                            });
                         } else {
                             tracing::warn!(?res, "no responder channel available for root response");
                         }
                     }
                     ResponseFromRoot::StaticWgRouting { res } => {
                         if let Some(responder) = self.responder_unit.take() {
-                            let _ = responder.send(res);
-                        } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
-                        }
-                    }
-                    ResponseFromRoot::TearDownWg { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
-                            let _ = responder.send(res);
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for static wg routing response");
+                            });
                         } else {
                             tracing::warn!(?res, "no responder channel available for root response");
                         }
                     }
                     ResponseFromRoot::Ping { res } => {
                         if let Some(responder) = self.responder_duration.take() {
-                            let _ = responder.send(res);
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for ping response");
+                            });
                         } else {
                             tracing::warn!(?res, "no responder channel available for root response");
                         }
                     }
                 };
 
-                true
-            }
-            WorkerToCore::WgUpResult { res } => {
-                match (res, self.phase.clone()) {
-                    (Ok(()), Phase::Connecting(conn)) => {
-                        tracing::info!(destination= %conn.destination,"WireGuard tunnel established");
-                        let destination = conn.destination.clone();
-                        if let Some(ping_session) = conn.session {
-                            self.spawn_connection_runner_post_wg(destination, ping_session, results_sender);
-                        } else {
-                            tracing::error!(%conn, "missing ping session for post-wg runner - disconnecting from target");
-                            self.target_destination = None;
-                            self.act_on_target(results_sender);
-                        }
-                    }
-                    (Err(err), Phase::Connecting(conn)) => {
-                        tracing::error!(%conn, %err, "WireGuard tunnel establishment failed - disconnecting");
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
-                    }
-                    (res, phase) => {
-                        tracing::warn!(?phase, ?res, "unexpected WireGuard result in current phase - ignoring");
-                    }
-                }
                 true
             }
 
@@ -412,6 +391,7 @@ impl Core {
         }
     }
 
+    /// Results are events from async runners
     #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
@@ -648,6 +628,28 @@ impl Core {
                     tracing::error!(?phase, "session monitor failed in unexpected phase");
                 }
             },
+
+            Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
+                RespondableRequestToRoot::DynamicWgRouting { wg_data, resp } => {
+                    self.responder_unit = Some(resp);
+                    let request = RequestToRoot::DynamicWgRouting { wg_data };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+                RespondableRequestToRoot::StaticWgRouting {
+                    wg_data,
+                    peer_ips,
+                    resp,
+                } => {
+                    self.responder_unit = Some(resp);
+                    let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+                RespondableRequestToRoot::Ping { options, resp } => {
+                    self.responder_duration = Some(resp);
+                    let request = RequestToRoot::Ping { options };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+            },
         }
     }
 
@@ -847,10 +849,9 @@ impl Core {
             let outgoing_sender = self.outgoing_sender.clone();
             tokio::spawn(async move {
                 // this is a oneshot command and we do not wait for any result
-                outgoing_sender
-                    .send(CoreToWorker::WgDown)
-                    .await
-                    .expect("worker outgoing channel closed - shutting down");
+                let _ = outgoing_sender
+                    .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+                    .await;
                 cancel
                     .run_until_cancelled(async move {
                         runner.start(results_sender).await;
@@ -884,7 +885,7 @@ impl Core {
                 if let Some(health) = self.destination_health.get(&dest.address) {
                     if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner_pre_wg(dest.clone(), results_sender);
+                        self.spawn_connection_runner(dest.clone(), results_sender);
                     } else if health.is_unrecoverable() {
                         tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
                     } else {

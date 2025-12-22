@@ -57,6 +57,7 @@ impl Runner {
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. disconnect wg tunnel done from root
+
         // 1. open bridge session
         let _ = results_sender
             .send(Results::DisconnectionEvent {
@@ -82,6 +83,7 @@ impl Runner {
                 tracing::error!(%error, "unregistering from gvpn server failed");
             }
         }
+
         // 3. close bridge session
         let _ = results_sender
             .send(Results::DisconnectionEvent {

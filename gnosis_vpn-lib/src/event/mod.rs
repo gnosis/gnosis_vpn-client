@@ -28,8 +28,8 @@ pub enum WorkerToCore {
 /// Messages sent from core application logic to worker
 #[derive(Debug)]
 pub enum CoreToWorker {
-    /// Requesting root execution and waiting for response
-    RespondableRequestToRoot(RespondableRequestToRoot),
+    /// Requesting root execution
+    RequestToRoot(RequestToRoot),
 }
 
 /// Messages sent from root to worker
@@ -70,9 +70,6 @@ pub enum RespondableRequestToRoot {
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<(), String>>,
     },
-    TearDownWg {
-        resp: oneshot::Sender<Result<(), String>>,
-    },
     Ping {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
@@ -111,11 +108,10 @@ pub enum RequestToRoot {
 }
 
 /// Root execution response from root process.
-/// Should be matched by worker to **ResponsibleRequestToRoot** request responses.
+/// Should be matched by worker to **RespondableRequestToRoot** request responses.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponseFromRoot {
     DynamicWgRouting { res: Result<(), String> },
     StaticWgRouting { res: Result<(), String> },
-    TearDownWg { res: Result<(), String> },
     Ping { res: Result<Duration, String> },
 }
