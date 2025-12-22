@@ -14,7 +14,7 @@ use std::process::{self};
 
 use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::event::{IncomingWorker, OutgoingWorker, WireGuardCommand};
+use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::hopr_params::HoprParams;
 use gnosis_vpn_lib::{socket, worker};
 
@@ -22,7 +22,7 @@ mod cli;
 mod routing;
 mod wg_tooling;
 
-use crate::routing::Routing;
+use crate::routing::RoutingTrait;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -124,7 +124,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
     // ensure worker user exists
-    let input = worker::Input::new( args.worker_user.clone(), args.worker_binary.clone(), env!("CARGO_PKG_VERSION"));
+    let input = worker::Input::new(
+        args.worker_user.clone(),
+        args.worker_binary.clone(),
+        env!("CARGO_PKG_VERSION"),
+    );
     let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
         tracing::error!(error = ?err, "error determining worker user");
         exitcode::NOUSER
@@ -140,9 +144,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         })?;
 
     // tear down any previous routing - ignore expected error
-    let _ = routing.teardown().await.map(|_| {
-        tracing::warn!("cleaned up routing from previous daemon instance")
-    });
+    teardown_any_routing(&None, false).await;
 
     // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
@@ -220,8 +222,8 @@ async fn loop_daemon(
     let mut writer = BufWriter::new(writer_half);
 
     // provide initial resources to worker
-    send_to_worker(&IncomingWorker::HoprParams { hopr_params }, &mut writer).await?;
-    send_to_worker(&IncomingWorker::Config { config }, &mut writer).await?;
+    send_to_worker(RootToWorker::HoprParams { hopr_params }, &mut writer).await?;
+    send_to_worker(RootToWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
@@ -253,14 +255,14 @@ async fn loop_daemon(
             Ok(Some(line)) = lines_reader.next_line() => {
                 let cmd = parse_outgoing_worker(line)?;
                 match cmd {
-                    OutgoingWorker::Ack => {
+                    WorkerToRoot::Ack => {
                         tracing::debug!("received worker ack");
                     }
-                    OutgoingWorker::OutOfSync => {
+                    WorkerToRoot::OutOfSync => {
                         tracing::error!("worker out of sync with root - exiting");
                         return Err(exitcode::UNAVAILABLE);
                     }
-                    OutgoingWorker::Response { resp } => {
+                    WorkerToRoot::Response ( resp ) => {
                         tracing::debug!(?resp, "received worker response");
                         if let Some(mut writer) = socket_writer.take() {
                         send_to_socket(&resp, &mut writer).await?;
@@ -268,7 +270,36 @@ async fn loop_daemon(
                             tracing::error!(?resp, "failed to send response to socket - no socket connection");
                         }
                     }
-                    OutgoingWorker::WireGuard(wg_cmd) => {
+                    WorkerToRoot::RequestToRoot(request) => {
+                        tracing::debug!(?request, "received worker request to root");
+                        match request {
+                            RequestToRoot::DynamicWgRouting { wg_data } => {
+                                // ensure we run down before going up to ensure clean slate
+                                teardown_any_routing(routing, false).await;
+
+                                let new_routing = routing::Dynamic::new(worker_user.clone(), wg_data);
+                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                *routing = Some(new_routing);
+                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                            },
+                            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                                // ensure we run down before going up to ensure clean slate
+                                teardown_any_routing(routing, false).await;
+
+                                let new_routing = routing::Static::new(wg_data, peer_ips);
+                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                *routing = Some(new_routing);
+                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
+                            }
+                            RequestToRoot::TearDownWg => {
+                                teardown_any_routing(routing, true).await;
+                            }
+                            RequestToRoot::Ping { options } => {
+                                // TODO ping request
+                            }
+                        }
+                    },
+                    WorkerToRoot::WireGuard(wg_cmd) => {
                         tracing::debug!(?wg_cmd, "received worker wireguard command");
                         match wg_cmd {
                             WireGuardCommand::WgUp( wg_data ) => {
@@ -294,6 +325,7 @@ async fn loop_daemon(
                                         continue;
                                     }
                                 };
+
                             },
                             WireGuardCommand::WgDown => {
                                 match wg_tooling::down().await {
@@ -315,7 +347,7 @@ async fn loop_daemon(
             Ok(Some(line)) = async { socket_lines_reader.take().unwrap().next_line().await }, if socket_lines_reader.is_some() => {
                 let cmd: cmdCmd = parse_command(line)?;
                 tracing::debug!(command = ?cmd, "received socket command");
-                send_to_worker(&IncomingWorker::Command { cmd }, &mut writer).await?;
+                send_to_worker(RootToWorker::Command { cmd }, &mut writer).await?;
             }
             Ok(status) = worker_child.wait() => {
                 // restore routing if connected
@@ -346,8 +378,8 @@ async fn loop_daemon(
     }
 }
 
-fn parse_outgoing_worker(line: String) -> Result<OutgoingWorker, exitcode::ExitCode> {
-    let cmd: OutgoingWorker = serde_json::from_str(&line).map_err(|err| {
+fn parse_outgoing_worker(line: String) -> Result<WorkerToRoot, exitcode::ExitCode> {
+    let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
         tracing::error!(error = %err, "failed parsing outgoing worker command");
         exitcode::DATAERR
     })?;
@@ -363,7 +395,7 @@ fn parse_command(line: String) -> Result<cmdCmd, exitcode::ExitCode> {
 }
 
 async fn send_to_worker(
-    msg: &IncomingWorker,
+    msg: RootToWorker,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(msg).map_err(|err| {
@@ -403,6 +435,25 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
         exitcode::IOERR
     })?;
     Ok(())
+}
+
+async fn teardown_any_routing(routing: &Option<impl RoutingTrait>, expected_up: bool) {
+    if let Some(routing) = routing {
+        match routing.teardown().await {
+            Ok(_) => {
+                if !expected_up {
+                    tracing::warn!("cleaned up unexpected existing routing");
+                }
+            }
+            Err(err) => {
+                if expected_up {
+                    tracing::error!(error = ?err, "error tearing down routing");
+                } else {
+                    tracing::debug!(error = ?err, "expected error during non existing routing teardown");
+                }
+            }
+        }
+    }
 }
 
 /// limit root service to two threads
