@@ -6,7 +6,7 @@ use gnosis_vpn_lib::connection::{
     destination::{Address, Destination},
     destination_health::Health,
 };
-use gnosis_vpn_lib::socket;
+use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
 use std::{path::PathBuf, time::Duration};
 use tracing::{debug, error, info, warn};
@@ -26,11 +26,11 @@ impl ControlClient {
 
     /// Sends a raw command to the control socket and returns the daemon response.
     pub async fn send(&self, cmd: &Command) -> anyhow::Result<Response> {
-        match socket::process_cmd(self.socket_path.as_path(), cmd).await {
+        match process_cmd(self.socket_path.as_path(), cmd).await {
             Ok(resp) => Ok(resp),
-            Err(socket::Error::ServiceNotRunning) => {
+            Err(SocketError::ServiceNotRunning) => {
                 error!(?cmd, "service not running when sending command");
-                Err(socket::Error::ServiceNotRunning.into())
+                Err(SocketError::ServiceNotRunning.into())
             }
             Err(error) => {
                 error!(%error, ?cmd, "error while sending command");

@@ -22,6 +22,8 @@ impl Service {
             .arg(cfg.network.as_str())
             .arg("--socket-path")
             .arg(socket_path.as_os_str())
+            .arg("--worker-binary")
+            .arg(cfg.worker_binary.as_os_str())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
 

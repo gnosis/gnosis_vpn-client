@@ -165,14 +165,14 @@
           gnosis_vpn = mkPackage {
             pname = "gnosis_vpn";
             profile = "release";
-            cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
+            cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
           };
 
           # Development build with faster compilation and debug symbols
           gnosis_vpn-dev = mkPackage {
             pname = "gnosis_vpn-dev";
             profile = "dev";
-            cargoExtraArgs = "--bin gnosis_vpn --bin gnosis_vpn-ctl";
+            cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
           };
 
           gnosis_vpn-system-tests = mkPackage {
