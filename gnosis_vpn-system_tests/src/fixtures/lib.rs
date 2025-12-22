@@ -176,8 +176,7 @@ pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
 
 /// Resolves the test configuration, binary path, and socket location on disk.
 pub async fn prepare_configs() -> anyhow::Result<(PathBuf, PathBuf)> {
-    let gnosis_bin = find_binary("gnosis_vpn")
-        .with_context(|| "Build the gnosis_vpn binary first, e.g. `cargo build -p gnosis_vpn`")?;
+    let gnosis_bin = find_binary("gnosis_vpn-root").with_context(|| "Build the gnosis_vpn binary first")?;
 
     let working_dir = std::env::current_dir()?.join("tmp");
     let socket_path = working_dir.join("gnosis_vpn.sock");
