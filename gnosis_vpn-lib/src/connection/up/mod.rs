@@ -28,7 +28,7 @@ pub enum Progress {
     OpenPing,
     DynamicWgTunnel(SessionClientMetadata),
     PeerIps,
-    StaticWgTunnel(u16),
+    StaticWgTunnel(usize),
     Ping,
     AdjustToMain(Duration),
 }
@@ -38,6 +38,7 @@ pub enum Setback {
     OpenBridge(String),
     RegisterWg(String),
     OpenPing(String),
+    Ping(String),
 }
 
 #[derive(Debug, Error)]
