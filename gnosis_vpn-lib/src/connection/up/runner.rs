@@ -75,10 +75,7 @@ impl Runner {
         let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
 
         match res {
-            Ok(()) => {
-                self.run_after_wg_tunnel_established(&wg, &registration, &session, &results_sender)
-                    .await
-            }
+            Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
             Err(err) => {
                 tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
                 self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
@@ -96,21 +93,18 @@ impl Runner {
     ) -> Result<SessionClientMetadata, Error> {
         // 5b. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let peer_ips = gather_peer_ips(&self.hopr).await?;
+        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
 
         // 5c. request static wg tunnel from root
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
         request_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await?;
-        self.run_after_wg_tunnel_established(wg, registration, session, results_sender)
-            .await
+        self.run_after_wg_tunnel_established(session, results_sender).await
     }
 
     async fn run_after_wg_tunnel_established(
         &self,
-        wg: &WireGuard,
-        registration: &Registration,
         session: &SessionClientMetadata,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
@@ -327,14 +321,13 @@ async fn request_static_wg_tunnel(
     res.map_err(|e| Error::RootRequest(e))
 }
 
-async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
-    // TODO make minimum score customizable
-    let peers = hopr.announced_peers(0.1f64).await?;
+async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr>, HoprError> {
+    let peers = hopr.announced_peers(minimum_score).await?;
     let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
     Ok(peer_ips)
 }
 
-async fn request_ping(options: ping::Options, results_sender: &mpsc::Sender<Results>) -> Result<Duration, Error> {
+async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Results>) -> Result<Duration, Error> {
     (|| async {
         let (tx, rx) = oneshot::channel();
         let _ = results_sender
