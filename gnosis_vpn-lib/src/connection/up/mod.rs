@@ -79,7 +79,9 @@ pub enum Phase {
     RegisterWg,
     ClosingBridge,
     OpeningPing,
-    EstablishWgTunnel,
+    EstablishDynamicWgTunnel,
+    FallbackGatherPeerIps,
+    FallbackToStaticWgTunnel,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
@@ -116,12 +118,16 @@ impl Up {
                 self.registration = Some(reg);
             }
             Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::WgTunnel(session) => {
-                self.phase = (now, Phase::EstablishWgTunnel);
+            Progress::DynamicWgTunnel(session) => {
+                self.phase = (now, Phase::EstablishDynamicWgTunnel);
                 self.session = Some(session);
             }
+            Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::StaticWgTunnel(_announced_peer_count) => {
+                self.phase = (now, Phase::FallbackToStaticWgTunnel);
+            }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
-            Progress::AdjustToMain => self.phase = (now, Phase::AdjustToMain),
+            Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
         }
     }
 
@@ -151,7 +157,9 @@ impl Display for Phase {
             Phase::RegisterWg => "Registering WireGuard public key",
             Phase::ClosingBridge => "Closing bridge connection",
             Phase::OpeningPing => "Opening main connection",
-            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
+            Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
+            Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
             Phase::ConnectionEstablished => "Connection established",
@@ -177,9 +185,16 @@ impl Display for Progress {
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
             Progress::OpenPing => write!(f, "Opening main connection"),
-            Progress::WgTunnel(_) => write!(f, "Establishing WireGuard tunnel"),
+            Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
+            Progress::PeerIps => write!(f, "Retrieving peer IPs"),
+            Progress::StaticWgTunnel(announced_peer_count) => write!(
+                f,
+                "Establishing static WireGuard tunnel with {announced_peer_count} announced peers"
+            ),
             Progress::Ping => write!(f, "Verifying established connection"),
-            Progress::AdjustToMain => write!(f, "Upgrading for general traffic"),
+            Progress::AdjustToMain(round_trip_time) => {
+                write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)
+            }
         }
     }
 }
@@ -187,9 +202,10 @@ impl Display for Progress {
 impl Display for Setback {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Setback::OpenBridge(reason) => write!(f, "Failed to open bridge session: {}", reason),
-            Setback::RegisterWg(reason) => write!(f, "Failed to register WireGuard public key: {}", reason),
-            Setback::OpenPing(reason) => write!(f, "Failed to open main session: {}", reason),
+            Setback::OpenBridge(err) => write!(f, "Failed to open bridge connection: {err}"),
+            Setback::RegisterWg(err) => write!(f, "Failed to register WireGuard key: {err}"),
+            Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
+            Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),
         }
     }
 }
