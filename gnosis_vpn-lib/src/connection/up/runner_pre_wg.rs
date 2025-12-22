@@ -1,8 +1,7 @@
 //! The runner module for `core::connection::up` struct.
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use backoff::ExponentialBackoff;
-use backoff::future::retry;
+use backon::{ExponentialBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
 use tokio::sync::mpsc;
 
@@ -117,8 +116,8 @@ async fn open_bridge_session(
         )),
         ..Default::default()
     };
-    retry(ExponentialBackoff::default(), || async {
-        tracing::debug!(%destination,"attempting to open bridge session");
+    (|| async {
+        tracing::debug!(%destination, "attempting to open bridge session");
         let res = hopr
             .open_session(
                 destination.address,
@@ -138,6 +137,7 @@ async fn open_bridge_session(
         let ret_val = res?;
         Ok(ret_val)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -153,7 +153,7 @@ async fn register(
         options.timeouts.http,
     );
     let client = reqwest::Client::new();
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         tracing::debug!(?input, "attempting to register gvpn client public key");
         let res = gvpn_client::register(&client, &input).await;
         if let Err(e) = &res {
@@ -166,6 +166,7 @@ async fn register(
         let ret_val = res?;
         Ok(ret_val)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 
@@ -203,7 +204,7 @@ async fn open_ping_session(
         )),
         ..Default::default()
     };
-    retry(ExponentialBackoff::default(), || async {
+    (|| async {
         tracing::debug!(%destination, "attempting to open ping session");
         let res = hopr
             .open_session(
@@ -224,6 +225,7 @@ async fn open_ping_session(
         let ret_val = res?;
         Ok(ret_val)
     })
+    .retry(ExponentialBuilder::default())
     .await
 }
 

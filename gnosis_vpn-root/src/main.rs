@@ -22,7 +22,7 @@ mod cli;
 mod routing;
 mod wg_tooling;
 
-use routing::Routing;
+use crate::routing::Routing;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
