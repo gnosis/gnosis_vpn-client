@@ -14,7 +14,7 @@ use super::Error;
  * Refactor logic to use:
  * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
  */
-pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
+pub async fn setup(_worker: &worker::Worker, wg_data: &event::WireGuardData) -> Result<(), Error> {
     // 1. generate wg quick content
     let wg_quick_content = wg_data.wg.to_file_string(
         &wg_data.interface_info,
@@ -27,7 +27,7 @@ pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<
     Ok(())
 }
 
-pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
+pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WireGuardData) -> Result<(), Error> {
     // 1. run wg-quick down
     //  wg_tooling::down().await?;
     Ok(())

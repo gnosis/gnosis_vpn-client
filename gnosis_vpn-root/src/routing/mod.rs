@@ -1,16 +1,17 @@
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, event, shell_command_ext, wireguard, worker};
+use gnosis_vpn_lib::{dirs, shell_command_ext, wireguard};
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
+pub trait RoutingTrait {
+    async fn setup(&self) -> Result<(), Error>;
+    async fn teardown(&self) -> Result<(), Error>;
+}
 
-#[cfg(target_os = "linux")]
-use linux::{setup, teardown};
-#[cfg(target_os = "macos")]
-use macos::{setup, teardown};
+mod dynamic;
+mod static_;
+
+pub use dynamic::Dynamic;
+pub use static_::Static;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -25,23 +26,6 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
-}
-
-pub struct Routing {
-    worker: worker::Worker,
-    wg_data: event::WgData,
-}
-
-impl Routing {
-    pub fn new(worker: worker::Worker, wg_data: event::WgData) -> Self {
-        Self { worker, wg_data }
-    }
-
-    pub async fn setup(&self) -> Result<(), Error> {
-        setup(&self.worker, &self.wg_data).await
-    }
-
-    pub async fn teardown(&self) -> Result<(), Error> {
-        teardown(&self.worker, &self.wg_data).await
-    }
+    #[error("Not implemented")]
+    NotImplemented,
 }
