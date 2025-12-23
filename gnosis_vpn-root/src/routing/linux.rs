@@ -10,27 +10,45 @@ use super::Error;
 
 // const MARK: &str = "0xDEAD";
 
+pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routable, Error> {
+    Ok(Router { worker, wg_data })
+}
+
+pub struct Router {
+    worker: worker::Worker,
+    wg_data: event::WgData,
+}
+
+impl Routing {
+    pub fn new(worker: worker::Worker, wg_data: event::WgData) -> Self {
+        Self { worker, wg_data }
+    }
+}
+
 /**
  * Refactor logic to use:
  * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
  */
-pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. generate wg quick content
-    let wg_quick_content = wg_data.wg.to_file_string(
-        &wg_data.interface_info,
-        &wg_data.peer_info,
-        // true to route all traffic
-        false,
-    );
-    // 2. run wg-quick up
-    wg_tooling::up(wg_quick_content).await?;
-    Ok(())
-}
+#[async_trait]
+impl Routable for Router {
+    pub async fn setup(&self) -> Result<(), Error> {
+        // 1. generate wg quick content
+        let wg_quick_content = wg_data.wg.to_file_string(
+            &wg_data.interface_info,
+            &wg_data.peer_info,
+            // true to route all traffic
+            false,
+        );
+        // 2. run wg-quick up
+        wg_tooling::up(wg_quick_content).await?;
+        Ok(())
+    }
 
-pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. run wg-quick down
-    //  wg_tooling::down().await?;
-    Ok(())
+    pub async fn teardown(&self) -> Result<(), Error> {
+        // 1. run wg-quick down
+        //  wg_tooling::down().await?;
+        Ok(())
+    }
 }
 
 /*
