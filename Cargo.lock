@@ -3963,6 +3963,7 @@ name = "gnosis_vpn-root"
 version = "0.56.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "exitcode",
  "gnosis_vpn-lib",

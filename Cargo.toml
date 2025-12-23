@@ -21,6 +21,7 @@ alloy = { version = "=1.0.42", default-features = false, features = [
 ] }
 anyhow = { version = "1.0.100" }
 async-lock = { version = "3.4.2" }
+async-trait = "0.1.89"
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
 clap = { version = "4.5.53", features = ["derive", "env"] }

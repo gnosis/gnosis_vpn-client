@@ -22,7 +22,7 @@ mod cli;
 mod routing;
 mod wg_tooling;
 
-use crate::routing::RoutingTrait;
+use crate::routing::Routing;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -165,7 +165,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket = socket_listener(&args.socket_path).await?;
 
     let res = loop_daemon(&mut ctrlc_receiver, socket, &worker_user, config, hopr_params).await;
-
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
     });
