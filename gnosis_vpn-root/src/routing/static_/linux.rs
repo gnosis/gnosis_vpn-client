@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use crate::routing::Error;
 use crate::routing::{Routing, util};
+use crate::wg_tooling;
 
 use super::Static;
 
@@ -9,66 +10,28 @@ use super::Static;
 impl Routing for Static {
     async fn setup(&self) -> Result<(), Error> {
         let interface_gateway = util::interface().await?;
-        Err(Error::NotImplemented)
+        let mut extra = self
+            .peer_ips
+            .iter()
+            .map(|ip| util::pre_up_routing(ip, interface_gateway.clone()))
+            .collect::<Vec<String>>();
+        extra.extend(
+            self.peer_ips
+                .iter()
+                .map(|ip| util::post_down_routing(ip, interface_gateway.clone()))
+                .collect::<Vec<String>>(),
+        );
+
+        let wg_quick_content =
+            self.wg_data
+                .wg
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
+        wg_tooling::up(wg_quick_content).await?;
+        Ok(())
     }
 
     async fn teardown(&self) -> Result<(), Error> {
-        Err(Error::NotImplemented)
-    }
-}
-
-fn pre_up_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
-    if cfg!(target_os = "macos") {
-        if let Some(ref gateway) = interface.gateway {
-            format!(
-                "route -n add --host {relayer_ip} {gateway}",
-                relayer_ip = relayer_ip,
-                gateway = gateway
-            )
-        } else {
-            format!(
-                "route -n add -host {relayer_ip} -interface {device}",
-                relayer_ip = relayer_ip,
-                device = interface.device
-            )
-        }
-    } else {
-        // assuming linux
-        if let Some(ref gateway) = interface.gateway {
-            format!(
-                "ip route add {relayer_ip} via {gateway} dev {device}",
-                relayer_ip = relayer_ip,
-                gateway = gateway,
-                device = interface.device
-            )
-        } else {
-            format!(
-                "ip route add {relayer_ip} dev {device}",
-                relayer_ip = relayer_ip,
-                device = interface.device
-            )
-        }
-    }
-}
-
-fn post_down_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String {
-    if cfg!(target_os = "macos") {
-        format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
-    } else {
-        // assuming linux
-        if let Some(ref gateway) = interface.gateway {
-            format!(
-                "ip route del {relayer_ip} via {gateway} dev {device}",
-                relayer_ip = relayer_ip,
-                gateway = gateway,
-                device = interface.device
-            )
-        } else {
-            format!(
-                "ip route del {relayer_ip} dev {device}",
-                relayer_ip = relayer_ip,
-                device = interface.device
-            )
-        }
+        wg_tooling::down().await?;
+        Ok(())
     }
 }

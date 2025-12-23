@@ -16,7 +16,6 @@ pub use macos::build_firewall_router as build_router;
 pub enum Error {
     #[error(transparent)]
     ShellCommand(#[from] shell_command_ext::Error),
-    #[cfg(target_os = "macos")]
     #[error("Unable to determine default interface")]
     NoInterface,
     #[error("Directories error: {0}")]
