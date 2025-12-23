@@ -304,7 +304,10 @@
             inherit pre-commit-check;
             checks = self.checks.${system};
 
-            packages = [ ];
+            packages = [ 
+              pkgs.cargo-machete
+              pkgs.cargo-shear
+            ];
 
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
           };
