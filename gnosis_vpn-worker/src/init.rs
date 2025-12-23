@@ -1,5 +1,5 @@
 use gnosis_vpn_lib::config::Config;
-use gnosis_vpn_lib::event::IncomingWorker;
+use gnosis_vpn_lib::event::RootToWorker;
 use gnosis_vpn_lib::hopr_params::HoprParams;
 
 #[derive(Debug, Clone)]
@@ -30,18 +30,18 @@ impl Init {
         }
     }
 
-    pub fn incoming_cmd(&self, cmd: IncomingWorker) -> Self {
+    pub fn incoming_cmd(&self, cmd: RootToWorker) -> Self {
         match (self.state.clone(), cmd) {
-            (State::AwaitingResources, IncomingWorker::HoprParams { hopr_params }) => Init {
+            (State::AwaitingResources, RootToWorker::HoprParams { hopr_params }) => Init {
                 state: State::AwaitingConfig(hopr_params),
             },
-            (State::AwaitingResources, IncomingWorker::Config { config }) => Init {
+            (State::AwaitingResources, RootToWorker::Config { config }) => Init {
                 state: State::AwaitingHoprParams(config),
             },
-            (State::AwaitingHoprParams(config), IncomingWorker::HoprParams { hopr_params }) => Init {
+            (State::AwaitingHoprParams(config), RootToWorker::HoprParams { hopr_params }) => Init {
                 state: State::Ready(config, hopr_params),
             },
-            (State::AwaitingConfig(hopr_params), IncomingWorker::Config { config }) => Init {
+            (State::AwaitingConfig(hopr_params), RootToWorker::Config { config }) => Init {
                 state: State::Ready(config, hopr_params),
             },
             (state, worker_command) => {
