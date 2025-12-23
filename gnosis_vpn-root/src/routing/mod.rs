@@ -20,7 +20,6 @@ pub use static_::Static;
 pub enum Error {
     #[error(transparent)]
     ShellCommand(#[from] shell_command_ext::Error),
-    #[cfg(target_os = "macos")]
     #[error("Unable to determine default interface")]
     NoInterface,
     #[error("Directories error: {0}")]
