@@ -33,7 +33,6 @@ libc = "0.2.177"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
-notify = { version = "8.2.0", features = ["crossbeam-channel"] }
 pfctl = "0.7.0"
 ping = "0.7.0"
 primitive-types = "0.14.0"
