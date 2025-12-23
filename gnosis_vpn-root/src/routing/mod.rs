@@ -11,6 +11,7 @@ pub trait Routing {
 
 mod dynamic;
 mod static_;
+mod util;
 
 pub use dynamic::Dynamic;
 pub use static_::Static;

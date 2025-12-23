@@ -99,7 +99,7 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
-        request_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await?;
+        request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
         self.run_after_wg_tunnel_established(session, results_sender).await
     }
 
@@ -116,7 +116,7 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
-        adjust_to_main_session(&self.hopr, &self.options, &session).await?;
+        adjust_to_main_session(&self.hopr, &self.options, session).await?;
         Ok(session.clone())
     }
 }
@@ -285,7 +285,7 @@ async fn request_dynamic_wg_tunnel(
         ))
         .await;
     let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
-    res.map_err(|e| Error::RootRequest(e))
+    res.map_err(Error::RootRequest)
 }
 
 async fn request_static_wg_tunnel(
@@ -318,7 +318,7 @@ async fn request_static_wg_tunnel(
         ))
         .await;
     let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
-    res.map_err(|e| Error::RootRequest(e))
+    res.map_err(Error::RootRequest)
 }
 
 async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr>, HoprError> {
@@ -337,7 +337,7 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
             }))
             .await;
         let res = await_with_timeout(rx, Duration::from_secs(30)).await?;
-        res.map_err(|e| Error::RootRequest(e))
+        res.map_err(Error::RootRequest)
     })
     .retry(FibonacciBuilder::default())
     .when(|err: &Error| err.is_ping_error())
@@ -383,47 +383,3 @@ async fn await_with_timeout<T>(rx: tokio::sync::oneshot::Receiver<T>, duration: 
         }
     )
 }
-/*
-            Results::ConnectionResult { res } => {
-                tracing::debug!(?res, "handling pre wg connection runner result");
-                match (res, self.phase.clone()) {
-                    (Ok(session), Phase::Connecting(mut conn)) => {
-                        if let (Some(wg), Some(reg)) = (conn.wireguard.clone(), conn.registration.clone()) {
-                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
-                            let peer_info = wireguard::PeerInfo {
-                                public_key: reg.server_public_key(),
-                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
-                            };
-                            let wg_data = event::WgData {
-                                wg,
-                                peer_info,
-                                interface_info,
-                            };
-                            self.outgoing_sender
-                                .send(OutgoingCore::WgUp(wg_data))
-                                .await
-                                .expect("worker outgoing channel closed - shutting down");
-                            let evt = connection::up::Progress::WgTunnel(session);
-                            conn.connect_progress(evt);
-                            self.phase = Phase::Connecting(conn);
-                        } else {
-                            tracing::error!(%conn, "missing WireGuard or registration data for connection - disconnecting");
-                            self.target_destination = None;
-                            self.act_on_target(results_sender);
-                        }
-                    }
-                    (Err(err), Phase::Connecting(conn)) => {
-                        tracing::error!(%conn, %err, "Opening ping session failed - disconnecting");
-                        self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
-                    }
-                    (Ok(_), phase) => {
-                        tracing::warn!(?phase, "unawaited opening ping session succeeded");
-                    }
-                    (Err(err), phase) => {
-                        tracing::warn!(?phase, %err, "connection failed in unexpecting state");
-                    }
-                }
-            }
-*/
