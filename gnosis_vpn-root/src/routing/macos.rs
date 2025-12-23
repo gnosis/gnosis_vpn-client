@@ -1,3 +1,86 @@
+//! MacOS specific routing using the pf.
+//!
+//! Currently only supports setting up WireGuard interface and determining default interface.
+//!
+//! 1. Create a PF anchor in `/etc/pf.anchors/libp2p_bypass``
+//! ```
+//! # Route libp2p user traffic outside VPN via physical interface
+//! action = "pass out quick"
+//! $ext_if = "en0" # replace if needed
+//! $ext_gw = "192.168.1.1" # replace with your real gateway
+//! ${action} user libp2p route-to ($ext_if $ext_gw)
+//! ```
+//!
+//! 2. PF Main Config Patch: Add to bottom of `/etc/pf.conf`
+//! ```
+//! anchor "libp2p_bypass"
+//! load anchor "libp2p_bypass" from "/etc/pf.anchors/libp2p_bypass"
+//! ```
+//!
+//! 3. launchd service for the libp2p enabled process
+//!
+//! 4. Setup Script setup_libp2p_split_routing.sh
+//!
+//! ```
+//! #!/bin/bash
+//! set -e
+//!
+//!
+//! # 1. Create libp2p user
+//! echo "Creating libp2p user..."
+//! sudo dscl . -create /Users/libp2p || true
+//! sudo dscl . -create /Users/libp2p UserShell /usr/bin/false
+//! sudo dscl . -create /Users/libp2p UniqueID 510
+//! sudo dscl . -create /Users/libp2p PrimaryGroupID 20
+//! sudo dscl . -create /Users/libp2p NFSHomeDirectory /var/empty
+//!
+//! # 2. Install PF anchor
+//! sudo cp libp2p_bypass /etc/pf.anchors/libp2p_bypass
+//!
+//! # 3. Patch main pf.conf
+//! sudo grep -q "libp2p_bypass" /etc/pf.conf || \
+//! echo -e "\nanchor \"libp2p_bypass\"\nload anchor \"libp2p_bypass\" from \"/etc/pf.anchors/libp2p_bypass\"" | sudo tee -a /etc/pf.conf
+//!
+//! # 4. Apply PF
+//! sudo pfctl -f /etc/pf.conf
+//! sudo pfctl -e || true
+//!
+//! # 5. Install launchd service
+//! sudo cp com.libp2p.node.plist /Library/LaunchDaemons/com.libp2p.node.plist
+//! sudo launchctl load /Library/LaunchDaemons/com.libp2p.node.plist
+//!
+//! echo "Setup complete: libp2p routed outside VPN."
+//! ```
+//!
+//! 5. Teardown Script remove_libp2p_split_routing.sh
+//!
+//! ```
+//! #!/bin/bash
+//! set -e
+//!
+//!
+//! echo "Removing launchd service..."
+//! sudo launchctl unload /Library/LaunchDaemons/com.libp2p.node.plist || true
+//! sudo rm -f /Library/LaunchDaemons/com.libp2p.node.plist//!
+//!
+//! Remove PF anchor
+//! sudo rm -f /etc/pf.anchors/libp2p_bypass
+//!
+//! Remove pf.conf patch
+//! sudo sed -i '' '/libp2p_bypass/d' /etc/pf.conf
+//!
+//! Reload PF
+//! sudo pfctl -f /etc/pf.conf
+//!
+//! echo "(Optional) Remove user libp2p manually if desired:"
+//! echo "sudo dscl . -delete /Users/libp2p"
+//!
+//! echo "Cleanup complete."
+//! ```
+
+use std::sync::Arc;
+
+use gnosis_vpn_lib::hopr::hopr_lib::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
@@ -6,33 +89,85 @@ use gnosis_vpn_lib::{event, worker};
 
 use crate::wg_tooling;
 
-use super::Error;
+use super::{Error, Routable};
+
+pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routable, Error> {
+    let pf = pfctl::PfCtl::new()?;
+    Ok(Firewall {
+        fw: Arc::new(std::sync::Mutex::new(pf)),
+        worker,
+        wg_data,
+    })
+}
 
 // const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
 
-/**
- * Refactor logic to use:
- * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
- */
-pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. generate wg quick content
-    let wg_quick_content = wg_data.wg.to_file_string(
-        &wg_data.interface_info,
-        &wg_data.peer_info,
-        // true to route all traffic
-        false,
-    );
-    // 2. run wg-quick up
-    wg_tooling::up(wg_quick_content).await?;
-    // 3. determine interface
-    let (_device, _gateway) = interface().await?;
-    Ok(())
+pub struct Firewall {
+    fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
+    #[allow(dead_code)]
+    worker: worker::Worker,
+    wg_data: event::WgData,
 }
 
-pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. run wg-quick down
-    wg_tooling::down().await?;
-    Ok(())
+#[async_trait]
+impl Routable for Firewall {
+    /**
+     * Refactor logic to use:
+     * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
+     */
+    #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn setup(&self) -> Result<(), Error> {
+        // 1. generate wg quick content
+        let wg_quick_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            // true to route all traffic
+            false, // START WITH TRUE TO KILL YOURSELF
+        );
+
+        // 2. run wg-quick up
+        wg_tooling::up(wg_quick_content).await?;
+
+        // 3. determine interface
+        let (device, gateway) = interface().await?;
+
+        tracing::info!(%device, ?gateway, "Determined default interface");
+
+        // Create a PfCtl instance to control PF with:
+        let mut pf = self
+            .fw
+            .lock()
+            .ok()
+            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?;
+
+        // Enable the firewall, equivalent to the command "pfctl -e":
+        pf.try_enable()?;
+
+        // // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
+        // // use `try_add_anchor` to avoid that:
+        // let anchor_name = "testing-out-pfctl";
+        // pf.add_anchor(anchor_name, pfctl::AnchorKind::Filter).unwrap();
+
+        // // Create a packet filtering rule matching all packets on the "lo0" interface and allowing
+        // // them to pass:
+        // let rule = pfctl::FilterRuleBuilder::default()
+        //     .action(pfctl::FilterRuleAction::Pass)
+        //     .interface("lo0")
+        //     .build()
+        //     .unwrap();
+
+        // // Add the filterig rule to the anchor we just created.
+        // pf.add_rule(anchor_name, &rule).unwrap();
+
+        Ok(())
+    }
+
+    #[tracing::instrument(name = "Firewall::teardown",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn teardown(&self) -> Result<(), Error> {
+        // 1. run wg-quick down
+        wg_tooling::down().await?;
+        Ok(())
+    }
 }
 
 /*
