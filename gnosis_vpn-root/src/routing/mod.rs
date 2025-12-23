@@ -1,8 +1,10 @@
+use async_trait::async_trait;
 use thiserror::Error;
 
 use gnosis_vpn_lib::{dirs, shell_command_ext, wireguard};
 
-pub trait RoutingTrait {
+#[async_trait]
+pub trait Routing {
     async fn setup(&self) -> Result<(), Error>;
     async fn teardown(&self) -> Result<(), Error>;
 }

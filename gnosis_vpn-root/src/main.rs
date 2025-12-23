@@ -22,7 +22,7 @@ mod cli;
 mod routing;
 mod wg_tooling;
 
-use crate::routing::RoutingTrait;
+use crate::routing::Routing;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -165,7 +165,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let socket = socket_listener(&args.socket_path).await?;
 
-    let mut routing: Option<Routing> = None;
+    let mut routing: Option<Box<dyn Routing>> = None;
     let res = loop_daemon(
         &mut ctrlc_receiver,
         socket,
@@ -197,7 +197,7 @@ async fn loop_daemon(
     worker_user: &worker::Worker,
     config: Config,
     hopr_params: HoprParams,
-    routing: &mut Option<Routing>,
+    routing: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
