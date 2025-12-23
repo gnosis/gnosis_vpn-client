@@ -10,6 +10,7 @@ pub mod hopr;
 pub mod hopr_params;
 pub mod info;
 pub mod network;
+pub mod ping;
 pub mod shell_command_ext;
 pub mod socket;
 pub mod wireguard;
@@ -18,7 +19,6 @@ pub mod worker;
 mod gvpn_client;
 mod log_output;
 mod peer;
-mod ping;
 mod remote_data;
 mod ticket_stats;
 

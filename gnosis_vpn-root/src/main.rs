@@ -5,18 +5,20 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::process::{self};
+use std::time::Duration;
 
 use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::hopr_params::HoprParams;
-use gnosis_vpn_lib::{socket, worker};
+use gnosis_vpn_lib::{ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -229,6 +231,8 @@ async fn loop_daemon(
     // root <-> system socket communication setup (UI app)
     let mut socket_lines_reader: Option<io::Lines<BufReader<OwnedReadHalf>>> = None;
     let mut socket_writer: Option<BufWriter<OwnedWriteHalf>> = None;
+    let cancel_token = CancellationToken::new();
+    let (ping_sender, mut ping_receiver) = mpsc::channel(32);
 
     tracing::info!("entering main daemon loop");
 
@@ -244,12 +248,16 @@ async fn loop_daemon(
                 // child will receive event as well - waiting for it to shutdown
                 tracing::info!("initiate shutdown");
                 shutdown_ongoing = true;
+                cancel_token.cancel();
             },
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
                 let socket_reader = BufReader::new(socket_reader_half);
                 socket_lines_reader = Some(socket_reader.lines());
                 socket_writer = Some(BufWriter::new(socket_writer_half));
+            }
+            Some(res) = ping_receiver.recv() => {
+                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut writer).await?;
             }
             Ok(Some(line)) = lines_reader.next_line() => {
                 let cmd = parse_outgoing_worker(line)?;
@@ -278,7 +286,7 @@ async fn loop_daemon(
 
                                 let new_routing = routing::Dynamic::new(worker_user.clone(), wg_data);
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *routing = Some(new_routing);
+                                *routing = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
@@ -287,57 +295,14 @@ async fn loop_daemon(
 
                                 let new_routing = routing::Static::new(wg_data, peer_ips);
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *routing = Some(new_routing);
+                                *routing = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
                             }
                             RequestToRoot::TearDownWg => {
                                 teardown_any_routing(routing, true).await;
                             }
                             RequestToRoot::Ping { options } => {
-                                // TODO ping request
-                            }
-                        }
-                    },
-                    WorkerToRoot::WireGuard(wg_cmd) => {
-                        tracing::debug!(?wg_cmd, "received worker wireguard command");
-                        match wg_cmd {
-                            WireGuardCommand::WgUp( wg_data ) => {
-                                // ensure we run down before going up to ensure clean slate
-                                if let Some(router) = maybe_router.take() {
-                                    match router.teardown().await {
-                                        Ok(_) => tracing::warn!("cleaned up routing from previous instance"),
-                                        Err(error) => {
-                                            tracing::debug!(?error, "expected error during pre-start routing teardown");
-                                        }
-                                    }
-                                }
-
-                                match routing::build_router(worker_user.clone(), wg_data) {
-                                    Ok(new_router) => {
-                                        let res = new_router.setup().await.map_err(|e| format!("failed to setup routing: {}", e));
-                                        maybe_router = Some(Box::new(new_router));
-                                        send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
-                                    },
-                                    Err(err) => {
-                                        let res = Err(format!("failed to build a router: {}", err));
-                                        send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
-                                        continue;
-                                    }
-                                };
-
-                            },
-                            WireGuardCommand::WgDown => {
-                                match wg_tooling::down().await {
-                                    Ok(_) => {}
-                                    Err(error) => {
-                                        tracing::error!(?error, "error during wg-quick down");
-                                    }
-                                }
-                                if let Some(router) = maybe_router.take() {
-                                    let _ = router.teardown().await.map_err(|error| {
-                                        tracing::error!(?error, "error tearing down routing during wg down");
-                                    });
-                                }
+                                spawn_ping(&options, &ping_sender, &cancel_token);
                             }
                         }
                     },
@@ -346,7 +311,7 @@ async fn loop_daemon(
             Ok(Some(line)) = async { socket_lines_reader.take().unwrap().next_line().await }, if socket_lines_reader.is_some() => {
                 let cmd: cmdCmd = parse_command(line)?;
                 tracing::debug!(command = ?cmd, "received socket command");
-                send_to_worker(RootToWorker::Command { cmd }, &mut writer).await?;
+                send_to_worker(RootToWorker::Command ( cmd ), &mut writer).await?;
             }
             Ok(status) = worker_child.wait() => {
                 // restore routing if connected
@@ -397,7 +362,7 @@ async fn send_to_worker(
     msg: RootToWorker,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
-    let serialized = serde_json::to_string(msg).map_err(|err| {
+    let serialized = serde_json::to_string(&msg).map_err(|err| {
         tracing::error!(msg = ?msg, error = ?err, "failed to serialize message");
         exitcode::DATAERR
     })?;
@@ -436,7 +401,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(routing: &Option<impl RoutingTrait>, expected_up: bool) {
+async fn teardown_any_routing(routing: &Option<Box<dyn Routing>>, expected_up: bool) {
     if let Some(routing) = routing {
         match routing.teardown().await {
             Ok(_) => {
@@ -453,6 +418,29 @@ async fn teardown_any_routing(routing: &Option<impl RoutingTrait>, expected_up: 
             }
         }
     }
+}
+
+fn spawn_ping(
+    options: &ping::Options,
+    sender: &mpsc::Sender<Result<Duration, String>>,
+    cancel_token: &CancellationToken,
+) {
+    let cancel = cancel_token.clone();
+    let sender = sender.clone();
+    let options = options.clone();
+    tokio::spawn(async move {
+        cancel
+            .run_until_cancelled(async move {
+                let res = ping::ping(&options).map_err(|e| {
+                    tracing::debug!(error = ?e, "ping error");
+                    e.to_string()
+                });
+                let _ = sender.send(res).await.map_err(|_| {
+                    tracing::error!("ping receiver closed unexpectedly");
+                });
+            })
+            .await;
+    });
 }
 
 /// limit root service to two threads
