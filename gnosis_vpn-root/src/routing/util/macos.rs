@@ -227,6 +227,34 @@ fn post_down_routing(relayer_ip: &Ipv4Addr, interface: &InterfaceInfo) -> String
     }
 }
 
+pub async fn interface() -> Result<(String, Option<String>), Error> {
+    let output = Command::new("route")
+        .arg("-n")
+        .arg("get")
+        .arg("0.0.0.0")
+        .run_stdout()
+        .await?;
+
+    let res = parse_interface(&output)?;
+    Ok(res)
+}
+
+fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
+    let parts: Vec<&str> = output.split_whitespace().collect();
+    let device_index = parts.iter().position(|&x| x == "interface:");
+    let via_index = parts.iter().position(|&x| x == "gateway:");
+    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
+        Some(dev) => dev.to_string(),
+        None => {
+            tracing::error!(%output, "Unable to determine default interface");
+            return Err(Error::NoInterface);
+        }
+    };
+
+    let gateway = via_index.and_then(|idx| parts.get(idx + 1)).map(|gw| gw.to_string());
+    Ok((device, gateway))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
