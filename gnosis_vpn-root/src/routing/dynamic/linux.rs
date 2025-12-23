@@ -8,6 +8,7 @@ use super::Dynamic;
 #[async_trait]
 impl Routing for Dynamic {
     async fn setup(&self) -> Result<(), Error> {
+        tracing::debug!(wg_data = ?self.wg_data, worker= ?self.worker, "Setting up dynamic routing for linux not yet implemented");
         Err(Error::NotImplemented)
     }
 
