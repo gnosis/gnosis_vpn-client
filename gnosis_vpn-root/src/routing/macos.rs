@@ -14,6 +14,7 @@ use super::Error;
  * Refactor logic to use:
  * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
  */
+#[tracing::instrument(level = "info", skip(_worker, wg_data), fields(interface = ?wg_data.interface_info, peer = ?wg_data.peer_info), ret, err)]
 pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
     // 1. generate wg quick content
     let wg_quick_content = wg_data.wg.to_file_string(
@@ -22,10 +23,37 @@ pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<
         // true to route all traffic
         false,
     );
+
     // 2. run wg-quick up
     wg_tooling::up(wg_quick_content).await?;
+
     // 3. determine interface
-    let (_device, _gateway) = interface().await?;
+    let (device, gateway) = interface().await?;
+
+    tracing::info!(%device, ?gateway, "Determined default interface");
+
+    // // Create a PfCtl instance to control PF with:
+    // let mut pf = pfctl::PfCtl::new().unwrap();
+
+    // // Enable the firewall, equivalent to the command "pfctl -e":
+    // pf.try_enable().unwrap();
+
+    // // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
+    // // use `try_add_anchor` to avoid that:
+    // let anchor_name = "testing-out-pfctl";
+    // pf.add_anchor(anchor_name, pfctl::AnchorKind::Filter).unwrap();
+
+    // // Create a packet filtering rule matching all packets on the "lo0" interface and allowing
+    // // them to pass:
+    // let rule = pfctl::FilterRuleBuilder::default()
+    //     .action(pfctl::FilterRuleAction::Pass)
+    //     .interface("lo0")
+    //     .build()
+    //     .unwrap();
+
+    // // Add the filterig rule to the anchor we just created.
+    // pf.add_rule(anchor_name, &rule).unwrap();
+
     Ok(())
 }
 
