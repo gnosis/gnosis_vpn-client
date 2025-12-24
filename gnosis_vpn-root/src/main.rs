@@ -161,24 +161,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let socket = socket_listener(&args.socket_path).await?;
 
-    let mut routing: Option<Routing> = None;
-    let res = loop_daemon(
-        &mut ctrlc_receiver,
-        socket,
-        &worker_user,
-        config,
-        hopr_params,
-        &mut routing,
-    )
-    .await;
-
-    // restore routing if connected
-    if let Some(routing) = routing {
-        // restore routing - log errors
-        let _ = routing.teardown().await.map_err(|err| {
-            tracing::error!(error = ?err, "error tearing down routing on shutdown");
-        });
-    }
+    let res = loop_daemon(&mut ctrlc_receiver, socket, &worker_user, config, hopr_params).await;
 
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
@@ -192,7 +175,6 @@ async fn loop_daemon(
     worker_user: &worker::Worker,
     config: Config,
     hopr_params: HoprParams,
-    routing: &mut Option<Routing>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -246,6 +228,9 @@ async fn loop_daemon(
     let mut socket_writer: Option<BufWriter<OwnedWriteHalf>> = None;
 
     tracing::info!("entering main daemon loop");
+
+    let mut maybe_router: Option<Box<dyn Routing>> = None;
+
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
@@ -286,28 +271,40 @@ async fn loop_daemon(
                         match wg_cmd {
                             WireGuardCommand::WgUp( wg_data ) => {
                                 // ensure we run down before going up to ensure clean slate
-                                if let Some(routing) = routing {
-                                    match routing.teardown().await {
+                                if let Some(router) = maybe_router.take() {
+                                    match router.teardown().await {
                                         Ok(_) => tracing::warn!("cleaned up routing from previous instance"),
-                                        Err(err) => {
-                                            tracing::debug!(error = ?err, "expected error during pre-start routing teardown");
+                                        Err(error) => {
+                                            tracing::debug!(?error, "expected error during pre-start routing teardown");
                                         }
                                     }
                                 }
 
-                                let new_routing = Routing::new(worker_user.clone(), wg_data);
-                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *routing = Some(new_routing);
-                                send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
+                                match routing::build_router(worker_user.clone(), wg_data) {
+                                    Ok(new_router) => {
+                                        let res = new_router.setup().await.map_err(|e| format!("failed to setup routing: {}", e));
+                                        maybe_router = Some(Box::new(new_router));
+                                        send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
+                                    },
+                                    Err(err) => {
+                                        let res = Err(format!("failed to build a router: {}", err));
+                                        send_to_worker(&IncomingWorker::WgUpResult { res }, &mut writer).await?;
+                                        continue;
+                                    }
+                                };
                             },
                             WireGuardCommand::WgDown => {
                                 match wg_tooling::down().await {
                                     Ok(_) => {}
-                                    Err(err) => {
-                                        tracing::error!(error = ?err, "error during wg-quick down");
+                                    Err(error) => {
+                                        tracing::error!(?error, "error during wg-quick down");
                                     }
                                 }
-                                *routing = None;
+                                if let Some(router) = maybe_router.take() {
+                                    let _ = router.teardown().await.map_err(|error| {
+                                        tracing::error!(?error, "error tearing down routing during wg down");
+                                    });
+                                }
                             }
                         }
                     },
@@ -319,6 +316,14 @@ async fn loop_daemon(
                 send_to_worker(&IncomingWorker::Command { cmd }, &mut writer).await?;
             }
             Ok(status) = worker_child.wait() => {
+                // restore routing if connected
+                if let Some(router) = maybe_router.take() {
+                    // restore routing - log errors
+                    let _ = router.teardown().await.map_err(|error| {
+                        tracing::error!(?error, "error tearing down routing on shutdown");
+                    });
+                }
+
                 if shutdown_ongoing {
                     if status.success() {
                         tracing::info!("worker exited cleanly");

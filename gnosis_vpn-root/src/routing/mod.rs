@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, event, shell_command_ext, wireguard, worker};
+use gnosis_vpn_lib::{dirs, hopr::hopr_lib::async_trait, shell_command_ext, wireguard};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -8,9 +8,9 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-use linux::{setup, teardown};
+pub use linux::build_userspace_router as build_router;
 #[cfg(target_os = "macos")]
-use macos::{setup, teardown};
+pub use macos::build_firewall_router as build_router;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -25,23 +25,19 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
+
+    #[cfg(target_os = "macos")]
+    #[error("firewall error: {0}")]
+    PfCtl(#[from] pfctl::Error),
+
+    #[cfg(target_os = "macos")]
+    #[error("General error")]
+    General(String),
 }
 
-pub struct Routing {
-    worker: worker::Worker,
-    wg_data: event::WgData,
-}
+#[async_trait]
+pub trait Routing {
+    async fn setup(&self) -> Result<(), Error>;
 
-impl Routing {
-    pub fn new(worker: worker::Worker, wg_data: event::WgData) -> Self {
-        Self { worker, wg_data }
-    }
-
-    pub async fn setup(&self) -> Result<(), Error> {
-        setup(&self.worker, &self.wg_data).await
-    }
-
-    pub async fn teardown(&self) -> Result<(), Error> {
-        teardown(&self.worker, &self.wg_data).await
-    }
+    async fn teardown(&self) -> Result<(), Error>;
 }

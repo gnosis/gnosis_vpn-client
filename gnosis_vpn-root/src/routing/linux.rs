@@ -2,35 +2,53 @@
 
 // use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 // use gnosis_vpn_lib::wireguard;
-use gnosis_vpn_lib::{event, worker};
+use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, worker};
 
 use crate::wg_tooling;
 
-use super::Error;
+use super::{Error, Routing};
 
 // const MARK: &str = "0xDEAD";
+
+pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
+    Ok(Router { worker, wg_data })
+}
+
+pub struct Router {
+    worker: worker::Worker,
+    wg_data: event::WgData,
+}
+
+impl Router {
+    pub fn new(worker: worker::Worker, wg_data: event::WgData) -> Self {
+        Self { worker, wg_data }
+    }
+}
 
 /**
  * Refactor logic to use:
  * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
  */
-pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. generate wg quick content
-    let wg_quick_content = wg_data.wg.to_file_string(
-        &wg_data.interface_info,
-        &wg_data.peer_info,
-        // true to route all traffic
-        false,
-    );
-    // 2. run wg-quick up
-    wg_tooling::up(wg_quick_content).await?;
-    Ok(())
-}
+#[async_trait]
+impl Routing for Router {
+    async fn setup(&self) -> Result<(), Error> {
+        // 1. generate wg quick content
+        let wg_quick_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            // true to route all traffic
+            false,
+        );
+        // 2. run wg-quick up
+        wg_tooling::up(wg_quick_content).await?;
+        Ok(())
+    }
 
-pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. run wg-quick down
-    //  wg_tooling::down().await?;
-    Ok(())
+    async fn teardown(&self) -> Result<(), Error> {
+        // 1. run wg-quick down
+        //  wg_tooling::down().await?;
+        Ok(())
+    }
 }
 
 /*

@@ -10,7 +10,6 @@ license = { workspace = true }
 clap.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
-notify.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -22,9 +21,11 @@ url.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 mimalloc.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+pfctl.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
-tempfile = "3.23.0"
