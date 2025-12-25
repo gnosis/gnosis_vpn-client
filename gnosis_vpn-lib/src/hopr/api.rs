@@ -16,6 +16,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
+use std::collections::HashMap;
 use std::{
     fmt::{self, Display},
     str::FromStr,
@@ -429,12 +430,12 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn announced_peers(&self, minimum_score: f64) -> Result<HashMap<Address, Peer>, HoprError> {
         tracing::debug!("query hopr connected peers");
-        let peer_ids = self.hopr.network_connected_peers().await?;
+        let peer_ids = self.edgli.network_connected_peers().await?;
         let mut set = JoinSet::new();
         for peer_id in peer_ids {
-            let hopr = self.hopr.clone();
+            let edgli = self.edgli.clone();
             set.spawn(async move {
-                let address = match hopr.peerid_to_chain_key(&peer_id).await {
+                let address = match edgli.peerid_to_chain_key(&peer_id).await {
                     Ok(Some(address)) => address,
                     Ok(None) => {
                         tracing::warn!(%peer_id, "no address for peer id");
@@ -445,7 +446,7 @@ impl Hopr {
                         return None;
                     }
                 };
-                let observed = hopr.network_observed_multiaddresses(&peer_id).await;
+                let observed = edgli.network_observed_multiaddresses(&peer_id).await;
                 for addr in observed.clone().iter_mut() {
                     tracing::debug!("observed multiaddress: {:?}", addr);
                     while let Some(protocol) = addr.pop() {
