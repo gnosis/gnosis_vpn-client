@@ -1,15 +1,15 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use alloy::primitives::U256;
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::{Address, Balance, IntoEndian, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
+use edgli::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use human_bandwidth::re::bandwidth::Bandwidth;
-use rand::Rng;
+use rand::{Rng, random};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -22,17 +22,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::balance;
-use crate::chain::client::GnosisRpcClient;
-use crate::chain::contracts::NetworkSpecifications;
-use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
-use crate::chain::errors::ChainError;
 use crate::connection;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::hopr_params::{self, HoprParams};
 use crate::log_output;
-use crate::remote_data;
 use crate::ticket_stats::{self, TicketStats};
+use crate::{event, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -46,7 +42,7 @@ pub enum Results {
         res: Result<balance::PreSafe, Error>,
     },
     TicketStats {
-        res: Result<ticket_stats::TicketStats, Error>,
+        res: Result<TicketStats, Error>,
     },
     SafeDeployment {
         res: Result<SafeModuleDeploymentResult, Error>,
@@ -65,14 +61,10 @@ pub enum Results {
         res: Result<Vec<Address>, Error>,
     },
     HoprRunning,
-    ConnectionEvent {
-        evt: connection::up::Event,
-    },
-    ConnectionResultPreWg {
+    ConnectionEvent(connection::up::Event),
+    ConnectionRequestToRoot(event::RespondableRequestToRoot),
+    ConnectionResult {
         res: Result<SessionClientMetadata, connection::up::Error>,
-    },
-    ConnectionResultPostWg {
-        res: Result<(), connection::up::Error>,
     },
     DisconnectionEvent {
         wg_public_key: String,
@@ -93,8 +85,8 @@ pub enum Error {
     PreSafe(#[from] balance::Error),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
-    #[error(transparent)]
-    Chain(#[from] ChainError),
+    #[error("chain error: {0}")]
+    Chain(String),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
@@ -147,8 +139,8 @@ pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: 
     let _ = results_sender.send(Results::SafePersisted).await;
 }
 
-pub async fn hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params, ticket_value).await;
+pub async fn hopr(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
+    let res = run_hopr(hopr_params).await;
     let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
@@ -197,33 +189,50 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     tracing::debug!("starting presafe balance runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider();
-    let node_address = keys.chain_key.public().to_address();
-    (|| async {
-        let presafe = balance::PreSafe::fetch(&private_key, rpc_provider.as_str(), node_address)
-            .await
-            .map_err(Error::from)?;
-        Ok(presafe)
+    let url = hopr_params.blokli_url();
+    (|| {
+        let url = url.clone();
+        let private_key = private_key.clone();
+
+        async move {
+            let (balance_wxhopr, balance_xdai) = edgli::blokli::SafelessInteractor::new(url, &private_key)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .balances()
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+
+            Ok(balance::PreSafe {
+                node_xdai: balance_xdai,
+                node_wxhopr: balance_wxhopr,
+            })
+        }
     })
     .retry(ExponentialBuilder::default())
     .await
 }
 
-async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::TicketStats, Error> {
+async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
-    let rpc_provider = hopr_params.rpc_provider();
-    let network = hopr_params.network();
-    (|| async {
-        let stats = TicketStats::fetch(
-            &private_key,
-            rpc_provider.as_str(),
-            &NetworkSpecifications::from_network(&network),
-        )
-        .await
-        .map_err(Error::from)?;
-        Ok(stats)
+    let url = hopr_params.blokli_url();
+    (|| {
+        let url = url.clone();
+        let private_key = private_key.clone();
+        async move {
+            let ticket_stats = edgli::blokli::SafelessInteractor::new(url, &private_key)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .ticket_stats()
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+
+            Ok(TicketStats {
+                ticket_price: ticket_stats.ticket_price,
+                winning_probability: ticket_stats.winning_probability,
+            })
+        }
     })
     .retry(ExponentialBuilder::default())
     .await
@@ -236,26 +245,28 @@ async fn run_safe_deployment(
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider();
     let node_address = keys.chain_key.public().to_address();
     let token_u256 = presafe.node_wxhopr.amount();
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
-    let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
-    let network = hopr_params.network();
-    (|| async {
-        let mut bytes = [0u8; 32];
-        rand::rng().fill(&mut bytes);
-        let nonce = U256::from_be_bytes(bytes);
-        let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
-            .await
-            .map_err(Error::from)?;
-        let safe_module_deployment_inputs =
-            SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
-        let res = safe_module_deployment_inputs
-            .deploy(&client.provider, network.clone())
-            .await
-            .map_err(Error::from)?;
-        Ok(res)
+    let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
+    let nonce = edgli::hopr_lib::U256::from(random::<u64>());
+    let url = hopr_params.blokli_url();
+
+    (|| {
+        let url = url.clone();
+        let private_key = private_key.clone();
+        async move {
+            edgli::blokli::SafelessInteractor::new(url, &private_key)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .deploy_safe(SafeModuleDeploymentInputs {
+                    token_amount,
+                    nonce,
+                    admins: vec![node_address],
+                })
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))
+        }
     })
     .retry(ExponentialBuilder::default())
     .await
@@ -317,11 +328,13 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
+async fn run_hopr(hopr_params: HoprParams) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = hopr_params.to_config(ticket_value).await?;
+    let cfg = hopr_params.to_config().await?;
     let keys = hopr_params.calc_keys().await?;
-    Hopr::new(cfg, keys).await.map_err(Error::from)
+    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys)
+        .await
+        .map_err(Error::from)
 }
 
 async fn run_fund_channel(
@@ -408,15 +421,17 @@ impl Display for Results {
                 Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
-            Results::ConnectionEvent { evt } => write!(f, "ConnectionEvent: {}", evt),
-            Results::ConnectionResultPreWg { res } => match res {
-                Ok(session) => write!(f, "ConnectionResultPreWg: Success ({})", session),
-                Err(err) => write!(f, "ConnectionResultPreWg: Error({})", err),
+            Results::ConnectionEvent(evt) => {
+                write!(f, "ConnectionEvent: {}", evt)
+            }
+            Results::ConnectionRequestToRoot(req) => {
+                write!(f, "ConnectionRequestToRoot: {:?}", req)
+            }
+            Results::ConnectionResult { res } => match res {
+                Ok(_) => write!(f, "ConnectionResult: Success"),
+                Err(err) => write!(f, "ConnectionResult: Error({})", err),
             },
-            Results::ConnectionResultPostWg { res } => match res {
-                Ok(_) => write!(f, "ConnectionResultPostWg: Success"),
-                Err(err) => write!(f, "ConnectionResultPostWg: Error({})", err),
-            },
+
             Results::DisconnectionEvent { wg_public_key, evt } => {
                 write!(f, "DisconnectionEvent ({}): {}", wg_public_key, evt)
             }

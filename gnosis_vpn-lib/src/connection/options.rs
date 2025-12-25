@@ -11,9 +11,10 @@ use crate::ping;
 pub struct Options {
     pub timeouts: Timeouts,
     pub sessions: Sessions,
-    pub ping_options: ping::PingOptions,
+    pub ping_options: ping::Options,
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
+    pub announced_peer_minimum_score: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,10 +57,11 @@ impl SessionParameters {
 impl Options {
     pub fn new(
         sessions: Sessions,
-        ping_options: ping::PingOptions,
+        ping_options: ping::Options,
         buffer_sizes: BufferSizes,
         max_surb_upstream: MaxSurbUpstream,
         timeouts: Timeouts,
+        announced_peer_minimum_score: f64,
     ) -> Self {
         Self {
             sessions,
@@ -67,6 +69,7 @@ impl Options {
             buffer_sizes,
             max_surb_upstream,
             timeouts,
+            announced_peer_minimum_score,
         }
     }
 }

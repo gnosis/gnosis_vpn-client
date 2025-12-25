@@ -127,37 +127,41 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo, route_all_traffic: bool) -> String {
-        let listen_port_line = self
-            .config
-            .listen_port
-            .map(|port| format!("ListenPort = {port}\n"))
-            .unwrap_or_default();
-
+    pub fn to_file_string(
+        &self,
+        interface: &InterfaceInfo,
+        peer: &PeerInfo,
+        route_all_traffic: bool,
+        extra_interface_lines: Option<Vec<String>>,
+    ) -> String {
         let allowed_ips = match (route_all_traffic, &self.config.allowed_ips) {
             (true, _) => "0.0.0.0/0".to_string(),
             (_, Some(allowed_ips)) => allowed_ips.clone(),
             _ => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
         };
 
-        format!(
-            "[Interface]
-PrivateKey = {private_key}
-Address = {address}
-{listen_port_line}
+        let mut lines = Vec::new();
 
-[Peer]
-PublicKey = {public_key}
-Endpoint = {endpoint}
-AllowedIPs = {allowed_ips}
-",
-            private_key = self.key_pair.priv_key,
-            address = interface.address,
-            public_key = peer.public_key,
-            endpoint = peer.endpoint,
-            listen_port_line = listen_port_line,
-            allowed_ips = allowed_ips,
-        )
+        // [Interface] section
+        lines.push("[Interface]".to_string());
+        lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
+        lines.push(format!("Address = {}", interface.address));
+        if let Some(listen_port) = self.config.listen_port {
+            lines.push(format!("ListenPort = {}", listen_port));
+        }
+        if let Some(extra_lines) = extra_interface_lines {
+            lines.extend(extra_lines);
+        }
+
+        lines.push("".to_string()); // Empty line for spacing
+
+        // [Peer] section
+        lines.push("[Peer]".to_string());
+        lines.push(format!("PublicKey = {}", peer.public_key));
+        lines.push(format!("Endpoint = {}", peer.endpoint));
+        lines.push(format!("AllowedIPs = {}", allowed_ips));
+
+        lines.join("\n")
     }
 }
 
