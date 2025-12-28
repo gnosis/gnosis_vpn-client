@@ -20,8 +20,8 @@ pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> 
     })
 }
 
-pub fn static_fallback_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
-    Ok(FallbackRouter { worker, wg_data })
+pub fn static_fallback_router(worker: worker::Worker, wg_data: event::WgData) -> impl Routing {
+    FallbackRouter { worker, wg_data }
 }
 
 // const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";

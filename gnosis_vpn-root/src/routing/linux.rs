@@ -4,18 +4,20 @@
 // use gnosis_vpn_lib::wireguard;
 use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, worker};
 
+use std::net::Ipv4Addr;
+
 use crate::wg_tooling;
 
 use super::{Error, Routing};
 
 // const MARK: &str = "0xDEAD";
 
-pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
+pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
     Err(Error::NotImplemented)
 }
 
-pub fn static_fallback_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
-    Ok(FallbackRouter { worker, wg_data })
+pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
+    FallbackRouter { worker, wg_data }
 }
 
 pub struct Router {
@@ -24,8 +26,8 @@ pub struct Router {
 }
 
 pub struct FallbackRouter {
-    worker: worker::Worker,
-    wg_data: event::WgData,
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
 }
 
 /**

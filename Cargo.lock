@@ -3939,6 +3939,7 @@ dependencies = [
  "human-bandwidth",
  "humantime",
  "humantime-serde",
+ "multiaddr",
  "ping",
  "primitive-types 0.14.0",
  "rand 0.9.2",

@@ -145,9 +145,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::UNAVAILABLE
         })?;
 
-    // tear down any previous routing - ignore expected error
-    teardown_any_routing(&None, false).await;
-
     // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
@@ -166,7 +163,20 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let socket = socket_listener(&args.socket_path).await?;
 
-    let res = loop_daemon(&mut ctrlc_receiver, socket, &worker_user, config, hopr_params).await;
+    let mut maybe_router: Option<Box<dyn Routing>> = None;
+    let res = loop_daemon(
+        &mut ctrlc_receiver,
+        socket,
+        &worker_user,
+        config,
+        hopr_params,
+        maybe_router,
+    )
+    .await;
+
+    // restore routing if connected
+    teardown_any_routing(&maybe_router, true).await;
+
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
     });
@@ -180,6 +190,7 @@ async fn loop_daemon(
     worker_user: &worker::Worker,
     config: Config,
     hopr_params: HoprParams,
+    maybe_router: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -236,8 +247,6 @@ async fn loop_daemon(
 
     tracing::info!("entering main daemon loop");
 
-    let mut maybe_router: Option<Box<dyn Routing>> = None;
-
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
@@ -282,20 +291,28 @@ async fn loop_daemon(
                         match request {
                             RequestToRoot::DynamicWgRouting { wg_data } => {
                                 // ensure we run down before going up to ensure clean slate
-                                teardown_any_routing(routing, false).await;
+                                teardown_any_routing(maybe_router, false).await;
 
-                                let new_routing = routing::Dynamic::new(worker_user.clone(), wg_data);
-                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *routing = Some(Box::new(new_routing));
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                match routing::build_router(worker_user.clone(), wg_data) {
+                                    Ok(router) => {
+                                        let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                        *maybe_router = Some(Box::new(router));
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                    },
+                                    Err(error) => {
+                                        tracing::error!(?error, "failed to build router");
+                                        let res = Err(error.to_string());
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                    }
+                                }
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
                                 // ensure we run down before going up to ensure clean slate
-                                teardown_any_routing(routing, false).await;
+                                teardown_any_routing(maybe_router, false).await;
 
-                                let new_routing = routing::Static::new(wg_data, peer_ips);
+                                let new_routing = routing::static_fallback_router(wg_data, peer_ips);
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *routing = Some(Box::new(new_routing));
+                                maybe_router = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
                             }
                             RequestToRoot::TearDownWg => {
@@ -314,14 +331,6 @@ async fn loop_daemon(
                 send_to_worker(RootToWorker::Command ( cmd ), &mut writer).await?;
             }
             Ok(status) = worker_child.wait() => {
-                // restore routing if connected
-                if let Some(router) = maybe_router.take() {
-                    // restore routing - log errors
-                    let _ = router.teardown().await.map_err(|error| {
-                        tracing::error!(?error, "error tearing down routing on shutdown");
-                    });
-                }
-
                 if shutdown_ongoing {
                     if status.success() {
                         tracing::info!("worker exited cleanly");
@@ -401,9 +410,9 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(routing: &Option<Box<dyn Routing>>, expected_up: bool) {
-    if let Some(routing) = routing {
-        match routing.teardown().await {
+async fn teardown_any_routing(maybe_router: &Option<Box<impl Routing>>, expected_up: bool) {
+    if let Some(router) = maybe_router {
+        match router.teardown().await {
             Ok(_) => {
                 if !expected_up {
                     tracing::warn!("cleaned up unexpected existing routing");
