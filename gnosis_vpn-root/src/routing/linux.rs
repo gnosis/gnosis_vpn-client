@@ -36,14 +36,14 @@ pub struct FallbackRouter {
 impl Routing for Router {
     async fn setup(&self) -> Result<(), Error> {
         // 1. generate wg quick content
-        let wg_quick_content = self.wg_data.wg.to_file_string(
-            &self.wg_data.interface_info,
-            &self.wg_data.peer_info,
-            // true to route all traffic
-            false,
-        );
+//        let wg_quick_content = self.wg_data.wg.to_file_string(
+//            &self.wg_data.interface_info,
+//            &self.wg_data.peer_info,
+//            // true to route all traffic
+//            false,
+//        );
         // 2. run wg-quick up
-        wg_tooling::up(wg_quick_content).await?;
+        // wg_tooling::up(wg_quick_content).await?;
         Ok(())
     }
 
