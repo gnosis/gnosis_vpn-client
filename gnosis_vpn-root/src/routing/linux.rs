@@ -158,7 +158,7 @@ mod tests {
         let (device, gateway) = super::parse_interface(output)?;
 
         assert_eq!(device, "wlp2s0");
-        assert_eq!(gateway, Some("192.168.101.202".to_string()));
+        assert_eq!(gateway, Some("192.168.101.1".to_string()));
         Ok(())
     }
 }
