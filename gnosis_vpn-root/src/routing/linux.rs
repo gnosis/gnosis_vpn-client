@@ -1,7 +1,6 @@
-//use tokio::process::Command;
+use tokio::process::Command;
 
-// use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-// use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, worker};
 
 use std::net::Ipv4Addr;
@@ -12,17 +11,19 @@ use super::{Error, Routing};
 
 // const MARK: &str = "0xDEAD";
 
-pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
+pub fn build_userspace_router(_worker: worker::Worker, _wg_data: event::WireGuardData) -> Result<Router, Error> {
     Err(Error::NotImplemented)
 }
 
 pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
-    FallbackRouter { worker, wg_data }
+    FallbackRouter { wg_data, peer_ips }
 }
 
+// TOOD remove allow dead code once implemented
+#[allow(dead_code)]
 pub struct Router {
     worker: worker::Worker,
-    wg_data: event::WgData,
+    wg_data: event::WireGuardData,
 }
 
 pub struct FallbackRouter {
@@ -38,12 +39,12 @@ pub struct FallbackRouter {
 impl Routing for Router {
     async fn setup(&self) -> Result<(), Error> {
         // 1. generate wg quick content
-//        let wg_quick_content = self.wg_data.wg.to_file_string(
-//            &self.wg_data.interface_info,
-//            &self.wg_data.peer_info,
-//            // true to route all traffic
-//            false,
-//        );
+        //        let wg_quick_content = self.wg_data.wg.to_file_string(
+        //            &self.wg_data.interface_info,
+        //            &self.wg_data.peer_info,
+        //            // true to route all traffic
+        //            false,
+        //        );
         // 2. run wg-quick up
         // wg_tooling::up(wg_quick_content).await?;
         Ok(())
@@ -58,7 +59,7 @@ impl Routing for Router {
 
 #[async_trait]
 impl Routing for FallbackRouter {
-    pub async fn setup(&self) -> Result<(), Error> {
+    async fn setup(&self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
         let mut extra = self
             .peer_ips
@@ -80,12 +81,11 @@ impl Routing for FallbackRouter {
         Ok(())
     }
 
-    pub async fn teardown(&self) -> Result<(), Error> {
+    async fn teardown(&self) -> Result<(), Error> {
         wg_tooling::down().await?;
         Ok(())
     }
 }
-
 
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
     match gateway {
@@ -119,7 +119,6 @@ fn post_down_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<S
     }
 }
 
-}
 async fn interface() -> Result<(String, Option<String>), Error> {
     let output = Command::new("ip")
         .arg("route")

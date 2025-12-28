@@ -170,7 +170,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         &worker_user,
         config,
         hopr_params,
-        maybe_router,
+        &mut maybe_router,
     )
     .await;
 
@@ -312,11 +312,11 @@ async fn loop_daemon(
 
                                 let new_routing = routing::static_fallback_router(wg_data, peer_ips);
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                maybe_router = Some(Box::new(new_routing));
+                                *maybe_router = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
                             }
                             RequestToRoot::TearDownWg => {
-                                teardown_any_routing(routing, true).await;
+                                teardown_any_routing(maybe_router, true).await;
                             }
                             RequestToRoot::Ping { options } => {
                                 spawn_ping(&options, &ping_sender, &cancel_token);
@@ -410,7 +410,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(maybe_router: &Option<Box<impl Routing>>, expected_up: bool) {
+async fn teardown_any_routing(maybe_router: &Option<Box<dyn Routing>>, expected_up: bool) {
     if let Some(router) = maybe_router {
         match router.teardown().await {
             Ok(_) => {

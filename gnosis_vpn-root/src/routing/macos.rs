@@ -20,7 +20,7 @@ pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> 
     })
 }
 
-pub fn static_fallback_router(worker: worker::Worker, wg_data: event::WgData) -> impl Routing {
+pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
     FallbackRouter { worker, wg_data }
 }
 
@@ -34,8 +34,8 @@ pub struct Firewall {
 }
 
 pub struct FallbackRouter {
-    worker: worker::Worker,
-    wg_data: event::WgData,
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
 }
 
 #[async_trait]
