@@ -9,8 +9,10 @@ mod macos;
 
 #[cfg(target_os = "linux")]
 pub use linux::build_userspace_router as build_router;
+pub use linux::static_fallback_router;
 #[cfg(target_os = "macos")]
 pub use macos::build_firewall_router as build_router;
+pub use macos::static_fallback_router;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -24,6 +26,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
+    #[error("Not yet implemented")]
+    NotImplemented,
 
     #[cfg(target_os = "macos")]
     #[error("firewall error: {0}")]
