@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use gnosis_vpn_lib::hopr::hopr_lib::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
@@ -6,33 +9,85 @@ use gnosis_vpn_lib::{event, worker};
 
 use crate::wg_tooling;
 
-use super::Error;
+use super::{Error, Routing};
+
+pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
+    let pf = pfctl::PfCtl::new()?;
+    Ok(Firewall {
+        fw: Arc::new(std::sync::Mutex::new(pf)),
+        worker,
+        wg_data,
+    })
+}
 
 // const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
 
-/**
- * Refactor logic to use:
- * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
- */
-pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. generate wg quick content
-    let wg_quick_content = wg_data.wg.to_file_string(
-        &wg_data.interface_info,
-        &wg_data.peer_info,
-        // true to route all traffic
-        false,
-    );
-    // 2. run wg-quick up
-    wg_tooling::up(wg_quick_content).await?;
-    // 3. determine interface
-    let (_device, _gateway) = interface().await?;
-    Ok(())
+pub struct Firewall {
+    fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
+    #[allow(dead_code)]
+    worker: worker::Worker,
+    wg_data: event::WgData,
 }
 
-pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. run wg-quick down
-    wg_tooling::down().await?;
-    Ok(())
+#[async_trait]
+impl Routing for Firewall {
+    /**
+     * Refactor logic to use:
+     * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
+     */
+    #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn setup(&self) -> Result<(), Error> {
+        // 1. generate wg quick content
+        let wg_quick_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            // true to route all traffic
+            false, // START WITH TRUE TO KILL YOURSELF
+        );
+
+        // 2. run wg-quick up
+        wg_tooling::up(wg_quick_content).await?;
+
+        // 3. determine interface
+        let (device, gateway) = interface().await?;
+
+        tracing::info!(%device, ?gateway, "Determined default interface");
+
+        // Create a PfCtl instance to control PF with:
+        let mut pf = self
+            .fw
+            .lock()
+            .ok()
+            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?;
+
+        // Enable the firewall, equivalent to the command "pfctl -e":
+        pf.try_enable()?;
+
+        // // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
+        // // use `try_add_anchor` to avoid that:
+        // let anchor_name = "testing-out-pfctl";
+        // pf.add_anchor(anchor_name, pfctl::AnchorKind::Filter).unwrap();
+
+        // // Create a packet filtering rule matching all packets on the "lo0" interface and allowing
+        // // them to pass:
+        // let rule = pfctl::FilterRuleBuilder::default()
+        //     .action(pfctl::FilterRuleAction::Pass)
+        //     .interface("lo0")
+        //     .build()
+        //     .unwrap();
+
+        // // Add the filterig rule to the anchor we just created.
+        // pf.add_rule(anchor_name, &rule).unwrap();
+
+        Ok(())
+    }
+
+    #[tracing::instrument(name = "Firewall::teardown",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn teardown(&self) -> Result<(), Error> {
+        // 1. run wg-quick down
+        wg_tooling::down().await?;
+        Ok(())
+    }
 }
 
 /*
