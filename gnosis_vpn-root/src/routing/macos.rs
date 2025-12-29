@@ -12,11 +12,13 @@ use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 // use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::{event, worker};
 
+use std::net::Ipv4Addr;
+
 use crate::wg_tooling;
 
 use super::{Error, Routing};
 
-pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
+pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
     let pf = pfctl::PfCtl::new()?;
     Ok(Firewall {
         fw: Arc::new(std::sync::Mutex::new(pf)),
@@ -25,11 +27,22 @@ pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> 
     })
 }
 
+pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
+    FallbackRouter { wg_data, peer_ips }
+}
+
+// const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
+
 pub struct Firewall {
     fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
     #[allow(dead_code)]
     worker: worker::Worker,
-    wg_data: event::WgData,
+    wg_data: event::WireGuardData,
+}
+
+pub struct FallbackRouter {
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
 }
 
 impl Firewall {
@@ -115,6 +128,55 @@ impl Routing for Firewall {
 
         Ok(())
     }
+}
+
+#[async_trait]
+impl Routing for FallbackRouter {
+    async fn setup(&self) -> Result<(), Error> {
+        let interface_gateway = interface().await?;
+        let mut extra = self
+            .peer_ips
+            .iter()
+            .map(|ip| pre_up_routing(ip, interface_gateway.clone()))
+            .collect::<Vec<String>>();
+        extra.extend(
+            self.peer_ips
+                .iter()
+                .map(|ip| post_down_routing(ip, interface_gateway.clone()))
+                .collect::<Vec<String>>(),
+        );
+
+        let wg_quick_content =
+            self.wg_data
+                .wg
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
+        wg_tooling::up(wg_quick_content).await?;
+        Ok(())
+    }
+
+    async fn teardown(&self) -> Result<(), Error> {
+        wg_tooling::down().await?;
+        Ok(())
+    }
+}
+
+fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
+    match gateway {
+        Some(gw) => format!(
+            "route -n add --host {relayer_ip} {gateway}",
+            relayer_ip = relayer_ip,
+            gateway = gw,
+        ),
+        None => format!(
+            "route -n add -host {relayer_ip} -interface {device}",
+            relayer_ip = relayer_ip,
+            device = device
+        ),
+    }
+}
+
+fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
+    format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
 }
 
 async fn interface() -> Result<(String, Option<String>), Error> {
