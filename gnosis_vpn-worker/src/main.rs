@@ -10,7 +10,7 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process;
 
 use gnosis_vpn_lib::core::Core;
-use gnosis_vpn_lib::event::{IncomingCore, IncomingWorker, OutgoingCore, OutgoingWorker, WireGuardCommand};
+use gnosis_vpn_lib::event::{CoreToWorker, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::socket;
 
@@ -116,7 +116,7 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                     return Ok(());
                 }
                 shutdown_ongoing = true;
-                incoming_event_sender.send(IncomingCore::Shutdown).await.map_err(|_| {
+                incoming_event_sender.send(WorkerToCore::Shutdown).await.map_err(|_| {
                     tracing::error!("command receiver already closed");
                     exitcode::IOERR
                 })?;
@@ -126,7 +126,7 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                 let wcmd = parse_incoming_worker(line)?;
                 if let Some(init) = init_opt.take() {
                     let next = init.incoming_cmd(wcmd);
-                    send_outgoing(OutgoingWorker::Ack, &mut writer).await?;
+                    send_outgoing(WorkerToRoot::Ack, &mut writer).await?;
                     if let Some((config, hopr_params)) = next.ready() {
                         if let (Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
                             let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
@@ -148,10 +148,8 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                     Some(event) => {
                         tracing::debug!(?event, "outgoing event from core");
                         match event {
-                            OutgoingCore::WgUp(content) =>
-                                send_outgoing(OutgoingWorker::WireGuard(WireGuardCommand::WgUp(content)), &mut writer).await?,
-                                OutgoingCore::WgDown =>
-                                send_outgoing(OutgoingWorker::WireGuard(WireGuardCommand::WgDown), &mut writer).await?,
+                            CoreToWorker::RequestToRoot(req) =>
+                                send_outgoing(WorkerToRoot::RequestToRoot(req), &mut writer).await?,
                         }
                     }
                     None => {
@@ -174,8 +172,8 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     }
 }
 
-fn parse_incoming_worker(line: String) -> Result<IncomingWorker, exitcode::ExitCode> {
-    let cmd: IncomingWorker = serde_json::from_str(&line).map_err(|err| {
+fn parse_incoming_worker(line: String) -> Result<RootToWorker, exitcode::ExitCode> {
+    let cmd: RootToWorker = serde_json::from_str(&line).map_err(|err| {
         tracing::error!(error = %err, "failed parsing incoming worker command");
         exitcode::DATAERR
     })?;
@@ -183,7 +181,7 @@ fn parse_incoming_worker(line: String) -> Result<IncomingWorker, exitcode::ExitC
 }
 
 async fn send_outgoing(
-    resp: OutgoingWorker,
+    resp: WorkerToRoot,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(&resp).map_err(|err| {
@@ -206,14 +204,14 @@ async fn send_outgoing(
 }
 
 async fn incoming_cmd(
-    cmd: IncomingWorker,
-    event_sender: &mut mpsc::Sender<IncomingCore>,
-) -> Result<OutgoingWorker, exitcode::ExitCode> {
+    cmd: RootToWorker,
+    event_sender: &mut mpsc::Sender<WorkerToCore>,
+) -> Result<WorkerToRoot, exitcode::ExitCode> {
     match cmd {
-        IncomingWorker::Command { cmd } => {
+        RootToWorker::Command(cmd) => {
             let (sender, recv) = oneshot::channel();
             event_sender
-                .send(IncomingCore::Command { cmd, resp: sender })
+                .send(WorkerToCore::Command { cmd, resp: sender })
                 .await
                 .map_err(|_| {
                     tracing::error!("command receiver already closed");
@@ -223,22 +221,25 @@ async fn incoming_cmd(
                 tracing::error!("command responder already closed");
                 exitcode::IOERR
             })?;
-            Ok(OutgoingWorker::Response { resp: Box::new(resp) })
+            Ok(WorkerToRoot::Response(resp))
         }
-        IncomingWorker::HoprParams { .. } => {
+        RootToWorker::HoprParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
-            Ok(OutgoingWorker::OutOfSync)
+            Ok(WorkerToRoot::OutOfSync)
         }
-        IncomingWorker::Config { .. } => {
+        RootToWorker::Config { .. } => {
             tracing::warn!("received config after init - ignoring");
-            Ok(OutgoingWorker::OutOfSync)
+            Ok(WorkerToRoot::OutOfSync)
         }
-        IncomingWorker::WgUpResult { res } => {
-            event_sender.send(IncomingCore::WgUpResult { res }).await.map_err(|_| {
-                tracing::error!("event receiver already closed");
-                exitcode::IOERR
-            })?;
-            Ok(OutgoingWorker::Ack)
+        RootToWorker::ResponseFromRoot(res) => {
+            event_sender
+                .send(WorkerToCore::ResponseFromRoot(res))
+                .await
+                .map_err(|_| {
+                    tracing::error!("event receiver already closed");
+                    exitcode::IOERR
+                })?;
+            Ok(WorkerToRoot::Ack)
         }
     }
 }

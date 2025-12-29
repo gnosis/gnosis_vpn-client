@@ -7,11 +7,13 @@ use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 // use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::{event, worker};
 
+use std::net::Ipv4Addr;
+
 use crate::wg_tooling;
 
 use super::{Error, Routing};
 
-pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> Result<impl Routing, Error> {
+pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
     let pf = pfctl::PfCtl::new()?;
     Ok(Firewall {
         fw: Arc::new(std::sync::Mutex::new(pf)),
@@ -20,13 +22,22 @@ pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WgData) -> 
     })
 }
 
+pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
+    FallbackRouter { wg_data, peer_ips }
+}
+
 // const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
 
 pub struct Firewall {
     fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
     #[allow(dead_code)]
     worker: worker::Worker,
-    wg_data: event::WgData,
+    wg_data: event::WireGuardData,
+}
+
+pub struct FallbackRouter {
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
 }
 
 #[async_trait]
@@ -43,6 +54,7 @@ impl Routing for Firewall {
             &self.wg_data.peer_info,
             // true to route all traffic
             false, // START WITH TRUE TO KILL YOURSELF
+            None,
         );
 
         // 2. run wg-quick up
@@ -90,58 +102,54 @@ impl Routing for Firewall {
     }
 }
 
-/*
-pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
-    let (device, gateway) = interface().await?;
+#[async_trait]
+impl Routing for FallbackRouter {
+    async fn setup(&self) -> Result<(), Error> {
+        let interface_gateway = interface().await?;
+        let mut extra = self
+            .peer_ips
+            .iter()
+            .map(|ip| pre_up_routing(ip, interface_gateway.clone()))
+            .collect::<Vec<String>>();
+        extra.extend(
+            self.peer_ips
+                .iter()
+                .map(|ip| post_down_routing(ip, interface_gateway.clone()))
+                .collect::<Vec<String>>(),
+        );
 
-    let route_to = match gateway {
-        Some(gw) => format!("{} {}", device, gw),
-        None => device,
-    };
-
-    let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
-    let content = format!(
-        r#"
-set skip on lo0
-pass out quick user {uid} route-to ({route_to}) keep state
-    "#,
-        route_to = route_to,
-        uid = worker.uid,
-    );
-
-    fs::write(&conf_file, content.as_bytes()).await?;
-
-    Command::new("pfctl")
-        .arg("-a")
-        .arg(gnosis_vpn_lib::IDENTIFIER)
-        .arg("-f")
-        .arg(conf_file)
-        .run()
-        .await
-        .map_err(Error::from)
-}
-
-pub async fn teardown(_worker: &worker::Worker) -> Result<(), Error> {
-    let cmd = Command::new("pfctl")
-        .arg("-a")
-        .arg(gnosis_vpn_lib::IDENTIFIER)
-        .arg("-F")
-        .arg("all")
-        .spawn_no_capture()
-        .await
-        .map_err(Error::from);
-
-    let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
-    if conf_file.exists() {
-        let _ = fs::remove_file(conf_file).await;
+        let wg_quick_content =
+            self.wg_data
+                .wg
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
+        wg_tooling::up(wg_quick_content).await?;
+        Ok(())
     }
 
-    cmd?;
-
-    Ok(())
+    async fn teardown(&self) -> Result<(), Error> {
+        wg_tooling::down().await?;
+        Ok(())
+    }
 }
 
-*/
+fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
+    match gateway {
+        Some(gw) => format!(
+            "route -n add --host {relayer_ip} {gateway}",
+            relayer_ip = relayer_ip,
+            gateway = gw,
+        ),
+        None => format!(
+            "route -n add -host {relayer_ip} -interface {device}",
+            relayer_ip = relayer_ip,
+            device = device
+        ),
+    }
+}
+
+fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
+    format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
+}
 
 async fn interface() -> Result<(String, Option<String>), Error> {
     let output = Command::new("route")
