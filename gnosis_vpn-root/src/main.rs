@@ -32,12 +32,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
-    let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
-        tracing::error!(error = ?e, "error setting up SIGINT handler");
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGINT handler");
         exitcode::IOERR
     })?;
-    let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
-        tracing::error!(error = ?e, "error setting up SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGTERM handler");
         exitcode::IOERR
     })?;
 
