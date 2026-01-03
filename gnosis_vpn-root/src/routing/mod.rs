@@ -31,9 +31,24 @@ pub enum Error {
     #[error("firewall error: {0}")]
     PfCtl(#[from] pfctl::Error),
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[error("General error")]
     General(String),
+
+    #[cfg(target_os = "linux")]
+    #[error("rtnetlink error: {0} ")]
+    RtnetlinkError(#[from] rtnetlink::Error),
+
+    #[cfg(target_os = "linux")]
+    #[error("iptables error: {0} ")]
+    IpTablesError(String),
+}
+
+impl Error {
+    #[cfg(target_os = "linux")]
+    pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
+        Self::IpTablesError(e.into().to_string())
+    }
 }
 
 #[async_trait]
