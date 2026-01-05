@@ -7,7 +7,7 @@ use std::net::Ipv4Addr;
 use futures::TryStreamExt;
 
 use rtnetlink::{IpVersion};
-use rtnetlink::packet_route::link::LinkAttribute;
+use rtnetlink::packet_route::link::{LinkAttribute, LinkMessage};
 use rtnetlink::packet_route::rule::RuleAttribute;
 use crate::wg_tooling;
 
@@ -64,6 +64,11 @@ fn flush_ip_tables() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn find_interface_index_by_name(ifs: &[LinkMessage], name: &str) -> Option<u32> {
+    ifs.iter().find(|i| i.attributes.iter().any(|attr| matches!(attr, LinkAttribute::IfName(if_name) if if_name == name)))
+        .map(|i| i.header.index)
+}
+
 /**
  * Refactor logic to use:
  * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
@@ -76,17 +81,11 @@ impl Routing for Router {
         let ifs = handle.link().get().execute()
             .try_collect::<Vec<_>>().await?;
 
-        let vpn_if_index = ifs.iter()
-            .find(|i| i.attributes.iter().any(|attr| matches!(attr, LinkAttribute::IfName(name) if name == IF_VPN)))
-            .ok_or(Error::General(format!("vpn interface {} not found", IF_VPN)))?
-            .header
-            .index;
+        let vpn_if_index = find_interface_index_by_name(&ifs, IF_VPN).ok_or(Error::General(format!("vpn interface {} not found", IF_VPN)))?;
+        tracing::debug!(vpn_if_index, "vpn interface index");
 
-        let wan_if_index = ifs.iter()
-            .find(|i| i.attributes.iter().any(|attr| matches!(attr, LinkAttribute::IfName(name) if name == IF_WAN)))
-            .ok_or(Error::General(format!("wan interface {} not found", IF_WAN)))?
-            .header
-            .index;
+        let wan_if_index = find_interface_index_by_name(&ifs, IF_WAN).ok_or(Error::General(format!("wan interface {} not found", IF_WAN)))?;
+        tracing::debug!(wan_if_index, "wan interface index");
 
         // Check if the fwmark rule already exists
         let rules = handle.rule().get(IpVersion::V4).execute().try_collect::<Vec<_>>().await?;
@@ -101,7 +100,7 @@ impl Routing for Router {
             .output_interface(vpn_if_index)
             .build();
         handle.route().add(default_route).execute().await?;
-        tracing::debug!("set main table default route to interface {} (index {vpn_if_index})", IF_VPN);
+        tracing::debug!(vpn_if_index, "set main table default route to interface {}", IF_VPN);
 
         // Route for TABLE_ID: All traffic goes to the WAN interface (bypasses VPN)
         let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
@@ -110,7 +109,7 @@ impl Routing for Router {
             .output_interface(wan_if_index)
             .build();
         handle.route().add(no_vpn_route).execute().await?;
-        tracing::debug!("set table {} default route to interface {} (index {wan_if_index})", TABLE_ID, IF_WAN);
+        tracing::debug!(wan_if_index, "set table {} default route to interface {}", TABLE_ID, IF_WAN);
 
         // Add rule: everything marked with FW_MARK goes via TABLE_ID routing table
         handle.rule()
