@@ -81,7 +81,7 @@ impl Routing for Router {
     ///
     /// The steps:
     ///   1. Adjust the default routing table (MAIN) to use the VPN interface for default routing
-    ///      Equivalent command: `ip route replace default dev "IF_VPN"`
+    ///      Equivalent command: `ip route replace default dev "$IF_VPN"`
     ///   2. Create a new routing table for traffic that does not go through the VPN (TABLE_ID)
     ///      Equivalent command: `ip route add default dev "$IF_WAN" table "$TABLE_ID"`
     ///   3. Add a rule to direct traffic with the specified fwmark to the new routing table
@@ -167,7 +167,7 @@ impl Routing for Router {
     ///   4. Delete the TABLE_ID routing table
     ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
     ///   5. Replace the default route in the MAIN routing table
-    ///      Equivalent command: `ip route replace default dev "IF_WAN"`
+    ///      Equivalent command: `ip route replace default dev "$IF_WAN"`
     async fn teardown(&self) -> Result<(), Error> {
         // Run wg-quick down
         wg_tooling::down().await?;
