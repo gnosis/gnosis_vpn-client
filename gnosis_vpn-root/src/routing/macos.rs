@@ -61,7 +61,7 @@ impl Routing for Firewall {
         let wg_quick_content =
             self.wg_data
                 .wg
-                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true);
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, None);
 
         // 2. run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
