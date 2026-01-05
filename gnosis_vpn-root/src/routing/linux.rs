@@ -13,10 +13,8 @@ use crate::wg_tooling;
 
 use super::{Error, Routing};
 
-// const MARK: &str = "0xDEAD";
-
-pub fn build_userspace_router(_worker: worker::Worker, _wg_data: event::WireGuardData) -> Result<Router, Error> {
-    Err(Error::NotImplemented)
+pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
+    Ok(Router { worker, wg_data })
 }
 
 pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
@@ -45,6 +43,13 @@ const IF_VPN: &str = "wg0";
 
 const IF_WAN: &str = "eth0";
 
+/// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
+/// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
+///
+/// Equivalent commands:
+/// 1. `iptables -t mangle -F OUTPUT`
+/// 2. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -o lo -j RETURN`
+/// 3. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
 fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
     iptables.delete_chain("mangle", "OUTPUT")?;
@@ -69,12 +74,23 @@ fn find_interface_index_by_name(ifs: &[LinkMessage], name: &str) -> Option<u32> 
         .map(|i| i.header.index)
 }
 
-/**
- * Refactor logic to use:
- * - [rtnetlink](https://docs.rs/rtnetlink/latest/rtnetlink/index.html)
- */
+/// Linux-specific implementation of [`Routing`] for split-tunnel routing.
 #[async_trait]
 impl Routing for Router {
+    /// Install split-tunnel routing.
+    ///
+    /// The steps:
+    ///   1. Adjust the default routing table (MAIN) to use the VPN interface for default routing
+    ///      Equivalent command: `ip route replace default dev "IF_VPN"`
+    ///   2. Create a new routing table for traffic that does not go through the VPN (TABLE_ID)
+    ///      Equivalent command: `ip route add default dev "$IF_WAN" table "$TABLE_ID"`
+    ///   3. Add a rule to direct traffic with the specified fwmark to the new routing table
+    ///      Equivalent command: `ip rule add fwmark $FW_MARK table $TABLE_ID`
+    ///   4. Set all traffic from the VPN user to be marked with the fwmark
+    ///      This is currently done via `iptables` rule, but it will be replaced with an explicit fwmark on the hopr-lib transport socket.
+    ///      See [`setup_iptables`] for details.
+    ///   5. Generate wg-quick config and run `wg-quick up`
+    ///      The `wg-quick` config makes sure that WG UDP packets have the same fwmark set and that it sets no additional routing rules.
     async fn setup(&self) -> Result<(), Error> {
         let (_c, handle, _rx) = rtnetlink::new_connection()?;
 
@@ -141,6 +157,17 @@ impl Routing for Router {
         Ok(())
     }
 
+    /// Uninstalls the split-tunnel routing.
+    ///
+    /// The steps:
+    ///   1. Run `wg-quick down`
+    ///   2. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
+    ///   3. Delete the fwmark rule for the TABLE_ID
+    ///      Equivalent command: `ip rule del fwmark $FW_MARK table $TABLE_ID`
+    ///   4. Delete the TABLE_ID routing table
+    ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
+    ///   5. Replace the default route in the MAIN routing table
+    ///      Equivalent command: `ip route replace default dev "IF_WAN"`
     async fn teardown(&self) -> Result<(), Error> {
         // Run wg-quick down
         wg_tooling::down().await?;
@@ -159,9 +186,6 @@ impl Routing for Router {
             tracing::debug!("deleted fwmark {} routing table rule", FW_MARK);
         }
 
-        handle.route().del(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().table_id(TABLE_ID).build()).execute().await?;
-        tracing::debug!("deleted table {}", TABLE_ID);
-
         let ifs = handle.link().get().execute()
             .try_collect::<Vec<_>>().await?;
 
@@ -170,6 +194,15 @@ impl Routing for Router {
             .ok_or(Error::General(format!("wan interface {} not found", IF_WAN)))?
             .header
             .index;
+
+        // Delete the TABLE_ID routing table
+        handle.route().del(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+            .table_id(TABLE_ID)
+            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+            .output_interface(wan_if_index)
+            .build()
+        ).execute().await?;
+        tracing::debug!("deleted table {}", TABLE_ID);
 
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
