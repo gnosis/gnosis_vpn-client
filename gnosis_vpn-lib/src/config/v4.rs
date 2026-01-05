@@ -53,6 +53,7 @@ pub(super) struct Connection {
     ping: Option<PingOptions>,
     buffer: Option<BufferOptions>,
     max_surb_upstream: Option<MaxSurbUpstreamOptions>,
+    announced_peer_minimum_score: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -267,6 +268,10 @@ impl Connection {
     pub fn default_http_timeout() -> Duration {
         Duration::from_secs(60)
     }
+
+    pub fn default_announced_peer_minimum_score() -> f64 {
+        0.1
+    }
 }
 
 impl From<BufferOptions> for options::BufferSizes {
@@ -320,10 +325,10 @@ impl From<Option<Connection>> for options::Options {
             wg: params_wg,
         };
 
-        let def_opts = ping::PingOptions::default();
+        let def_opts = ping::Options::default();
         let ping_opts = connection
             .and_then(|c| c.ping.as_ref())
-            .map(|p| ping::PingOptions {
+            .map(|p| ping::Options {
                 address: p.address.unwrap_or(def_opts.address),
                 timeout: p.timeout.unwrap_or(def_opts.timeout),
                 ttl: p.ttl.unwrap_or(def_opts.ttl),
@@ -345,7 +350,18 @@ impl From<Option<Connection>> for options::Options {
 
         let timeouts = options::Timeouts { http: http_timeout };
 
-        options::Options::new(sessions, ping_opts, buffer_sizes, max_surb_upstream, timeouts)
+        let announced_peer_minimum_score = connection
+            .and_then(|c| c.announced_peer_minimum_score)
+            .unwrap_or(Connection::default_announced_peer_minimum_score());
+
+        options::Options::new(
+            sessions,
+            ping_opts,
+            buffer_sizes,
+            max_surb_upstream,
+            timeouts,
+            announced_peer_minimum_score,
+        )
     }
 }
 

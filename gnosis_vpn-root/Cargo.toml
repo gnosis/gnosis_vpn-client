@@ -13,6 +13,7 @@ gnosis_vpn-lib.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
@@ -20,6 +21,9 @@ url.workspace = true
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
 mimalloc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+pfctl.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

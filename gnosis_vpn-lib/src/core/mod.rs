@@ -3,7 +3,7 @@ use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::{Balance, WxHOPR};
 use futures_util::future::AbortHandle;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -17,7 +17,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::event::{self, IncomingCore, OutgoingCore};
+use crate::event::{CoreToWorker, RequestToRoot, RespondableRequestToRoot, ResponseFromRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -57,7 +57,7 @@ pub struct Core {
     // static data
     hopr_params: HoprParams,
     node_address: Address,
-    outgoing_sender: mpsc::Sender<OutgoingCore>,
+    outgoing_sender: mpsc::Sender<CoreToWorker>,
 
     // cancellation tokens
     cancel_balances: CancellationToken,
@@ -76,6 +76,8 @@ pub struct Core {
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
     destination_health: HashMap<Address, DestinationHealth>,
+    responder_unit: Option<oneshot::Sender<Result<(), String>>>,
+    responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
 }
 
@@ -95,7 +97,7 @@ impl Core {
     pub async fn init(
         config: Config,
         hopr_params: HoprParams,
-        outgoing_sender: mpsc::Sender<OutgoingCore>,
+        outgoing_sender: mpsc::Sender<CoreToWorker>,
     ) -> Result<Core, Error> {
         wireguard::available().await?;
         wireguard::executable().await?;
@@ -128,15 +130,18 @@ impl Core {
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             destination_health: HashMap::new(),
+            responder_unit: None,
+            responder_duration: None,
         })
     }
 
-    pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<IncomingCore>) {
+    pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<WorkerToCore>) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender);
         loop {
             tokio::select! {
-                // React to an incoming outside event
+
+                // React to an incoming worker events
                 Some(event) = incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
@@ -144,10 +149,12 @@ impl Core {
                         break;
                     }
                 }
+
                 // React to internal results from longer lasting runner computations
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
                 }
+
                 else => {
                     tracing::warn!("event receiver closed");
                     break;
@@ -156,12 +163,12 @@ impl Core {
         }
     }
 
+    /// receive an event from the worker main thread
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    async fn on_event(&mut self, event: IncomingCore, results_sender: &mpsc::Sender<Results>) -> bool {
-        tracing::debug!(phase = ?self.phase, "on incoming outside event");
+    async fn on_event(&mut self, event: WorkerToCore, results_sender: &mpsc::Sender<Results>) -> bool {
         match event {
-            IncomingCore::Shutdown => {
-                tracing::debug!("shutting down core");
+            WorkerToCore::Shutdown => {
+                tracing::debug!("incoming shutdown request");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
                 self.cancel_channel_tasks.cancel();
@@ -185,32 +192,42 @@ impl Core {
                 false
             }
 
-            IncomingCore::WgUpResult { res } => {
-                match (res, self.phase.clone()) {
-                    (Ok(()), Phase::Connecting(conn)) => {
-                        tracing::info!(destination= %conn.destination,"WireGuard tunnel established");
-                        let destination = conn.destination.clone();
-                        if let Some(ping_session) = conn.session {
-                            self.spawn_connection_runner_post_wg(destination, ping_session, results_sender);
+            WorkerToCore::ResponseFromRoot(resp) => {
+                tracing::debug!(?resp, "incoming response from root");
+                match resp {
+                    ResponseFromRoot::DynamicWgRouting { res } => {
+                        if let Some(responder) = self.responder_unit.take() {
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for dynamic wg routing response");
+                            });
                         } else {
-                            tracing::error!(%conn, "missing ping session for post-wg runner - disconnecting from target");
-                            self.target_destination = None;
-                            self.act_on_target(results_sender);
+                            tracing::warn!(?res, "no responder channel available for root response");
                         }
                     }
-                    (Err(err), Phase::Connecting(conn)) => {
-                        tracing::error!(%conn, %err, "WireGuard tunnel establishment failed - disconnecting");
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
+                    ResponseFromRoot::StaticWgRouting { res } => {
+                        if let Some(responder) = self.responder_unit.take() {
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for static wg routing response");
+                            });
+                        } else {
+                            tracing::warn!(?res, "no responder channel available for root response");
+                        }
                     }
-                    (res, phase) => {
-                        tracing::warn!(?phase, ?res, "unexpected WireGuard result in current phase - ignoring");
+                    ResponseFromRoot::Ping { res } => {
+                        if let Some(responder) = self.responder_duration.take() {
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for ping response");
+                            });
+                        } else {
+                            tracing::warn!(?res, "no responder channel available for root response");
+                        }
                     }
-                }
+                };
+
                 true
             }
 
-            IncomingCore::Command { cmd, resp } => {
+            WorkerToCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
                     Command::Status => {
@@ -384,6 +401,7 @@ impl Core {
         }
     }
 
+    /// Results are events from async runners
     #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
@@ -527,7 +545,7 @@ impl Core {
                 }
             },
 
-            Results::ConnectionEvent { evt } => {
+            Results::ConnectionEvent(evt) => {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
@@ -564,51 +582,8 @@ impl Core {
                 }
             }
 
-            Results::ConnectionResultPreWg { res } => {
-                tracing::debug!(?res, "handling pre wg connection runner result");
-                match (res, self.phase.clone()) {
-                    (Ok(session), Phase::Connecting(mut conn)) => {
-                        if let (Some(wg), Some(reg)) = (conn.wireguard.clone(), conn.registration.clone()) {
-                            let interface_info = wireguard::InterfaceInfo { address: reg.address() };
-                            let peer_info = wireguard::PeerInfo {
-                                public_key: reg.server_public_key(),
-                                endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
-                            };
-                            let wg_data = event::WgData {
-                                wg,
-                                peer_info,
-                                interface_info,
-                            };
-                            self.outgoing_sender
-                                .send(OutgoingCore::WgUp(wg_data))
-                                .await
-                                .expect("worker outgoing channel closed - shutting down");
-                            let evt = connection::up::Progress::WgTunnel(session);
-                            conn.connect_progress(evt);
-                            self.phase = Phase::Connecting(conn);
-                        } else {
-                            tracing::error!(%conn, "missing WireGuard or registration data for connection - disconnecting");
-                            self.target_destination = None;
-                            self.act_on_target(results_sender);
-                        }
-                    }
-                    (Err(err), Phase::Connecting(conn)) => {
-                        tracing::error!(%conn, %err, "Opening ping session failed - disconnecting");
-                        self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
-                    }
-                    (Ok(_), phase) => {
-                        tracing::warn!(?phase, "unawaited opening ping session succeeded");
-                    }
-                    (Err(err), phase) => {
-                        tracing::warn!(?phase, %err, "connection failed in unexpecting state");
-                    }
-                }
-            }
-
-            Results::ConnectionResultPostWg { res } => match (res, self.phase.clone()) {
-                (Ok(()), Phase::Connecting(mut conn)) => {
+            Results::ConnectionResult { res } => match (res, self.phase.clone()) {
+                (Ok(session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
@@ -618,13 +593,8 @@ impl Core {
                         conn.destination.pretty_print_path(),
                         log_output::address(&conn.destination.address)
                     );
-                    if let Some(session) = conn.session.clone() {
-                        log_output::print_session_established(route.as_str());
-                        self.spawn_session_monitoring(session, results_sender);
-                    } else {
-                        tracing::error!(%conn, "missing session metadata after connection established - disconnecting");
-                        self.disconnect_from_connection(&conn, results_sender);
-                    }
+                    log_output::print_session_established(route.as_str());
+                    self.spawn_session_monitoring(session, results_sender);
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -665,6 +635,28 @@ impl Core {
                 }
                 phase => {
                     tracing::error!(?phase, "session monitor failed in unexpected phase");
+                }
+            },
+
+            Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
+                RespondableRequestToRoot::DynamicWgRouting { wg_data, resp } => {
+                    self.responder_unit = Some(resp);
+                    let request = RequestToRoot::DynamicWgRouting { wg_data };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+                RespondableRequestToRoot::StaticWgRouting {
+                    wg_data,
+                    peer_ips,
+                    resp,
+                } => {
+                    self.responder_unit = Some(resp);
+                    let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+                RespondableRequestToRoot::Ping { options, resp } => {
+                    self.responder_duration = Some(resp);
+                    let request = RequestToRoot::Ping { options };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
             },
         }
@@ -830,14 +822,14 @@ impl Core {
         }
     }
 
-    fn spawn_connection_runner_pre_wg(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            let runner = connection::up::runner_pre_wg::Runner::new(
+            let runner = connection::up::runner::Runner::new(
                 conn.destination.clone(),
                 config_connection,
                 config_wireguard,
@@ -845,29 +837,6 @@ impl Core {
             );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        runner.start(results_sender).await;
-                    })
-                    .await;
-            });
-        }
-    }
-
-    fn spawn_connection_runner_post_wg(
-        &mut self,
-        destination: Destination,
-        ping_session: SessionClientMetadata,
-        results_sender: &mpsc::Sender<Results>,
-    ) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_connection.clone();
-            let config_connection = self.config.connection.clone();
-            let hopr = hopr.clone();
-            let runner =
-                connection::up::runner_post_wg::Runner::new(destination, config_connection, ping_session, hopr);
-            let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
@@ -889,10 +858,9 @@ impl Core {
             let outgoing_sender = self.outgoing_sender.clone();
             tokio::spawn(async move {
                 // this is a oneshot command and we do not wait for any result
-                outgoing_sender
-                    .send(OutgoingCore::WgDown)
-                    .await
-                    .expect("worker outgoing channel closed - shutting down");
+                let _ = outgoing_sender
+                    .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+                    .await;
                 cancel
                     .run_until_cancelled(async move {
                         runner.start(results_sender).await;
@@ -926,7 +894,7 @@ impl Core {
                 if let Some(health) = self.destination_health.get(&dest.address) {
                     if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner_pre_wg(dest.clone(), results_sender);
+                        self.spawn_connection_runner(dest.clone(), results_sender);
                     } else if health.is_unrecoverable() {
                         tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
                     } else {

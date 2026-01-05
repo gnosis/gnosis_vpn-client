@@ -1,92 +1,155 @@
+use std::sync::Arc;
+
+use gnosis_vpn_lib::hopr::hopr_lib::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 // use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::{event, worker};
 
+use std::net::Ipv4Addr;
+
 use crate::wg_tooling;
 
-use super::Error;
+use super::{Error, Routing};
+
+pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
+    let pf = pfctl::PfCtl::new()?;
+    Ok(Firewall {
+        fw: Arc::new(std::sync::Mutex::new(pf)),
+        worker,
+        wg_data,
+    })
+}
+
+pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
+    FallbackRouter { wg_data, peer_ips }
+}
 
 // const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
 
-/**
- * Refactor logic to use:
- * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
- */
-pub async fn setup(_worker: &worker::Worker, wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. generate wg quick content
-    let wg_quick_content = wg_data.wg.to_file_string(
-        &wg_data.interface_info,
-        &wg_data.peer_info,
-        // true to route all traffic
-        false,
-    );
-    // 2. run wg-quick up
-    wg_tooling::up(wg_quick_content).await?;
-    // 3. determine interface
-    let (_device, _gateway) = interface().await?;
-    Ok(())
+pub struct Firewall {
+    fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
+    #[allow(dead_code)]
+    worker: worker::Worker,
+    wg_data: event::WireGuardData,
 }
 
-pub async fn teardown(_worker: &worker::Worker, _wg_data: &event::WgData) -> Result<(), Error> {
-    // 1. run wg-quick down
-    wg_tooling::down().await?;
-    Ok(())
+pub struct FallbackRouter {
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
 }
 
-/*
-pub async fn setup(worker: &worker::Worker) -> Result<(), Error> {
-    let (device, gateway) = interface().await?;
+#[async_trait]
+impl Routing for Firewall {
+    /**
+     * Refactor logic to use:
+     * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
+     */
+    #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn setup(&self) -> Result<(), Error> {
+        // 1. generate wg quick content
+        let wg_quick_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            // true to route all traffic
+            false, // START WITH TRUE TO KILL YOURSELF
+            None,
+        );
 
-    let route_to = match gateway {
-        Some(gw) => format!("{} {}", device, gw),
-        None => device,
-    };
+        // 2. run wg-quick up
+        wg_tooling::up(wg_quick_content).await?;
 
-    let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
-    let content = format!(
-        r#"
-set skip on lo0
-pass out quick user {uid} route-to ({route_to}) keep state
-    "#,
-        route_to = route_to,
-        uid = worker.uid,
-    );
+        // 3. determine interface
+        let (device, gateway) = interface().await?;
 
-    fs::write(&conf_file, content.as_bytes()).await?;
+        tracing::info!(%device, ?gateway, "Determined default interface");
 
-    Command::new("pfctl")
-        .arg("-a")
-        .arg(gnosis_vpn_lib::IDENTIFIER)
-        .arg("-f")
-        .arg(conf_file)
-        .run()
-        .await
-        .map_err(Error::from)
-}
+        // Create a PfCtl instance to control PF with:
+        let mut pf = self
+            .fw
+            .lock()
+            .ok()
+            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?;
 
-pub async fn teardown(_worker: &worker::Worker) -> Result<(), Error> {
-    let cmd = Command::new("pfctl")
-        .arg("-a")
-        .arg(gnosis_vpn_lib::IDENTIFIER)
-        .arg("-F")
-        .arg("all")
-        .spawn_no_capture()
-        .await
-        .map_err(Error::from);
+        // Enable the firewall, equivalent to the command "pfctl -e":
+        pf.try_enable()?;
 
-    let conf_file = dirs::cache_dir(PF_RULE_FILE)?;
-    if conf_file.exists() {
-        let _ = fs::remove_file(conf_file).await;
+        // // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
+        // // use `try_add_anchor` to avoid that:
+        // let anchor_name = "testing-out-pfctl";
+        // pf.add_anchor(anchor_name, pfctl::AnchorKind::Filter).unwrap();
+
+        // // Create a packet filtering rule matching all packets on the "lo0" interface and allowing
+        // // them to pass:
+        // let rule = pfctl::FilterRuleBuilder::default()
+        //     .action(pfctl::FilterRuleAction::Pass)
+        //     .interface("lo0")
+        //     .build()
+        //     .unwrap();
+
+        // // Add the filterig rule to the anchor we just created.
+        // pf.add_rule(anchor_name, &rule).unwrap();
+
+        Ok(())
     }
 
-    cmd?;
-
-    Ok(())
+    #[tracing::instrument(name = "Firewall::teardown",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn teardown(&self) -> Result<(), Error> {
+        // 1. run wg-quick down
+        wg_tooling::down().await?;
+        Ok(())
+    }
 }
 
-*/
+#[async_trait]
+impl Routing for FallbackRouter {
+    async fn setup(&self) -> Result<(), Error> {
+        let interface_gateway = interface().await?;
+        let mut extra = self
+            .peer_ips
+            .iter()
+            .map(|ip| pre_up_routing(ip, interface_gateway.clone()))
+            .collect::<Vec<String>>();
+        extra.extend(
+            self.peer_ips
+                .iter()
+                .map(|ip| post_down_routing(ip, interface_gateway.clone()))
+                .collect::<Vec<String>>(),
+        );
+
+        let wg_quick_content =
+            self.wg_data
+                .wg
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
+        wg_tooling::up(wg_quick_content).await?;
+        Ok(())
+    }
+
+    async fn teardown(&self) -> Result<(), Error> {
+        wg_tooling::down().await?;
+        Ok(())
+    }
+}
+
+fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
+    match gateway {
+        Some(gw) => format!(
+            "route -n add --host {relayer_ip} {gateway}",
+            relayer_ip = relayer_ip,
+            gateway = gw,
+        ),
+        None => format!(
+            "route -n add -host {relayer_ip} -interface {device}",
+            relayer_ip = relayer_ip,
+            device = device
+        ),
+    }
+}
+
+fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
+    format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
+}
 
 async fn interface() -> Result<(String, Option<String>), Error> {
     let output = Command::new("route")

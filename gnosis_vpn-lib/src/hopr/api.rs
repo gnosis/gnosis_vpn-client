@@ -10,6 +10,7 @@ use futures_util::future::AbortHandle;
 use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
+use multiaddr::Protocol;
 use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -21,6 +22,7 @@ use std::{
 };
 use std::{net::SocketAddr, sync::Arc};
 
+use crate::peer::Peer;
 use crate::{
     balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
@@ -422,6 +424,47 @@ impl Hopr {
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn announced_peers(&self, minimum_score: f64) -> Result<HashMap<Address, Peer>, HoprError> {
+        tracing::debug!("query hopr connected peers");
+        let peer_ids = self.hopr.network_connected_peers().await?;
+        let mut set = JoinSet::new();
+        for peer_id in peer_ids {
+            let hopr = self.hopr.clone();
+            set.spawn(async move {
+                let address = match hopr.peerid_to_chain_key(&peer_id).await {
+                    Ok(Some(address)) => address,
+                    Ok(None) => {
+                        tracing::warn!(%peer_id, "no address for peer id");
+                        return None;
+                    }
+                    Err(err) => {
+                        tracing::error!(%peer_id, ?err, "failed to get address for peer id");
+                        return None;
+                    }
+                };
+                let observed = hopr.network_observed_multiaddresses(&peer_id).await;
+                for addr in observed.clone().iter_mut() {
+                    tracing::debug!("observed multiaddress: {:?}", addr);
+                    while let Some(protocol) = addr.pop() {
+                        if let Protocol::Ip4(ipv4) = protocol {
+                            return Some(Peer::new(address, ipv4));
+                        }
+                    }
+                }
+                None
+            });
+        }
+
+        let mut peers = HashMap::new();
+        while let Some(res) = set.join_next().await {
+            if let Ok(Some(peer)) = res {
+                peers.insert(peer.address, peer);
+            }
+        }
+        Ok(peers)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
