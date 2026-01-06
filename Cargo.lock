@@ -1464,7 +1464,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.16.0"
-source = "git+https://github.com/hoprnet/blokli#05c11a70aa2d1cf386caacbaf242a92097a9748a"
+source = "git+https://github.com/hoprnet/blokli#6f1227ca45566ab794f0ffe310fd161465c6a46e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3993,6 +3993,7 @@ name = "gnosis_vpn-root"
 version = "0.56.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
@@ -4334,8 +4335,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.3.0"
-source = "git+https://github.com/hoprnet/contracts?branch=main#c897d2a947440878708bc8a285d7f6786406e80a"
+version = "4.4.0"
+source = "git+https://github.com/hoprnet/contracts?branch=main#9a8fa29898719fc8c0bf7577023963f99cd69b97"
 dependencies = [
  "alloy",
  "anyhow",
