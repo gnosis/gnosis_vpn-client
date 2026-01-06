@@ -34,13 +34,5 @@ impl Default for Options {
 pub fn ping(opts: &Options) -> Result<Duration, Error> {
     let mut builder = ping::new(opts.address);
     let ping = builder.timeout(opts.timeout).ttl(opts.ttl).seq_cnt(opts.seq_count);
-    // #[cfg(target_os = "linux")]
-    // {
-    //     ping = ping.socket_type(ping::RAW);
-    // }
-    // #[cfg(target_os = "macos")]
-    // {
-    //     ping = ping.socket_type(ping::DGRAM);
-    // }
     ping.send().map(|p| p.rtt).map_err(Error::from)
 }
