@@ -176,7 +176,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     .await;
 
     // restore routing if connected
-    teardown_any_routing(&maybe_router, true).await;
+    teardown_any_routing(&mut maybe_router, true).await;
 
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
@@ -295,7 +295,7 @@ async fn loop_daemon(
                                 teardown_any_routing(maybe_router, false).await;
 
                                 match routing::build_router(worker_user.clone(), wg_data) {
-                                    Ok(router) => {
+                                    Ok(mut router) => {
                                         let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                         *maybe_router = Some(Box::new(router));
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
@@ -311,7 +311,7 @@ async fn loop_daemon(
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                let new_routing = routing::static_fallback_router(wg_data, peer_ips);
+                                let mut new_routing = routing::static_fallback_router(wg_data, peer_ips);
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                 *maybe_router = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
@@ -411,7 +411,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(maybe_router: &Option<Box<dyn Routing>>, expected_up: bool) {
+async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expected_up: bool) {
     if let Some(router) = maybe_router {
         match router.teardown().await {
             Ok(_) => {

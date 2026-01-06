@@ -56,7 +56,7 @@ impl Routing for Firewall {
      * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
      */
     #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
-    async fn setup(&self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<(), Error> {
         // 1. generate wg quick content
         let wg_quick_content =
             self.wg_data
@@ -115,7 +115,7 @@ impl Routing for Firewall {
     }
 
     #[tracing::instrument(name = "Firewall::teardown", level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
-    async fn teardown(&self) -> Result<(), Error> {
+    async fn teardown(&mut self) -> Result<(), Error> {
         // 1. remove pf anchor
         self.fw
             .lock()
@@ -132,7 +132,7 @@ impl Routing for Firewall {
 
 #[async_trait]
 impl Routing for FallbackRouter {
-    async fn setup(&self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
         let mut extra = self
             .peer_ips
@@ -154,7 +154,7 @@ impl Routing for FallbackRouter {
         Ok(())
     }
 
-    async fn teardown(&self) -> Result<(), Error> {
+    async fn teardown(&mut self) -> Result<(), Error> {
         wg_tooling::down().await?;
         Ok(())
     }
