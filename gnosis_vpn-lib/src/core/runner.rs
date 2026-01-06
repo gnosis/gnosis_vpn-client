@@ -255,7 +255,7 @@ async fn run_safe_deployment(
     let token_u256 = presafe.node_wxhopr.amount();
     let token_bytes: [u8; 32] = token_u256.to_big_endian();
     let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
-    let nonce = edgli::hopr_lib::U256::from(random::<u64>());
+    let random_nonce = edgli::hopr_lib::U256::from(random::<u64>());
     let url = hopr_params.blokli_url();
 
     (|| {
@@ -267,7 +267,7 @@ async fn run_safe_deployment(
                 .map_err(|e| Error::Chain(e.to_string()))?
                 .deploy_safe(SafeModuleDeploymentInputs {
                     token_amount,
-                    nonce,
+                    random_nonce,
                     admins: vec![node_address],
                 })
                 .await
