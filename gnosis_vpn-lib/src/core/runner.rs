@@ -209,6 +209,9 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
         }
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "PreSafe attempt failed, retrying...");
+    })
     .await
 }
 
@@ -235,6 +238,9 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
         }
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Ticket stats attempt failed, retrying...");
+    })
     .await
 }
 
@@ -269,6 +275,9 @@ async fn run_safe_deployment(
         }
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Safe deployment attempt failed, retrying...");
+    })
     .await
 }
 
@@ -325,6 +334,9 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
         Ok(res)
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Funding tool attempt failed, retrying...");
+    })
     .await
 }
 
@@ -350,6 +362,9 @@ async fn run_fund_channel(
         Ok(())
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Fund channel attempt failed, retrying...");
+    })
     .await
 }
 
