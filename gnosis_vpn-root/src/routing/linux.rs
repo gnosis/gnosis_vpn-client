@@ -1,7 +1,8 @@
+use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, worker};
+use gnosis_vpn_lib::{event, worker};
 
 use std::net::Ipv4Addr;
 
