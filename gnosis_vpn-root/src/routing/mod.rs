@@ -24,8 +24,6 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
-    #[error("Not yet implemented")]
-    NotImplemented,
 
     #[cfg(target_os = "macos")]
     #[error("firewall error: {0}")]
@@ -53,7 +51,7 @@ impl Error {
 
 #[async_trait]
 pub trait Routing {
-    async fn setup(&self) -> Result<(), Error>;
+    async fn setup(&mut self) -> Result<(), Error>;
 
-    async fn teardown(&self) -> Result<(), Error>;
+    async fn teardown(&mut self) -> Result<(), Error>;
 }

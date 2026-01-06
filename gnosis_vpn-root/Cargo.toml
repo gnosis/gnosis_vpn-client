@@ -24,6 +24,7 @@ mimalloc.workspace = true
 rtnetlink = { workspace = true }
 iptables = { workspace = true }
 futures = { workspace = true }
+parking_lot = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 pfctl.workspace = true
