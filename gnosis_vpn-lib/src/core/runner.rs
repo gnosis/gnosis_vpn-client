@@ -344,7 +344,8 @@ async fn run_hopr(hopr_params: HoprParams) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
     let cfg = hopr_params.to_config().await?;
     let keys = hopr_params.calc_keys().await?;
-    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys)
+    let blokli_url = hopr_params.blokli_url();
+    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys, blokli_url)
         .await
         .map_err(Error::from)
 }

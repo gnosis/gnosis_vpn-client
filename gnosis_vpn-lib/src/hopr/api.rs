@@ -54,9 +54,10 @@ impl Hopr {
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         db_data_dir: &std::path::Path,
         keys: edgli::hopr_lib::HoprKeys,
+        blokli_url: Option<url::Url>,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
-        let edge_node = Edgli::new(cfg, db_data_dir, keys)
+        let edge_node = Edgli::new(cfg, db_data_dir, keys, blokli_url.map(|u| u.to_string()))
             .await
             .map_err(|e| HoprError::Construction(e.to_string()))?;
 
