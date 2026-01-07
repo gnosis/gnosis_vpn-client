@@ -5,6 +5,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
@@ -34,12 +35,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
-    let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
-        tracing::error!(error = ?e, "error setting up SIGINT handler");
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGINT handler");
         exitcode::IOERR
     })?;
-    let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
-        tracing::error!(error = ?e, "error setting up SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGTERM handler");
         exitcode::IOERR
     })?;
 
@@ -440,7 +441,9 @@ fn spawn_ping(
     tokio::spawn(async move {
         cancel
             .run_until_cancelled(async move {
-                let res = ping::ping(&options).map_err(|e| {
+                // delay ping by one sec to increase success rate
+                time::sleep(Duration::from_secs(1)).await;
+                let res = ping::ping(&options).await.map_err(|e| {
                     tracing::debug!(error = ?e, "ping error");
                     e.to_string()
                 });

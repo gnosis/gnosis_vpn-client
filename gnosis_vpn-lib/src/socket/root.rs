@@ -17,7 +17,7 @@ pub enum Error {
     ServiceNotRunning,
     #[error("failed serializing command: {0}")]
     Serialization(#[from] serde_json::Error),
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     IO(#[from] io::Error),
 }
 
