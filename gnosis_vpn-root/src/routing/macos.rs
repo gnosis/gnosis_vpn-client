@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use gnosis_vpn_lib::hopr::hopr_lib::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
@@ -40,7 +39,7 @@ pub struct FallbackRouter {
     peer_ips: Vec<Ipv4Addr>,
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Routing for Firewall {
     /**
      * Refactor logic to use:
@@ -102,7 +101,7 @@ impl Routing for Firewall {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Routing for FallbackRouter {
     async fn setup(&self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
