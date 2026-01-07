@@ -40,7 +40,7 @@ tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "0.3.22"
 tokio = { version = "1.48.0", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "748dd1c971a0caf00eba0fb08ebc6a1e28bde5b4", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "e121f023a114aa061f5390aed90be8a17b45e389", features = [
   "prometheus",
 ] }
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "c435dda0021577ba23201899b88fb16bba458369", features = [
