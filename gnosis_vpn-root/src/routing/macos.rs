@@ -163,7 +163,7 @@ impl Routing for FallbackRouter {
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
     match gateway {
         Some(gw) => format!(
-            "PreUp = route -n add --host {relayer_ip} {gateway}",
+            "PreUp = route -n add -host {relayer_ip} {gateway}",
             relayer_ip = relayer_ip,
             gateway = gw,
         ),
