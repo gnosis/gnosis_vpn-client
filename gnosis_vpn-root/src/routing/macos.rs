@@ -163,12 +163,12 @@ impl Routing for FallbackRouter {
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
     match gateway {
         Some(gw) => format!(
-            "route -n add --host {relayer_ip} {gateway}",
+            "PreUp = route -n add --host {relayer_ip} {gateway}",
             relayer_ip = relayer_ip,
             gateway = gw,
         ),
         None => format!(
-            "route -n add -host {relayer_ip} -interface {device}",
+            "PreUp = route -n add -host {relayer_ip} -interface {device}",
             relayer_ip = relayer_ip,
             device = device
         ),
@@ -176,7 +176,7 @@ fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<Stri
 }
 
 fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
-    format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
+    format!("PostDown = route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
 }
 
 async fn interface() -> Result<(String, Option<String>), Error> {
