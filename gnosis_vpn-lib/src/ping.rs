@@ -55,13 +55,14 @@ pub async fn ping(opts: &Options) -> Result<Duration, Error> {
 async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
     let mut cmd = Command::new("ping");
     cmd.arg("-c").arg("1");
+    let timeout_str = opts.timeout.as_secs().to_string();
     #[cfg(target_os = "linux")]
     {
-        cmd.arg("-W").arg(opts.timeout.as_secs().to_string());
+        cmd.arg("-W").arg(timeout_str);
     }
     #[cfg(target_os = "macos")]
     {
-        cmd.arg("-t").arg(opts.timeout);
+        cmd.arg("-t").arg(timeout_str);
     }
     let output = cmd.run_stdout().await.map_err(|_| Error::Timeout)?;
     parse_duration(output)
