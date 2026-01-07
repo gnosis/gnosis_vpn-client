@@ -24,6 +24,7 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
+    #[cfg(target_os = "linux")]
     #[error("Not yet implemented")]
     NotImplemented,
 
