@@ -35,17 +35,17 @@ pub enum Error {
 
     #[cfg(target_os = "linux")]
     #[error("rtnetlink error: {0} ")]
-    RtnetlinkError(#[from] rtnetlink::Error),
+    Rtnetlink(#[from] rtnetlink::Error),
 
     #[cfg(target_os = "linux")]
     #[error("iptables error: {0} ")]
-    IpTablesError(String),
+    IpTables(String),
 }
 
 impl Error {
     #[cfg(target_os = "linux")]
     pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
-        Self::IpTablesError(e.into().to_string())
+        Self::IpTables(e.into().to_string())
     }
 }
 
