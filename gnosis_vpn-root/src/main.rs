@@ -443,7 +443,7 @@ fn spawn_ping(
             .run_until_cancelled(async move {
                 // delay ping by one sec to increase success rate
                 time::sleep(Duration::from_secs(1)).await;
-                let res = ping::ping(&options).map_err(|e| {
+                let res = ping::ping(&options).await.map_err(|e| {
                     tracing::debug!(error = ?e, "ping error");
                     e.to_string()
                 });
