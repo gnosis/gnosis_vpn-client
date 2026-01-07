@@ -5,6 +5,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
@@ -440,6 +441,8 @@ fn spawn_ping(
     tokio::spawn(async move {
         cancel
             .run_until_cancelled(async move {
+                // delay ping by one sec to increase success rate
+                time::sleep(Duration::from_secs(1)).await;
                 let res = ping::ping(&options).map_err(|e| {
                     tracing::debug!(error = ?e, "ping error");
                     e.to_string()
