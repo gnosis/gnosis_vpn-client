@@ -9,21 +9,22 @@ use std::{io, string};
 use crate::dirs;
 use crate::shell_command_ext::{self, ShellCommandExt};
 
+pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     IO(#[from] io::Error),
-    #[error(transparent)]
+    #[error("UTF8 conversion error: {0}")]
     FromUtf8Error(#[from] string::FromUtf8Error),
-    #[error(transparent)]
+    #[error("TOML serialization error: {0}")]
     Toml(#[from] toml::ser::Error),
     #[error("error generating wg key")]
     WgGenKey,
-    #[error(transparent)]
+    #[error("Dirs error: {0}")]
     Dirs(#[from] dirs::Error),
-    #[error(transparent)]
+    #[error("Shell command error: {0}")]
     ShellCommandExt(#[from] shell_command_ext::Error),
 }
 

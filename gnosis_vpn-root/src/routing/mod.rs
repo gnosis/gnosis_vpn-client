@@ -25,21 +25,34 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
-    #[error("Not yet implemented")]
-    NotImplemented,
 
     #[cfg(target_os = "macos")]
     #[error("firewall error: {0}")]
     PfCtl(#[from] pfctl::Error),
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[error("General error")]
     General(String),
+
+    #[cfg(target_os = "linux")]
+    #[error("rtnetlink error: {0} ")]
+    Rtnetlink(#[from] rtnetlink::Error),
+
+    #[cfg(target_os = "linux")]
+    #[error("iptables error: {0} ")]
+    IpTables(String),
+}
+
+impl Error {
+    #[cfg(target_os = "linux")]
+    pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
+        Self::IpTables(e.into().to_string())
+    }
 }
 
 #[async_trait]
 pub trait Routing {
-    async fn setup(&self) -> Result<(), Error>;
+    async fn setup(&mut self) -> Result<(), Error>;
 
-    async fn teardown(&self) -> Result<(), Error>;
+    async fn teardown(&mut self) -> Result<(), Error>;
 }

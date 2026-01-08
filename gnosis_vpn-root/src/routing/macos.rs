@@ -1,5 +1,8 @@
-use std::sync::Arc;
+//! MacOS specific routing using the pf.
+//!
+//! Currently only supports setting up WireGuard interface and determining default interface.
 
+use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
@@ -7,6 +10,7 @@ use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, worker};
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use crate::wg_tooling;
 
@@ -39,22 +43,23 @@ pub struct FallbackRouter {
     peer_ips: Vec<Ipv4Addr>,
 }
 
-#[async_trait::async_trait]
+impl Firewall {
+    pub const ANCHOR_NAME: &str = "gnosisvpn_bypass";
+}
+
+#[async_trait]
 impl Routing for Firewall {
     /**
      * Refactor logic to use:
      * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
      */
     #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
-    async fn setup(&self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<(), Error> {
         // 1. generate wg quick content
-        let wg_quick_content = self.wg_data.wg.to_file_string(
-            &self.wg_data.interface_info,
-            &self.wg_data.peer_info,
-            // true to route all traffic
-            false, // START WITH TRUE TO KILL YOURSELF
-            None,
-        );
+        let wg_quick_content =
+            self.wg_data
+                .wg
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, None);
 
         // 2. run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
@@ -62,6 +67,7 @@ impl Routing for Firewall {
         // 3. determine interface
         let (device, gateway) = interface().await?;
 
+        // 4. setup bypass
         tracing::info!(%device, ?gateway, "Determined default interface");
 
         // Create a PfCtl instance to control PF with:
@@ -71,39 +77,60 @@ impl Routing for Firewall {
             .ok()
             .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?;
 
+        let interface = pfctl::Interface::from(&device);
+        let gw_ip: std::net::IpAddr = gateway
+            .ok_or(Error::General("No gateway found".into()))?
+            .as_str()
+            .parse()
+            .map_err(|e| Error::General(format!("failed to convert gatewat to IpAddr: {e}")))?;
+        let gw = pfctl::Ip::from(gw_ip);
+
         // Enable the firewall, equivalent to the command "pfctl -e":
         pf.try_enable()?;
 
-        // // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
-        // // use `try_add_anchor` to avoid that:
-        // let anchor_name = "testing-out-pfctl";
-        // pf.add_anchor(anchor_name, pfctl::AnchorKind::Filter).unwrap();
+        // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
+        // use `try_add_anchor` to avoid that:
+        pf.add_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
 
-        // // Create a packet filtering rule matching all packets on the "lo0" interface and allowing
-        // // them to pass:
-        // let rule = pfctl::FilterRuleBuilder::default()
-        //     .action(pfctl::FilterRuleAction::Pass)
-        //     .interface("lo0")
-        //     .build()
-        //     .unwrap();
+        // Create a packet filtering rule matching all packets on the identified interface and allowing
+        // them to pass:
+        // RULE: `pass out quick route-to (en0 192.168.0.1) from any to any user gnosisvpn`
+        let rule = pfctl::FilterRuleBuilder::default()
+            .action(pfctl::FilterRuleAction::Pass)
+            .interface(&device)
+            .direction(pfctl::Direction::Out) // or Any
+            .quick(true)
+            .route(pfctl::Route::RouteTo(pfctl::PoolAddr::new(interface, gw)))
+            .from(std::net::Ipv4Addr::UNSPECIFIED) // any
+            .to(std::net::Ipv4Addr::UNSPECIFIED) // any
+            .user(self.worker.uid)
+            .build()?;
 
-        // // Add the filterig rule to the anchor we just created.
-        // pf.add_rule(anchor_name, &rule).unwrap();
+        // Add the filtering rule to the anchor we just created.
+        pf.add_rule(Firewall::ANCHOR_NAME, &rule)?;
 
         Ok(())
     }
 
-    #[tracing::instrument(name = "Firewall::teardown",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
-    async fn teardown(&self) -> Result<(), Error> {
-        // 1. run wg-quick down
+    #[tracing::instrument(name = "Firewall::teardown", level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
+    async fn teardown(&mut self) -> Result<(), Error> {
+        // 1. remove pf anchor
+        self.fw
+            .lock()
+            .ok()
+            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?
+            .remove_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+
+        // 2. run wg-quick down
         wg_tooling::down().await?;
+
         Ok(())
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Routing for FallbackRouter {
-    async fn setup(&self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
         let mut extra = self
             .peer_ips
@@ -125,7 +152,7 @@ impl Routing for FallbackRouter {
         Ok(())
     }
 
-    async fn teardown(&self) -> Result<(), Error> {
+    async fn teardown(&mut self) -> Result<(), Error> {
         wg_tooling::down().await?;
         Ok(())
     }
@@ -134,12 +161,12 @@ impl Routing for FallbackRouter {
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
     match gateway {
         Some(gw) => format!(
-            "route -n add --host {relayer_ip} {gateway}",
+            "PreUp = route -n add -host {relayer_ip} {gateway}",
             relayer_ip = relayer_ip,
             gateway = gw,
         ),
         None => format!(
-            "route -n add -host {relayer_ip} -interface {device}",
+            "PreUp = route -n add -host {relayer_ip} -interface {device}",
             relayer_ip = relayer_ip,
             device = device
         ),
@@ -147,7 +174,7 @@ fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<Stri
 }
 
 fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
-    format!("route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
+    format!("PostDown = route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
 }
 
 async fn interface() -> Result<(String, Option<String>), Error> {

@@ -5,6 +5,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::os::unix::fs::PermissionsExt;
@@ -34,12 +35,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
-    let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
-        tracing::error!(error = ?e, "error setting up SIGINT handler");
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGINT handler");
         exitcode::IOERR
     })?;
-    let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
-        tracing::error!(error = ?e, "error setting up SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGTERM handler");
         exitcode::IOERR
     })?;
 
@@ -176,7 +177,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     .await;
 
     // restore routing if connected
-    teardown_any_routing(&maybe_router, true).await;
+    teardown_any_routing(&mut maybe_router, true).await;
 
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
@@ -295,7 +296,7 @@ async fn loop_daemon(
                                 teardown_any_routing(maybe_router, false).await;
 
                                 match routing::build_router(worker_user.clone(), wg_data) {
-                                    Ok(router) => {
+                                    Ok(mut router) => {
                                         let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                         *maybe_router = Some(Box::new(router));
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
@@ -308,10 +309,13 @@ async fn loop_daemon(
                                 }
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                                let mut new_routing = routing::static_fallback_router(wg_data, peer_ips);
+
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
+                                let _ = new_routing.teardown().await;
 
-                                let new_routing = routing::static_fallback_router(wg_data, peer_ips);
+                                // bring up new static routing
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                 *maybe_router = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
@@ -411,7 +415,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(maybe_router: &Option<Box<dyn Routing>>, expected_up: bool) {
+async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expected_up: bool) {
     if let Some(router) = maybe_router {
         match router.teardown().await {
             Ok(_) => {
@@ -441,7 +445,9 @@ fn spawn_ping(
     tokio::spawn(async move {
         cancel
             .run_until_cancelled(async move {
-                let res = ping::ping(&options).map_err(|e| {
+                // delay ping by one sec to increase success rate
+                time::sleep(Duration::from_secs(1)).await;
+                let res = ping::ping(&options).await.map_err(|e| {
                     tracing::debug!(error = ?e, "ping error");
                     e.to_string()
                 });
