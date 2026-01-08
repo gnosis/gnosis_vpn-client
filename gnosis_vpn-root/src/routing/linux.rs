@@ -114,27 +114,45 @@ impl Routing for Router {
     /// Install split-tunnel routing.
     ///
     /// The steps:
-    ///   1. Adjust the default routing table (MAIN) to use the VPN interface for default routing
+    ///   1. Generate wg-quick config and run `wg-quick up`
+    ///      The `wg-quick` config makes sure that WG UDP packets have the same fwmark set and that it sets no additional routing rules.
+    ///   2. Adjust the default routing table (MAIN) to use the VPN interface for default routing
     ///      Equivalent command: `ip route replace default dev "$IF_VPN"`
-    ///   2. Create a new routing table for traffic that does not go through the VPN (TABLE_ID)
+    ///   3. Create a new routing table for traffic that does not go through the VPN (TABLE_ID)
     ///      Equivalent command: `ip route add default dev "$IF_WAN" table "$TABLE_ID"`
-    ///   3. Add a rule to direct traffic with the specified fwmark to the new routing table
+    ///   4. Add a rule to direct traffic with the specified fwmark to the new routing table
     ///      Equivalent command: `ip rule add fwmark $FW_MARK table $TABLE_ID`
-    ///   4. Set all traffic from the VPN user to be marked with the fwmark
+    ///   5. Set all traffic from the VPN user to be marked with the fwmark
     ///      This is currently done via `iptables` rule, but it will be replaced with an explicit fwmark on the hopr-lib transport socket.
     ///      See [`setup_iptables`] for details.
-    ///   5. Generate wg-quick config and run `wg-quick up`
-    ///      The `wg-quick` config makes sure that WG UDP packets have the same fwmark set and that it sets no additional routing rules.
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         if self.wan_if_index.is_some() {
             return Err(Error::General("invalid state: already set up".into()));
         }
 
+        // Get the default WAN interface index
         let wan_if_index = self.get_default_if_index().await?;
         self.wan_if_index = Some(wan_if_index);
         tracing::debug!(wan_if_index, "wan interface index");
 
+        // Generate wg quick content
+        let wg_quick_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            // true to route all traffic
+            false,
+            // Disable all routing set by wg-quick
+            // Set the FwMark on WG's own UDP packets to allow them to go to the Session
+            Some([
+                "Table = off".to_string(),
+                format!("FwMark = {:#X}", FW_MARK)
+            ].into_iter().collect())
+        );
+        // Run wg-quick up
+        wg_tooling::up(wg_quick_content).await?;
+
+        // Get the VPN interface index
         let vpn_if_index = self.find_if_index_by_name(IF_VPN).await?;
         tracing::debug!(vpn_if_index, "vpn interface index");
 
@@ -174,41 +192,23 @@ impl Routing for Router {
         // This steps marks all traffic from VPN_USER with FW_MARK
         setup_iptables(self.worker.uid).map_err(Error::iptables)?;
 
-        // Generate wg quick content
-        let wg_quick_content = self.wg_data.wg.to_file_string(
-            &self.wg_data.interface_info,
-            &self.wg_data.peer_info,
-            // true to route all traffic
-            false,
-            // Disable all routing set by wg-quick
-            // Set the FwMark on WG's own UDP packets to allow them to go to the Session
-            Some([
-                "Table = off".to_string(),
-                format!("FwMark = {:#X}", FW_MARK)
-            ].into_iter().collect())
-       );
-        // Run wg-quick up
-        wg_tooling::up(wg_quick_content).await?;
         Ok(())
     }
 
     /// Uninstalls the split-tunnel routing.
     ///
     /// The steps:
-    ///   1. Run `wg-quick down`
-    ///   2. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
-    ///   3. Delete the fwmark rule for the TABLE_ID
+    ///   1. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
+    ///   2. Delete the fwmark rule for the TABLE_ID
     ///      Equivalent command: `ip rule del fwmark $FW_MARK table $TABLE_ID`
-    ///   4. Delete the TABLE_ID routing table
+    ///   3. Delete the TABLE_ID routing table
     ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
-    ///   5. Replace the default route in the MAIN routing table
+    ///   4. Replace the default route in the MAIN routing table
     ///      Equivalent command: `ip route replace default dev "$IF_WAN"`
+    ///   5. Run `wg-quick down`
     ///
     async fn teardown(&mut self) -> Result<(), Error> {
         let wan_if_index = self.wan_if_index.take().ok_or(Error::General("invalid state: not set up".into()))?;
-
-        // Run wg-quick down
-        wg_tooling::down().await?;
 
         // Flush the iptables rules
         flush_ip_tables().map_err(Error::iptables)?;
@@ -232,12 +232,16 @@ impl Routing for Router {
         ).execute().await?;
         tracing::debug!("deleted table {}", TABLE_ID);
 
+        // Set the default route back to the WAN interface
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
             .build();
         self.handle.route().add(default_route).execute().await?;
         tracing::debug!(wan_if_index, "set main table default route to interface");
+
+        // Run wg-quick down
+        wg_tooling::down().await?;
 
         Ok(())
     }
