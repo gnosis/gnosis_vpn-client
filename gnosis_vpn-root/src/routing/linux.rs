@@ -3,20 +3,25 @@ use tokio::process::Command;
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, worker};
 
-use std::net::Ipv4Addr;
 use futures::TryStreamExt;
+use std::net::Ipv4Addr;
 
-use rtnetlink::{IpVersion};
-use rtnetlink::packet_route::link::{LinkAttribute};
-use rtnetlink::packet_route::rule::RuleAttribute;
 use crate::wg_tooling;
+use rtnetlink::IpVersion;
+use rtnetlink::packet_route::link::LinkAttribute;
+use rtnetlink::packet_route::rule::RuleAttribute;
 
 use super::{Error, Routing};
 
 pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn); // Task terminates once the Router is dropped
-    Ok(Router { worker, wg_data, handle, wan_if_index: None })
+    Ok(Router {
+        worker,
+        wg_data,
+        handle,
+        wan_if_index: None,
+    })
 }
 
 pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
@@ -46,7 +51,6 @@ const TABLE_ID: u32 = 108;
 
 const IF_VPN: &str = "wg0_gnosisvpn";
 
-
 /// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
 /// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
 ///
@@ -60,9 +64,17 @@ fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
     iptables.new_chain("mangle", "OUTPUT")?;
 
     // Keep loopback for VPN user unmarked
-    iptables.append("mangle", "OUTPUT", &format!("-m owner --uid-owner {vpn_uid} -o lo -j RETURN"))?;
+    iptables.append(
+        "mangle",
+        "OUTPUT",
+        &format!("-m owner --uid-owner {vpn_uid} -o lo -j RETURN"),
+    )?;
     // Mark all other traffic from VPN user
-    iptables.append("mangle", "OUTPUT", &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {}", FW_MARK))?;
+    iptables.append(
+        "mangle",
+        "OUTPUT",
+        &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {}", FW_MARK),
+    )?;
 
     Ok(())
 }
@@ -76,8 +88,13 @@ fn flush_ip_tables() -> Result<(), Box<dyn std::error::Error>> {
 impl Router {
     async fn get_default_if_index(&self) -> Result<u32, Error> {
         // The default route is the one with the longest prefix match (= smallest prefix length)
-        let default_route = self.handle.route().get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build()).execute()
-            .try_collect::<Vec<_>>().await?
+        let default_route = self
+            .handle
+            .route()
+            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
+            .execute()
+            .try_collect::<Vec<_>>()
+            .await?
             .into_iter()
             .min_by_key(|route| route.header.destination_prefix_length)
             .ok_or(Error::NoInterface)?;
@@ -100,10 +117,12 @@ impl Router {
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
-            .find_map(|link| link.attributes.iter().find_map(|attr| match attr {
-                LinkAttribute::IfName(if_name) if if_name == name => Some(link.header.index),
-                _ => None,
-            }))
+            .find_map(|link| {
+                link.attributes.iter().find_map(|attr| match attr {
+                    LinkAttribute::IfName(if_name) if if_name == name => Some(link.header.index),
+                    _ => None,
+                })
+            })
             .ok_or(Error::NoInterface)
     }
 }
@@ -144,10 +163,11 @@ impl Routing for Router {
             false,
             // Disable all routing set by wg-quick
             // Set the FwMark on WG's own UDP packets to allow them to go to the Session
-            Some([
-                "Table = off".to_string(),
-                format!("FwMark = {:#X}", FW_MARK)
-            ].into_iter().collect())
+            Some(
+                ["Table = off".to_string(), format!("FwMark = {:#X}", FW_MARK)]
+                    .into_iter()
+                    .collect(),
+            ),
         );
         // Run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
@@ -157,10 +177,20 @@ impl Routing for Router {
         tracing::debug!(vpn_if_index, "vpn interface index");
 
         // Check if the fwmark rule already exists
-        let rules = self.handle.rule().get(IpVersion::V4).execute().try_collect::<Vec<_>>().await?;
-        if rules.into_iter().any(|rule| rule.attributes.iter().any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if *fwmark == FW_MARK))) {
+        let rules = self
+            .handle
+            .rule()
+            .get(IpVersion::V4)
+            .execute()
+            .try_collect::<Vec<_>>()
+            .await?;
+        if rules.into_iter().any(|rule| {
+            rule.attributes
+                .iter()
+                .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if *fwmark == FW_MARK))
+        }) {
             tracing::info!("fwmark {} already set", FW_MARK);
-            return Ok(())
+            return Ok(());
         }
 
         // Adjust the main routing table so that everything gets routed via the VPN interface
@@ -181,7 +211,8 @@ impl Routing for Router {
         tracing::debug!(wan_if_index, "set table {} default route to interface", TABLE_ID);
 
         // Add rule: everything marked with FW_MARK goes via TABLE_ID routing table
-        self.handle.rule()
+        self.handle
+            .rule()
             .add()
             .fw_mark(FW_MARK)
             .table_id(TABLE_ID)
@@ -208,28 +239,47 @@ impl Routing for Router {
     ///   5. Run `wg-quick down`
     ///
     async fn teardown(&mut self) -> Result<(), Error> {
-        let wan_if_index = self.wan_if_index.take().ok_or(Error::General("invalid state: not set up".into()))?;
+        let wan_if_index = self
+            .wan_if_index
+            .take()
+            .ok_or(Error::General("invalid state: not set up".into()))?;
 
         // Flush the iptables rules
         flush_ip_tables().map_err(Error::iptables)?;
 
         // Delete the fwmark routing table rule
-        let rules = self.handle.rule().get(IpVersion::V4).execute().try_collect::<Vec<_>>().await?;
+        let rules = self
+            .handle
+            .rule()
+            .get(IpVersion::V4)
+            .execute()
+            .try_collect::<Vec<_>>()
+            .await?;
         for rule in rules.into_iter().filter(|rule| {
-            rule.attributes.iter().any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK)) &&
-                rule.attributes.iter().any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
+            rule.attributes
+                .iter()
+                .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
+                && rule
+                    .attributes
+                    .iter()
+                    .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
         }) {
             self.handle.rule().del(rule).execute().await?;
             tracing::debug!("deleted fwmark {} routing table rule", FW_MARK);
         }
 
         // Delete the TABLE_ID routing table
-        self.handle.route().del(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .table_id(TABLE_ID)
-            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-            .output_interface(wan_if_index)
-            .build()
-        ).execute().await?;
+        self.handle
+            .route()
+            .del(
+                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+                    .table_id(TABLE_ID)
+                    .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+                    .output_interface(wan_if_index)
+                    .build(),
+            )
+            .execute()
+            .await?;
         tracing::debug!("deleted table {}", TABLE_ID);
 
         // Set the default route back to the WAN interface
