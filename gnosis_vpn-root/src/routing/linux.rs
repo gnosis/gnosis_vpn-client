@@ -331,13 +331,13 @@ fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<Stri
     // TODO: rewrite via rtnetlink
     match gateway {
         Some(gw) => format!(
-            "ip route add {relayer_ip} via {gateway} dev {device}",
+            "PreUp = ip route add {relayer_ip} via {gateway} dev {device}",
             relayer_ip = relayer_ip,
             gateway = gw,
             device = device
         ),
         None => format!(
-            "ip route add {relayer_ip} dev {device}",
+            "PreUp = ip route add {relayer_ip} dev {device}",
             relayer_ip = relayer_ip,
             device = device
         ),
@@ -348,13 +348,13 @@ fn post_down_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<S
     // TODO: rewrite via rtnetlink
     match gateway {
         Some(gw) => format!(
-            "ip route del {relayer_ip} via {gateway} dev {device}",
+            "PostDown = ip route del {relayer_ip} via {gateway} dev {device}",
             relayer_ip = relayer_ip,
             gateway = gw,
             device = device,
         ),
         None => format!(
-            "ip route del {relayer_ip} dev {device}",
+            "PostDown = ip route del {relayer_ip} dev {device}",
             relayer_ip = relayer_ip,
             device = device,
         ),
