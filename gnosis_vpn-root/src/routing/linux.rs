@@ -216,6 +216,7 @@ impl Routing for Router {
         self.handle
             .rule()
             .add()
+            .v4()
             .fw_mark(FW_MARK)
             .table_id(TABLE_ID)
             .execute()

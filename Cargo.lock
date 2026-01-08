@@ -3920,7 +3920,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.56.2"
+version = "0.56.3"
 dependencies = [
  "clap",
  "exitcode",
@@ -3932,7 +3932,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.56.2"
+version = "0.56.3"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3966,7 +3966,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-root"
-version = "0.56.2"
+version = "0.56.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-worker"
-version = "0.56.2"
+version = "0.56.3"
 dependencies = [
  "clap",
  "exitcode",
