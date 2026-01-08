@@ -308,10 +308,13 @@ async fn loop_daemon(
                                 }
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                                let mut new_routing = routing::static_fallback_router(wg_data, peer_ips);
+
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
+                                let _ = new_routing.teardown().await;
 
-                                let mut new_routing = routing::static_fallback_router(wg_data, peer_ips);
+                                // bring up new static routing
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                 *maybe_router = Some(Box::new(new_routing));
                                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;

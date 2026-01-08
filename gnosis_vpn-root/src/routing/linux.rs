@@ -1,7 +1,7 @@
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, worker};
+use gnosis_vpn_lib::{event, hopr::hopr_lib::async_trait, wireguard, worker};
 
 use futures::TryStreamExt;
 use std::net::Ipv4Addr;
@@ -48,8 +48,6 @@ const FW_MARK: u32 = 0xFEED_CAFE;
 
 // Table for traffic that does not go through the VPN
 const TABLE_ID: u32 = 108;
-
-const IF_VPN: &str = "wg0_gnosisvpn";
 
 /// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
 /// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
@@ -173,7 +171,7 @@ impl Routing for Router {
         wg_tooling::up(wg_quick_content).await?;
 
         // Get the VPN interface index
-        let vpn_if_index = self.find_if_index_by_name(IF_VPN).await?;
+        let vpn_if_index = self.find_if_index_by_name(wireguard::WG_INTERFACE).await?;
         tracing::debug!(vpn_if_index, "vpn interface index");
 
         // Check if the fwmark rule already exists
@@ -199,7 +197,11 @@ impl Routing for Router {
             .output_interface(vpn_if_index)
             .build();
         self.handle.route().add(default_route).execute().await?;
-        tracing::debug!(vpn_if_index, "set main table default route to interface {}", IF_VPN);
+        tracing::debug!(
+            vpn_if_index,
+            "set main table default route to interface {}",
+            wireguard::WG_INTERFACE
+        );
 
         // Route for TABLE_ID: All traffic goes to the WAN interface (bypasses VPN)
         let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
