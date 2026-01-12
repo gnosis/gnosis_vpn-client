@@ -47,7 +47,7 @@ url = { version = "2.5.7", features = ["serde"] }
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "dab5b65a879c75f00c8d07a6f29856d97c9c3ff5", features = [
   "prometheus",
 ] }
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "c435dda0021577ba23201899b88fb16bba458369", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "74b48627a863310a5ef5a5de5127bc3ebc7073c9", features = [
   "runtime-tokio",
 ] }
 serde_with = "3.16.1"
