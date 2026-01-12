@@ -3,13 +3,13 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
+use edgli::SafeModuleDeploymentResult;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Address, Balance, IntoEndian, WxHOPR};
+use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
-use edgli::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
 use human_bandwidth::re::bandwidth::Bandwidth;
-use rand::{Rng, random};
+use rand::Rng;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -251,11 +251,6 @@ async fn run_safe_deployment(
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let node_address = keys.chain_key.public().to_address();
-    let token_u256 = presafe.node_wxhopr.amount();
-    let token_bytes: [u8; 32] = token_u256.to_big_endian();
-    let token_amount = edgli::hopr_lib::U256::from_be_bytes(token_bytes);
-    let random_nonce = edgli::hopr_lib::U256::from(random::<u64>());
     let url = hopr_params.blokli_url();
 
     (|| {
@@ -265,11 +260,7 @@ async fn run_safe_deployment(
             edgli::blokli::SafelessInteractor::new(url, &private_key)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?
-                .deploy_safe(SafeModuleDeploymentInputs {
-                    token_amount,
-                    random_nonce,
-                    admins: vec![node_address],
-                })
+                .deploy_safe(presafe.node_wxhopr)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))
         }
