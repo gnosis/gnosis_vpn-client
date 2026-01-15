@@ -3,6 +3,7 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{ExponentialBuilder, FibonacciBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
+use edgli::hopr_lib::SurbBalancerConfig;
 use tokio::sync::{mpsc, oneshot};
 
 use std::fmt::{self, Display};
@@ -52,7 +53,16 @@ impl Runner {
 
         // 1. open bridge session
         let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+        let bridge_config =
+            runner::to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge)?;
+        let bridge_session = open_bridge_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            bridge_config,
+            &results_sender,
+        )
+        .await?;
 
         // 2. register wg public key
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
@@ -66,7 +76,16 @@ impl Runner {
 
         // 4. open ping session
         let _ = results_sender.send(progress(Progress::OpenPing)).await;
-        let session = open_ping_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+        let ping_config =
+            runner::to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping)?;
+        let session = open_ping_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            ping_config,
+            &results_sender,
+        )
+        .await?;
 
         // 5a. request dynamic wg tunnel from root
         let _ = results_sender
@@ -116,7 +135,9 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
-        adjust_to_main_session(&self.hopr, &self.options, session).await?;
+        let main_config =
+            runner::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main)?;
+        adjust_to_main_session(&self.hopr, main_config, session).await?;
         Ok(session.clone())
     }
 }
@@ -140,16 +161,14 @@ async fn open_bridge_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
+    surb_management: SurbBalancerConfig,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
-        surb_management: Some(runner::to_surb_balancer_config(
-            options.buffer_sizes.bridge,
-            options.max_surb_upstream.bridge,
-        )),
+        surb_management: Some(surb_management),
         ..Default::default()
     };
     (|| async {
@@ -225,16 +244,14 @@ async fn open_ping_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
+    surb_management: SurbBalancerConfig,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
-        surb_management: Some(runner::to_surb_balancer_config(
-            options.buffer_sizes.ping,
-            options.max_surb_upstream.ping,
-        )),
+        surb_management: Some(surb_management),
         ..Default::default()
     };
     (|| async {
@@ -354,7 +371,7 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
 
 async fn adjust_to_main_session(
     hopr: &Hopr,
-    options: &Options,
+    surb_management: SurbBalancerConfig,
     session_client_metadata: &SessionClientMetadata,
 ) -> Result<(), HoprError> {
     let active_client = match session_client_metadata.active_clients.as_slice() {
@@ -363,7 +380,6 @@ async fn adjust_to_main_session(
         _ => return Err(HoprError::SessionAmbiguousClient),
     };
     tracing::debug!(bound_host = ?session_client_metadata.bound_host, "adjusting to main session");
-    let surb_management = runner::to_surb_balancer_config(options.buffer_sizes.main, options.max_surb_upstream.main);
     hopr.adjust_session(surb_management, active_client).await
 }
 
