@@ -307,6 +307,7 @@
             packages = [
               pkgs.cargo-machete
               pkgs.cargo-shear
+              pkgs.rust-analyzer
             ];
 
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
