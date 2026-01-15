@@ -1436,7 +1436,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.17.0"
-source = "git+https://github.com/hoprnet/blokli#efb271c6a55bc35b244911da5b3c7c14f79acd50"
+source = "git+https://github.com/hoprnet/blokli#10fe1ee28452ae7fed651c619283e5196a7f2bd2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3035,7 +3035,6 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
- "mimalloc",
  "serde_json",
  "tokio",
 ]
@@ -3085,7 +3084,6 @@ dependencies = [
  "gnosis_vpn-lib",
  "iptables",
  "libc",
- "mimalloc",
  "parking_lot",
  "pfctl",
  "rtnetlink 0.20.0",
@@ -3105,7 +3103,6 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
- "mimalloc",
  "serde_json",
  "tokio",
  "tracing",

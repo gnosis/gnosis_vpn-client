@@ -21,7 +21,6 @@ url.workspace = true
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
-mimalloc.workspace = true
 rtnetlink = { workspace = true }
 iptables = { workspace = true }
 futures = { workspace = true }
