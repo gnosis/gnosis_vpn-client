@@ -1,6 +1,7 @@
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::{Balance, WxHOPR};
+use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
@@ -20,6 +21,7 @@ use crate::event::{CoreToWorker, RequestToRoot, RespondableRequestToRoot, Respon
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
+use crate::ticket_stats::TicketStats;
 use crate::{balance, log_output, wireguard};
 
 pub mod runner;
@@ -72,10 +74,12 @@ pub struct Core {
     funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
+    strategy_handle: Option<AbortHandle>,
     destination_health: HashMap<Address, DestinationHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
+    ongoing_channel_fundings: Vec<Address>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,7 +128,9 @@ impl Core {
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             ticket_value: None,
+            strategy_handle: None,
             ongoing_disconnections: Vec::new(),
+            ongoing_channel_fundings: Vec::new(),
             destination_health: HashMap::new(),
             responder_unit: None,
             responder_duration: None,
@@ -172,6 +178,12 @@ impl Core {
                 self.cancel_for_shutdown.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
+                    if let Some(handle) = self.strategy_handle.take() {
+                        shutdown_tracker.spawn(async move {
+                            tracing::debug!("aborting strategy task");
+                            handle.abort();
+                        });
+                    }
                     shutdown_tracker.spawn(async move {
                         tracing::debug!("shutting down hopr");
                         hopr.shutdown().await;
@@ -226,7 +238,7 @@ impl Core {
                             Phase::CreatingSafe { presafe } => {
                                 RunMode::preparing_safe(self.node_address, &presafe, self.funding_tool.clone())
                             }
-                            Phase::Starting => RunMode::ValueingTicket,
+                            Phase::Starting => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprSyncing => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                                 if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
@@ -376,7 +388,7 @@ impl Core {
                     }
 
                     Command::Metrics => {
-                        let metrics = match edgli::hopr_lib::Hopr::collect_hopr_metrics() {
+                        let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
                             Ok(m) => m,
                             Err(err) => {
                                 tracing::error!(%err, "failed to collect hopr metrics");
@@ -397,17 +409,7 @@ impl Core {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
             Results::TicketStats { res } => match res {
-                Ok(stats) => match stats.ticket_value() {
-                    Ok(tv) => {
-                        tracing::info!(%stats, %tv, "determined ticket value from stats");
-                        self.ticket_value = Some(tv);
-                        self.spawn_hopr_runner(results_sender, Duration::ZERO);
-                    }
-                    Err(err) => {
-                        tracing::error!(%stats, %err, "failed to determine ticket value from stats - retrying");
-                        self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
-                    }
-                },
+                Ok(stats) => self.on_ticket_stats(stats, results_sender),
                 Err(err) => {
                     tracing::error!(%err, "failed to fetch ticket stats - retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
@@ -435,7 +437,14 @@ impl Core {
 
             Results::SafeDeployment { res } => match res {
                 Ok(deployment) => {
-                    self.spawn_store_safe(deployment.into(), results_sender);
+                    self.spawn_store_safe(
+                        edgli::hopr_lib::SafeModule {
+                            safe_address: deployment.safe_address,
+                            module_address: deployment.module_address,
+                            ..Default::default()
+                        },
+                        results_sender,
+                    );
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");
@@ -454,7 +463,9 @@ impl Core {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
+                    self.ticket_value = None;
                     self.spawn_balances_runner(results_sender, Duration::ZERO);
+                    self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -522,19 +533,20 @@ impl Core {
                 address,
                 res,
                 target_dest,
-            } => match res {
-                Ok(()) => {
-                    tracing::info!(%address, "channel funded");
-                    self.update_health(target_dest, |h| h.channel_funded(address));
-                    self.act_on_target(results_sender);
-                }
-                Err(err) => {
-                    tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute if needed");
-                    if self.update_health(target_dest, |h| h.with_error(err.to_string())) {
-                        self.spawn_channel_funding(address, target_dest, results_sender, Duration::from_secs(60));
+            } => {
+                self.ongoing_channel_fundings.retain(|a| a != &address);
+                match res {
+                    Ok(()) => {
+                        tracing::info!(%address, "channel funded");
+                        self.update_health(target_dest, |h| h.channel_funded(address));
+                        self.act_on_target(results_sender);
+                    }
+                    Err(err) => {
+                        tracing::error!(%err, %address, "failed to ensure channel funding");
+                        self.update_health(target_dest, |h| h.with_error(err.to_string()));
                     }
                 }
-            },
+            }
 
             Results::ConnectionEvent(evt) => {
                 tracing::debug!(%evt, "handling connection runner event");
@@ -656,11 +668,11 @@ impl Core {
     fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
         if hopr_config::has_safe() {
             self.phase = Phase::Starting;
+            self.spawn_hopr_runner(results_sender, Duration::ZERO);
         } else {
             self.phase = Phase::CreatingSafe { presafe: None };
             self.spawn_presafe_runner(results_sender, Duration::ZERO);
         }
-        self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
     }
 
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -729,8 +741,8 @@ impl Core {
     }
 
     fn spawn_hopr_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        // check if we are ready: safe available(Phase::Starting) and ticket value
-        if let (Phase::Starting, Some(ticket_value)) = (self.phase.clone(), self.ticket_value) {
+        // check if we are ready: safe available(Phase::Starting)
+        if let Phase::Starting = self.phase.clone() {
             let cancel = self.cancel_for_shutdown.clone();
             let hopr_params = self.hopr_params.clone();
             let results_sender = results_sender.clone();
@@ -738,7 +750,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::hopr(hopr_params, ticket_value, results_sender).await;
+                        runner::hopr(hopr_params, results_sender).await;
                     })
                     .await
             });
@@ -777,12 +789,17 @@ impl Core {
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn spawn_channel_funding(
-        &self,
+        &mut self,
         address: Address,
         target_dest: Address,
         results_sender: &mpsc::Sender<Results>,
         delay: Duration,
     ) {
+        if self.ongoing_channel_fundings.contains(&address) {
+            tracing::debug!(%address, "channel funding already ongoing - skipping");
+            return;
+        }
+        self.ongoing_channel_fundings.push(address);
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
             let cancel = self.cancel_channel_tasks.clone();
@@ -944,6 +961,33 @@ impl Core {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         }
         self.act_on_target(results_sender);
+    }
+
+    fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
+        tracing::info!("received ticket stats from runner");
+        match (stats.ticket_value(), self.hopr.as_ref()) {
+            (Ok(tv), Some(edgli)) => {
+                tracing::info!(%stats, %tv, "determined ticket value from stats");
+                self.ticket_value = Some(tv);
+                match edgli.start_telemetry_reactor(tv) {
+                    Ok(strategy_process) => {
+                        tracing::info!("started edge node telemetry reactor");
+                        self.strategy_handle = Some(strategy_process);
+                    }
+                    Err(err) => {
+                        tracing::error!(%err, "failed to start edge node telemetry reactor - retrying ticket stats");
+                        self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                    }
+                }
+            }
+            (Ok(_), None) => {
+                tracing::error!("edgeclient not available when starting telemetry reactor");
+            }
+            (Err(err), _) => {
+                tracing::error!(%stats, %err, "failed to determine ticket value from stats - retrying");
+                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+            }
+        }
     }
 
     fn update_health<F>(&mut self, address: Address, cb: F) -> bool

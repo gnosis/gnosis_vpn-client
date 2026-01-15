@@ -1,6 +1,7 @@
+use async_trait::async_trait;
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, hopr::hopr_lib::async_trait, shell_command_ext, wireguard};
+use gnosis_vpn_lib::{dirs, shell_command_ext, wireguard};
 
 #[cfg(target_os = "linux")]
 mod linux;

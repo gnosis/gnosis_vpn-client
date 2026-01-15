@@ -18,9 +18,10 @@ mod cli;
 mod init;
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
-#[cfg(target_os = "linux")]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// HOWEVER disabled due to build issues
+// #[cfg(target_os = "linux")]
+// #[global_allocator]
+// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
@@ -245,7 +246,7 @@ async fn incoming_cmd(
 }
 
 fn main() {
-    match hopr_lib::prepare_tokio_runtime() {
+    match hopr_lib::prepare_tokio_runtime(None, None) {
         Ok(rt) => {
             rt.block_on(main_inner());
         }

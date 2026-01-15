@@ -2,10 +2,7 @@
 //!
 //! Currently only supports setting up WireGuard interface and determining default interface.
 
-use std::sync::Arc;
-
-use gnosis_vpn_lib::hopr::hopr_lib::async_trait;
-
+use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
@@ -13,6 +10,7 @@ use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, worker};
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use crate::wg_tooling;
 

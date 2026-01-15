@@ -120,7 +120,7 @@
               pkgs.libiconv # Required for Darwin builds
             ];
           }
-          # Add musl-specific configuration for C dependencies (SQLite, mimalloc, etc.)
+          # Add musl-specific configuration for C dependencies (SQLite, etc.)
           // lib.optionalAttrs (lib.hasInfix "musl" targetForSystem) {
             # Disable Nix hardening features that are incompatible with musl
             hardeningDisable = [ "fortify" ];
@@ -205,9 +205,6 @@
               "*.yaml"
             ];
             programs.rustfmt.enable = true;
-            settings.formatter.rustfmt = {
-              command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
-            };
             programs.shellcheck.enable = true;
             programs.shfmt = {
               enable = true;
@@ -307,6 +304,7 @@
             packages = [
               pkgs.cargo-machete
               pkgs.cargo-shear
+              pkgs.rust-analyzer
             ];
 
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
