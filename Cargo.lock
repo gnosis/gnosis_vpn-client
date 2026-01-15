@@ -1436,7 +1436,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.17.0"
-source = "git+https://github.com/hoprnet/blokli#10fe1ee28452ae7fed651c619283e5196a7f2bd2"
+source = "git+https://github.com/hoprnet/blokli#fb60f509faabd43e9bc33382406a1839238be043"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2397,7 +2397,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=6fd6ea4e1e30d957ec80c71f10434ca47932304a#6fd6ea4e1e30d957ec80c71f10434ca47932304a"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=91168b143f55d96548e7a8d5cd8ce7f9634cacaf#91168b143f55d96548e7a8d5cd8ce7f9634cacaf"
 dependencies = [
  "anyhow",
  "async-signal",
