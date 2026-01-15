@@ -467,7 +467,7 @@ pub fn to_surb_balancer_config(
     if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
         return Err(SurbConfigError::ResponseBufferTooSmall);
     }
-    if max_surb_upstream.as_bps() <= 0 {
+    if max_surb_upstream.is_zero() {
         return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
     }
     let config = SurbBalancerConfig {
