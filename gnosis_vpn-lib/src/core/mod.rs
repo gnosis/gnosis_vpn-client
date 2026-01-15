@@ -79,6 +79,7 @@ pub struct Core {
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
+    ongoing_channel_fundings: Vec<Address>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +130,7 @@ impl Core {
             ticket_value: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
+            ongoing_channel_fundings: Vec::new(),
             destination_health: HashMap::new(),
             responder_unit: None,
             responder_duration: None,
@@ -531,19 +533,20 @@ impl Core {
                 address,
                 res,
                 target_dest,
-            } => match res {
-                Ok(()) => {
-                    tracing::info!(%address, "channel funded");
-                    self.update_health(target_dest, |h| h.channel_funded(address));
-                    self.act_on_target(results_sender);
-                }
-                Err(err) => {
-                    tracing::error!(%err, %address, "failed to ensure channel funding - retrying in 1 minute if needed");
-                    if self.update_health(target_dest, |h| h.with_error(err.to_string())) {
-                        self.spawn_channel_funding(address, target_dest, results_sender, Duration::from_secs(60));
+            } => {
+                self.ongoing_channel_fundings.retain(|a| a != &address);
+                match res {
+                    Ok(()) => {
+                        tracing::info!(%address, "channel funded");
+                        self.update_health(target_dest, |h| h.channel_funded(address));
+                        self.act_on_target(results_sender);
+                    }
+                    Err(err) => {
+                        tracing::error!(%err, %address, "failed to ensure channel funding");
+                        self.update_health(target_dest, |h| h.with_error(err.to_string()));
                     }
                 }
-            },
+            }
 
             Results::ConnectionEvent(evt) => {
                 tracing::debug!(%evt, "handling connection runner event");
@@ -786,12 +789,17 @@ impl Core {
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn spawn_channel_funding(
-        &self,
+        &mut self,
         address: Address,
         target_dest: Address,
         results_sender: &mpsc::Sender<Results>,
         delay: Duration,
     ) {
+        if self.ongoing_channel_fundings.contains(&address) {
+            tracing::debug!(%address, "channel funding already ongoing - skipping");
+            return;
+        }
+        self.ongoing_channel_fundings.push(address);
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
             let cancel = self.cancel_channel_tasks.clone();
