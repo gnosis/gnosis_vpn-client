@@ -205,9 +205,6 @@
               "*.yaml"
             ];
             programs.rustfmt.enable = true;
-            settings.formatter.rustfmt = {
-              command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
-            };
             programs.shellcheck.enable = true;
             programs.shfmt = {
               enable = true;
