@@ -5,6 +5,7 @@ use std::fmt::{self, Display};
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
+use crate::core::runner::SurbConfigError;
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
@@ -55,6 +56,8 @@ pub enum Error {
     Runtime(String),
     #[error("Root request error: {0}")]
     RootRequest(String),
+    #[error("Surb config error: {0}")]
+    SurbConfig(#[from] SurbConfigError),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.

@@ -7,6 +7,7 @@ license = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait.workspace = true
 clap.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
@@ -20,7 +21,6 @@ url.workspace = true
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
-mimalloc.workspace = true
 rtnetlink = { workspace = true }
 iptables = { workspace = true }
 futures = { workspace = true }

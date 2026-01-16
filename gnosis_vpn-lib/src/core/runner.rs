@@ -1,9 +1,9 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use alloy::primitives::U256;
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
+use edgli::SafeModuleDeploymentResult;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
@@ -22,10 +22,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::balance;
-use crate::chain::client::GnosisRpcClient;
-use crate::chain::contracts::NetworkSpecifications;
-use crate::chain::contracts::{SafeModuleDeploymentInputs, SafeModuleDeploymentResult};
-use crate::chain::errors::ChainError;
 use crate::connection;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
@@ -46,7 +42,7 @@ pub enum Results {
         res: Result<balance::PreSafe, Error>,
     },
     TicketStats {
-        res: Result<ticket_stats::TicketStats, Error>,
+        res: Result<TicketStats, Error>,
     },
     SafeDeployment {
         res: Result<SafeModuleDeploymentResult, Error>,
@@ -72,11 +68,11 @@ pub enum Results {
     },
     DisconnectionEvent {
         wg_public_key: String,
-        evt: connection::down::runner::Event,
+        evt: connection::down::Event,
     },
     DisconnectionResult {
         wg_public_key: String,
-        res: Result<(), connection::down::runner::Error>,
+        res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
 }
@@ -89,8 +85,8 @@ pub enum Error {
     PreSafe(#[from] balance::Error),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
-    #[error(transparent)]
-    Chain(#[from] ChainError),
+    #[error("chain error: {0}")]
+    Chain(String),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
@@ -103,6 +99,14 @@ pub enum Error {
     ChannelError(#[from] hopr_api::ChannelError),
     #[error("Funding tool error: {0}")]
     FundingTool(String),
+}
+
+#[derive(Debug, Error)]
+pub enum SurbConfigError {
+    #[error("Response buffer byte size too small")]
+    ResponseBufferTooSmall,
+    #[error("Max SURB upstream bandwidth cannot be zero")]
+    MaxSurbUpstreamCannotBeZero,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,8 +147,8 @@ pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: 
     let _ = results_sender.send(Results::SafePersisted).await;
 }
 
-pub async fn hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params, ticket_value).await;
+pub async fn hopr(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
+    let res = run_hopr(hopr_params).await;
     let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
@@ -193,35 +197,58 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     tracing::debug!("starting presafe balance runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider();
-    let node_address = keys.chain_key.public().to_address();
-    (|| async {
-        let presafe = balance::PreSafe::fetch(&private_key, rpc_provider.as_str(), node_address)
-            .await
-            .map_err(Error::from)?;
-        Ok(presafe)
+    let url = hopr_params.blokli_url();
+    (|| {
+        let url = url.clone();
+        let private_key = private_key.clone();
+
+        async move {
+            let (balance_wxhopr, balance_xdai) = edgli::blokli::SafelessInteractor::new(url, &private_key)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .balances()
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+
+            Ok(balance::PreSafe {
+                node_xdai: balance_xdai,
+                node_wxhopr: balance_wxhopr,
+            })
+        }
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "PreSafe attempt failed, retrying...");
+    })
     .await
 }
 
-async fn run_ticket_stats(hopr_params: HoprParams) -> Result<ticket_stats::TicketStats, Error> {
+async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key;
-    let rpc_provider = hopr_params.rpc_provider();
-    let network = hopr_params.network();
-    (|| async {
-        let stats = TicketStats::fetch(
-            &private_key,
-            rpc_provider.as_str(),
-            &NetworkSpecifications::from_network(&network),
-        )
-        .await
-        .map_err(Error::from)?;
-        Ok(stats)
+    let url = hopr_params.blokli_url();
+    (|| {
+        let url = url.clone();
+        let private_key = private_key.clone();
+        async move {
+            let ticket_stats = edgli::blokli::SafelessInteractor::new(url, &private_key)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .ticket_stats()
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+
+            Ok(TicketStats {
+                ticket_price: ticket_stats.ticket_price,
+                winning_probability: ticket_stats.winning_probability,
+            })
+        }
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Ticket stats attempt failed, retrying...");
+    })
     .await
 }
 
@@ -232,28 +259,24 @@ async fn run_safe_deployment(
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
-    let rpc_provider = hopr_params.rpc_provider();
-    let node_address = keys.chain_key.public().to_address();
-    let token_u256 = presafe.node_wxhopr.amount();
-    let token_bytes: [u8; 32] = token_u256.to_big_endian();
-    let token_amount: U256 = U256::from_be_bytes::<32>(token_bytes);
-    let network = hopr_params.network();
-    (|| async {
-        let mut bytes = [0u8; 32];
-        rand::rng().fill(&mut bytes);
-        let nonce = U256::from_be_bytes(bytes);
-        let client = GnosisRpcClient::with_url(private_key.clone(), rpc_provider.as_str())
-            .await
-            .map_err(Error::from)?;
-        let safe_module_deployment_inputs =
-            SafeModuleDeploymentInputs::new(nonce, token_amount, vec![node_address.into()]);
-        let res = safe_module_deployment_inputs
-            .deploy(&client.provider, network.clone())
-            .await
-            .map_err(Error::from)?;
-        Ok(res)
+    let url = hopr_params.blokli_url();
+
+    (|| {
+        let url = url.clone();
+        let private_key = private_key.clone();
+        async move {
+            edgli::blokli::SafelessInteractor::new(url, &private_key)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?
+                .deploy_safe(presafe.node_wxhopr)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))
+        }
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Safe deployment attempt failed, retrying...");
+    })
     .await
 }
 
@@ -310,14 +333,20 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
         Ok(res)
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Funding tool attempt failed, retrying...");
+    })
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams, ticket_value: Balance<WxHOPR>) -> Result<Hopr, Error> {
+async fn run_hopr(hopr_params: HoprParams) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = hopr_params.to_config(ticket_value).await?;
+    let cfg = hopr_params.to_config().await?;
     let keys = hopr_params.calc_keys().await?;
-    Hopr::new(cfg, keys).await.map_err(Error::from)
+    let blokli_url = hopr_params.blokli_url();
+    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys, blokli_url)
+        .await
+        .map_err(Error::from)
 }
 
 async fn run_fund_channel(
@@ -333,6 +362,9 @@ async fn run_fund_channel(
         Ok(())
     })
     .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Fund channel attempt failed, retrying...");
+    })
     .await
 }
 
@@ -427,16 +459,21 @@ impl Display for Results {
     }
 }
 
-pub fn to_surb_balancer_config(response_buffer: ByteSize, max_surb_upstream: Bandwidth) -> SurbBalancerConfig {
+pub fn to_surb_balancer_config(
+    response_buffer: ByteSize,
+    max_surb_upstream: Bandwidth,
+) -> Result<SurbBalancerConfig, SurbConfigError> {
     // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
-        SurbBalancerConfig {
-            target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-            max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
-            ..Default::default()
-        }
-    } else {
-        // Use defaults otherwise
-        Default::default()
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+        return Err(SurbConfigError::ResponseBufferTooSmall);
     }
+    if max_surb_upstream.is_zero() {
+        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
+    }
+    let config = SurbBalancerConfig {
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+        ..Default::default()
+    };
+    Ok(config)
 }

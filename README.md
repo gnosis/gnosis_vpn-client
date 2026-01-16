@@ -11,9 +11,12 @@ consisting of:
 
 ## General concept
 
-The client offers two binaries, `gnosis_vpn` and `gnosis_vpn-ctl`. The client
-(`gnosis_vpn`) runs as a system service with privileged access. The control
-application (`gnosis_vpn-ctl`) is used to manage the client and its connections.
+The client offers three binaries, `gnosis_vpn-root`, `gnosis_vpn-worker` and
+`gnosis_vpn-ctl`. The client system service (`gnosis_vpn-root`) runs with root
+privileges and takes care of routing setup. It spawn the worker process
+(`gnosis_vpn-worker`) which is responsible for the application logic. The
+control application (`gnosis_vpn-ctl`) is used to manage the client and its
+connections.
 
 ## Installation
 
@@ -33,20 +36,20 @@ steps:
 2. Verify the binary signature:
 
    ```bash
-   gpg --verify gnosis_vpn-x86_64-linux.asc gnosis_vpn-x86_64-linux
+   gpg --verify gnosis_vpn-root-x86_64-linux.asc gnosis_vpn-root-x86_64-linux
    ```
 
 3. Compare the checksum with the actual checksum:
 
    ```bash
-   diff -u <(cat gnosis_vpn-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-x86_64-linux)
+   diff -u <(cat gnosis_vpn-root-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-x86_64-linux)
    ```
 
 ## General usage
 
 Check available params and env vars via:
 
-`gnosis_vpn --help` `gnosis_vpn-ctl --help`
+`gnosis_vpn-root --help` `gnosis_vpn-ctl --help`
 
 ## Deployment
 
@@ -64,6 +67,7 @@ The resulting binaries are in `result/bin/`:
 $ ls -l result*/bin/
 result/bin/:
 total 4752
--r-xr-xr-x 1 root root 4863367 Jan  1  1970 gnosis_vpn
--r-xr-xr-x 1 root root 1740050 Jan  1  1970 gnosis_vpn-ctl
+-r-xr-xr-x 1 root root  4863367 Jan  1  1970 gnosis_vpn-root
+-r-xr-xr-x 1 root root 14863367 Jan  1  1970 gnosis_vpn-worker
+-r-xr-xr-x 1 root root  1740050 Jan  1  1970 gnosis_vpn-ctl
 ```

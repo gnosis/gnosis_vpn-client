@@ -8,9 +8,10 @@ mod cli;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
-#[cfg(target_os = "linux")]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// HOW#EVER disabled due to build issues
+// #[cfg(target_os = "linux")]
+// #[global_allocator]
+// static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[tokio::main]
 async fn main() {
@@ -21,7 +22,7 @@ async fn main() {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("Error processing {cmd}: {e}");
-            return;
+            process::exit(exitcode::UNAVAILABLE);
         }
     };
 
@@ -78,9 +79,9 @@ fn pretty_print(resp: &Response) {
             issues,
             info,
         })) => {
-            let mut str_resp = format!("Network: {}\n", info.network);
+            let mut str_resp = String::new();
             str_resp.push_str(&format!(
-                "---\nNode Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
+                "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
                 info.node_address, info.node_peer_id, info.safe_address
             ));
             str_resp.push_str(&format!(

@@ -1,4 +1,4 @@
-use alloy::{
+use edgli::hopr_chain_connector::reexports::alloy::{
     contract::Error as ContractError,
     providers::{MulticallError, PendingTransactionError},
     signers::k256::ecdsa::Error as SigningKeyError,
