@@ -22,7 +22,7 @@ async fn main() {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("Error processing {cmd}: {e}");
-            process::exit(exitcode::IOERR);
+            process::exit(exitcode::UNAVAILABLE);
         }
     };
 
