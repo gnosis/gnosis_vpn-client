@@ -481,12 +481,12 @@ ttl = 6
 seq_count = 1
 
 [connection.max_surb_upstream]
-bridge = "0 Mb/s"
+bridge = "512 Kb/s"
 ping = "1 Mb/s"
 main = "16 Mb/s"
 
 [connection.buffer]
-bridge = "0 B"
+bridge = "32 kB"
 ping = "32 kB"
 main = "2 MB"
 

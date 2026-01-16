@@ -580,7 +580,7 @@ impl Core {
                 // potentially reconnect early after wg disconnected
                 // this might only happen when reconnecting to a different destination after a
                 // connection established successfully
-                if matches!(evt, connection::down::runner::Event::OpenBridge) {
+                if matches!(evt, connection::down::Event::OpenBridge) {
                     self.act_on_target(results_sender);
                 }
             }

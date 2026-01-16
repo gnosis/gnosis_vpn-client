@@ -2,7 +2,7 @@
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use edgli::hopr_lib::SessionClientConfig;
-use thiserror::Error;
+use edgli::hopr_lib::SurbBalancerConfig;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -14,30 +14,13 @@ use crate::core::runner::{self, Results};
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::ping;
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error(transparent)]
-    Hopr(#[from] HoprError),
-    #[error(transparent)]
-    GvpnClient(#[from] gvpn_client::Error),
-    #[error(transparent)]
-    Ping(#[from] ping::Error),
-}
+use super::{Error, Event};
 
 pub struct Runner {
     down: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Event {
-    DisconnectWg,
-    OpenBridge,
-    UnregisterWg,
-    CloseBridge,
 }
 
 impl Runner {
@@ -65,7 +48,9 @@ impl Runner {
                 evt: Event::OpenBridge,
             })
             .await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options).await?;
+        let bridge_config =
+            runner::to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge)?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_config).await?;
 
         // 2. unregister wg public key
         let _ = results_sender
@@ -101,15 +86,13 @@ async fn open_bridge_session(
     hopr: &Hopr,
     down: &connection::down::Down,
     options: &Options,
+    surb_management: SurbBalancerConfig,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path_options: down.destination.routing.clone(),
         return_path_options: down.destination.routing.clone(),
-        surb_management: Some(runner::to_surb_balancer_config(
-            options.buffer_sizes.bridge,
-            options.max_surb_upstream.bridge,
-        )),
+        surb_management: Some(surb_management),
         ..Default::default()
     };
     hopr.open_session(

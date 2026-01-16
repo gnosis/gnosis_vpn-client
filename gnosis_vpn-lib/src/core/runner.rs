@@ -68,11 +68,11 @@ pub enum Results {
     },
     DisconnectionEvent {
         wg_public_key: String,
-        evt: connection::down::runner::Event,
+        evt: connection::down::Event,
     },
     DisconnectionResult {
         wg_public_key: String,
-        res: Result<(), connection::down::runner::Error>,
+        res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
 }
@@ -99,6 +99,14 @@ pub enum Error {
     ChannelError(#[from] hopr_api::ChannelError),
     #[error("Funding tool error: {0}")]
     FundingTool(String),
+}
+
+#[derive(Debug, Error)]
+pub enum SurbConfigError {
+    #[error("Response buffer byte size too small")]
+    ResponseBufferTooSmall,
+    #[error("Max SURB upstream bandwidth cannot be zero")]
+    MaxSurbUpstreamCannotBeZero,
 }
 
 #[derive(Debug, Deserialize)]
@@ -451,16 +459,21 @@ impl Display for Results {
     }
 }
 
-pub fn to_surb_balancer_config(response_buffer: ByteSize, max_surb_upstream: Bandwidth) -> SurbBalancerConfig {
+pub fn to_surb_balancer_config(
+    response_buffer: ByteSize,
+    max_surb_upstream: Bandwidth,
+) -> Result<SurbBalancerConfig, SurbConfigError> {
     // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() >= 2 * edgli::hopr_lib::SESSION_MTU as u64 {
-        SurbBalancerConfig {
-            target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-            max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
-            ..Default::default()
-        }
-    } else {
-        // Use defaults otherwise
-        Default::default()
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+        return Err(SurbConfigError::ResponseBufferTooSmall);
     }
+    if max_surb_upstream.is_zero() {
+        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
+    }
+    let config = SurbBalancerConfig {
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+        ..Default::default()
+    };
+    Ok(config)
 }

@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use std::fmt::{self, Display};
 use std::time::SystemTime;
 
-use crate::connection;
 use crate::connection::destination::Destination;
-use crate::log_output;
+use crate::core::runner::SurbConfigError;
+use crate::hopr::HoprError;
+use crate::{connection, gvpn_client, log_output, ping};
 
 pub mod runner;
 
@@ -29,6 +31,26 @@ pub enum Phase {
     ClosingBridge,
 }
 
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    Hopr(#[from] HoprError),
+    #[error(transparent)]
+    GvpnClient(#[from] gvpn_client::Error),
+    #[error(transparent)]
+    Ping(#[from] ping::Error),
+    #[error("Surb config error: {0}")]
+    SurbConfig(#[from] SurbConfigError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Event {
+    DisconnectWg,
+    OpenBridge,
+    UnregisterWg,
+    CloseBridge,
+}
+
 /// Depending on how far a connection was already established,
 /// different steps for dismantling need to be taken.
 /// If no wg pubkey was generated, nothing needs to be done to rewind a connection attempt.
@@ -49,13 +71,13 @@ impl TryFrom<&connection::up::Up> for Down {
 }
 
 impl Down {
-    pub fn disconnect_evt(&mut self, evt: runner::Event) {
+    pub fn disconnect_evt(&mut self, evt: Event) {
         let now = SystemTime::now();
         match evt {
-            runner::Event::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
-            runner::Event::OpenBridge => self.phase = (now, Phase::OpeningBridge),
-            runner::Event::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
-            runner::Event::CloseBridge => self.phase = (now, Phase::ClosingBridge),
+            Event::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
+            Event::OpenBridge => self.phase = (now, Phase::OpeningBridge),
+            Event::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
+            Event::CloseBridge => self.phase = (now, Phase::ClosingBridge),
         }
     }
 }
