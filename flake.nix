@@ -30,15 +30,16 @@
   };
 
   outputs =
-    inputs@{ self
-    , flake-parts
-    , nixpkgs
-    , rust-overlay
-    , crane
-    , advisory-db
-    , treefmt-nix
-    , pre-commit
-    , ...
+    inputs@{
+      self,
+      flake-parts,
+      nixpkgs,
+      rust-overlay,
+      crane,
+      advisory-db,
+      treefmt-nix,
+      pre-commit,
+      ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
@@ -51,12 +52,13 @@
         "x86_64-darwin"
       ];
       perSystem =
-        { config
-        , self'
-        , inputs'
-        , lib
-        , system
-        , ...
+        {
+          config,
+          self',
+          inputs',
+          lib,
+          system,
+          ...
         }:
         let
           pkgs = (
@@ -156,7 +158,8 @@
             ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv # Required for Darwin builds
             ];
-          } // crateArgsForTarget;
+          }
+          // crateArgsForTarget;
 
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,

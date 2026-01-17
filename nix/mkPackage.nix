@@ -9,19 +9,19 @@
 #   };
 {
   # Crane library instance with custom Rust toolchain
-  craneLib
-, # nixpkgs library utilities
-  lib
-, # package repo
-  pkgs
-, # Pre-built cargo dependencies for caching
-  cargoArtifacts
-, # Package version extracted from Cargo.toml
-  version
-, # Common build arguments including buildInputs and nativeBuildInputs
-  commonArgs
-, # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
-  pname
+  craneLib,
+  # nixpkgs library utilities
+  lib,
+  # package repo
+  pkgs,
+  # Pre-built cargo dependencies for caching
+  cargoArtifacts,
+  # Package version extracted from Cargo.toml
+  version,
+  # Common build arguments including buildInputs and nativeBuildInputs
+  commonArgs,
+  # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
+  pname,
 }:
 let
   # Source files configuration
