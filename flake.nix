@@ -161,7 +161,8 @@
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,
           # allowing us to cache and reuse them across all packages (via cachix in CI).
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          cargoArtifacts-release = craneLib.buildDepsOnly commonArgs;
+          cargoArtifacts-dev = craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = "dev"; });
 
           # Import the package builder function from nix/mkPackage.nix
           # This function encapsulates all the logic for building gnosis_vpn packages
@@ -172,12 +173,12 @@
             inherit
               craneLib
               lib
-              cargoArtifacts
               pkgs
               commonArgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn";
+            cargoArtifacts = cargoArtifacts-release;
           };
 
           # Development build with faster compilation and debug symbols
@@ -186,7 +187,6 @@
             inherit
               craneLib
               lib
-              cargoArtifacts
               pkgs
               ;
             commonArgs = commonArgs // {
@@ -194,6 +194,7 @@
             };
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn-dev";
+            cargoArtifacts = cargoArtifacts-dev;
           };
 
           pre-commit-check = pre-commit.lib.${system}.run {
@@ -278,15 +279,15 @@
             clippy = craneLib.cargoClippy (
               commonArgs
               // {
-                inherit cargoArtifacts;
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+                cargoArtifacts = cargoArtifacts-dev;
               }
             );
 
             docs = craneLib.cargoDoc (
               commonArgs
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifacts-dev;
               }
             );
 
@@ -308,7 +309,7 @@
             test = craneLib.cargoNextest (
               commonArgs
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifacts-dev;
                 partitions = 1;
                 partitionType = "count";
                 cargoNextestPartitionsExtraArgs = "--no-tests=pass";
