@@ -18,9 +18,33 @@ privileges and takes care of routing setup. It spawn the worker process
 control application (`gnosis_vpn-ctl`) is used to manage the client and its
 connections.
 
+## Development setup
+
+1. Create an extra user on your system (e.g. `gnosisvpn`) with normal privileges.
+This user will be used to run the worker process.
+
+2. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
+
+3.  Copy worker binary into user's home directory and make it owned by the user:
+
+```bash
+> sudo cp target/debug/gnosis_vpn-worker /home/gnosisvpn/
+# or from nix build:
+# sudo cp result/bin/gnosis_vpn-worker /home/gnosisvpn/
+> sudo chown gnosisvpn:gnosisvpn /home/gnosisvpn/gnosis_vpn-worker
+```
+
+4. Run the root binary with sudo and provide the path to the worker binary:
+
+```bash
+> sudo RUST_LOG="debug" ./target/debug/gnosis_vpn-root -c <config.toml> --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+# or from nix build:
+> sudo RUST_LOG="debug" ./result/bin/gnosis_vpn-root -c <config.toml> --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+```
+
 ## Installation
 
-Use the [install script](./install.sh).
+Use the latest [installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
 
 ### Check signatures
 
