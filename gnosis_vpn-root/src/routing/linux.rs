@@ -29,8 +29,6 @@ pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4A
     FallbackRouter { wg_data, peer_ips }
 }
 
-// TOOD remove allow dead code once implemented
-#[allow(dead_code)]
 pub struct Router {
     worker: worker::Worker,
     wg_data: event::WireGuardData,
@@ -59,8 +57,11 @@ const TABLE_ID: u32 = 108;
 /// 3. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
 fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
-    iptables.delete_chain("mangle", "OUTPUT")?;
-    iptables.new_chain("mangle", "OUTPUT")?;
+    if iptables.chain_exists("mangle", "OUTPUT")? {
+        iptables.flush_chain("mangle", "OUTPUT")?;
+    } else {
+        iptables.new_chain("mangle", "OUTPUT")?;
+    }
 
     // Keep loopback for VPN user unmarked
     iptables.append(
@@ -249,31 +250,37 @@ impl Routing for Router {
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
         // Flush the iptables rules
-        flush_ip_tables().map_err(Error::iptables)?;
+        if let Err(error) = flush_ip_tables().map_err(Error::iptables) {
+            tracing::error!(%error, "failed to flush iptables rules, continuing anyway");
+        }
 
         // Delete the fwmark routing table rule
-        let rules = self
+        if let Ok(rules) = self
             .handle
             .rule()
             .get(IpVersion::V4)
             .execute()
             .try_collect::<Vec<_>>()
-            .await?;
-        for rule in rules.into_iter().filter(|rule| {
-            rule.attributes
-                .iter()
-                .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
-                && rule
+            .await {
+            for rule in rules.into_iter().filter(|rule| {
+                rule.attributes
+                    .iter()
+                    .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
+                    && rule
                     .attributes
                     .iter()
                     .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
-        }) {
-            self.handle.rule().del(rule).execute().await?;
-            tracing::debug!("deleted fwmark {} routing table rule", FW_MARK);
+            }) {
+                if let Err(error) = self.handle.rule().del(rule).execute().await {
+                    tracing::error!(%error, "failed to delete fwmark routing table rule, continuing anyway");
+                } else {
+                    tracing::debug!("deleted fwmark {} routing table rule", FW_MARK);
+                }
+            }
         }
 
         // Delete the TABLE_ID routing table
-        self.handle
+        if let Err(error) = self.handle
             .route()
             .del(
                 rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
@@ -283,16 +290,23 @@ impl Routing for Router {
                     .build(),
             )
             .execute()
-            .await?;
-        tracing::debug!("deleted table {}", TABLE_ID);
+            .await {
+            tracing::error!(%error, "failed to delete table {}, continuing anyway", TABLE_ID);
+        } else {
+            tracing::debug!("deleted table {}", TABLE_ID);
+        }
 
         // Set the default route back to the WAN interface
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
             .build();
-        self.handle.route().add(default_route).execute().await?;
-        tracing::debug!(wan_if_index, "set main table default route to interface");
+
+        if let Err(error) = self.handle.route().add(default_route).execute().await {
+            tracing::error!(%error, "failed to set default route back to interface, continuing anyway");
+        } else {
+            tracing::debug!(wan_if_index, "set main table default route to interface");
+        }
 
         // Run wg-quick down
         wg_tooling::down().await?;
