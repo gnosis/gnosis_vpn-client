@@ -61,7 +61,7 @@ jobs:
           echo "Generating release notes"
           gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
           echo "Preparing binaries for upload"
-          binaries=(gnosis_vpn-worker gnosis_vpn-root gnosis_vpn-client)
+          binaries=(gnosis_vpn-worker gnosis_vpn-root gnosis_vpn-ctl)
           for architecture in "${architectures[@]}"; do
               echo "Downloading from GCP binary for ${architecture}"
               for b in "${binaries[@]}"; do
