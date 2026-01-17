@@ -6,7 +6,6 @@
 # Usage example:
 #   gvpn = mkPackage {
 #     pname = "gnosis_vpn";
-#     profile = "release";
 #   };
 {
   # Crane library instance with custom Rust toolchain
@@ -21,17 +20,9 @@
   version
 , # Common build arguments including buildInputs and nativeBuildInputs
   commonArgs
-,
-}:
-{
-  # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
+, # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
   pname
-, # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
-  profile
-, # Build only binary crates in workspace
-  cargoExtraArgs ? "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl"
-, ... # Any additional arguments are passed through to craneLib.buildPackage
-}@args:
+}:
 let
   # Source files configuration
   # Uses filesets to include only necessary files for the build, excluding
@@ -62,23 +53,15 @@ let
   # Merges all configuration layers in order:
   # 1. Common arguments (buildInputs, nativeBuildInputs, src, etc.)
   # 2. Base crate arguments (version, artifacts, doCheck)
-  # 3. Package-specific settings (pname, profile, source)
-  # 4. Target-specific flags (RUSTFLAGS, target triple)
-  # 5. Additional user-provided arguments (after filtering internal ones)
+  # 3. Package-specific settings (pname, source)
   packageArgs =
     commonArgs
     // individualCrateArgs
     // {
       inherit pname;
-      inherit cargoExtraArgs;
+      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
       src = srcFiles;
-      CARGO_PROFILE = profile;
-    }
-    // (builtins.removeAttrs args [
-      "pname"
-      "profile"
-      "cargoExtraArgs"
-    ]);
+    };
 in
 # Build the package using crane's buildPackage with all merged arguments
 craneLib.buildPackage packageArgs

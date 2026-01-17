@@ -87,6 +87,7 @@
           # - All targets enable crt-static for standalone binaries
           targetCrateArgs = {
             "x86_64-unknown-linux-musl" = {
+              CARGO_PROFILE = "release";
               CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
               CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
               # Add musl-specific configuration for C dependencies (SQLite, etc.)
@@ -96,6 +97,7 @@
               LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
             };
             "aarch64-unknown-linux-musl" = {
+              CARGO_PROFILE = "release";
               CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
               CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
               # Add musl-specific configuration for C dependencies (SQLite, etc.)
@@ -109,6 +111,7 @@
               CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
             };
             "aarch64-apple-darwin" = {
+              CARGO_PROFILE = "release";
               CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
             };
           };
@@ -132,6 +135,7 @@
 
           # Common build arguments shared across all crane operations
           # These are used for dependency building, clippy, docs, tests, etc.
+          # CARGO_PROFILE is part of the commonArgs to make depsonly build match the target derivations
           commonArgs = {
             inherit src;
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
@@ -163,32 +167,33 @@
           # This function encapsulates all the logic for building gnosis_vpn packages
           # with consistent source files, target configurations, and build settings.
           # See nix/mkPackage.nix for detailed documentation on the builder function.
-          mkPackage = import ./nix/mkPackage.nix {
+          # Production build with release profile optimizations
+          gnosis_vpn = import ./nix/mkPackage.nix {
             inherit
               craneLib
               lib
-              targetForSystem
               cargoArtifacts
               pkgs
               commonArgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-          };
-
-          # Build the top-level crates of the workspace as individual derivations
-          # This modular approach allows consumers to depend on and build only what
-          # they need, rather than building the entire workspace as a single derivation.
-
-          # Production build with release profile optimizations
-          gnosis_vpn = mkPackage {
             pname = "gnosis_vpn";
-            profile = "release";
           };
 
           # Development build with faster compilation and debug symbols
-          gnosis_vpn-dev = mkPackage {
+          # Override release profile set in commonArgs with "dev" profile
+          gnosis_vpn-dev = import ./nix/mkPackage.nix {
+            inherit
+              craneLib
+              lib
+              cargoArtifacts
+              pkgs
+              ;
+            commonArgs = commonArgs // {
+              CARGO_PROFILE = "dev";
+            };
+            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn-dev";
-            profile = "dev";
           };
 
           pre-commit-check = pre-commit.lib.${system}.run {
