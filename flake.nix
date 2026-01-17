@@ -30,16 +30,15 @@
   };
 
   outputs =
-    inputs@{
-      self,
-      flake-parts,
-      nixpkgs,
-      rust-overlay,
-      crane,
-      advisory-db,
-      treefmt-nix,
-      pre-commit,
-      ...
+    inputs@{ self
+    , flake-parts
+    , nixpkgs
+    , rust-overlay
+    , crane
+    , advisory-db
+    , treefmt-nix
+    , pre-commit
+    , ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
@@ -52,13 +51,12 @@
         "x86_64-darwin"
       ];
       perSystem =
-        {
-          config,
-          self',
-          inputs',
-          lib,
-          system,
-          ...
+        { config
+        , self'
+        , inputs'
+        , lib
+        , system
+        , ...
         }:
         let
           pkgs = (
@@ -81,6 +79,41 @@
           # Map current system to its corresponding Rust target triple
           # This ensures we build for the correct architecture and platform
           targetForSystem = builtins.getAttr system systemTargets;
+
+          # Target-specific build arguments
+          # Each target triple has its own compiler flags and build configuration.
+          # - Linux targets use musl for static linking and mold for faster linking
+          # - Darwin targets use different profiles based on architecture (intelmac for x86_64)
+          # - All targets enable crt-static for standalone binaries
+          targetCrateArgs = {
+            "x86_64-unknown-linux-musl" = {
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              # Add musl-specific configuration for C dependencies (SQLite, etc.)
+              # Disable Nix hardening features that are incompatible with musl
+              hardeningDisable = [ "fortify" ];
+              # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+            };
+            "aarch64-unknown-linux-musl" = {
+              CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              # Add musl-specific configuration for C dependencies (SQLite, etc.)
+              # Disable Nix hardening features that are incompatible with musl
+              hardeningDisable = [ "fortify" ];
+              # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+            };
+            "x86_64-apple-darwin" = {
+              CARGO_PROFILE = "intelmac";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+            };
+            "aarch64-apple-darwin" = {
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+            };
+          };
+
+          crateArgsForTarget = builtins.getAttr targetForSystem targetCrateArgs;
 
           # Configure crane with custom Rust toolchain
           # We don't overlay the custom toolchain for the *entire* pkgs (which
@@ -119,14 +152,7 @@
             ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv # Required for Darwin builds
             ];
-          }
-          # Add musl-specific configuration for C dependencies (SQLite, etc.)
-          // lib.optionalAttrs (lib.hasInfix "musl" targetForSystem) {
-            # Disable Nix hardening features that are incompatible with musl
-            hardeningDisable = [ "fortify" ];
-            # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
-            LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
-          };
+          } // crateArgsForTarget;
 
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,

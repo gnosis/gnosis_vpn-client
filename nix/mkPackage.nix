@@ -10,28 +10,27 @@
 #   };
 {
   # Crane library instance with custom Rust toolchain
-  craneLib,
-  # nixpkgs library utilities
-  lib,
-  # package repo
-  pkgs,
-  # Target triple for the current system (e.g., "x86_64-unknown-linux-musl")
-  targetForSystem,
-  # Pre-built cargo dependencies for caching
-  cargoArtifacts,
-  # Package version extracted from Cargo.toml
-  version,
-  # Common build arguments including buildInputs and nativeBuildInputs
-  commonArgs,
+  craneLib
+, # nixpkgs library utilities
+  lib
+, # package repo
+  pkgs
+, # Pre-built cargo dependencies for caching
+  cargoArtifacts
+, # Package version extracted from Cargo.toml
+  version
+, # Common build arguments including buildInputs and nativeBuildInputs
+  commonArgs
+,
 }:
 {
   # Package name (e.g., "gnosis_vpn-root", "gnosis_vpn-worker" or "gnosis_vpn-dev")
-  pname,
-  profile ? "release",
-  # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
-  cargoExtraArgs ? "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl",
-  # Build only binary crates in workspace
-  ... # Any additional arguments are passed through to craneLib.buildPackage
+  pname
+, # Cargo build profile (default: "release", can be "dev", "intelmac", etc.)
+  profile
+, # Build only binary crates in workspace
+  cargoExtraArgs ? "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl"
+, ... # Any additional arguments are passed through to craneLib.buildPackage
 }@args:
 let
   # Source files configuration
@@ -48,29 +47,6 @@ let
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-root)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-worker)
     ];
-  };
-
-  # Target-specific build arguments
-  # Each target triple has its own compiler flags and build configuration.
-  # - Linux targets use musl for static linking and mold for faster linking
-  # - Darwin targets use different profiles based on architecture (intelmac for x86_64)
-  # - All targets enable crt-static for standalone binaries
-  targetCrateArgs = {
-    "x86_64-unknown-linux-musl" = {
-      CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
-    };
-    "aarch64-unknown-linux-musl" = {
-      CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
-      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
-    };
-    "x86_64-apple-darwin" = {
-      CARGO_PROFILE = "intelmac";
-      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-    };
-    "aarch64-apple-darwin" = {
-      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
-    };
   };
 
   # Individual crate build arguments shared across all packages
@@ -98,7 +74,6 @@ let
       src = srcFiles;
       CARGO_PROFILE = profile;
     }
-    // (builtins.getAttr targetForSystem targetCrateArgs)
     // (builtins.removeAttrs args [
       "pname"
       "profile"
