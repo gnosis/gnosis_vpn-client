@@ -156,7 +156,7 @@
               pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
             ]
             ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.libiconv # Required for Darwin builds
+              pkgs.pkgsStatic.libiconv # Required for Darwin builds
             ];
           }
           // crateArgsForTarget;
