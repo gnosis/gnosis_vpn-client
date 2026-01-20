@@ -50,7 +50,7 @@ let
   };
 
   postInstall = ''
-    for bin in "$out/bin/*"; do
+    for bin in $(find "$out/bin" -type f); do
       local linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
 
       if [ -n "$linked_iconv" ]; then
