@@ -56,12 +56,12 @@ let
   # 3. Package-specific settings (pname, source)
   packageArgs =
     commonArgs
-    // individualCrateArgs
     // {
       inherit pname;
       cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
       src = srcFiles;
-    };
+    }
+    // individualCrateArgs;
 in
 # Build the package using crane's buildPackage with all merged arguments
 craneLib.buildPackage packageArgs
