@@ -110,11 +110,13 @@
             };
             "x86_64-apple-darwin" = {
               CARGO_PROFILE = "intelmac";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
             };
             "aarch64-apple-darwin" = {
               CARGO_PROFILE = "release";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
             };
           };
 
@@ -154,9 +156,6 @@
             buildInputs = [
               pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
               pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-            ]
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.pkgsStatic.libiconv # Required for Darwin builds
             ];
           }
           // crateArgsForTarget;
