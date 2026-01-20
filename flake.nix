@@ -158,22 +158,6 @@
               pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
             ];
 
-            postInstall = ''
-              for bin in "$out/bin/*"; do
-                local linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
-
-                if [ -n "$linked_iconv" ]; then
-                  echo "Rewriting $bin - found nix libiconv reference: $linked_iconv"
-
-                  # macOS usually ships libiconv.2.dylib in /usr/lib
-                  install_name_tool -change "$linked_iconv" "/usr/lib/libiconv.2.dylib" "$bin"
-
-                  echo "Fixed libiconv path"
-                else
-                  echo "Not rewriting $bin - no nix libiconv reference found"
-                fi
-              done
-            '';
           }
           // crateArgsForTarget;
 
