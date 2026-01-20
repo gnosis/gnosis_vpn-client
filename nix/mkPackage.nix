@@ -49,6 +49,23 @@ let
     doCheck = false;
   };
 
+  postInstall = ''
+    for bin in $(find "$out/bin" -type f); do
+      local linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
+
+      if [ -n "$linked_iconv" ]; then
+        echo "Rewriting $bin - found nix libiconv reference: $linked_iconv"
+
+        # macOS usually ships libiconv.2.dylib in /usr/lib
+        install_name_tool -change "$linked_iconv" "/usr/lib/libiconv.2.dylib" "$bin"
+
+        echo "Fixed libiconv path"
+      else
+        echo "Not rewriting $bin - no nix libiconv reference found"
+      fi
+    done
+  '';
+
   # Final package arguments
   # Merges all configuration layers in order:
   # 1. Common arguments (buildInputs, nativeBuildInputs, src, etc.)
@@ -59,6 +76,7 @@ let
     // individualCrateArgs
     // {
       inherit pname;
+      inherit postInstall;
       cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
       src = srcFiles;
     };

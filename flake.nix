@@ -110,11 +110,13 @@
             };
             "x86_64-apple-darwin" = {
               CARGO_PROFILE = "intelmac";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
             };
             "aarch64-apple-darwin" = {
               CARGO_PROFILE = "release";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
             };
           };
 
@@ -138,7 +140,7 @@
           # Common build arguments shared across all crane operations
           # These are used for dependency building, clippy, docs, tests, etc.
           # CARGO_PROFILE is part of the commonArgs to make depsonly build match the target derivations
-          commonArgs = {
+          commonArgsRelease = {
             inherit src;
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
@@ -154,33 +156,35 @@
             buildInputs = [
               pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
               pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-            ]
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.libiconv # Required for Darwin builds
             ];
+
           }
           // crateArgsForTarget;
+
+          commonArgsDev = commonArgsRelease // {
+            CARGO_PROFILE = "dev";
+          };
 
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,
           # allowing us to cache and reuse them across all packages (via cachix in CI).
-          cargoArtifacts-release = craneLib.buildDepsOnly commonArgs;
-          cargoArtifacts-dev = craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = "dev"; });
+          cargoArtifacts-release = craneLib.buildDepsOnly commonArgsRelease;
+          cargoArtifacts-dev = craneLib.buildDepsOnly commonArgsDev;
 
           # Import the package builder function from nix/mkPackage.nix
           # This function encapsulates all the logic for building gnosis_vpn packages
           # with consistent source files, target configurations, and build settings.
           # See nix/mkPackage.nix for detailed documentation on the builder function.
           # Production build with release profile optimizations
-          gnosis_vpn = import ./nix/mkPackage.nix {
+          gnosis_vpn-release = import ./nix/mkPackage.nix {
             inherit
               craneLib
               lib
               pkgs
-              commonArgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn";
+            commonArgs = commonArgsRelease;
             cargoArtifacts = cargoArtifacts-release;
           };
 
@@ -192,11 +196,9 @@
               lib
               pkgs
               ;
-            commonArgs = commonArgs // {
-              CARGO_PROFILE = "dev";
-            };
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn-dev";
+            commonArgs = commonArgsDev;
             cargoArtifacts = cargoArtifacts-dev;
           };
 
@@ -280,7 +282,7 @@
             # we can block the CI if there are issues here, but not
             # prevent downstream consumers from building our crate by itself.
             clippy = craneLib.cargoClippy (
-              commonArgs
+              commonArgsDev
               // {
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
                 cargoArtifacts = cargoArtifacts-dev;
@@ -288,7 +290,7 @@
             );
 
             docs = craneLib.cargoDoc (
-              commonArgs
+              commonArgsDev
               // {
                 cargoArtifacts = cargoArtifacts-dev;
               }
@@ -310,7 +312,7 @@
             # Consider setting `doCheck = false` on other crate derivations
             # if you do not want the tests to run twice
             test = craneLib.cargoNextest (
-              commonArgs
+              commonArgsDev
               // {
                 cargoArtifacts = cargoArtifacts-dev;
                 partitions = 1;
@@ -322,10 +324,10 @@
           };
 
           packages = {
-            inherit gnosis_vpn;
+            gnosis_vpn = gnosis_vpn-release;
             inherit gnosis_vpn-dev;
             inherit pre-commit-check;
-            default = gnosis_vpn;
+            default = gnosis_vpn-release;
           };
 
           apps = {

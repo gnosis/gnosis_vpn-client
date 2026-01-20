@@ -20,12 +20,12 @@ connections.
 
 ## Development setup
 
-1. Create an extra user on your system (e.g. `gnosisvpn`) with normal privileges.
-This user will be used to run the worker process.
+1. Create an extra user on your system (e.g. `gnosisvpn`) with normal
+   privileges. This user will be used to run the worker process.
 
 2. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
 
-3.  Copy worker binary into user's home directory and make it owned by the user:
+3. Copy worker binary into user's home directory and make it owned by the user:
 
 ```bash
 > sudo cp target/debug/gnosis_vpn-worker /home/gnosisvpn/
@@ -44,7 +44,8 @@ This user will be used to run the worker process.
 
 ## Installation
 
-Use the latest [installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
+Use the latest
+[installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
 
 ### Check signatures
 

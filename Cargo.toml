@@ -3,7 +3,7 @@ members = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.60.2"
+version = "0.60.3"
 edition = "2024"
 license = "LGPL-3.0"
 
@@ -67,11 +67,11 @@ inherits = "release"
 opt-level = 1
 debug = false
 # split-debuginfo = '...'  # Platform-specific.
-strip = "none"
+strip = true
 debug-assertions = false
 overflow-checks = false
 lto = false
-panic = 'unwind'
+panic = "abort"
 incremental = false
-codegen-units = 16
+codegen-units = 1
 rpath = false
