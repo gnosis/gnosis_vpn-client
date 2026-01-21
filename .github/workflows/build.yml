@@ -81,9 +81,9 @@ jobs:
           - architecture: x86_64-linux
             runner: ubuntu-22.04
           - architecture: aarch64-darwin
-            runner: macos-15-xlarge
+            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU and 14GB RAM
           - architecture: x86_64-darwin
-            runner: macos-15-large
+            runner: macos-15-large # Uses Intel hardware 12vCPU and 30GB RAM
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
