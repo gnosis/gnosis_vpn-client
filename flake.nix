@@ -168,12 +168,18 @@
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,
           # allowing us to cache and reuse them across all packages (via cachix in CI).
-          cargoArtifacts-release = craneLib.buildDepsOnly (commonArgsRelease // {
-            doCheck = false; # Disable tests for deps-only build
-          });
-          cargoArtifacts-dev = craneLib.buildDepsOnly (commonArgsDev // {
-            doCheck = false; # Disable tests for deps-only build
-          });
+          cargoArtifacts-release = craneLib.buildDepsOnly (
+            commonArgsRelease
+            // {
+              doCheck = false; # Disable tests for deps-only build
+            }
+          );
+          cargoArtifacts-dev = craneLib.buildDepsOnly (
+            commonArgsDev
+            // {
+              doCheck = false; # Disable tests for deps-only build
+            }
+          );
 
           # Import the package builder function from nix/mkPackage.nix
           # This function encapsulates all the logic for building gnosis_vpn packages
