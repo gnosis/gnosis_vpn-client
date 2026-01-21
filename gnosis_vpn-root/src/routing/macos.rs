@@ -10,16 +10,15 @@ use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, worker};
 
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+// use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 use crate::wg_tooling;
 
 use super::{Error, Routing};
 
 pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
-    let pf = pfctl::PfCtl::new()?;
     Ok(Firewall {
-        fw: Arc::new(std::sync::Mutex::new(pf)),
         worker,
         wg_data,
     })
@@ -32,7 +31,6 @@ pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4A
 // const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
 
 pub struct Firewall {
-    fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
     #[allow(dead_code)]
     worker: worker::Worker,
     wg_data: event::WireGuardData,
@@ -51,7 +49,7 @@ impl Firewall {
 impl Routing for Firewall {
     /**
      * Refactor logic to use:
-     * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
+     * - pfctl shell command
      */
     #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
     async fn setup(&mut self) -> Result<(), Error> {
@@ -70,75 +68,161 @@ impl Routing for Firewall {
 
         // 4. setup bypass
 
-        // Create a PfCtl instance to control PF with:
-        let mut pf = self
-            .fw
-            .lock()
-            .ok()
-            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?;
-
-        let interface = pfctl::Interface::from(&device);
         let gw_ip: std::net::IpAddr = gateway
             .ok_or(Error::General("No gateway found".into()))?
             .as_str()
             .parse()
             .map_err(|e| Error::General(format!("failed to convert gatewat to IpAddr: {e}")))?;
-        let gw = pfctl::Ip::from(gw_ip);
 
         // Enable the firewall, equivalent to the command "pfctl -e":
         tracing::info!("Enabling PF...");
-        pf.try_enable()?;
+        let _ = Command::new("pfctl")
+            .arg("-e")
+            .output()
+            .await
+            .map_err(|e| Error::General(format!("Failed to enable pfctl: {e}")))?;
 
-        // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
-        // use `try_add_anchor` to avoid that:
-        tracing::info!("Adding anchor {}...", Firewall::ANCHOR_NAME);
-        pf.try_add_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+        tracing::info!("Ensuring anchor link exists in main ruleset...");
+        let main_rules = Command::new("pfctl")
+            .arg("-sr")
+            .output()
+            .await
+            .map_err(|e| Error::General(format!("Failed to read pf rules: {e}")))?;
+        
+        let rules_str = String::from_utf8_lossy(&main_rules.stdout);
+        if !rules_str.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)) {
+             tracing::info!("Linking anchor to main ruleset...");
+             
+             let mut child = Command::new("pfctl")
+                .arg("-f")
+                .arg("-")
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+             
+             if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(&main_rules.stdout).await?;
+                stdin.write_all(b"\n").await?;
+                stdin.write_all(format!("anchor \"{}\"\n", Firewall::ANCHOR_NAME).as_bytes()).await?;
+             }
+             child.wait().await?;
+        }
+
         tracing::info!("Flushing rules for anchor {}...", Firewall::ANCHOR_NAME);
-        pf.flush_rules(Firewall::ANCHOR_NAME, pfctl::RulesetKind::Filter)?;
+        Command::new("pfctl")
+            .args(&["-a", Firewall::ANCHOR_NAME, "-F", "all"])
+            .output()
+            .await?;
 
-        // Create a packet filtering rule matching all packets on the identified interface and allowing
-        // them to pass:
-        // RULE: `pass out quick route-to (en0 192.168.0.1) from any to any user gnosisvpn`
+        // ... Add rule ...
         tracing::info!(
-            "PF Rule Params: device={}, gateway={:?}, uid={}",
-            device,
-            gw_ip,
-            self.worker.uid
+             "PF Rule Params: device={}, gateway={:?}, uid={}",
+             device,
+             gw_ip,
+             self.worker.uid
         );
-        let rule = pfctl::FilterRuleBuilder::default()
-            .action(pfctl::FilterRuleAction::Pass)
-            .interface(&device)
-            .direction(pfctl::Direction::Out) // or Any
-            .quick(true)
-            .route(pfctl::Route::RouteTo(pfctl::PoolAddr::new(interface, gw)))
-            .from(std::net::Ipv4Addr::UNSPECIFIED) // any
-            .to(std::net::Ipv4Addr::UNSPECIFIED) // any
-            .user(self.worker.uid)
-            .build()?;
+        
+        let rule_str = format!(
+            "pass out quick route-to ({device} {gateway}) inet from any to ! 127.0.0.0/8 user {uid}\n",
+            device = device,
+            gateway = gw_ip,
+            uid = self.worker.uid
+        );
+        
+        tracing::info!("Adding rule: {}", rule_str);
+        
+        let mut child = Command::new("pfctl")
+            .args(&["-a", Firewall::ANCHOR_NAME, "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(rule_str.as_bytes()).await?;
+        }
+        
+        let output = child.wait_with_output().await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::General(format!("Failed to add pf rule: {}", stderr)));
+        }
+        
+        tracing::info!("Bypass rule added successfully via shell.");
 
-        // Add the filtering rule to the anchor we just created.
-        tracing::info!(?rule, "Adding bypass rule to anchor");
-        pf.add_rule(Firewall::ANCHOR_NAME, &rule)?;
-        tracing::info!("Bypass rule added successfully.");
+        // Debug: Log full configuration
+        match Command::new("pfctl").arg("-sr").output().await {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                tracing::info!("--- Main Rules ---\n{}", stdout);
+            }
+            Err(e) => tracing::warn!("Failed to fetch main rules: {}", e),
+        }
+
+        match Command::new("pfctl")
+            .args(&["-a", Firewall::ANCHOR_NAME, "-sr"])
+            .output()
+            .await 
+        {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                tracing::info!("--- Anchor {} Rules ---\n{}", Firewall::ANCHOR_NAME, stdout);
+            }
+            Err(e) => tracing::warn!("Failed to fetch anchor rules: {}", e),
+        }
 
         Ok(())
     }
 
     #[tracing::instrument(name = "Firewall::teardown", level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
     async fn teardown(&mut self) -> Result<(), Error> {
-        // 1. remove pf anchor
-        self.fw
-            .lock()
-            .ok()
-            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?
-            .remove_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+        // 1. remove pf anchor rules
+        Command::new("pfctl")
+            .args(&["-a", Firewall::ANCHOR_NAME, "-F", "all"])
+            .output()
+            .await?;
+            
+        // 2. Optionally remove anchor from main ruleset?
+        // The crate `remove_anchor` did `pf_change_rule` to remove it from main ruleset.
+        // We probably should cleanup.
+        // (pfctl -sr | grep -v 'anchor "gnosisvpn_bypass"') | pfctl -f -
+        
+        let main_rules = Command::new("pfctl")
+            .arg("-sr")
+            .output()
+            .await
+            .map_err(|e| Error::General(format!("Failed to read pf rules: {e}")))?;
+            
+        let rules_str = String::from_utf8_lossy(&main_rules.stdout);
+        if rules_str.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)) {
+             tracing::info!("Removing anchor link from main ruleset...");
+             let new_rules = rules_str
+                .lines()
+                .filter(|l| !l.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)))
+                .collect::<Vec<_>>()
+                .join("\n");
+                
+             let mut child = Command::new("pfctl")
+                .arg("-f")
+                .arg("-")
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+             
+             if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(new_rules.as_bytes()).await?;
+                // Ensure newline at end if needed
+                if !new_rules.ends_with('\n') {
+                    stdin.write_all(b"\n").await?;
+                }
+             }
+             child.wait().await?;
+        }
 
-        // 2. run wg-quick down
+        // 3. run wg-quick down
         wg_tooling::down().await?;
 
         Ok(())
     }
 }
+
 
 #[async_trait]
 impl Routing for FallbackRouter {
