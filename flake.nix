@@ -82,6 +82,46 @@
           # This ensures we build for the correct architecture and platform
           targetForSystem = builtins.getAttr system systemTargets;
 
+          # Target-specific build arguments
+          # Each target triple has its own compiler flags and build configuration.
+          # - Linux targets use musl for static linking and mold for faster linking
+          # - Darwin targets use different profiles based on architecture (intelmac for x86_64)
+          # - All targets enable crt-static for standalone binaries
+          targetCrateArgs = {
+            "x86_64-unknown-linux-musl" = {
+              CARGO_PROFILE = "release";
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              # Add musl-specific configuration for C dependencies (SQLite, etc.)
+              # Disable Nix hardening features that are incompatible with musl
+              hardeningDisable = [ "fortify" ];
+              # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+            };
+            "aarch64-unknown-linux-musl" = {
+              CARGO_PROFILE = "release";
+              CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              # Add musl-specific configuration for C dependencies (SQLite, etc.)
+              # Disable Nix hardening features that are incompatible with musl
+              hardeningDisable = [ "fortify" ];
+              # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+            };
+            "x86_64-apple-darwin" = {
+              CARGO_PROFILE = "intelmac";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+            };
+            "aarch64-apple-darwin" = {
+              CARGO_PROFILE = "release";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+            };
+          };
+
+          crateArgsForTarget = builtins.getAttr targetForSystem targetCrateArgs;
+
           # Configure crane with custom Rust toolchain
           # We don't overlay the custom toolchain for the *entire* pkgs (which
           # would require rebuilding anything else that uses rust). Instead, we
@@ -99,7 +139,8 @@
 
           # Common build arguments shared across all crane operations
           # These are used for dependency building, clippy, docs, tests, etc.
-          commonArgs = {
+          # CARGO_PROFILE is part of the commonArgs to make depsonly build match the target derivations
+          commonArgsRelease = {
             inherit src;
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
@@ -115,54 +156,50 @@
             buildInputs = [
               pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
               pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-            ]
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.libiconv # Required for Darwin builds
             ];
+
           }
-          # Add musl-specific configuration for C dependencies (SQLite, etc.)
-          // lib.optionalAttrs (lib.hasInfix "musl" targetForSystem) {
-            # Disable Nix hardening features that are incompatible with musl
-            hardeningDisable = [ "fortify" ];
-            # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
-            LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+          // crateArgsForTarget;
+
+          commonArgsDev = commonArgsRelease // {
+            CARGO_PROFILE = "dev";
           };
 
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,
           # allowing us to cache and reuse them across all packages (via cachix in CI).
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          cargoArtifacts-release = craneLib.buildDepsOnly commonArgsRelease;
+          cargoArtifacts-dev = craneLib.buildDepsOnly commonArgsDev;
 
           # Import the package builder function from nix/mkPackage.nix
           # This function encapsulates all the logic for building gnosis_vpn packages
           # with consistent source files, target configurations, and build settings.
           # See nix/mkPackage.nix for detailed documentation on the builder function.
-          mkPackage = import ./nix/mkPackage.nix {
+          # Production build with release profile optimizations
+          gnosis_vpn-release = import ./nix/mkPackage.nix {
             inherit
               craneLib
               lib
-              targetForSystem
-              cargoArtifacts
               pkgs
-              commonArgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-          };
-
-          # Build the top-level crates of the workspace as individual derivations
-          # This modular approach allows consumers to depend on and build only what
-          # they need, rather than building the entire workspace as a single derivation.
-
-          # Production build with release profile optimizations
-          gnosis_vpn = mkPackage {
             pname = "gnosis_vpn";
-            profile = "release";
+            commonArgs = commonArgsRelease;
+            cargoArtifacts = cargoArtifacts-release;
           };
 
           # Development build with faster compilation and debug symbols
-          gnosis_vpn-dev = mkPackage {
+          # Override release profile set in commonArgs with "dev" profile
+          gnosis_vpn-dev = import ./nix/mkPackage.nix {
+            inherit
+              craneLib
+              lib
+              pkgs
+              ;
+            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn-dev";
-            profile = "dev";
+            commonArgs = commonArgsDev;
+            cargoArtifacts = cargoArtifacts-dev;
           };
 
           pre-commit-check = pre-commit.lib.${system}.run {
@@ -245,17 +282,17 @@
             # we can block the CI if there are issues here, but not
             # prevent downstream consumers from building our crate by itself.
             clippy = craneLib.cargoClippy (
-              commonArgs
+              commonArgsDev
               // {
-                inherit cargoArtifacts;
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+                cargoArtifacts = cargoArtifacts-dev;
               }
             );
 
             docs = craneLib.cargoDoc (
-              commonArgs
+              commonArgsDev
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifacts-dev;
               }
             );
 
@@ -275,9 +312,9 @@
             # Consider setting `doCheck = false` on other crate derivations
             # if you do not want the tests to run twice
             test = craneLib.cargoNextest (
-              commonArgs
+              commonArgsDev
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifacts-dev;
                 partitions = 1;
                 partitionType = "count";
                 cargoNextestPartitionsExtraArgs = "--no-tests=pass";
@@ -287,10 +324,10 @@
           };
 
           packages = {
-            inherit gnosis_vpn;
+            gnosis_vpn = gnosis_vpn-release;
             inherit gnosis_vpn-dev;
             inherit pre-commit-check;
-            default = gnosis_vpn;
+            default = gnosis_vpn-release;
           };
 
           apps = {
