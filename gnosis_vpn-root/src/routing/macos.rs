@@ -55,20 +55,20 @@ impl Routing for Firewall {
      */
     #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
     async fn setup(&mut self) -> Result<(), Error> {
-        // 1. generate wg quick content
+        // 1. determine interface (Moved before WG setup to get physical interface)
+        let (device, gateway) = interface().await?;
+        tracing::info!(%device, ?gateway, "Determined default interface");
+
+        // 2. generate wg quick content
         let wg_quick_content =
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, None);
 
-        // 2. run wg-quick up
+        // 3. run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
 
-        // 3. determine interface
-        let (device, gateway) = interface().await?;
-
         // 4. setup bypass
-        tracing::info!(%device, ?gateway, "Determined default interface");
 
         // Create a PfCtl instance to control PF with:
         let mut pf = self
@@ -86,15 +86,25 @@ impl Routing for Firewall {
         let gw = pfctl::Ip::from(gw_ip);
 
         // Enable the firewall, equivalent to the command "pfctl -e":
+        tracing::info!("Enabling PF...");
         pf.try_enable()?;
 
         // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
         // use `try_add_anchor` to avoid that:
-        pf.add_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+        tracing::info!("Adding anchor {}...", Firewall::ANCHOR_NAME);
+        pf.try_add_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+        tracing::info!("Flushing rules for anchor {}...", Firewall::ANCHOR_NAME);
+        pf.flush_rules(Firewall::ANCHOR_NAME, pfctl::RulesetKind::Filter)?;
 
         // Create a packet filtering rule matching all packets on the identified interface and allowing
         // them to pass:
         // RULE: `pass out quick route-to (en0 192.168.0.1) from any to any user gnosisvpn`
+        tracing::info!(
+            "PF Rule Params: device={}, gateway={:?}, uid={}",
+            device,
+            gw_ip,
+            self.worker.uid
+        );
         let rule = pfctl::FilterRuleBuilder::default()
             .action(pfctl::FilterRuleAction::Pass)
             .interface(&device)
@@ -107,7 +117,9 @@ impl Routing for Firewall {
             .build()?;
 
         // Add the filtering rule to the anchor we just created.
+        tracing::info!(?rule, "Adding bypass rule to anchor");
         pf.add_rule(Firewall::ANCHOR_NAME, &rule)?;
+        tracing::info!("Bypass rule added successfully.");
 
         Ok(())
     }
