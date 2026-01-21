@@ -261,15 +261,16 @@ impl Routing for Router {
             .get(IpVersion::V4)
             .execute()
             .try_collect::<Vec<_>>()
-            .await {
+            .await
+        {
             for rule in rules.into_iter().filter(|rule| {
                 rule.attributes
                     .iter()
                     .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
                     && rule
-                    .attributes
-                    .iter()
-                    .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
+                        .attributes
+                        .iter()
+                        .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
             }) {
                 if let Err(error) = self.handle.rule().del(rule).execute().await {
                     tracing::error!(%error, "failed to delete fwmark routing table rule, continuing anyway");
@@ -280,7 +281,8 @@ impl Routing for Router {
         }
 
         // Delete the TABLE_ID routing table
-        if let Err(error) = self.handle
+        if let Err(error) = self
+            .handle
             .route()
             .del(
                 rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
@@ -290,7 +292,8 @@ impl Routing for Router {
                     .build(),
             )
             .execute()
-            .await {
+            .await
+        {
             tracing::error!(%error, "failed to delete table {}, continuing anyway", TABLE_ID);
         } else {
             tracing::debug!("deleted table {}", TABLE_ID);

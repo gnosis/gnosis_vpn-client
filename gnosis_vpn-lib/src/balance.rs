@@ -4,8 +4,6 @@ use thiserror::Error;
 
 use std::fmt::{self, Display};
 
-use crate::chain::errors::ChainError;
-
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FundingIssue {
@@ -26,10 +24,7 @@ pub enum FundingTool {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
-    #[error(transparent)]
-    Chain(#[from] ChainError),
-}
+pub enum Error {}
 
 impl Display for FundingIssue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

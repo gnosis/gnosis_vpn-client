@@ -4,14 +4,10 @@ use thiserror::Error;
 
 use std::fmt::{self, Display};
 
-use crate::chain::errors::ChainError;
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     Hopr(#[from] GeneralError),
-    #[error(transparent)]
-    Chain(#[from] ChainError),
 }
 
 #[derive(Copy, Debug, Clone)]
