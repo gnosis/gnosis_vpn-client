@@ -150,11 +150,6 @@ impl Routing for Router {
             return Err(Error::General("invalid state: already set up".into()));
         }
 
-        // Get the default WAN interface index
-        let wan_if_index = self.get_default_if_index().await?;
-        self.wan_if_index = Some(wan_if_index);
-        tracing::debug!(wan_if_index, "wan interface index");
-
         // Generate wg quick content
         let wg_quick_content = self.wg_data.wg.to_file_string(
             &self.wg_data.interface_info,
@@ -171,6 +166,11 @@ impl Routing for Router {
         );
         // Run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
+
+        // Get the default WAN interface index
+        let wan_if_index = self.get_default_if_index().await?;
+        self.wan_if_index = Some(wan_if_index);
+        tracing::debug!(wan_if_index, "wan interface index");
 
         // Get the VPN interface index
         let vpn_if_index = self.find_if_index_by_name(wireguard::WG_INTERFACE).await?;
