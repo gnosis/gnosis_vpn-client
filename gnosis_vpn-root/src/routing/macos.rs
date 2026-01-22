@@ -90,32 +90,22 @@ impl Routing for Firewall {
             .await
             .map_err(|e| Error::General(format!("Failed to enable pfctl: {e}")))?;
 
-        tracing::info!("Ensuring anchor link exists in main ruleset...");
+        tracing::info!("Ensuring anchor link exists in main rulesets...");
         let main_rules = Command::new("pfctl")
             .arg("-sr")
             .output()
             .await
             .map_err(|e| Error::General(format!("Failed to read pf rules: {e}")))?;
+        let nat_rules = Command::new("pfctl")
+            .arg("-sn")
+            .output()
+            .await
+            .map_err(|e| Error::General(format!("Failed to read pf nat rules: {e}")))?;
 
         let rules_str = String::from_utf8_lossy(&main_rules.stdout);
-        if !rules_str.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)) {
-            tracing::info!("Linking anchor to main ruleset...");
-
-            let mut child = Command::new("pfctl")
-                .arg("-f")
-                .arg("-")
-                .stdin(std::process::Stdio::piped())
-                .spawn()?;
-
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(&main_rules.stdout).await?;
-                stdin.write_all(b"\n").await?;
-                stdin
-                    .write_all(format!("anchor \"{}\"\n", Firewall::ANCHOR_NAME).as_bytes())
-                    .await?;
-            }
-            child.wait().await?;
-        }
+        let nat_rules_str = String::from_utf8_lossy(&nat_rules.stdout);
+        ensure_filter_anchor_link(&rules_str, Firewall::ANCHOR_NAME).await?;
+        ensure_nat_anchor_link(&nat_rules_str, Firewall::ANCHOR_NAME).await?;
 
         tracing::info!("Flushing rules for anchor {}...", Firewall::ANCHOR_NAME);
         Command::new("pfctl")
@@ -130,18 +120,19 @@ impl Routing for Firewall {
             .map_err(|e| Error::General(format!("failed to convert gatewat to IpAddr: {e}")))?;
 
         let utun_device = wg_interface_from_public_key(&self.wg_data.wg.key_pair.public_key).await?;
-        let wg_address = parse_wg_ip(&self.wg_data.interface_info.address)?;
+        let wg_nat_cidr = wg_nat_cidr(&self.wg_data.interface_info.address)?;
 
         tracing::info!(
-            "PF Rule Params: device={}, gateway={:?}, utun_device={}, uid={}, wg_address={}",
+            "PF Rule Params: device={}, gateway={:?}, utun_device={}, uid={}, wg_nat_cidr={}",
             device,
             gw_ip,
             utun_device,
             self.worker.uid,
-            wg_address
+            wg_nat_cidr
         );
 
-        let rule_str = build_pf_rule(&device, &utun_device, gw_ip, self.worker.uid, wg_address);
+        enable_ip_forwarding().await?;
+        let rule_str = build_pf_rule(&device, &utun_device, gw_ip, self.worker.uid, &wg_nat_cidr);
 
         tracing::info!("Adding rule: {}", rule_str);
 
@@ -243,16 +234,10 @@ impl Routing for DisabledFallbackRouter {
     }
 }
 
-fn build_pf_rule(
-    device: &str,
-    utun_device: &str,
-    gateway: std::net::IpAddr,
-    uid: u32,
-    wg_address: std::net::IpAddr,
-) -> String {
+fn build_pf_rule(device: &str, utun_device: &str, gateway: std::net::IpAddr, uid: u32, wg_nat_cidr: &str) -> String {
     [
         "scrub all fragment reassemble".to_string(),
-        format!("nat on {device} inet from {wg_address} to any -> ({device})"),
+        format!("nat on {device} inet from {wg_nat_cidr} to any -> ({device})"),
         "pass quick on lo0 all flags any keep state".to_string(),
         format!("pass out quick on {device} inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state"),
         format!("pass in quick on {device} inet proto udp from any port = 67 to any port = 68 no state"),
@@ -276,11 +261,30 @@ async fn reset_pf_anchor() -> Result<(), Error> {
         .output()
         .await
         .map_err(|e| Error::General(format!("Failed to read pf rules: {e}")))?;
+    let nat_rules = Command::new("pfctl")
+        .arg("-sn")
+        .output()
+        .await
+        .map_err(|e| Error::General(format!("Failed to read pf nat rules: {e}")))?;
 
     let rules_str = String::from_utf8_lossy(&main_rules.stdout);
-    if let Some(new_rules) = strip_anchor_link(&rules_str, Firewall::ANCHOR_NAME) {
+    if let Some(new_rules) = strip_anchor_links(&rules_str, Firewall::ANCHOR_NAME) {
         let mut child = Command::new("pfctl")
-            .arg("-f")
+            .arg("-Rf")
+            .arg("-")
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(new_rules.as_bytes()).await?;
+        }
+        child.wait().await?;
+    }
+
+    let nat_rules_str = String::from_utf8_lossy(&nat_rules.stdout);
+    if let Some(new_rules) = strip_anchor_links(&nat_rules_str, Firewall::ANCHOR_NAME) {
+        let mut child = Command::new("pfctl")
+            .arg("-Nf")
             .arg("-")
             .stdin(std::process::Stdio::piped())
             .spawn()?;
@@ -294,15 +298,60 @@ async fn reset_pf_anchor() -> Result<(), Error> {
     Ok(())
 }
 
-fn strip_anchor_link(rules: &str, anchor: &str) -> Option<String> {
-    if !rules.contains(&format!("anchor \"{}\"", anchor)) {
+async fn ensure_filter_anchor_link(rules: &str, anchor: &str) -> Result<(), Error> {
+    let anchor_line = format!("anchor \"{}\"", anchor);
+    if rules.contains(&anchor_line) {
+        return Ok(());
+    }
+
+    let mut child = Command::new("pfctl")
+        .arg("-Rf")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(rules.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.write_all(format!("{anchor_line}\n").as_bytes()).await?;
+    }
+    child.wait().await?;
+    Ok(())
+}
+
+async fn ensure_nat_anchor_link(rules: &str, anchor: &str) -> Result<(), Error> {
+    let nat_anchor_line = format!("nat-anchor \"{}\"", anchor);
+    if rules.contains(&nat_anchor_line) {
+        return Ok(());
+    }
+
+    let mut child = Command::new("pfctl")
+        .arg("-Nf")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(rules.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.write_all(format!("{nat_anchor_line}\n").as_bytes()).await?;
+    }
+    child.wait().await?;
+    Ok(())
+}
+
+fn strip_anchor_links(rules: &str, anchor: &str) -> Option<String> {
+    let anchor_line = format!("anchor \"{}\"", anchor);
+    let nat_anchor_line = format!("nat-anchor \"{}\"", anchor);
+
+    if !rules.contains(&anchor_line) && !rules.contains(&nat_anchor_line) {
         return None;
     }
 
     Some(
         rules
             .lines()
-            .filter(|line| !line.contains(&format!("anchor \"{}\"", anchor)))
+            .filter(|line| line != &anchor_line && line != &nat_anchor_line)
             .collect::<Vec<_>>()
             .join("\n"),
     )
@@ -333,11 +382,27 @@ fn parse_wg_interface_from_dump(output: &str, public_key: &str) -> Option<String
     })
 }
 
-fn parse_wg_ip(address: &str) -> Result<std::net::IpAddr, Error> {
+fn wg_nat_cidr(address: &str) -> Result<String, Error> {
     let ip_str = address.split('/').next().unwrap_or(address);
-    ip_str
+    let ip: std::net::IpAddr = ip_str
         .parse()
-        .map_err(|e| Error::General(format!("failed to parse wg address {address}: {e}")))
+        .map_err(|e| Error::General(format!("failed to parse wg address {address}: {e}")))?;
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            Ok(format!("{}.{}.0.0/9", octets[0], octets[1]))
+        }
+        std::net::IpAddr::V6(_) => Err(Error::General("wg nat cidr requires ipv4 address".to_string())),
+    }
+}
+
+async fn enable_ip_forwarding() -> Result<(), Error> {
+    Command::new("sysctl")
+        .arg("-w")
+        .arg("net.inet.ip.forwarding=1")
+        .run_stdout()
+        .await?;
+    Ok(())
 }
 
 async fn cleanup_utun_host_routes() -> Result<(), Error> {
@@ -529,20 +594,20 @@ mod tests {
             "utun10",
             "192.168.88.1".parse().expect("gateway"),
             499,
-            "10.128.0.115".parse().expect("wg_address"),
+            "10.128.0.0/9",
         );
 
         assert_eq!(
             rule,
-            "scrub all fragment reassemble\nnat on en0 inet from 10.128.0.115 to any -> (en0)\npass quick on lo0 all flags any keep state\npass out quick on en0 inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state\npass in quick on en0 inet proto udp from any port = 67 to any port = 68 no state\npass out quick route-to (en0 192.168.88.1) inet all user 499 keep state\npass out quick on en0 proto udp from any port 67:68 to any port 67:68 keep state\npass quick on utun10 all user != 499\nblock drop out on en0 all\n"
+            "scrub all fragment reassemble\nnat on en0 inet from 10.128.0.0/9 to any -> (en0)\npass quick on lo0 all flags any keep state\npass out quick on en0 inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state\npass in quick on en0 inet proto udp from any port = 67 to any port = 68 no state\npass out quick route-to (en0 192.168.88.1) inet all user 499 keep state\npass out quick on en0 proto udp from any port 67:68 to any port 67:68 keep state\npass quick on utun10 all user != 499\nblock drop out on en0 all\n"
         );
     }
 
     #[test]
     fn strips_anchor_link_from_rules() {
-        let rules = "block drop all\nanchor \"gnosisvpn_bypass\"\npass out all";
+        let rules = "block drop all\nanchor \"gnosisvpn_bypass\"\nnat-anchor \"gnosisvpn_bypass\"\npass out all";
 
-        let stripped = super::strip_anchor_link(rules, "gnosisvpn_bypass");
+        let stripped = super::strip_anchor_links(rules, "gnosisvpn_bypass");
 
         assert_eq!(stripped, Some("block drop all\npass out all".to_string()));
     }
