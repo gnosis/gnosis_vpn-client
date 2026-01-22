@@ -6,7 +6,7 @@ use gnosis_vpn_lib::{event, wireguard, worker};
 
 use futures::TryStreamExt;
 use std::net::Ipv4Addr;
-
+use std::str::FromStr;
 use crate::wg_tooling;
 use rtnetlink::IpVersion;
 use rtnetlink::packet_route::link::LinkAttribute;
@@ -48,6 +48,9 @@ const FW_MARK: u32 = 0xFEED_CAFE;
 // Table for traffic that does not go through the VPN
 const TABLE_ID: u32 = 108;
 
+const IP_TABLE: &str = "mangle";
+const IP_CHAIN: &str = "OUTPUT";
+
 /// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
 /// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
 ///
@@ -57,36 +60,37 @@ const TABLE_ID: u32 = 108;
 /// 3. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
 fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
-    if iptables.chain_exists("mangle", "OUTPUT")? {
-        iptables.flush_chain("mangle", "OUTPUT")?;
+    if iptables.chain_exists(IP_TABLE, IP_CHAIN)? {
+        iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
     } else {
-        iptables.new_chain("mangle", "OUTPUT")?;
+        iptables.new_chain(IP_TABLE, IP_CHAIN)?;
     }
 
     // Keep loopback for VPN user unmarked
     iptables.append(
-        "mangle",
-        "OUTPUT",
+        IP_TABLE,
+        IP_CHAIN,
         &format!("-m owner --uid-owner {vpn_uid} -o lo -j RETURN"),
     )?;
     // Mark all other traffic from VPN user
     iptables.append(
-        "mangle",
-        "OUTPUT",
-        &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {}", FW_MARK),
+        IP_TABLE,
+        IP_CHAIN,
+        &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
     )?;
+
 
     Ok(())
 }
 
 fn flush_ip_tables() -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
-    iptables.flush_chain("mangle", "OUTPUT")?;
+    iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
     Ok(())
 }
 
 impl Router {
-    async fn get_default_if_index(&self) -> Result<u32, Error> {
+    async fn get_default_if_index_and_gw(&self) -> Result<(u32, Ipv4Addr), Error> {
         // The default route is the one with the longest prefix match (= smallest prefix length)
         let default_route = self
             .handle
@@ -99,14 +103,25 @@ impl Router {
             .min_by_key(|route| route.header.destination_prefix_length)
             .ok_or(Error::NoInterface)?;
 
-        default_route
+        let index = default_route
             .attributes
             .iter()
             .find_map(|attr| match attr {
                 rtnetlink::packet_route::route::RouteAttribute::Oif(index) => Some(*index),
                 _ => None,
             })
-            .ok_or(Error::NoInterface)
+            .ok_or(Error::NoInterface)?;
+
+        let gw = default_route
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                rtnetlink::packet_route::route::RouteAttribute::Gateway(rtnetlink::packet_route::route::RouteAddress::Inet(gw)) => Some(*gw),
+                _ => None,
+            })
+            .ok_or(Error::NoInterface)?;
+
+        Ok((index, gw))
     }
 
     async fn find_if_index_by_name(&self, name: &str) -> Result<u32, Error> {
@@ -166,11 +181,21 @@ impl Routing for Router {
         );
         // Run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
+        tracing::debug!("wg-quick up");
+
+        // Find the default gateway for the VPN
+        let vpn_gw = Ipv4Addr::from_str(self.wg_data.interface_info.address
+            .split_once('/')
+            .map(|(s,_)| s)
+            .unwrap_or(&self.wg_data.interface_info.address))
+            .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
+        let vpn_gw = Ipv4Addr::new(vpn_gw.octets()[0], vpn_gw.octets()[1], vpn_gw.octets()[2], 1);
+        tracing::debug!(%vpn_gw, "wg vpn gateway");
 
         // Get the default WAN interface index
-        let wan_if_index = self.get_default_if_index().await?;
+        let (wan_if_index, gw_addr) = self.get_default_if_index_and_gw().await?;
         self.wan_if_index = Some(wan_if_index);
-        tracing::debug!(wan_if_index, "wan interface index");
+        tracing::debug!(wan_if_index, %gw_addr, "wan interface index");
 
         // Get the VPN interface index
         let vpn_if_index = self.find_if_index_by_name(wireguard::WG_INTERFACE).await?;
@@ -178,16 +203,17 @@ impl Routing for Router {
 
         // This steps marks all traffic from VPN_USER with FW_MARK
         setup_iptables(self.worker.uid).map_err(Error::iptables)?;
-        tracing::debug!("iptables rules set up");
+        tracing::debug!(uid = self.worker.uid, "iptables rules set up");
 
         // New routing table TABLE_ID: All traffic in this table goes to the WAN interface (bypasses VPN)
         let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .table_id(TABLE_ID)
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
+            .gateway(gw_addr)
             .build();
         self.handle.route().add(no_vpn_route).execute().await?;
-        tracing::debug!(wan_if_index, "set table {} default route to interface", TABLE_ID);
+        tracing::debug!(wan_if_index, %gw_addr, "set table {TABLE_ID} default route to interface");
 
         // Add rule: everything marked with FW_MARK goes via TABLE_ID routing table
         self.handle
@@ -198,16 +224,18 @@ impl Routing for Router {
             .table_id(TABLE_ID)
             .execute()
             .await?;
-        tracing::debug!("set fwmark {} routing table", TABLE_ID);
+        tracing::debug!("set fwmark {FW_MARK} on routing table {TABLE_ID}");
 
         // Adjust the main routing table so that everything gets routed via the VPN interface
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(vpn_if_index)
+            .gateway(vpn_gw)
             .build();
         self.handle.route().add(default_route).execute().await?;
         tracing::debug!(
             vpn_if_index,
+            %vpn_gw,
             "set main table default route to interface {}",
             wireguard::WG_INTERFACE
         );
