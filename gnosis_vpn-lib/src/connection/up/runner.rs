@@ -344,6 +344,8 @@ async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr
     Ok(peer_ips)
 }
 
+const PING_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Results>) -> Result<Duration, Error> {
     (|| async {
         let (tx, rx) = oneshot::channel();
@@ -353,7 +355,7 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
                 resp: tx,
             }))
             .await;
-        let res = await_with_timeout(rx, Duration::from_secs(30)).await?;
+        let res = await_with_timeout(rx, PING_REQUEST_TIMEOUT).await?;
         res.map_err(Error::RootRequest)
     })
     .retry(FibonacciBuilder::default())
@@ -367,6 +369,16 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
         });
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PING_REQUEST_TIMEOUT;
+
+    #[test]
+    fn ping_request_timeout_is_120_seconds() {
+        assert_eq!(PING_REQUEST_TIMEOUT.as_secs(), 120);
+    }
 }
 
 async fn adjust_to_main_session(

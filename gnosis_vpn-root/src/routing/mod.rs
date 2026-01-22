@@ -29,7 +29,6 @@ pub enum Error {
     // #[cfg(target_os = "macos")]
     // #[error("firewall error: {0}")]
     // PfCtl(#[from] pfctl::Error),
-
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[error("General error: {0}")]
     General(String),

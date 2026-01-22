@@ -31,7 +31,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             address: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
-            timeout: Duration::from_secs(15),
+            timeout: Duration::from_secs(120),
             ttl: 6,
             seq_count: 1,
         }
@@ -54,22 +54,33 @@ pub async fn ping(opts: &Options) -> Result<Duration, Error> {
 
 async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
     let mut cmd = Command::new("ping");
-    cmd.arg("-c").arg("1");
+    for arg in ping_cmd_args(opts) {
+        cmd.arg(arg);
+    }
+    let output = cmd.run_stdout().await.map_err(|_| Error::Timeout)?;
+    parse_duration(output)
+}
+
+fn ping_cmd_args(opts: &Options) -> Vec<String> {
+    let mut args = Vec::new();
+    args.push("-c".to_string());
+    args.push(opts.seq_count.to_string());
     let timeout_str = opts.timeout.as_secs().to_string();
     #[cfg(target_os = "linux")]
     {
-        cmd.arg("-W").arg(timeout_str);
+        args.push("-W".to_string());
+        args.push(timeout_str);
     }
     #[cfg(target_os = "macos")]
     {
-        cmd.arg("-t").arg(timeout_str);
+        let timeout_ms = opts.timeout.as_millis().to_string();
+        args.push("-t".to_string());
+        args.push(timeout_str);
+        args.push("-W".to_string());
+        args.push(timeout_ms);
     }
-    let output = cmd
-        .arg(opts.address.to_string())
-        .run_stdout()
-        .await
-        .map_err(|_| Error::Timeout)?;
-    parse_duration(output)
+    args.push(opts.address.to_string());
+    args
 }
 
 fn ping_using_ping_crate(opts: &Options) -> Result<Duration, Error> {
@@ -112,21 +123,21 @@ mod tests {
     #[test]
     fn parse_duration() -> anyhow::Result<()> {
         let duration1 = r#####"
-PING 1.1.1.1 (1.1.1.1) 56(84) bytes of data.
-64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=13.1 ms
-
---- 1.1.1.1 ping statistics ---
-1 packets transmitted, 1 received, 0% packet loss, time 0ms
-rtt min/avg/max/mdev = 13.135/13.135/13.135/0.000 ms
-"#####;
+ PING 1.1.1.1 (1.1.1.1) 56(84) bytes of data.
+ 64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=13.1 ms
+ 
+ --- 1.1.1.1 ping statistics ---
+ 1 packets transmitted, 1 received, 0% packet loss, time 0ms
+ rtt min/avg/max/mdev = 13.135/13.135/13.135/0.000 ms
+ "#####;
         let duration2 = r#####"
-PING 1.1.1.1 (1.1.1.1): 56 data bytes
-64 bytes from 1.1.1.1: icmp_seq=0 ttl=57 time=19.540 ms
-
---- 1.1.1.1 ping statistics ---
-1 packets transmitted, 1 packets received, 0.0% packet loss
-round-trip min/avg/max/stddev = 19.540/19.540/19.540/nan ms
-"#####;
+ PING 1.1.1.1 (1.1.1.1): 56 data bytes
+ 64 bytes from 1.1.1.1: icmp_seq=0 ttl=57 time=19.540 ms
+ 
+ --- 1.1.1.1 ping statistics ---
+ 1 packets transmitted, 1 packets received, 0.0% packet loss
+ round-trip min/avg/max/stddev = 19.540/19.540/19.540/nan ms
+ "#####;
 
         let d1 = super::parse_duration(duration1.to_string())?;
         let d2 = super::parse_duration(duration2.to_string())?;
@@ -135,5 +146,41 @@ round-trip min/avg/max/stddev = 19.540/19.540/19.540/nan ms
         assert_eq!(d2, std::time::Duration::from_micros(19540));
 
         Ok(())
+    }
+
+    #[test]
+    fn ping_default_timeout_is_120_seconds() {
+        let options = super::Options::default();
+
+        assert_eq!(options.timeout, std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn ping_cmd_args_use_seq_count() {
+        let options = super::Options {
+            address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            timeout: std::time::Duration::from_secs(120),
+            ttl: 6,
+            seq_count: 10,
+        };
+
+        let args = super::ping_cmd_args(&options);
+
+        assert!(args.contains(&"-c".to_string()));
+        assert!(args.contains(&"10".to_string()));
+        assert!(args.contains(&"10.0.0.1".to_string()));
+
+        #[cfg(target_os = "linux")]
+        {
+            assert!(args.contains(&"-W".to_string()));
+            assert!(args.contains(&"120".to_string()));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(args.contains(&"-t".to_string()));
+            assert!(args.contains(&"-W".to_string()));
+            assert!(args.contains(&"120".to_string()));
+            assert!(args.contains(&"120000".to_string()));
+        }
     }
 }

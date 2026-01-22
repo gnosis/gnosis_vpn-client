@@ -18,10 +18,7 @@ use crate::wg_tooling;
 use super::{Error, Routing};
 
 pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
-    Ok(Firewall {
-        worker,
-        wg_data,
-    })
+    Ok(Firewall { worker, wg_data })
 }
 
 pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
@@ -68,12 +65,6 @@ impl Routing for Firewall {
 
         // 4. setup bypass
 
-        let gw_ip: std::net::IpAddr = gateway
-            .ok_or(Error::General("No gateway found".into()))?
-            .as_str()
-            .parse()
-            .map_err(|e| Error::General(format!("failed to convert gatewat to IpAddr: {e}")))?;
-
         // Enable the firewall, equivalent to the command "pfctl -e":
         tracing::info!("Enabling PF...");
         let _ = Command::new("pfctl")
@@ -88,23 +79,25 @@ impl Routing for Firewall {
             .output()
             .await
             .map_err(|e| Error::General(format!("Failed to read pf rules: {e}")))?;
-        
+
         let rules_str = String::from_utf8_lossy(&main_rules.stdout);
         if !rules_str.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)) {
-             tracing::info!("Linking anchor to main ruleset...");
-             
-             let mut child = Command::new("pfctl")
+            tracing::info!("Linking anchor to main ruleset...");
+
+            let mut child = Command::new("pfctl")
                 .arg("-f")
                 .arg("-")
                 .stdin(std::process::Stdio::piped())
                 .spawn()?;
-             
-             if let Some(mut stdin) = child.stdin.take() {
+
+            if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(&main_rules.stdout).await?;
                 stdin.write_all(b"\n").await?;
-                stdin.write_all(format!("anchor \"{}\"\n", Firewall::ANCHOR_NAME).as_bytes()).await?;
-             }
-             child.wait().await?;
+                stdin
+                    .write_all(format!("anchor \"{}\"\n", Firewall::ANCHOR_NAME).as_bytes())
+                    .await?;
+            }
+            child.wait().await?;
         }
 
         tracing::info!("Flushing rules for anchor {}...", Firewall::ANCHOR_NAME);
@@ -113,39 +106,42 @@ impl Routing for Firewall {
             .output()
             .await?;
 
-        // ... Add rule ...
+        let gw_ip: std::net::IpAddr = gateway
+            .ok_or(Error::General("No gateway found".into()))?
+            .as_str()
+            .parse()
+            .map_err(|e| Error::General(format!("failed to convert gatewat to IpAddr: {e}")))?;
+
+        let utun_device = wg_interface_from_public_key(&self.wg_data.wg.key_pair.public_key).await?;
+
         tracing::info!(
-             "PF Rule Params: device={}, gateway={:?}, uid={}",
-             device,
-             gw_ip,
-             self.worker.uid
+            "PF Rule Params: device={}, gateway={:?}, utun_device={}, uid={}",
+            device,
+            gw_ip,
+            utun_device,
+            self.worker.uid
         );
-        
-        let rule_str = format!(
-            "pass out quick route-to ({device} {gateway}) inet from any to ! 127.0.0.0/8 user {uid}\n",
-            device = device,
-            gateway = gw_ip,
-            uid = self.worker.uid
-        );
-        
+
+        let rule_str = build_pf_rule(&device, &utun_device, gw_ip, self.worker.uid);
+
         tracing::info!("Adding rule: {}", rule_str);
-        
+
         let mut child = Command::new("pfctl")
             .args(&["-a", Firewall::ANCHOR_NAME, "-f", "-"])
             .stdin(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
-        
+
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(rule_str.as_bytes()).await?;
         }
-        
+
         let output = child.wait_with_output().await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::General(format!("Failed to add pf rule: {}", stderr)));
         }
-        
+
         tracing::info!("Bypass rule added successfully via shell.");
 
         // Debug: Log full configuration
@@ -160,7 +156,7 @@ impl Routing for Firewall {
         match Command::new("pfctl")
             .args(&["-a", Firewall::ANCHOR_NAME, "-sr"])
             .output()
-            .await 
+            .await
         {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -179,41 +175,41 @@ impl Routing for Firewall {
             .args(&["-a", Firewall::ANCHOR_NAME, "-F", "all"])
             .output()
             .await?;
-            
+
         // 2. Optionally remove anchor from main ruleset?
         // The crate `remove_anchor` did `pf_change_rule` to remove it from main ruleset.
         // We probably should cleanup.
         // (pfctl -sr | grep -v 'anchor "gnosisvpn_bypass"') | pfctl -f -
-        
+
         let main_rules = Command::new("pfctl")
             .arg("-sr")
             .output()
             .await
             .map_err(|e| Error::General(format!("Failed to read pf rules: {e}")))?;
-            
+
         let rules_str = String::from_utf8_lossy(&main_rules.stdout);
         if rules_str.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)) {
-             tracing::info!("Removing anchor link from main ruleset...");
-             let new_rules = rules_str
+            tracing::info!("Removing anchor link from main ruleset...");
+            let new_rules = rules_str
                 .lines()
                 .filter(|l| !l.contains(&format!("anchor \"{}\"", Firewall::ANCHOR_NAME)))
                 .collect::<Vec<_>>()
                 .join("\n");
-                
-             let mut child = Command::new("pfctl")
+
+            let mut child = Command::new("pfctl")
                 .arg("-f")
                 .arg("-")
                 .stdin(std::process::Stdio::piped())
                 .spawn()?;
-             
-             if let Some(mut stdin) = child.stdin.take() {
+
+            if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(new_rules.as_bytes()).await?;
                 // Ensure newline at end if needed
                 if !new_rules.ends_with('\n') {
                     stdin.write_all(b"\n").await?;
                 }
-             }
-             child.wait().await?;
+            }
+            child.wait().await?;
         }
 
         // 3. run wg-quick down
@@ -222,7 +218,6 @@ impl Routing for Firewall {
         Ok(())
     }
 }
-
 
 #[async_trait]
 impl Routing for FallbackRouter {
@@ -252,6 +247,42 @@ impl Routing for FallbackRouter {
         wg_tooling::down().await?;
         Ok(())
     }
+}
+
+fn build_pf_rule(device: &str, utun_device: &str, gateway: std::net::IpAddr, uid: u32) -> String {
+    [
+        format!("pass out quick route-to ({device} {gateway}) inet all user {uid} keep state"),
+        format!("pass out quick on {device} proto udp from any port 67:68 to any port 67:68 keep state"),
+        format!("pass quick on {utun_device} all user != {uid}"),
+        format!("block drop out on {device} all"),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+async fn wg_interface_from_public_key(public_key: &str) -> Result<String, Error> {
+    let output = Command::new("wg")
+        .arg("show")
+        .arg("all")
+        .arg("dump")
+        .run_stdout()
+        .await?;
+    parse_wg_interface_from_dump(&output, public_key)
+        .ok_or_else(|| Error::General(format!("Unable to find wg interface for public key {public_key}")))
+}
+
+fn parse_wg_interface_from_dump(output: &str, public_key: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let iface = parts.next()?;
+        let _private_key = parts.next()?;
+        let iface_public_key = parts.next()?;
+        if iface_public_key == public_key {
+            Some(iface.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
@@ -321,5 +352,24 @@ mod tests {
         assert_eq!(device, "en1");
         assert_eq!(gateway, Some("192.168.178.1".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn parses_wg_interface_from_dump() {
+        let output = "utun9 private_key_a public_key_a 51820 0\nutun10 private_key_b public_key_b 51820 0";
+
+        let iface = super::parse_wg_interface_from_dump(output, "public_key_b");
+
+        assert_eq!(iface, Some("utun10".to_string()));
+    }
+
+    #[test]
+    fn builds_pf_rule_for_user_on_interface() {
+        let rule = super::build_pf_rule("en0", "utun10", "192.168.88.1".parse().expect("gateway"), 499);
+
+        assert_eq!(
+            rule,
+            "pass out quick route-to (en0 192.168.88.1) inet all user 499 keep state\npass out quick on en0 proto udp from any port 67:68 to any port 67:68 keep state\npass quick on utun10 all user != 499\nblock drop out on en0 all\n"
+        );
     }
 }
