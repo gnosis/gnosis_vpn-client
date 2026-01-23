@@ -4,13 +4,12 @@ use tokio::process::Command;
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, wireguard, worker};
 
-use futures::TryStreamExt;
-use std::net::Ipv4Addr;
-use std::str::FromStr;
 use crate::wg_tooling;
+use futures::TryStreamExt;
 use rtnetlink::IpVersion;
 use rtnetlink::packet_route::link::LinkAttribute;
 use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
+use std::net::Ipv4Addr;
 
 use super::{Error, Routing};
 
@@ -79,7 +78,6 @@ fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
         &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
     )?;
 
-
     Ok(())
 }
 
@@ -116,7 +114,9 @@ impl Router {
             .attributes
             .iter()
             .find_map(|attr| match attr {
-                rtnetlink::packet_route::route::RouteAttribute::Gateway(rtnetlink::packet_route::route::RouteAddress::Inet(gw)) => Some(*gw),
+                rtnetlink::packet_route::route::RouteAttribute::Gateway(
+                    rtnetlink::packet_route::route::RouteAddress::Inet(gw),
+                ) => Some(*gw),
                 _ => None,
             })
             .ok_or(Error::NoInterface)?;
@@ -169,30 +169,14 @@ impl Routing for Router {
         let wg_quick_content = self.wg_data.wg.to_file_string(
             &self.wg_data.interface_info,
             &self.wg_data.peer_info,
-            // true to route all traffic
-            false,
-            // Disable all routing set by wg-quick
-            // Set the FwMark on WG's own UDP packets to allow them to go to the Session
-            Some(
-                ["Table = off".to_string(), format!("FwMark = {:#X}", FW_MARK)]
-                    .into_iter()
-                    .collect(),
-            ),
+            true,
+            Some(["Table = off".to_string()].into_iter().collect()),
         );
         // Run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
         tracing::debug!("wg-quick up");
 
-        // Find the default gateway for the VPN
-        let vpn_gw = Ipv4Addr::from_str(self.wg_data.interface_info.address
-            .split_once('/')
-            .map(|(s,_)| s)
-            .unwrap_or(&self.wg_data.interface_info.address))
-            .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
-        let vpn_gw = Ipv4Addr::new(vpn_gw.octets()[0], vpn_gw.octets()[1], vpn_gw.octets()[2], 1);
-        tracing::debug!(%vpn_gw, "wg vpn gateway");
-
-        // Get the default WAN interface index
+        // Get the default WAN interface index and default gateway
         let (wan_if_index, gw_addr) = self.get_default_if_index_and_gw().await?;
         self.wan_if_index = Some(wan_if_index);
         tracing::debug!(wan_if_index, %gw_addr, "wan interface index");
@@ -232,12 +216,10 @@ impl Routing for Router {
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(vpn_if_index)
-            //.gateway(vpn_gw)
             .build();
         self.handle.route().add(default_route).execute().await?;
         tracing::debug!(
             vpn_if_index,
-            %vpn_gw,
             "set main table default route to interface {}",
             wireguard::WG_INTERFACE
         );
