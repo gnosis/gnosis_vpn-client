@@ -46,13 +46,20 @@ impl NetworkDeviceInfo {
     const VPN_SUBNET_PREFIX: u8 = 9;
 
     async fn get_via_rtnetlink(handle: &rtnetlink::Handle, vpn_ip: &str) -> Result<Self, Error> {
-        let vpn_gw: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
+        let vpn_client_ip_cidr: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
             .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
 
-        if !vpn_gw.is_host_address() {
+        // This must be a unique VPN client address, not a block of addresses
+        if !vpn_client_ip_cidr.is_host_address() {
             return Err(Error::General("vpn gateway must be a host address".into()));
         }
-        let vpn_gw = vpn_gw.first_address();
+
+        // Construct VPN subnet CIDR by ignoring the host bits of the VPN client IP and using the default prefix length
+        let vpn_cidr: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(
+            &format!("{}/{}", vpn_client_ip_cidr.first_address(), Self::VPN_SUBNET_PREFIX),
+            Ipv4Addr::from_str,
+        )
+        .map_err(|_| Error::General("invalid vpn subnet range".into()))?;
 
         // The default route is the one with the longest prefix match (= smallest prefix length)
         let default_route = handle
@@ -104,12 +111,12 @@ impl NetworkDeviceInfo {
             wan_if_index,
             wan_gw,
             vpn_if_index,
-            vpn_gw,
-            vpn_cidr: cidr::parsers::parse_cidr_ignore_hostbits(
-                &format!("{vpn_gw}/{}", Self::VPN_SUBNET_PREFIX),
-                Ipv4Addr::from_str,
-            )
-            .map_err(|_| Error::General("invalid vpn subnet range".into()))?,
+            vpn_gw: vpn_cidr
+                .into_iter()
+                .addresses()
+                .nth(1)
+                .ok_or(Error::General("invalid vpn subnet range".into()))?,
+            vpn_cidr,
         })
     }
 }
@@ -506,6 +513,8 @@ mod tests {
         let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
 
         assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 0));
+        assert_eq!(ip.first_address().to_string(), "192.168.101.0");
+        assert_eq!(ip.iter().addresses().nth(1).unwrap().to_string(), "192.168.101.1");
         assert_eq!(ip.network_length(), 24);
         assert_eq!("192.168.101.0/24", ip.to_string());
 
@@ -513,6 +522,7 @@ mod tests {
         let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
 
         assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 0));
+        assert_eq!(ip.iter().addresses().nth(1).unwrap().to_string(), "192.168.101.1");
         assert_eq!(ip.network_length(), 24);
         assert_eq!("192.168.101.0/24", ip.to_string());
 
@@ -535,6 +545,7 @@ mod tests {
         let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
 
         assert_eq!(ip.first_address(), Ipv4Addr::new(192, 128, 0, 0));
+        assert_eq!(ip.iter().addresses().nth(1).unwrap().to_string(), "192.128.0.1");
         assert_eq!(ip.network_length(), 9);
         assert_eq!("192.128.0.0/9", ip.to_string());
 
