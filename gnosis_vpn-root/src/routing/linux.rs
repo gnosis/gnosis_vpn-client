@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::wg_tooling;
 use rtnetlink::IpVersion;
 use rtnetlink::packet_route::link::LinkAttribute;
-use rtnetlink::packet_route::rule::RuleAttribute;
+use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
 
 use super::{Error, Routing};
 
@@ -223,6 +223,7 @@ impl Routing for Router {
             .fw_mark(FW_MARK)
             .priority(1)
             .table_id(TABLE_ID)
+            .action(RuleAction::ToTable)
             .execute()
             .await?;
         tracing::debug!("set fwmark {FW_MARK} on routing table {TABLE_ID}");
