@@ -253,14 +253,12 @@ async fn loop_daemon(
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
-                if shutdown_ongoing {
+                let should_exit = handle_shutdown(&mut shutdown_ongoing, &cancel_token, maybe_router).await?;
+                if should_exit {
                     tracing::info!("force shutdown immediately");
                     return Ok(());
                 }
-                // child will receive event as well - waiting for it to shutdown
                 tracing::info!("initiate shutdown");
-                shutdown_ongoing = true;
-                cancel_token.cancel();
             },
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
@@ -404,6 +402,21 @@ async fn send_to_worker(
     Ok(())
 }
 
+async fn handle_shutdown(
+    shutdown_ongoing: &mut bool,
+    cancel_token: &CancellationToken,
+    maybe_router: &mut Option<Box<dyn Routing>>,
+) -> Result<bool, exitcode::ExitCode> {
+    if *shutdown_ongoing {
+        return Ok(true);
+    }
+
+    *shutdown_ongoing = true;
+    cancel_token.cancel();
+    teardown_any_routing(maybe_router, true).await;
+    Ok(false)
+}
+
 async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(msg).map_err(|err| {
         tracing::error!(error = ?err, "failed to serialize response");
@@ -440,6 +453,52 @@ async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expec
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Routing, handle_shutdown};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio_util::sync::CancellationToken;
+
+    struct TestRouter {
+        teardown_called: Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl Routing for TestRouter {
+        async fn setup(&mut self) -> Result<(), crate::routing::Error> {
+            Ok(())
+        }
+
+        async fn teardown(&mut self) -> Result<(), crate::routing::Error> {
+            self.teardown_called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_shutdown_calls_teardown_and_cancels() {
+        let teardown_called = Arc::new(AtomicBool::new(false));
+        let router: Box<dyn Routing> = Box::new(TestRouter {
+            teardown_called: teardown_called.clone(),
+        });
+        let mut maybe_router = Some(router);
+        let cancel_token = CancellationToken::new();
+        let mut shutdown_ongoing = false;
+
+        let should_exit = handle_shutdown(&mut shutdown_ongoing, &cancel_token, &mut maybe_router)
+            .await
+            .expect("shutdown");
+
+        assert!(!should_exit);
+        assert!(shutdown_ongoing);
+        assert!(cancel_token.is_cancelled());
+        assert!(teardown_called.load(Ordering::SeqCst));
     }
 }
 

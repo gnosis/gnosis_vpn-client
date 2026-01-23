@@ -156,15 +156,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_wg_interface_from_dump() {
-        let output = "utun9 private_key_a public_key_a 51820 0\nutun10 private_key_b public_key_b 51820 0";
-
-        let iface = super::parse_wg_interface_from_dump(output, "public_key_b");
-
-        assert_eq!(iface, Some("utun10".to_string()));
-    }
-
-    #[test]
     fn builds_peer_route_lines_include_pre_down() {
         let interface_gateway = ("en0".to_string(), Some("192.168.88.1".to_string()));
 

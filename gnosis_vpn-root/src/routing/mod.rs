@@ -26,7 +26,7 @@ pub enum Error {
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
     General(String),
 
