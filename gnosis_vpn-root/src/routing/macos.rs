@@ -17,8 +17,16 @@ use crate::wg_tooling;
 
 use super::{Error, Routing};
 
-pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
-    Ok(Firewall { worker, wg_data })
+pub fn build_firewall_router(
+    worker: worker::Worker,
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
+) -> Result<impl Routing, Error> {
+    Ok(Firewall {
+        worker,
+        wg_data,
+        peer_ips,
+    })
 }
 
 pub fn static_fallback_router(_wg_data: event::WireGuardData, _peer_ips: Vec<Ipv4Addr>) -> impl Routing {
@@ -31,6 +39,7 @@ pub struct Firewall {
     #[allow(dead_code)]
     worker: worker::Worker,
     wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
 }
 
 pub struct FallbackRouter {
@@ -139,7 +148,8 @@ impl Routing for Firewall {
 
         enable_ip_forwarding().await?;
         let filter_rules = build_pf_filter_rules(&device, &utun_device, gw_ip, self.worker.uid, &wg_nat_cidr);
-        let nat_rules = build_pf_nat_rules(&utun_device, &device, &wg_nat_cidr);
+        let public_ip = interface_ip(&device).await?;
+        let nat_rules = build_pf_nat_rules(&device, &utun_device, &wg_nat_cidr, &self.peer_ips, public_ip);
 
         tracing::info!("Adding filter rules: {}", filter_rules);
 
@@ -292,8 +302,35 @@ fn build_pf_filter_rules(
         + "\n"
 }
 
-fn build_pf_nat_rules(utun_device: &str, device: &str, wg_nat_cidr: &str) -> String {
-    format!("nat on {utun_device} inet from {wg_nat_cidr} -> ({device})\n")
+fn build_pf_nat_rules(
+    device: &str,
+    utun_device: &str,
+    wg_nat_cidr: &str,
+    peer_ips: &[Ipv4Addr],
+    public_ip: std::net::IpAddr,
+) -> String {
+    if peer_ips.is_empty() {
+        return String::new();
+    }
+
+    let public_ip = match public_ip {
+        std::net::IpAddr::V4(v4) => v4,
+        std::net::IpAddr::V6(_) => {
+            return String::new();
+        }
+    };
+
+    let mut rules = Vec::new();
+    for peer_ip in peer_ips {
+        rules.push(format!(
+            "nat on {device} inet from {wg_nat_cidr} to {peer_ip} -> {public_ip}"
+        ));
+        rules.push(format!(
+            "nat on {utun_device} inet from {wg_nat_cidr} to {peer_ip} -> {public_ip}"
+        ));
+    }
+
+    rules.join("\n") + "\n"
 }
 
 async fn reset_pf_anchor() -> Result<(), Error> {
@@ -575,6 +612,19 @@ async fn interface() -> Result<(String, Option<String>), Error> {
     Ok(res)
 }
 
+async fn interface_ip(device: &str) -> Result<std::net::IpAddr, Error> {
+    let output = Command::new("ipconfig")
+        .arg("getifaddr")
+        .arg(device)
+        .run_stdout()
+        .await?;
+    let ip = output
+        .trim()
+        .parse()
+        .map_err(|e| Error::General(format!("failed to parse {device} ip address: {e}")))?;
+    Ok(ip)
+}
+
 fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
     let parts: Vec<&str> = output.split_whitespace().collect();
     let device_index = parts.iter().position(|&x| x == "interface:");
@@ -646,13 +696,26 @@ mod tests {
             499,
             "10.128.0.0/9",
         );
-        let nat_rules = super::build_pf_nat_rules("utun10", "en0", "10.128.0.0/9");
+        let peer_ips = [Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2)];
+        let nat_rules = super::build_pf_nat_rules(
+            "en0",
+            "utun10",
+            "10.128.0.0/9",
+            &peer_ips,
+            "192.168.88.9".parse().expect("public ip"),
+        );
 
         assert_eq!(
             filter_rules,
             "scrub all fragment reassemble\npass quick on lo0 all flags any keep state\npass out quick on en0 inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state\npass in quick on en0 inet proto udp from any port = 67 to any port = 68 no state\npass out quick route-to (en0 192.168.88.1) inet all user 499 keep state\npass out quick on en0 proto udp from any port 67:68 to any port 67:68 keep state\npass quick on utun10 all user != 499\nblock drop out on en0 all\n"
         );
-        assert_eq!(nat_rules, "nat on utun10 inet from 10.128.0.0/9 -> (en0)\n");
+        let expected_nat_rules = concat!(
+            "nat on en0 inet from 10.128.0.0/9 to 10.0.0.1 -> 192.168.88.9\n",
+            "nat on utun10 inet from 10.128.0.0/9 to 10.0.0.1 -> 192.168.88.9\n",
+            "nat on en0 inet from 10.128.0.0/9 to 10.0.0.2 -> 192.168.88.9\n",
+            "nat on utun10 inet from 10.128.0.0/9 to 10.0.0.2 -> 192.168.88.9\n",
+        );
+        assert_eq!(nat_rules, expected_nat_rules);
     }
 
     #[test]

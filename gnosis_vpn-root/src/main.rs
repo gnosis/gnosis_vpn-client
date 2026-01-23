@@ -292,11 +292,19 @@ async fn loop_daemon(
                     WorkerToRoot::RequestToRoot(request) => {
                         tracing::debug!(?request, "received worker request to root");
                         match request {
-                            RequestToRoot::DynamicWgRouting { wg_data } => {
+                            RequestToRoot::DynamicWgRouting { wg_data, peer_ips } => {
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                match routing::build_router(worker_user.clone(), wg_data) {
+                                #[cfg(target_os = "macos")]
+                                let router_result = routing::build_router(worker_user.clone(), wg_data, peer_ips);
+                                #[cfg(target_os = "linux")]
+                                let router_result = {
+                                    let _ = peer_ips;
+                                    routing::build_router(worker_user.clone(), wg_data)
+                                };
+
+                                match router_result {
                                     Ok(mut router) => {
                                         let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                         *maybe_router = Some(Box::new(router));

@@ -63,6 +63,7 @@ pub enum WorkerToRoot {
 pub enum RespondableRequestToRoot {
     DynamicWgRouting {
         wg_data: WireGuardData,
+        peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<(), String>>,
     },
     StaticWgRouting {
@@ -96,6 +97,7 @@ impl AsRef<RootToWorker> for RootToWorker {
 pub enum RequestToRoot {
     DynamicWgRouting {
         wg_data: WireGuardData,
+        peer_ips: Vec<Ipv4Addr>,
     },
     StaticWgRouting {
         wg_data: WireGuardData,

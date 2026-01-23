@@ -91,7 +91,8 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::DynamicWgTunnel(session.clone())))
             .await;
-        let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
+        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let res = request_dynamic_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await;
 
         match res {
             Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
@@ -281,6 +282,7 @@ async fn request_dynamic_wg_tunnel(
     wg: &WireGuard,
     registration: &Registration,
     session: &SessionClientMetadata,
+    peer_ips: Vec<Ipv4Addr>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<(), Error> {
     let (tx, rx) = oneshot::channel();
@@ -298,7 +300,11 @@ async fn request_dynamic_wg_tunnel(
     };
     let _ = results_sender
         .send(Results::ConnectionRequestToRoot(
-            RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx },
+            RespondableRequestToRoot::DynamicWgRouting {
+                wg_data,
+                peer_ips,
+                resp: tx,
+            },
         ))
         .await;
     let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
