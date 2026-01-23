@@ -241,10 +241,7 @@
               "modules/*"
             ];
 
-            programs.nixfmt = {
-              enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt-rfc-style.compiler;
-              package = pkgs.nixfmt-rfc-style;
-            };
+            programs.nixfmt.enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt.compiler;
             programs.deno.enable = true;
             settings.formatter.deno.excludes = [
               "*.toml"
