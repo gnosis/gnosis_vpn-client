@@ -31,7 +31,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             address: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
-            timeout: Duration::from_secs(600),
+            timeout: Duration::from_secs(15),
             ttl: 6,
             seq_count: 1,
         }
@@ -149,10 +149,10 @@ mod tests {
     }
 
     #[test]
-    fn ping_default_timeout_is_600_seconds() {
+    fn ping_default_timeout_is_15_seconds() {
         let options = super::Options::default();
 
-        assert_eq!(options.timeout, std::time::Duration::from_secs(600));
+        assert_eq!(options.timeout, std::time::Duration::from_secs(15));
     }
 
     #[test]

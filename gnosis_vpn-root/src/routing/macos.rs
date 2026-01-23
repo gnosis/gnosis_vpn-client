@@ -1,3 +1,7 @@
+//! macOS routing implementation using `wg-quick` hook commands.
+//!
+//! Builds a static router that installs per-peer host routes and
+//! default-route overrides via `route` commands for split-tunnel behavior.
 use async_trait::async_trait;
 use tokio::process::Command;
 
@@ -9,6 +13,9 @@ use std::net::Ipv4Addr;
 
 use super::{Error, Routing};
 
+/// Builds the macOS router using the firewall-routing entrypoint.
+///
+/// The worker handle is unused on macOS but kept for API parity.
 pub fn build_firewall_router(
     worker: worker::Worker,
     wg_data: event::WireGuardData,
@@ -18,10 +25,12 @@ pub fn build_firewall_router(
     Ok(StaticRouter { wg_data, peer_ips })
 }
 
+/// Builds a static macOS router without a worker handle.
 pub fn static_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
     StaticRouter { wg_data, peer_ips }
 }
 
+/// macOS routing implementation that programs host routes via `wg-quick` hooks.
 pub struct StaticRouter {
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
@@ -62,6 +71,7 @@ fn build_static_extra_lines(
             .iter()
             .map(|ip| pre_down_routing(ip, interface_gateway.clone())),
     );
+    extra.extend(default_route_hook_lines(interface_name, "PostDown", "delete"));
     extra.extend(
         peer_ips
             .iter()
@@ -176,7 +186,7 @@ mod tests {
         let extra = super::build_static_extra_lines(&peer_ips, interface_gateway, wireguard::WG_INTERFACE);
 
         assert_eq!(extra[0], "Table = off");
-        assert_eq!(extra.len(), 8);
+        assert_eq!(extra.len(), 10);
         assert!(
             extra
                 .iter()
@@ -196,6 +206,16 @@ mod tests {
             extra
                 .iter()
                 .any(|line| { line == "PreDown = route -n delete -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
+        );
+        assert!(
+            extra
+                .iter()
+                .any(|line| { line == "PostDown = route -n delete -inet 0.0.0.0/1 -interface wg0_gnosisvpn" })
+        );
+        assert!(
+            extra
+                .iter()
+                .any(|line| { line == "PostDown = route -n delete -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
         );
         assert!(extra.iter().any(|line| line.contains("PreUp = route -n add -host")));
         assert!(

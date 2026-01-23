@@ -2,6 +2,7 @@ use clap::Parser;
 use url::Url;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gnosis_vpn_lib::hopr_params::{self, HoprParams};
 use gnosis_vpn_lib::{config, hopr, socket};
@@ -29,6 +30,14 @@ pub struct Cli {
         default_value = config::DEFAULT_PATH,
         )]
     pub config_path: PathBuf,
+
+    /// Ping timeout used to verify sessions (e.g. "10s")
+    #[arg(long, value_parser = humantime::parse_duration)]
+    pub ping_timeout: Option<Duration>,
+
+    /// Ping count used to verify sessions
+    #[arg(long)]
+    pub ping_count: Option<u16>,
 
     /// Username of the worker user (needs a home folder for caching and configurations)
     #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
@@ -99,6 +108,26 @@ mod tests {
     fn parses_cli_with_minimum_arguments() -> anyhow::Result<()> {
         let args = Cli::try_parse_from(base_args())?;
         assert!(args.hopr_config_path.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn parses_cli_with_ping_overrides() -> anyhow::Result<()> {
+        let args = Cli::try_parse_from([
+            "gnosis_vpn",
+            "--socket-path",
+            "/tmp/gnosis.socket",
+            "--config-path",
+            "/tmp/gnosis.toml",
+            "--ping-timeout",
+            "12s",
+            "--ping-count",
+            "3",
+        ])?;
+
+        assert_eq!(args.ping_timeout, Some(Duration::from_secs(12)));
+        assert_eq!(args.ping_count, Some(3));
 
         Ok(())
     }
