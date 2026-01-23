@@ -111,6 +111,7 @@ impl NetworkDeviceInfo {
             wan_if_index,
             wan_gw,
             vpn_if_index,
+            // Gateway of the VPN interface is the second address in the VPN subnet
             vpn_gw: vpn_cidr
                 .into_iter()
                 .addresses()
@@ -251,7 +252,6 @@ impl Routing for Router {
             .table_id(TABLE_ID)
             .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
             .output_interface(vpn_if_index)
-            .gateway(vpn_gw)
             .build();
         self.handle.route().add(vpn_addrs_route).execute().await?;
         tracing::debug!("ip route add {vpn_cidr} via {vpn_gw} dev {vpn_if_index}");
