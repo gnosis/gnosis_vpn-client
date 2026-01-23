@@ -31,7 +31,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             address: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
-            timeout: Duration::from_secs(120),
+            timeout: Duration::from_secs(600),
             ttl: 6,
             seq_count: 1,
         }
@@ -149,17 +149,17 @@ mod tests {
     }
 
     #[test]
-    fn ping_default_timeout_is_120_seconds() {
+    fn ping_default_timeout_is_600_seconds() {
         let options = super::Options::default();
 
-        assert_eq!(options.timeout, std::time::Duration::from_secs(120));
+        assert_eq!(options.timeout, std::time::Duration::from_secs(600));
     }
 
     #[test]
     fn ping_cmd_args_use_seq_count() {
         let options = super::Options {
             address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
-            timeout: std::time::Duration::from_secs(120),
+            timeout: std::time::Duration::from_secs(600),
             ttl: 6,
             seq_count: 10,
         };
@@ -173,14 +173,14 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             assert!(args.contains(&"-W".to_string()));
-            assert!(args.contains(&"120".to_string()));
+            assert!(args.contains(&"600".to_string()));
         }
         #[cfg(target_os = "macos")]
         {
             assert!(args.contains(&"-t".to_string()));
             assert!(args.contains(&"-W".to_string()));
-            assert!(args.contains(&"120".to_string()));
-            assert!(args.contains(&"120000".to_string()));
+            assert!(args.contains(&"600".to_string()));
+            assert!(args.contains(&"600000".to_string()));
         }
     }
 }

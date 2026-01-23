@@ -41,7 +41,8 @@ pub struct FallbackRouter {
 pub struct DisabledFallbackRouter;
 
 impl Firewall {
-    pub const ANCHOR_NAME: &str = "gnosisvpn_bypass";
+    pub const FILTER_ANCHOR_NAME: &str = "gnosisvpn_bypass";
+    pub const NAT_ANCHOR_NAME: &str = "gnosisvpn_bypass_nat";
 }
 
 #[async_trait]
@@ -104,12 +105,17 @@ impl Routing for Firewall {
 
         let rules_str = String::from_utf8_lossy(&main_rules.stdout);
         let nat_rules_str = String::from_utf8_lossy(&nat_rules.stdout);
-        ensure_filter_anchor_link(&rules_str, Firewall::ANCHOR_NAME).await?;
-        ensure_nat_anchor_link(&nat_rules_str, Firewall::ANCHOR_NAME).await?;
+        ensure_filter_anchor_link(&rules_str, Firewall::FILTER_ANCHOR_NAME).await?;
+        ensure_nat_anchor_link(&nat_rules_str, Firewall::NAT_ANCHOR_NAME).await?;
 
-        tracing::info!("Flushing rules for anchor {}...", Firewall::ANCHOR_NAME);
+        tracing::info!("Flushing rules for anchor {}...", Firewall::FILTER_ANCHOR_NAME);
         Command::new("pfctl")
-            .args(&["-a", Firewall::ANCHOR_NAME, "-F", "all"])
+            .args(&["-a", Firewall::FILTER_ANCHOR_NAME, "-F", "all"])
+            .output()
+            .await?;
+        tracing::info!("Flushing rules for anchor {}...", Firewall::NAT_ANCHOR_NAME);
+        Command::new("pfctl")
+            .args(&["-a", Firewall::NAT_ANCHOR_NAME, "-F", "all"])
             .output()
             .await?;
 
@@ -132,27 +138,46 @@ impl Routing for Firewall {
         );
 
         enable_ip_forwarding().await?;
-        let rule_str = build_pf_rule(&device, &utun_device, gw_ip, self.worker.uid, &wg_nat_cidr);
+        let filter_rules = build_pf_filter_rules(&device, &utun_device, gw_ip, self.worker.uid, &wg_nat_cidr);
+        let nat_rules = build_pf_nat_rules(&utun_device, &device, &wg_nat_cidr);
 
-        tracing::info!("Adding rule: {}", rule_str);
+        tracing::info!("Adding filter rules: {}", filter_rules);
 
-        let mut child = Command::new("pfctl")
-            .args(&["-a", Firewall::ANCHOR_NAME, "-f", "-"])
+        let mut filter_child = Command::new("pfctl")
+            .args(&["-a", Firewall::FILTER_ANCHOR_NAME, "-f", "-"])
             .stdin(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(rule_str.as_bytes()).await?;
+        if let Some(mut stdin) = filter_child.stdin.take() {
+            stdin.write_all(filter_rules.as_bytes()).await?;
         }
 
-        let output = child.wait_with_output().await?;
+        let output = filter_child.wait_with_output().await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::General(format!("Failed to add pf rule: {}", stderr)));
+            return Err(Error::General(format!("Failed to add pf filter rules: {}", stderr)));
         }
 
-        tracing::info!("Bypass rule added successfully via shell.");
+        tracing::info!("Adding nat rules: {}", nat_rules);
+
+        let mut nat_child = Command::new("pfctl")
+            .args(&["-a", Firewall::NAT_ANCHOR_NAME, "-Nf", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        if let Some(mut stdin) = nat_child.stdin.take() {
+            stdin.write_all(nat_rules.as_bytes()).await?;
+        }
+
+        let output = nat_child.wait_with_output().await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::General(format!("Failed to add pf nat rules: {}", stderr)));
+        }
+
+        tracing::info!("Bypass rules added successfully via shell.");
 
         // Debug: Log full configuration
         match Command::new("pfctl").arg("-sr").output().await {
@@ -164,15 +189,27 @@ impl Routing for Firewall {
         }
 
         match Command::new("pfctl")
-            .args(&["-a", Firewall::ANCHOR_NAME, "-sr"])
+            .args(&["-a", Firewall::FILTER_ANCHOR_NAME, "-sr"])
             .output()
             .await
         {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                tracing::info!("--- Anchor {} Rules ---\n{}", Firewall::ANCHOR_NAME, stdout);
+                tracing::info!("--- Anchor {} Rules ---\n{}", Firewall::FILTER_ANCHOR_NAME, stdout);
             }
             Err(e) => tracing::warn!("Failed to fetch anchor rules: {}", e),
+        }
+
+        match Command::new("pfctl")
+            .args(&["-a", Firewall::NAT_ANCHOR_NAME, "-sn"])
+            .output()
+            .await
+        {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                tracing::info!("--- Anchor {} NAT Rules ---\n{}", Firewall::NAT_ANCHOR_NAME, stdout);
+            }
+            Err(e) => tracing::warn!("Failed to fetch anchor nat rules: {}", e),
         }
 
         Ok(())
@@ -234,10 +271,15 @@ impl Routing for DisabledFallbackRouter {
     }
 }
 
-fn build_pf_rule(device: &str, utun_device: &str, gateway: std::net::IpAddr, uid: u32, wg_nat_cidr: &str) -> String {
+fn build_pf_filter_rules(
+    device: &str,
+    utun_device: &str,
+    gateway: std::net::IpAddr,
+    uid: u32,
+    _wg_nat_cidr: &str,
+) -> String {
     [
         "scrub all fragment reassemble".to_string(),
-        format!("nat on {device} inet from {wg_nat_cidr} to any -> ({device})"),
         "pass quick on lo0 all flags any keep state".to_string(),
         format!("pass out quick on {device} inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state"),
         format!("pass in quick on {device} inet proto udp from any port = 67 to any port = 68 no state"),
@@ -250,9 +292,17 @@ fn build_pf_rule(device: &str, utun_device: &str, gateway: std::net::IpAddr, uid
         + "\n"
 }
 
+fn build_pf_nat_rules(utun_device: &str, device: &str, wg_nat_cidr: &str) -> String {
+    format!("nat on {utun_device} inet from {wg_nat_cidr} -> ({device})\n")
+}
+
 async fn reset_pf_anchor() -> Result<(), Error> {
     Command::new("pfctl")
-        .args(&["-a", Firewall::ANCHOR_NAME, "-F", "all"])
+        .args(&["-a", Firewall::FILTER_ANCHOR_NAME, "-F", "all"])
+        .output()
+        .await?;
+    Command::new("pfctl")
+        .args(&["-a", Firewall::NAT_ANCHOR_NAME, "-F", "all"])
         .output()
         .await?;
 
@@ -268,7 +318,7 @@ async fn reset_pf_anchor() -> Result<(), Error> {
         .map_err(|e| Error::General(format!("Failed to read pf nat rules: {e}")))?;
 
     let rules_str = String::from_utf8_lossy(&main_rules.stdout);
-    if let Some(new_rules) = strip_anchor_links(&rules_str, Firewall::ANCHOR_NAME) {
+    if let Some(new_rules) = strip_anchor_links(&rules_str, Firewall::FILTER_ANCHOR_NAME) {
         let mut child = Command::new("pfctl")
             .arg("-Rf")
             .arg("-")
@@ -282,7 +332,7 @@ async fn reset_pf_anchor() -> Result<(), Error> {
     }
 
     let nat_rules_str = String::from_utf8_lossy(&nat_rules.stdout);
-    if let Some(new_rules) = strip_anchor_links(&nat_rules_str, Firewall::ANCHOR_NAME) {
+    if let Some(new_rules) = strip_anchor_links(&nat_rules_str, Firewall::NAT_ANCHOR_NAME) {
         let mut child = Command::new("pfctl")
             .arg("-Nf")
             .arg("-")
@@ -589,18 +639,20 @@ mod tests {
 
     #[test]
     fn builds_pf_rule_for_user_on_interface() {
-        let rule = super::build_pf_rule(
+        let filter_rules = super::build_pf_filter_rules(
             "en0",
             "utun10",
             "192.168.88.1".parse().expect("gateway"),
             499,
             "10.128.0.0/9",
         );
+        let nat_rules = super::build_pf_nat_rules("utun10", "en0", "10.128.0.0/9");
 
         assert_eq!(
-            rule,
-            "scrub all fragment reassemble\nnat on en0 inet from 10.128.0.0/9 to any -> (en0)\npass quick on lo0 all flags any keep state\npass out quick on en0 inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state\npass in quick on en0 inet proto udp from any port = 67 to any port = 68 no state\npass out quick route-to (en0 192.168.88.1) inet all user 499 keep state\npass out quick on en0 proto udp from any port 67:68 to any port 67:68 keep state\npass quick on utun10 all user != 499\nblock drop out on en0 all\n"
+            filter_rules,
+            "scrub all fragment reassemble\npass quick on lo0 all flags any keep state\npass out quick on en0 inet proto udp from any port = 68 to 255.255.255.255 port = 67 no state\npass in quick on en0 inet proto udp from any port = 67 to any port = 68 no state\npass out quick route-to (en0 192.168.88.1) inet all user 499 keep state\npass out quick on en0 proto udp from any port 67:68 to any port 67:68 keep state\npass quick on utun10 all user != 499\nblock drop out on en0 all\n"
         );
+        assert_eq!(nat_rules, "nat on utun10 inet from 10.128.0.0/9 -> (en0)\n");
     }
 
     #[test]

@@ -344,7 +344,7 @@ async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr
     Ok(peer_ips)
 }
 
-const PING_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const PING_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Results>) -> Result<Duration, Error> {
     (|| async {
@@ -376,8 +376,8 @@ mod tests {
     use super::PING_REQUEST_TIMEOUT;
 
     #[test]
-    fn ping_request_timeout_is_120_seconds() {
-        assert_eq!(PING_REQUEST_TIMEOUT.as_secs(), 120);
+    fn ping_request_timeout_is_600_seconds() {
+        assert_eq!(PING_REQUEST_TIMEOUT.as_secs(), 600);
     }
 }
 
