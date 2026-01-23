@@ -277,6 +277,7 @@ impl Routing for Router {
         self.handle.route().add(default_route).execute().await?;
         tracing::debug!("ip route add default dev {vpn_if_index}");
 
+        tracing::info!("routing is ready");
         Ok(())
     }
 
