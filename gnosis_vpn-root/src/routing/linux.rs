@@ -221,6 +221,7 @@ impl Routing for Router {
             .add()
             .v4()
             .fw_mark(FW_MARK)
+            .priority(1)
             .table_id(TABLE_ID)
             .execute()
             .await?;
@@ -230,7 +231,7 @@ impl Routing for Router {
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(vpn_if_index)
-            .gateway(vpn_gw)
+            //.gateway(vpn_gw)
             .build();
         self.handle.route().add(default_route).execute().await?;
         tracing::debug!(
