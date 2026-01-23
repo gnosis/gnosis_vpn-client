@@ -4,14 +4,14 @@ use tokio::process::Command;
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
 use gnosis_vpn_lib::{event, wireguard, worker};
 
+use super::{Error, Routing};
 use crate::wg_tooling;
 use futures::TryStreamExt;
 use rtnetlink::IpVersion;
 use rtnetlink::packet_route::link::LinkAttribute;
 use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
 use std::net::Ipv4Addr;
-
-use super::{Error, Routing};
+use std::str::FromStr;
 
 pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
@@ -20,7 +20,7 @@ pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardD
         worker,
         wg_data,
         handle,
-        wan_if_index: None,
+        if_indices: None,
     })
 }
 
@@ -28,12 +28,95 @@ pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4A
     FallbackRouter { wg_data, peer_ips }
 }
 
+#[derive(Debug, Copy, Clone)]
+struct NetworkDeviceInfo {
+    /// Index of the WAN interface
+    wan_if_index: u32,
+    /// Default gateway of the WAN interface
+    wan_gw: Ipv4Addr,
+    /// Index of the VPN interface
+    vpn_if_index: u32,
+    /// Default gateway of the VPN interface
+    vpn_gw: Ipv4Addr,
+    /// CIDR of the VPN subnet
+    vpn_cidr: cidr::Ipv4Cidr,
+}
+
+impl NetworkDeviceInfo {
+    const VPN_SUBNET_PREFIX: u8 = 9;
+
+    async fn get_via_rtnetlink(handle: &rtnetlink::Handle, vpn_ip: &str) -> Result<Self, Error> {
+        let vpn_gw = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(vpn_ip, Ipv4Addr::from_str)
+            .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
+
+        if !vpn_gw.is_host_address() {
+            return Err(Error::General("vpn gateway must be a host address".into()));
+        }
+        let vpn_gw = vpn_gw.first_address();
+
+        // The default route is the one with the longest prefix match (= smallest prefix length)
+        let default_route = handle
+            .route()
+            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
+            .execute()
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .min_by_key(|route| route.header.destination_prefix_length)
+            .ok_or(Error::NoInterface)?;
+
+        let wan_if_index = default_route
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                rtnetlink::packet_route::route::RouteAttribute::Oif(index) => Some(*index),
+                _ => None,
+            })
+            .ok_or(Error::NoInterface)?;
+
+        let wan_gw = default_route
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                rtnetlink::packet_route::route::RouteAttribute::Gateway(
+                    rtnetlink::packet_route::route::RouteAddress::Inet(gw),
+                ) => Some(*gw),
+                _ => None,
+            })
+            .ok_or(Error::NoInterface)?;
+
+        let vpn_if_index = handle
+            .link()
+            .get()
+            .execute()
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .find_map(|link| {
+                link.attributes.iter().find_map(|attr| match attr {
+                    LinkAttribute::IfName(if_name) if if_name == wireguard::WG_INTERFACE => Some(link.header.index),
+                    _ => None,
+                })
+            })
+            .ok_or(Error::NoInterface)?;
+
+        Ok(Self {
+            wan_if_index,
+            wan_gw,
+            vpn_if_index,
+            vpn_gw,
+            vpn_cidr: cidr::Cidr::new(vpn_gw, Self::VPN_SUBNET_PREFIX)
+                .map_err(|_| Error::General("invalid vpn subnet range".into()))?,
+        })
+    }
+}
+
 pub struct Router {
     worker: worker::Worker,
     wg_data: event::WireGuardData,
     // Once dropped, the spawned rtnetlink task will terminate
     handle: rtnetlink::Handle,
-    wan_if_index: Option<u32>,
+    if_indices: Option<NetworkDeviceInfo>,
 }
 
 pub struct FallbackRouter {
@@ -46,6 +129,9 @@ const FW_MARK: u32 = 0xFEED_CAFE;
 
 // Table for traffic that does not go through the VPN
 const TABLE_ID: u32 = 108;
+
+// Priority of the FwMark routing table rule
+const RULE_PRIORITY: u32 = 1;
 
 const IP_TABLE: &str = "mangle";
 const IP_CHAIN: &str = "OUTPUT";
@@ -87,61 +173,6 @@ fn flush_ip_tables() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-impl Router {
-    async fn get_default_if_index_and_gw(&self) -> Result<(u32, Ipv4Addr), Error> {
-        // The default route is the one with the longest prefix match (= smallest prefix length)
-        let default_route = self
-            .handle
-            .route()
-            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
-            .execute()
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .min_by_key(|route| route.header.destination_prefix_length)
-            .ok_or(Error::NoInterface)?;
-
-        let index = default_route
-            .attributes
-            .iter()
-            .find_map(|attr| match attr {
-                rtnetlink::packet_route::route::RouteAttribute::Oif(index) => Some(*index),
-                _ => None,
-            })
-            .ok_or(Error::NoInterface)?;
-
-        let gw = default_route
-            .attributes
-            .iter()
-            .find_map(|attr| match attr {
-                rtnetlink::packet_route::route::RouteAttribute::Gateway(
-                    rtnetlink::packet_route::route::RouteAddress::Inet(gw),
-                ) => Some(*gw),
-                _ => None,
-            })
-            .ok_or(Error::NoInterface)?;
-
-        Ok((index, gw))
-    }
-
-    async fn find_if_index_by_name(&self, name: &str) -> Result<u32, Error> {
-        self.handle
-            .link()
-            .get()
-            .execute()
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .find_map(|link| {
-                link.attributes.iter().find_map(|attr| match attr {
-                    LinkAttribute::IfName(if_name) if if_name == name => Some(link.header.index),
-                    _ => None,
-                })
-            })
-            .ok_or(Error::NoInterface)
-    }
-}
-
 /// Linux-specific implementation of [`Routing`] for split-tunnel routing.
 #[async_trait]
 impl Routing for Router {
@@ -155,13 +186,15 @@ impl Routing for Router {
     ///      See [`setup_iptables`] for details.
     ///   3. Create a new routing table for traffic that does not go through the VPN (TABLE_ID)
     ///      Equivalent command: `ip route add default dev "$IF_WAN" table "$TABLE_ID"`
-    ///   4. Add a rule to direct traffic with the specified fwmark to the new routing table
-    ///      Equivalent command: `ip rule add fwmark $FW_MARK table $TABLE_ID`
-    ///   5. Adjust the default routing table (MAIN) to use the VPN interface for default routing
+    ///   4. Allow non-VPN traffic to reach VPN addresses
+    ///      Equivalent command: `ip route add $VPN_RANGE dev "$IP_VPN" table "$TABLE_ID"`
+    ///   5. Add a rule to direct traffic with the specified fwmark to the new routing table
+    ///      Equivalent command: `ip rule add mark $FW_MARK table $TABLE_ID pref 1`
+    ///   6. Adjust the default routing table (MAIN) to use the VPN interface for default routing
     ///      Equivalent command: `ip route replace default dev "$IF_VPN"`
     ///
     async fn setup(&mut self) -> Result<(), Error> {
-        if self.wan_if_index.is_some() {
+        if self.if_indices.is_some() {
             return Err(Error::General("invalid state: already set up".into()));
         }
 
@@ -176,16 +209,20 @@ impl Routing for Router {
         wg_tooling::up(wg_quick_content).await?;
         tracing::debug!("wg-quick up");
 
-        // Get the default WAN interface index and default gateway
-        let (wan_if_index, gw_addr) = self.get_default_if_index_and_gw().await?;
-        self.wan_if_index = Some(wan_if_index);
-        tracing::debug!(wan_if_index, %gw_addr, "wan interface index");
-
-        // Get the VPN interface index
-        let vpn_if_index = self.find_if_index_by_name(wireguard::WG_INTERFACE).await?;
-        tracing::debug!(vpn_if_index, "vpn interface index");
+        // Obtain network interface data
+        let ifs = NetworkDeviceInfo::get_via_rtnetlink(&self.handle, &self.wg_data.interface_info.address).await?;
+        let NetworkDeviceInfo {
+            wan_if_index,
+            wan_gw,
+            vpn_if_index,
+            vpn_gw,
+            vpn_cidr,
+        } = ifs;
+        self.if_indices = Some(ifs);
+        tracing::debug!(?ifs, "interface data");
 
         // This steps marks all traffic from VPN_USER with FW_MARK
+        // Remove this once we can set the fwmark directly on the libp2p Socket
         setup_iptables(self.worker.uid).map_err(Error::iptables)?;
         tracing::debug!(uid = self.worker.uid, "iptables rules set up");
 
@@ -194,23 +231,33 @@ impl Routing for Router {
             .table_id(TABLE_ID)
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
-            .gateway(gw_addr)
+            .gateway(wan_gw)
             .build();
         self.handle.route().add(no_vpn_route).execute().await?;
-        tracing::debug!(wan_if_index, %gw_addr, "set table {TABLE_ID} default route to interface");
+        tracing::debug!("ip route add default via {wan_gw} dev {wan_if_index} table {TABLE_ID}");
 
-        // Add rule: everything marked with FW_MARK goes via TABLE_ID routing table
+        // Allow VPN traffic arriving to the TABLE_ID table goes to the VPN interface
+        let vpn_addrs_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+            .table_id(TABLE_ID)
+            .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
+            .output_interface(vpn_if_index)
+            .gateway(vpn_gw)
+            .build();
+        self.handle.route().add(vpn_addrs_route).execute().await?;
+        tracing::debug!("ip route add {vpn_cidr} via {vpn_gw} dev {vpn_if_index}");
+
+        // Add rule: everything marked with FW_MARK goes via the TABLE_ID routing table
         self.handle
             .rule()
             .add()
             .v4()
             .fw_mark(FW_MARK)
-            .priority(1)
+            .priority(RULE_PRIORITY)
             .table_id(TABLE_ID)
             .action(RuleAction::ToTable)
             .execute()
             .await?;
-        tracing::debug!("set fwmark {FW_MARK} on routing table {TABLE_ID}");
+        tracing::debug!("ip rule add mark {FW_MARK} table {TABLE_ID} pref {RULE_PRIORITY}");
 
         // Adjust the main routing table so that everything gets routed via the VPN interface
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
@@ -218,11 +265,7 @@ impl Routing for Router {
             .output_interface(vpn_if_index)
             .build();
         self.handle.route().add(default_route).execute().await?;
-        tracing::debug!(
-            vpn_if_index,
-            "set main table default route to interface {}",
-            wireguard::WG_INTERFACE
-        );
+        tracing::debug!("ip route add default dev {vpn_if_index}");
 
         Ok(())
     }
@@ -232,16 +275,24 @@ impl Routing for Router {
     /// The steps:
     ///   1. Replace the default route in the MAIN routing table
     ///      Equivalent command: `ip route replace default dev "$IF_WAN"`
-    ///   2. Delete the fwmark rule for the TABLE_ID
-    ///      Equivalent command: `ip rule del fwmark $FW_MARK table $TABLE_ID`
+    ///   2. Delete the mark rule for the TABLE_ID
+    ///      Equivalent command: `ip rule del mark $FW_MARK table $TABLE_ID`
     ///   3. Delete the TABLE_ID routing table
+    ///      Equivalent command: `ip route del $VPN_RANGE dev "$VPN_WAN" table "$TABLE_ID"`
+    ///   4. Delete the TABLE_ID routing table
     ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
-    ///   4. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
-    ///   5. Run `wg-quick down`
+    ///   5. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
+    ///   6. Run `wg-quick down`
     ///
     async fn teardown(&mut self) -> Result<(), Error> {
-        let wan_if_index = self
-            .wan_if_index
+        let NetworkDeviceInfo {
+            wan_if_index,
+            vpn_if_index,
+            vpn_gw,
+            vpn_cidr,
+            ..
+        } = self
+            .if_indices
             .take()
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
@@ -254,7 +305,7 @@ impl Routing for Router {
         if let Err(error) = self.handle.route().add(default_route).execute().await {
             tracing::error!(%error, "failed to set default route back to interface, continuing anyway");
         } else {
-            tracing::debug!(wan_if_index, "set main table default route to interface");
+            tracing::debug!("ip route add default via {vpn_gw} dev {wan_if_index}");
         }
 
         // Delete the fwmark routing table rule
@@ -278,12 +329,31 @@ impl Routing for Router {
                 if let Err(error) = self.handle.rule().del(rule).execute().await {
                     tracing::error!(%error, "failed to delete fwmark routing table rule, continuing anyway");
                 } else {
-                    tracing::debug!("deleted fwmark {} routing table rule", FW_MARK);
+                    tracing::debug!("ip rule del mark {FW_MARK} table {TABLE_ID}");
                 }
             }
         }
 
-        // Delete the TABLE_ID routing table
+        // Delete the TABLE_ID routing table VPN route
+        if let Err(error) = self
+            .handle
+            .route()
+            .del(
+                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+                    .table_id(TABLE_ID)
+                    .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
+                    .output_interface(vpn_if_index)
+                    .build(),
+            )
+            .execute()
+            .await
+        {
+            tracing::error!(%error, "failed to delete table {TABLE_ID}, continuing anyway");
+        } else {
+            tracing::debug!("ip route del {vpn_cidr} via {vpn_gw} dev {vpn_if_index}");
+        }
+
+        // Delete the TABLE_ID routing table default route
         if let Err(error) = self
             .handle
             .route()
@@ -297,18 +367,20 @@ impl Routing for Router {
             .execute()
             .await
         {
-            tracing::error!(%error, "failed to delete table {}, continuing anyway", TABLE_ID);
+            tracing::error!(%error, "failed to delete table {TABLE_ID}, continuing anyway");
         } else {
-            tracing::debug!("deleted table {}", TABLE_ID);
+            tracing::debug!("ip route del default via {vpn_gw} dev {wan_if_index}");
         }
 
         // Flush the iptables rules
         if let Err(error) = flush_ip_tables().map_err(Error::iptables) {
             tracing::error!(%error, "failed to flush iptables rules, continuing anyway");
         }
+        tracing::debug!("iptables rules flushed");
 
         // Run wg-quick down
         wg_tooling::down().await?;
+        tracing::debug!("wg-quick down");
 
         Ok(())
     }
@@ -411,6 +483,9 @@ fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+    use std::str::FromStr;
+
     #[test]
     fn parses_interface_gateway() -> anyhow::Result<()> {
         let output = "default via 192.168.101.1 dev wlp2s0 proto dhcp src 192.168.101.202 metric 600 ";
@@ -419,6 +494,32 @@ mod tests {
 
         assert_eq!(device, "wlp2s0");
         assert_eq!(gateway, Some("192.168.101.1".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_cidr() -> anyhow::Result<()> {
+        let cidr = "192.168.101.0/24";
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+
+        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 0));
+        assert_eq!(ip.network_length(), 24);
+        assert_eq!("192.168.101.0/24", ip.to_string());
+
+        let cidr = "192.168.101.32/24";
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+
+        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 0));
+        assert_eq!(ip.network_length(), 24);
+        assert_eq!("192.168.101.0/24", ip.to_string());
+
+        let cidr = "192.168.101.1";
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+
+        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 1));
+        assert_eq!(ip.network_length(), 32);
+        assert_eq!("192.168.101.1", ip.to_string());
+
         Ok(())
     }
 }
