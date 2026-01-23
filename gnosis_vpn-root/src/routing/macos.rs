@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-use gnosis_vpn_lib::{event, worker};
+use gnosis_vpn_lib::{event, wireguard, worker};
 
 use crate::wg_tooling;
 use std::net::Ipv4Addr;
@@ -31,7 +31,7 @@ pub struct StaticRouter {
 impl Routing for StaticRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
-        let extra = build_static_extra_lines(&self.peer_ips, interface_gateway);
+        let extra = build_static_extra_lines(&self.peer_ips, interface_gateway, wireguard::WG_INTERFACE);
 
         let wg_quick_content =
             self.wg_data
@@ -39,55 +39,24 @@ impl Routing for StaticRouter {
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
         wg_tooling::up(wg_quick_content).await?;
 
-        let utun_device = wg_interface_from_public_key(&self.wg_data.wg.key_pair.public_key).await?;
-        apply_default_routes(&utun_device).await?;
-
         Ok(())
     }
 
     async fn teardown(&mut self) -> Result<(), Error> {
-        match wg_interface_from_public_key(&self.wg_data.wg.key_pair.public_key).await {
-            Ok(utun_device) => {
-                if let Err(err) = remove_default_routes(&utun_device).await {
-                    tracing::warn!(error = ?err, "failed to remove default routes");
-                }
-            }
-            Err(err) => tracing::warn!(error = ?err, "failed to lookup utun device"),
-        }
-
         wg_tooling::down().await?;
         Ok(())
     }
 }
 
-async fn wg_interface_from_public_key(public_key: &str) -> Result<String, Error> {
-    let output = Command::new("wg")
-        .arg("show")
-        .arg("all")
-        .arg("dump")
-        .run_stdout()
-        .await?;
-    parse_wg_interface_from_dump(&output, public_key)
-        .ok_or_else(|| Error::General(format!("Unable to find wg interface for public key {public_key}")))
-}
-
-fn parse_wg_interface_from_dump(output: &str, public_key: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let iface = parts.next()?;
-        let _private_key = parts.next()?;
-        let iface_public_key = parts.next()?;
-        if iface_public_key == public_key {
-            Some(iface.to_string())
-        } else {
-            None
-        }
-    })
-}
-
-fn build_static_extra_lines(peer_ips: &[Ipv4Addr], interface_gateway: (String, Option<String>)) -> Vec<String> {
+fn build_static_extra_lines(
+    peer_ips: &[Ipv4Addr],
+    interface_gateway: (String, Option<String>),
+    interface_name: &str,
+) -> Vec<String> {
     let mut extra = vec!["Table = off".to_string()];
+    extra.extend(default_route_hook_lines(interface_name, "PreUp", "add"));
     extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
+    extra.extend(default_route_hook_lines(interface_name, "PreDown", "delete"));
     extra.extend(
         peer_ips
             .iter()
@@ -101,35 +70,11 @@ fn build_static_extra_lines(peer_ips: &[Ipv4Addr], interface_gateway: (String, O
     extra
 }
 
-fn default_route_specs(utun_device: &str, action: &str) -> Vec<Vec<String>> {
+fn default_route_hook_lines(interface_name: &str, hook: &str, action: &str) -> Vec<String> {
     ["0.0.0.0/1", "128.0.0.0/1"]
         .iter()
-        .map(|cidr| {
-            vec![
-                "-q".to_string(),
-                "-n".to_string(),
-                action.to_string(),
-                "-inet".to_string(),
-                cidr.to_string(),
-                "-interface".to_string(),
-                utun_device.to_string(),
-            ]
-        })
+        .map(|cidr| format!("{hook} = route -n {action} -inet {cidr} -interface {interface_name}"))
         .collect()
-}
-
-async fn apply_default_routes(utun_device: &str) -> Result<(), Error> {
-    for spec in default_route_specs(utun_device, "add") {
-        Command::new("route").args(spec).run_stdout().await?;
-    }
-    Ok(())
-}
-
-async fn remove_default_routes(utun_device: &str) -> Result<(), Error> {
-    for spec in default_route_specs(utun_device, "delete") {
-        Command::new("route").args(spec).run_stdout().await?;
-    }
-    Ok(())
 }
 
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
@@ -237,42 +182,37 @@ mod tests {
         let peer_ips = [Ipv4Addr::new(10, 0, 0, 1)];
         let interface_gateway = ("en0".to_string(), Some("192.168.88.1".to_string()));
 
-        let extra = super::build_static_extra_lines(&peer_ips, interface_gateway);
+        let extra = super::build_static_extra_lines(&peer_ips, interface_gateway, wireguard::WG_INTERFACE);
 
         assert_eq!(extra[0], "Table = off");
-        assert_eq!(extra.len(), 4);
-        assert!(extra.iter().any(|line| line.contains("PreUp")));
-        assert!(extra.iter().any(|line| line.contains("PreDown")));
-        assert!(extra.iter().any(|line| line.contains("PostDown")));
-    }
-
-    #[test]
-    fn build_default_route_specs_for_add() {
-        let specs = super::default_route_specs("utun8", "add");
-
-        assert_eq!(
-            specs,
-            vec![
-                vec![
-                    "-q".to_string(),
-                    "-n".to_string(),
-                    "add".to_string(),
-                    "-inet".to_string(),
-                    "0.0.0.0/1".to_string(),
-                    "-interface".to_string(),
-                    "utun8".to_string(),
-                ],
-                vec![
-                    "-q".to_string(),
-                    "-n".to_string(),
-                    "add".to_string(),
-                    "-inet".to_string(),
-                    "128.0.0.0/1".to_string(),
-                    "-interface".to_string(),
-                    "utun8".to_string(),
-                ],
-            ]
+        assert_eq!(extra.len(), 8);
+        assert!(
+            extra
+                .iter()
+                .any(|line| { line == "PreUp = route -n add -inet 0.0.0.0/1 -interface wg0_gnosisvpn" })
         );
+        assert!(
+            extra
+                .iter()
+                .any(|line| { line == "PreUp = route -n add -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
+        );
+        assert!(
+            extra
+                .iter()
+                .any(|line| { line == "PreDown = route -n delete -inet 0.0.0.0/1 -interface wg0_gnosisvpn" })
+        );
+        assert!(
+            extra
+                .iter()
+                .any(|line| { line == "PreDown = route -n delete -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
+        );
+        assert!(extra.iter().any(|line| line.contains("PreUp = route -n add -host")));
+        assert!(
+            extra
+                .iter()
+                .any(|line| line.contains("PreDown = route -n delete -host"))
+        );
+        assert!(extra.iter().any(|line| line.contains("PostDown")));
     }
 
     #[test]
