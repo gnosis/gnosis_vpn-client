@@ -301,8 +301,17 @@ async fn request_dynamic_wg_tunnel(
             RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx },
         ))
         .await;
-    let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
-    res.map_err(Error::RootRequest)
+
+    tokio::select!(
+        res = rx => match res {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(Error::Routing(e)),
+            Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {}", reason))),
+        },
+        _ = tokio::time::sleep(Duration::from_secs(20)) => {
+            Err(Error::Runtime("Timed out waiting for response".to_string()))
+        }
+    )
 }
 
 async fn request_static_wg_tunnel(
@@ -334,8 +343,17 @@ async fn request_static_wg_tunnel(
             },
         ))
         .await;
-    let res = await_with_timeout(rx, Duration::from_secs(60)).await?;
-    res.map_err(Error::RootRequest)
+
+    tokio::select!(
+        res = rx => match res {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(Error::Routing(e)),
+            Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {}", reason))),
+        },
+        _ = tokio::time::sleep(Duration::from_secs(20)) => {
+            Err(Error::Runtime("Timed out waiting for response".to_string()))
+        }
+    )
 }
 
 async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr>, HoprError> {
@@ -353,8 +371,16 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
                 resp: tx,
             }))
             .await;
-        let res = await_with_timeout(rx, options.timeout + Duration::from_secs(30)).await?;
-        res.map_err(Error::RootRequest)
+        tokio::select!(
+            res = rx => match res {
+                Ok(Ok(duration)) => Ok(duration),
+                Ok(Err(e)) => Err(Error::Ping(e)),
+                Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {}", reason))),
+            },
+            _ = tokio::time::sleep(options.timeout + Duration::from_secs(20)) => {
+                Err(Error::Runtime("Timed out waiting for response".to_string()))
+            }
+        )
     })
     .retry(FibonacciBuilder::default())
     .when(|err: &Error| err.is_ping_error())
@@ -389,13 +415,4 @@ fn setback(setback: Setback) -> Results {
 
 fn progress(progress: Progress) -> Results {
     Results::ConnectionEvent(Event::Progress(progress))
-}
-
-async fn await_with_timeout<T>(rx: tokio::sync::oneshot::Receiver<T>, duration: Duration) -> Result<T, Error> {
-    tokio::select!(
-        res = rx => res.map_err(|_| Error::Runtime("Channel closed unexpectedly".to_string())),
-        _ = tokio::time::sleep(duration) => {
-            Err(Error::Runtime("Timed out waiting for response".to_string()))
-        }
-    )
 }
