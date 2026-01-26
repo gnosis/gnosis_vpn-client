@@ -263,7 +263,7 @@ async fn loop_daemon(
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
-                let should_exit = handle_shutdown(&mut shutdown_ongoing, &cancel_token, maybe_router).await?;
+                let should_exit = handle_shutdown(&mut shutdown_ongoing, &cancel_token, maybe_router, None).await?;
                 if should_exit {
                     tracing::info!("force shutdown immediately");
                     return Ok(());
@@ -416,6 +416,7 @@ async fn handle_shutdown(
     shutdown_ongoing: &mut bool,
     cancel_token: &CancellationToken,
     maybe_router: &mut Option<Box<dyn Routing>>,
+    teardown_complete_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> Result<bool, exitcode::ExitCode> {
     if *shutdown_ongoing {
         return Ok(true);
@@ -424,6 +425,12 @@ async fn handle_shutdown(
     *shutdown_ongoing = true;
     cancel_token.cancel();
     teardown_any_routing(maybe_router, true).await;
+
+    // Signal teardown completion if sender provided
+    if let Some(tx) = teardown_complete_tx {
+        let _ = tx.send(()).await;
+    }
+
     Ok(false)
 }
 

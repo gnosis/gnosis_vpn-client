@@ -65,9 +65,9 @@ fn ping_cmd_args(opts: &Options) -> Vec<String> {
     let mut args = Vec::new();
     args.push("-c".to_string());
     args.push(opts.seq_count.to_string());
-    let timeout_str = opts.timeout.as_secs().to_string();
     #[cfg(target_os = "linux")]
     {
+        let timeout_str = opts.timeout.as_secs().to_string();
         args.push("-W".to_string());
         args.push(timeout_str);
     }
@@ -75,7 +75,7 @@ fn ping_cmd_args(opts: &Options) -> Vec<String> {
     {
         let timeout_ms = opts.timeout.as_millis().to_string();
         args.push("-t".to_string());
-        args.push(timeout_str);
+        args.push(opts.ttl.to_string());
         args.push("-W".to_string());
         args.push(timeout_ms);
     }
@@ -178,9 +178,9 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             assert!(args.contains(&"-t".to_string()));
+            assert!(args.contains(&"6".to_string())); // TTL value
             assert!(args.contains(&"-W".to_string()));
-            assert!(args.contains(&"600".to_string()));
-            assert!(args.contains(&"600000".to_string()));
+            assert!(args.contains(&"600000".to_string())); // timeout in milliseconds
         }
     }
 }
