@@ -353,7 +353,7 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
                 resp: tx,
             }))
             .await;
-        let res = await_with_timeout(rx, Duration::from_secs(30)).await?;
+        let res = await_with_timeout(rx, options.timeout + Duration::from_secs(30)).await?;
         res.map_err(Error::RootRequest)
     })
     .retry(FibonacciBuilder::default())
