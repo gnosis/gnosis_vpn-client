@@ -1,6 +1,5 @@
 pub use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use std::fmt::{self, Display};
 
@@ -22,9 +21,6 @@ pub enum FundingTool {
     CompletedSuccess,
     CompletedError(String),
 }
-
-#[derive(Debug, Error)]
-pub enum Error {}
 
 impl Display for FundingIssue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
