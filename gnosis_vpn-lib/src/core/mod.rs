@@ -439,7 +439,6 @@ impl Core {
                         edgli::hopr_lib::SafeModule {
                             safe_address: deployment.safe_address,
                             module_address: deployment.module_address,
-                            ..Default::default()
                         },
                         results_sender,
                     );
