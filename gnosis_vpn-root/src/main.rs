@@ -518,10 +518,6 @@ mod tests {
         assert!(shutdown_ongoing);
         assert!(cancel_token.is_cancelled());
 
-        // Note: teardown_called may not be set because the blocking version
-        // calls wg_tooling::down_blocking() directly instead of router.teardown()
-        // This is correct behavior for shutdown scenarios
-
         // Verify teardown completion signal was sent
         assert!(rx.recv().await.is_some());
     }
