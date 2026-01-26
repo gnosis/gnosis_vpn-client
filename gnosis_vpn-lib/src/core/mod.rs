@@ -42,8 +42,6 @@ pub enum Error {
     HoprIdentity(#[from] identity::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("Balance error: {0}")]
-    Balance(#[from] balance::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
     #[error(transparent)]

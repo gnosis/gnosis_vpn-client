@@ -43,9 +43,7 @@ struct NetworkDeviceInfo {
 }
 
 impl NetworkDeviceInfo {
-    const VPN_SUBNET_PREFIX: u8 = 9;
-
-    async fn get_via_rtnetlink(handle: &rtnetlink::Handle, vpn_ip: &str) -> Result<Self, Error> {
+    async fn get_via_rtnetlink(handle: &rtnetlink::Handle, vpn_ip: &str, vpn_prefix: u8) -> Result<Self, Error> {
         let vpn_client_ip_cidr: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
             .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
 
@@ -56,7 +54,7 @@ impl NetworkDeviceInfo {
 
         // Construct VPN subnet CIDR by ignoring the host bits of the VPN client IP and using the default prefix length
         let vpn_cidr: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(
-            &format!("{}/{}", vpn_client_ip_cidr.first_address(), Self::VPN_SUBNET_PREFIX),
+            &format!("{}/{}", vpn_client_ip_cidr.first_address(), vpn_prefix),
             Ipv4Addr::from_str,
         )
         .map_err(|_| Error::General("invalid vpn subnet range".into()))?;
@@ -144,6 +142,9 @@ const TABLE_ID: u32 = 108;
 // Priority of the FwMark routing table rule
 const RULE_PRIORITY: u32 = 1;
 
+// Subnet prefix length for the VPN subnet, @esterlus this might need to be configurable
+const VPN_SUBNET_PREFIX: u8 = 9;
+
 const IP_TABLE: &str = "mangle";
 const IP_CHAIN: &str = "OUTPUT";
 
@@ -221,7 +222,9 @@ impl Routing for Router {
         tracing::debug!("wg-quick up");
 
         // Obtain network interface data
-        let ifs = NetworkDeviceInfo::get_via_rtnetlink(&self.handle, &self.wg_data.interface_info.address).await?;
+        let ifs =
+            NetworkDeviceInfo::get_via_rtnetlink(&self.handle, &self.wg_data.interface_info.address, VPN_SUBNET_PREFIX)
+                .await?;
         let NetworkDeviceInfo {
             wan_if_index,
             wan_gw,

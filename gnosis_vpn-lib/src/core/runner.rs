@@ -82,8 +82,6 @@ pub enum Error {
     #[error(transparent)]
     HoprParams(#[from] hopr_params::Error),
     #[error(transparent)]
-    PreSafe(#[from] balance::Error),
-    #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
     #[error("chain error: {0}")]
     Chain(String),
