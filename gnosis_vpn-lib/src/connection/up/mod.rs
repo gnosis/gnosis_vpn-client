@@ -10,7 +10,7 @@ use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wireguard::WireGuard;
-use crate::{gvpn_client, log_output, ping, wireguard};
+use crate::{gvpn_client, log_output, wireguard};
 
 pub mod runner;
 
@@ -48,16 +48,16 @@ pub enum Error {
     Hopr(#[from] HoprError),
     #[error("Gvpn client error: {0}")]
     GvpnClient(#[from] gvpn_client::Error),
-    #[error("WireGuard error: {0}")]
-    WireGuard(#[from] wireguard::Error),
     #[error("Ping error: {0}")]
-    Ping(#[from] ping::Error),
+    Ping(String),
     #[error("Critical error: {0}")]
     Runtime(String),
-    #[error("Root request error: {0}")]
-    RootRequest(String),
     #[error("Surb config error: {0}")]
     SurbConfig(#[from] SurbConfigError),
+    #[error("Routing error: {0}")]
+    Routing(String),
+    #[error("WireGuard error: {0}")]
+    WireGuard(#[from] wireguard::Error),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.

@@ -5,9 +5,10 @@ use tokio::fs;
 
 use std::path::{Path, PathBuf};
 
+use crate::compat::SafeModule;
 use crate::dirs;
 
-pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
+pub use edgli::hopr_lib::config::HoprLibConfig;
 
 const DB_FILE: &str = "gnosisvpn-hopr.db";
 const SAFE_FILE: &str = "gnosisvpn-hopr.safe";

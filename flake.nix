@@ -42,9 +42,7 @@
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [
-        treefmt-nix.flakeModule
-      ];
+      imports = [ treefmt-nix.flakeModule ];
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -64,10 +62,12 @@
           pkgs = (
             import nixpkgs {
               localSystem = system;
-              crossSystem = system;
               overlays = [ (import rust-overlay) ];
             }
           );
+
+          # use for statically linked musl libraries on linux
+          staticPkgs = pkgs.pkgsStatic;
 
           # Map Nix system names to Rust target triples
           # Linux targets use musl for static linking, Darwin uses standard targets
@@ -91,22 +91,42 @@
             "x86_64-unknown-linux-musl" = {
               CARGO_PROFILE = "release";
               CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
               # Add musl-specific configuration for C dependencies (SQLite, etc.)
               # Disable Nix hardening features that are incompatible with musl
               hardeningDisable = [ "fortify" ];
               # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
               LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+
+              # Use the musl-gcc linker from the staticPkgs overlay
+              CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
+
+              # Variables for cc-rs (C compilations)
+              CC_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
+              CXX_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
+
+              # poing pkg-config to static libraries
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
             };
             "aarch64-unknown-linux-musl" = {
               CARGO_PROFILE = "release";
               CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=mold";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
               # Add musl-specific configuration for C dependencies (SQLite, etc.)
               # Disable Nix hardening features that are incompatible with musl
               hardeningDisable = [ "fortify" ];
               # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
               LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+
+              # Use the musl-gcc linker from the staticPkgs overlay
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
+
+              # Variables for cc-rs (C compilations)
+              CC_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
+              CXX_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
+
+              # poing pkg-config to static libraries
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
             };
             "x86_64-apple-darwin" = {
               CARGO_PROFILE = "intelmac";
@@ -147,17 +167,27 @@
             # Build-time dependencies (available during compilation)
             nativeBuildInputs = [
               pkgs.pkg-config # For finding OpenSSL and other system libraries
+              pkgs.cmake
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
-              pkgs.mold # Faster linker for Linux builds
+              staticPkgs.stdenv.cc
+            ]
+            ++ lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.libiconv
             ];
 
             # Runtime dependencies (linked into the final binary)
-            buildInputs = [
-              pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
-              pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-            ];
-
+            buildInputs =
+              if pkgs.stdenv.isLinux then
+                [
+                  staticPkgs.openssl
+                  staticPkgs.sqlite
+                ]
+              else
+                [
+                  pkgs.openssl
+                  pkgs.sqlite
+                ];
           }
           // crateArgsForTarget;
 

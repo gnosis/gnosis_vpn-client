@@ -49,7 +49,7 @@ pub struct Hopr {
 }
 
 impl Hopr {
-    #[instrument(skip(keys, cfg), level = "debug", err)]
+    #[instrument(skip_all, level = "debug", err)]
     pub async fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         db_data_dir: &std::path::Path,

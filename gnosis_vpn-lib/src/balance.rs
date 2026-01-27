@@ -1,10 +1,7 @@
 pub use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use std::fmt::{self, Display};
-
-use crate::chain::errors::ChainError;
 
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -23,12 +20,6 @@ pub enum FundingTool {
     InProgress,
     CompletedSuccess,
     CompletedError(String),
-}
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error(transparent)]
-    Chain(#[from] ChainError),
 }
 
 impl Display for FundingIssue {
