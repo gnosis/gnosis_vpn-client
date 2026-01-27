@@ -97,6 +97,8 @@
               hardeningDisable = [ "fortify" ];
               # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
               LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+              # Set library path for musl to fix aws-lc-sys static C library linking
+              NIX_LDFLAGS = "-L${pkgs.pkgsStatic.stdenv.cc.libc}/lib";
             };
             "aarch64-unknown-linux-musl" = {
               CARGO_PROFILE = "release";
@@ -107,6 +109,8 @@
               hardeningDisable = [ "fortify" ];
               # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
               LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+              # Set library path for musl to fix aws-lc-sys static C library linking
+              NIX_LDFLAGS = "-L${pkgs.pkgsStatic.stdenv.cc.libc}/lib";
             };
             "x86_64-apple-darwin" = {
               CARGO_PROFILE = "intelmac";
@@ -153,15 +157,14 @@
             ];
 
             # Runtime dependencies (linked into the final binary)
-            buildInputs = [
-              pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
-              pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-            ]
-            ++ lib.optionals pkgs.stdenv.isLinux [
-              # Add musl for aws-lc-sys static C library requirement
-              # Using pkgsStatic to ensure musl is properly configured for static linking
-              pkgs.pkgsStatic.musl
-            ];
+            buildInputs =
+              [
+                pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
+                pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
+              ]
+              ++ lib.optionals pkgs.stdenv.isLinux [
+                # pkgsStatic packages already include musl for static builds
+              ];
 
           }
           // crateArgsForTarget;
