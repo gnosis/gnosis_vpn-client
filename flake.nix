@@ -156,6 +156,11 @@
             buildInputs = [
               pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
               pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
+            ]
+            ++ lib.optionals pkgs.stdenv.isLinux [
+              # Add musl for aws-lc-sys static C library requirement
+              pkgs.musl
+              pkgs.musl.dev
             ];
 
           }
