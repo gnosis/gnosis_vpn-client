@@ -3,7 +3,6 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
-use edgli::SafeModuleDeploymentResult;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
@@ -22,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::balance;
+use crate::compat::SafeModule;
 use crate::connection;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
@@ -45,7 +45,7 @@ pub enum Results {
         res: Result<TicketStats, Error>,
     },
     SafeDeployment {
-        res: Result<SafeModuleDeploymentResult, Error>,
+        res: Result<SafeModule, Error>,
     },
     SafePersisted,
     FundingTool {
@@ -81,8 +81,6 @@ pub enum Results {
 pub enum Error {
     #[error(transparent)]
     HoprParams(#[from] hopr_params::Error),
-    #[error(transparent)]
-    PreSafe(#[from] balance::Error),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
     #[error("chain error: {0}")]
@@ -138,7 +136,7 @@ pub async fn safe_deployment(
     let _ = results_sender.send(Results::SafeDeployment { res }).await;
 }
 
-pub async fn persist_safe(safe_module: hopr_config::SafeModule, results_sender: mpsc::Sender<Results>) {
+pub async fn persist_safe(safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
     while let Err(err) = hopr_config::store_safe(&safe_module).await {
         log_output::print_safe_module_storage_error(err);
@@ -252,10 +250,7 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     .await
 }
 
-async fn run_safe_deployment(
-    hopr_params: HoprParams,
-    presafe: balance::PreSafe,
-) -> Result<SafeModuleDeploymentResult, Error> {
+async fn run_safe_deployment(hopr_params: HoprParams, presafe: balance::PreSafe) -> Result<SafeModule, Error> {
     tracing::debug!("starting safe deployment runner");
     let keys = hopr_params.calc_keys().await?;
     let private_key = keys.chain_key.clone();
@@ -278,6 +273,7 @@ async fn run_safe_deployment(
         tracing::warn!(?err, ?dur, "Safe deployment attempt failed, retrying...");
     })
     .await
+    .map(SafeModule::from)
 }
 
 // Posts to the HOPR funding tool API to request an airdrop using the provided code.
