@@ -149,12 +149,14 @@
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
             # Build-time dependencies (available during compilation)
-            nativeBuildInputs = [
-              pkgs.pkg-config # For finding OpenSSL and other system libraries
-            ]
-            ++ lib.optionals pkgs.stdenv.isLinux [
-              pkgs.mold # Faster linker for Linux builds
-            ];
+            nativeBuildInputs =
+              [
+                pkgs.pkg-config # For finding OpenSSL and other system libraries
+              ]
+              ++ lib.optionals pkgs.stdenv.isLinux [
+                pkgs.mold # Faster linker for Linux builds
+                pkgs.pkgsStatic.stdenv.cc # C compiler with musl support for aws-lc-sys
+              ];
 
             # Runtime dependencies (linked into the final binary)
             buildInputs =
