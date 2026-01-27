@@ -33,7 +33,7 @@ impl Default for Options {
             address: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
             timeout: Duration::from_secs(15),
             ttl: 6,
-            seq_count: 1,
+            seq_count: 3,
         }
     }
 }

@@ -382,7 +382,7 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
             }
         )
     })
-    .retry(FibonacciBuilder::new().with_jitter().with_max_times(10))
+    .retry(FibonacciBuilder::new().with_jitter().with_max_times(5))
     .when(|err: &Error| err.is_ping_error())
     .notify(|err: &Error, dur: Duration| {
         tracing::warn!(error = ?err, "ping request failed - will retry after {:?}", dur);

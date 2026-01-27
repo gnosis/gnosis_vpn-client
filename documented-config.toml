@@ -73,7 +73,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # address = "10.128.0.1"
 # timeout = "15s"
 # ttl = 6
-# seq_count = 1
+# seq_count = 3
 
 # adjust session internal options
 # [connection.max_surb_upstream]
