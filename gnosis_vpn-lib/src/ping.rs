@@ -54,7 +54,7 @@ pub async fn ping(opts: &Options) -> Result<Duration, Error> {
 
 async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
     let mut cmd = Command::new("ping");
-    cmd.arg("-c").arg("1");
+    cmd.arg("-c").arg(opts.seq_count.to_string());
     let timeout_str = opts.timeout.as_secs().to_string();
     #[cfg(target_os = "linux")]
     {
@@ -96,7 +96,7 @@ pub fn parse_duration(duration: String) -> Result<Duration, Error> {
             let numbers_part = parts[1].trim();
             let first_number_str = numbers_part
                 .split('/')
-                .next()
+                .nth(1)
                 .ok_or(Error::DurationParserFailed)?
                 .trim();
             let first_number = first_number_str.parse::<f64>()?;
@@ -110,8 +110,8 @@ pub fn parse_duration(duration: String) -> Result<Duration, Error> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn parse_duration() -> anyhow::Result<()> {
-        let duration1 = r#####"
+    fn parse_duration_on_single_ping() -> anyhow::Result<()> {
+        let duration_linux = r#####"
 PING 1.1.1.1 (1.1.1.1) 56(84) bytes of data.
 64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=13.1 ms
 
@@ -119,7 +119,7 @@ PING 1.1.1.1 (1.1.1.1) 56(84) bytes of data.
 1 packets transmitted, 1 received, 0% packet loss, time 0ms
 rtt min/avg/max/mdev = 13.135/13.135/13.135/0.000 ms
 "#####;
-        let duration2 = r#####"
+        let duration_mac = r#####"
 PING 1.1.1.1 (1.1.1.1): 56 data bytes
 64 bytes from 1.1.1.1: icmp_seq=0 ttl=57 time=19.540 ms
 
@@ -128,11 +128,45 @@ PING 1.1.1.1 (1.1.1.1): 56 data bytes
 round-trip min/avg/max/stddev = 19.540/19.540/19.540/nan ms
 "#####;
 
-        let d1 = super::parse_duration(duration1.to_string())?;
-        let d2 = super::parse_duration(duration2.to_string())?;
+        let d_linux = super::parse_duration(duration_linux.to_string())?;
+        let d_mac = super::parse_duration(duration_mac.to_string())?;
 
-        assert_eq!(d1, std::time::Duration::from_micros(13135));
-        assert_eq!(d2, std::time::Duration::from_micros(19540));
+        assert_eq!(d_linux, std::time::Duration::from_micros(13135));
+        assert_eq!(d_mac, std::time::Duration::from_micros(19540));
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_duration_on_multiple_pings() -> anyhow::Result<()> {
+        let duration_linux = r#####"
+PING 1.1.1.1 (1.1.1.1) 56(84) bytes of data.
+64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=13.2 ms
+64 bytes from 1.1.1.1: icmp_seq=2 ttl=57 time=10.1 ms
+64 bytes from 1.1.1.1: icmp_seq=3 ttl=57 time=9.46 ms
+
+--- 1.1.1.1 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 9.458/10.937/13.208/1.629 ms
+"#####;
+        let duration_mac = r#####"
+        Last login: Tue Jan 27 14:00:28 2026 from 192.168.200.212
+este@officemac ~ % ping -c3 1.1.1.1
+PING 1.1.1.1 (1.1.1.1): 56 data bytes
+64 bytes from 1.1.1.1: icmp_seq=0 ttl=57 time=57.212 ms
+64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=17.999 ms
+64 bytes from 1.1.1.1: icmp_seq=2 ttl=57 time=25.403 ms
+
+--- 1.1.1.1 ping statistics ---
+3 packets transmitted, 3 packets received, 0.0% packet loss
+round-trip min/avg/max/stddev = 17.999/33.538/57.212/17.011 ms
+"#####;
+
+        let d_linux = super::parse_duration(duration_linux.to_string())?;
+        let d_mac = super::parse_duration(duration_mac.to_string())?;
+
+        assert_eq!(d_linux, std::time::Duration::from_micros(10937));
+        assert_eq!(d_mac, std::time::Duration::from_micros(33538));
 
         Ok(())
     }
