@@ -155,7 +155,9 @@
               ]
               ++ lib.optionals pkgs.stdenv.isLinux [
                 pkgs.mold # Faster linker for Linux builds
-                pkgs.pkgsStatic.stdenv.cc # C compiler with musl support for aws-lc-sys
+                # C compiler with musl support for aws-lc-sys
+                # Linux builds always target musl (x86_64-unknown-linux-musl, aarch64-unknown-linux-musl)
+                pkgs.pkgsStatic.stdenv.cc
               ];
 
             # Runtime dependencies (linked into the final binary)
