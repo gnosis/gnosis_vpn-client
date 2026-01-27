@@ -159,8 +159,8 @@
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
               # Add musl for aws-lc-sys static C library requirement
-              pkgs.musl
-              pkgs.musl.dev
+              # Using pkgsStatic to ensure musl is properly configured for static linking
+              pkgs.pkgsStatic.musl
             ];
 
           }
