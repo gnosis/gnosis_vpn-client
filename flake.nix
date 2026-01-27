@@ -159,14 +159,11 @@
               ];
 
             # Runtime dependencies (linked into the final binary)
-            buildInputs =
-              [
-                pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
-                pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-              ]
-              ++ lib.optionals pkgs.stdenv.isLinux [
-                # pkgsStatic packages already include musl for static builds
-              ];
+            # Note: pkgsStatic packages already include musl for static builds on Linux
+            buildInputs = [
+              pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
+              pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
+            ];
 
           }
           // crateArgsForTarget;
