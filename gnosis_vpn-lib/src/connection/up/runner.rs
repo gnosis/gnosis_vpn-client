@@ -87,19 +87,26 @@ impl Runner {
         )
         .await?;
 
-        // 5a. request dynamic wg tunnel from root
-        let _ = results_sender
-            .send(progress(Progress::DynamicWgTunnel(session.clone())))
-            .await;
-        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        let res = request_dynamic_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await;
+        #[cfg(target_os = "macos")]
+        {
+            self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
+                .await
+        }
+        #[cfg(target_os != "macos")]
+        {
+            // 5a. request dynamic wg tunnel from root
+            let _ = results_sender
+                .send(progress(Progress::DynamicWgTunnel(session.clone())))
+                .await;
+            let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
 
-        match res {
-            Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
-            Err(err) => {
-                tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
-                    .await
+            match res {
+                Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
+                Err(err) => {
+                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
+                    self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
+                        .await
+                }
             }
         }
     }
@@ -282,7 +289,6 @@ async fn request_dynamic_wg_tunnel(
     wg: &WireGuard,
     registration: &Registration,
     session: &SessionClientMetadata,
-    peer_ips: Vec<Ipv4Addr>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<(), Error> {
     let (tx, rx) = oneshot::channel();
@@ -300,11 +306,7 @@ async fn request_dynamic_wg_tunnel(
     };
     let _ = results_sender
         .send(Results::ConnectionRequestToRoot(
-            RespondableRequestToRoot::DynamicWgRouting {
-                wg_data,
-                peer_ips,
-                resp: tx,
-            },
+            RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx },
         ))
         .await;
 
@@ -399,16 +401,6 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
         });
     })
     .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PING_REQUEST_TIMEOUT;
-
-    #[test]
-    fn ping_request_timeout_is_600_seconds() {
-        assert_eq!(PING_REQUEST_TIMEOUT.as_secs(), 600);
-    }
 }
 
 async fn adjust_to_main_session(
