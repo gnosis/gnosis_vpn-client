@@ -1,5 +1,6 @@
 pub mod balance;
 pub mod command;
+pub mod compat;
 pub mod config;
 pub mod connection;
 pub mod core;

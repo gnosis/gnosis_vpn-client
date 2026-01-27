@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::command::{self, Command, Response, RunMode};
+use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
@@ -434,14 +435,8 @@ impl Core {
             },
 
             Results::SafeDeployment { res } => match res {
-                Ok(deployment) => {
-                    self.spawn_store_safe(
-                        edgli::hopr_lib::SafeModule {
-                            safe_address: deployment.safe_address,
-                            module_address: deployment.module_address,
-                        },
-                        results_sender,
-                    );
+                Ok(safe_module) => {
+                    self.spawn_store_safe(safe_module, results_sender);
                 }
                 Err(err) => {
                     tracing::error!(%err, "error deploying safe module - rechecking balance");
@@ -725,7 +720,7 @@ impl Core {
         });
     }
 
-    fn spawn_store_safe(&mut self, safe_module: hopr_config::SafeModule, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_for_shutdown.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
