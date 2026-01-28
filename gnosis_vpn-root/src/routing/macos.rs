@@ -13,6 +13,11 @@ use std::net::Ipv4Addr;
 
 use super::{Error, Routing};
 
+/// Dynamic routing not available on macOS.
+pub fn dynamic_router(_wg_data: event::WireGuardData, _worker: worker::Worker) -> Result<(), Error> {
+    Err(Error::NotAvailable)
+}
+
 /// Builds a static macOS router without a worker handle.
 pub fn static_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
     StaticRouter { wg_data, peer_ips }

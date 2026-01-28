@@ -304,7 +304,7 @@ async fn loop_daemon(
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                let router_result = routing::build_router(worker_user.clone(), wg_data);
+                                let router_result = routing::dynamic_router(worker_user.clone(), wg_data);
 
                                 match router_result {
                                     Ok(mut router) => {
@@ -313,7 +313,18 @@ async fn loop_daemon(
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
                                     },
                                     Err(error) => {
-                                        tracing::error!(?error, "failed to build router");
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            if error.is_not_available() {
+                                                tracing::debug!(?error, "dynamic routing not available on this platform");
+                                            } else {
+                                                tracing::error!(?error, "failed to build dynamic router");
+                                            }
+                                        }
+                                        #[cfg(target_os = "linux")]
+                                        {
+                                            tracing::error!(?error, "failed to build dynamic router");
+                                        }
                                         let res = Err(error.to_string());
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
                                     }

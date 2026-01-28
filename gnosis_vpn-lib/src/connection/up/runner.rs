@@ -87,26 +87,18 @@ impl Runner {
         )
         .await?;
 
-        #[cfg(target_os = "macos")]
-        {
-            self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
-                .await
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // 5a. request dynamic wg tunnel from root
-            let _ = results_sender
-                .send(progress(Progress::DynamicWgTunnel(session.clone())))
-                .await;
-            let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
+        // 5a. request dynamic wg tunnel from root
+        let _ = results_sender
+            .send(progress(Progress::DynamicWgTunnel(session.clone())))
+            .await;
+        let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
 
-            match res {
-                Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
-                Err(err) => {
-                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                    self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
-                        .await
-                }
+        match res {
+            Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
+            Err(err) => {
+                tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
+                self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
+                    .await
             }
         }
     }

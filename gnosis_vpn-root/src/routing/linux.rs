@@ -13,7 +13,7 @@ use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
-pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
+pub fn dynamic_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn); // Task terminates once the Router is dropped
     Ok(Router {

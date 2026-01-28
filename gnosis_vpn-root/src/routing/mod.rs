@@ -9,9 +9,9 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-pub use linux::{build_userspace_router as build_router, static_fallback_router as static_router};
+pub use linux::{dynamic_router, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
-pub use macos::static_router;
+pub use macos::{dynamic_router, static_router};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -25,6 +25,10 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
+
+    #[cfg(target_os = "macos")]
+    #[error("This functionality is not available on macOS")]
+    NotAvailable,
 
     #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
@@ -43,6 +47,11 @@ impl Error {
     #[cfg(target_os = "linux")]
     pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
         Self::IpTables(e.into().to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn is_not_available(&self) -> bool {
+        matches!(self, Self::NotAvailable)
     }
 }
 
