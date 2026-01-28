@@ -281,7 +281,7 @@ async fn run_safe_deployment(hopr_params: HoprParams, presafe: balance::PreSafe)
 async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Option<String>, Error> {
     let keys = hopr_params.calc_keys().await?;
     let node_address = keys.chain_key.public().to_address();
-    let url = Url::parse("https://webapi.hoprnet.org/api/cfp-funding-tool/airdrop")?;
+    let url = Url::parse("https://cfp-funding-api-656686060169.europe-west1.run.app/api/cfp-funding-tool/airdrop")?;
     let client = reqwest::Client::new();
     let headers = remote_data::json_headers();
     let body = json!({ "address": node_address.to_string(), "code": code, });
