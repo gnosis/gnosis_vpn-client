@@ -65,6 +65,7 @@ async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
         cmd.arg("-t").arg(opts.timeout.as_secs().to_string());
         cmd.arg("-m").arg(opts.ttl.to_string());
     }
+    cmd.arg(opts.address.to_string());
     let output = cmd.run_stdout(Logs::Print).await.map_err(|_| Error::Timeout)?;
     parse_duration(output)
 }
