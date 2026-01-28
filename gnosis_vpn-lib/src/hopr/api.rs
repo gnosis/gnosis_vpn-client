@@ -449,7 +449,6 @@ impl Hopr {
                 };
                 let observed = hopr.network_observed_multiaddresses(&peer_id).await;
                 for addr in observed.clone().iter_mut() {
-                    tracing::debug!("observed multiaddress: {:?}", addr);
                     while let Some(protocol) = addr.pop() {
                         if let Protocol::Ip4(ipv4) = protocol {
                             return Some(Peer::new(address, ipv4));
