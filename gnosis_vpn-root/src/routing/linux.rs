@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::process::Command;
 
-use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
+use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::{event, wireguard, worker};
 
 use super::{Error, Routing};
@@ -13,7 +13,7 @@ use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
-pub fn build_userspace_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
+pub fn dynamic_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn); // Task terminates once the Router is dropped
     Ok(Router {
@@ -298,7 +298,7 @@ impl Routing for Router {
     ///   5. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
     ///   6. Run `wg-quick down`
     ///
-    async fn teardown(&mut self) -> Result<(), Error> {
+    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
             wan_if_index,
             vpn_if_index,
@@ -393,7 +393,7 @@ impl Routing for Router {
         tracing::debug!("iptables rules flushed");
 
         // Run wg-quick down
-        wg_tooling::down().await?;
+        wg_tooling::down(logs).await?;
         tracing::debug!("wg-quick down");
 
         Ok(())
@@ -424,8 +424,8 @@ impl Routing for FallbackRouter {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<(), Error> {
-        wg_tooling::down().await?;
+    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        wg_tooling::down(logs).await?;
         Ok(())
     }
 }
@@ -470,7 +470,7 @@ async fn interface() -> Result<(String, Option<String>), Error> {
         .arg("route")
         .arg("show")
         .arg("default")
-        .run_stdout()
+        .run_stdout(Logs::Print)
         .await?;
 
     let res = parse_interface(&output)?;

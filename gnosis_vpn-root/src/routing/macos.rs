@@ -1,161 +1,84 @@
-//! MacOS specific routing using the pf.
+//! macOS routing implementation using `wg-quick` hook commands.
 //!
-//! Currently only supports setting up WireGuard interface and determining default interface.
-
+//! Builds a static router that installs per-peer host routes and
+//! default-route overrides via `route` commands for split-tunnel behavior.
 use async_trait::async_trait;
 use tokio::process::Command;
 
-use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
-// use gnosis_vpn_lib::dirs;
+use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::{event, worker};
 
-use std::net::Ipv4Addr;
-use std::sync::Arc;
-
 use crate::wg_tooling;
+use std::net::Ipv4Addr;
 
 use super::{Error, Routing};
 
-pub fn build_firewall_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<impl Routing, Error> {
-    let pf = pfctl::PfCtl::new()?;
-    Ok(Firewall {
-        fw: Arc::new(std::sync::Mutex::new(pf)),
-        worker,
-        wg_data,
-    })
+/// Dynamic routing not available on macOS.
+pub fn dynamic_router(_worker: worker::Worker, _wg_data: event::WireGuardData) -> Result<DynamicRouter, Error> {
+    Err(Error::NotAvailable)
 }
 
-pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
-    FallbackRouter { wg_data, peer_ips }
+pub struct DynamicRouter {}
+
+/// Builds a static macOS router without a worker handle.
+pub fn static_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
+    StaticRouter { wg_data, peer_ips }
 }
 
-// const PF_RULE_FILE: &str = "pf_gnosisvpn.conf";
-
-pub struct Firewall {
-    fw: Arc<std::sync::Mutex<pfctl::PfCtl>>,
-    #[allow(dead_code)]
-    worker: worker::Worker,
-    wg_data: event::WireGuardData,
-}
-
-pub struct FallbackRouter {
+/// macOS routing implementation that programs host routes via `wg-quick` hooks.
+pub struct StaticRouter {
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 }
 
-impl Firewall {
-    pub const ANCHOR_NAME: &str = "gnosisvpn_bypass";
-}
-
 #[async_trait]
-impl Routing for Firewall {
-    /**
-     * Refactor logic to use:
-     * - [pfctl](https://docs.rs/pfctl/0.7.0/pfctl/index.html)
-     */
-    #[tracing::instrument(name = "Firewall::setup",level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
-    async fn setup(&mut self) -> Result<(), Error> {
-        // 1. generate wg quick content
-        let wg_quick_content =
-            self.wg_data
-                .wg
-                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, None);
-
-        // 2. run wg-quick up
-        wg_tooling::up(wg_quick_content).await?;
-
-        // 3. determine interface
-        let (device, gateway) = interface().await?;
-
-        // 4. setup bypass
-        tracing::info!(%device, ?gateway, "Determined default interface");
-
-        // Create a PfCtl instance to control PF with:
-        let mut pf = self
-            .fw
-            .lock()
-            .ok()
-            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?;
-
-        let interface = pfctl::Interface::from(&device);
-        let gw_ip: std::net::IpAddr = gateway
-            .ok_or(Error::General("No gateway found".into()))?
-            .as_str()
-            .parse()
-            .map_err(|e| Error::General(format!("failed to convert gatewat to IpAddr: {e}")))?;
-        let gw = pfctl::Ip::from(gw_ip);
-
-        // Enable the firewall, equivalent to the command "pfctl -e":
-        pf.try_enable()?;
-
-        // Add an anchor rule for packet filtering rules into PF. This will fail if it already exists,
-        // use `try_add_anchor` to avoid that:
-        pf.add_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
-
-        // Create a packet filtering rule matching all packets on the identified interface and allowing
-        // them to pass:
-        // RULE: `pass out quick route-to (en0 192.168.0.1) from any to any user gnosisvpn`
-        let rule = pfctl::FilterRuleBuilder::default()
-            .action(pfctl::FilterRuleAction::Pass)
-            .interface(&device)
-            .direction(pfctl::Direction::Out) // or Any
-            .quick(true)
-            .route(pfctl::Route::RouteTo(pfctl::PoolAddr::new(interface, gw)))
-            .from(std::net::Ipv4Addr::UNSPECIFIED) // any
-            .to(std::net::Ipv4Addr::UNSPECIFIED) // any
-            .user(self.worker.uid)
-            .build()?;
-
-        // Add the filtering rule to the anchor we just created.
-        pf.add_rule(Firewall::ANCHOR_NAME, &rule)?;
-
-        Ok(())
-    }
-
-    #[tracing::instrument(name = "Firewall::teardown", level = "info", skip(self), fields(interface = ?self.wg_data.interface_info, peer = ?self.wg_data.peer_info), ret, err)]
-    async fn teardown(&mut self) -> Result<(), Error> {
-        // 1. remove pf anchor
-        self.fw
-            .lock()
-            .ok()
-            .ok_or(Error::General("Failed to acquire lock on pfctl".into()))?
-            .remove_anchor(Firewall::ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
-
-        // 2. run wg-quick down
-        wg_tooling::down().await?;
-
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Routing for FallbackRouter {
+impl Routing for StaticRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
-        let mut extra = self
-            .peer_ips
-            .iter()
-            .map(|ip| pre_up_routing(ip, interface_gateway.clone()))
-            .collect::<Vec<String>>();
-        extra.extend(
-            self.peer_ips
-                .iter()
-                .map(|ip| post_down_routing(ip, interface_gateway.clone()))
-                .collect::<Vec<String>>(),
-        );
+        let extra = build_static_extra_lines(&self.peer_ips, interface_gateway);
 
         let wg_quick_content =
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
         wg_tooling::up(wg_quick_content).await?;
+
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<(), Error> {
-        wg_tooling::down().await?;
+    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        wg_tooling::down(logs).await?;
         Ok(())
     }
+}
+
+/// Dynamic routing not available on macOS.
+#[async_trait]
+impl Routing for DynamicRouter {
+    async fn setup(&mut self) -> Result<(), Error> {
+        Err(Error::NotAvailable)
+    }
+
+    async fn teardown(&mut self, _logs: Logs) -> Result<(), Error> {
+        Err(Error::NotAvailable)
+    }
+}
+
+fn build_static_extra_lines(peer_ips: &[Ipv4Addr], interface_gateway: (String, Option<String>)) -> Vec<String> {
+    // take over routing from wg-quick
+    let mut extra = vec!["Table = off".to_string()];
+    // default routes are added PostUp on wg interface
+    extra.push("PostUp = route -n add -inet 0.0.0.0/1 -interface %i".to_string());
+    extra.push("PostUp = route -n add -inet 128.0.0.0/1 -interface %i".to_string());
+    // add routes exceptions to all connected peers
+    extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
+    // remove routes exceptions on PostDown
+    extra.extend(
+        peer_ips
+            .iter()
+            .map(|ip| post_down_routing(ip, interface_gateway.clone())),
+    );
+    extra
 }
 
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
@@ -182,7 +105,7 @@ async fn interface() -> Result<(String, Option<String>), Error> {
         .arg("-n")
         .arg("get")
         .arg("0.0.0.0")
-        .run_stdout()
+        .run_stdout(Logs::Print)
         .await?;
 
     let res = parse_interface(&output)?;

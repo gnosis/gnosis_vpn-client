@@ -5,7 +5,7 @@ use tokio::process::Command;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
-use crate::shell_command_ext::ShellCommandExt;
+use crate::shell_command_ext::{Logs, ShellCommandExt};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Options {
@@ -41,7 +41,7 @@ impl Default for Options {
 #[tracing::instrument(name = "ping", ret)]
 pub async fn ping(opts: &Options) -> Result<Duration, Error> {
     // prefer system ping as it seems way more robust that ping crate
-    let available = Command::new("which").arg("ping").run().await;
+    let available = Command::new("which").arg("ping").spawn_no_capture().await;
 
     match available {
         Ok(_) => ping_using_cmd(opts).await,
@@ -55,20 +55,18 @@ pub async fn ping(opts: &Options) -> Result<Duration, Error> {
 async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
     let mut cmd = Command::new("ping");
     cmd.arg("-c").arg(opts.seq_count.to_string());
-    let timeout_str = opts.timeout.as_secs().to_string();
     #[cfg(target_os = "linux")]
     {
-        cmd.arg("-W").arg(timeout_str);
+        cmd.arg("-W").arg(opts.timeout.as_secs().to_string());
+        cmd.arg("-t").arg(opts.ttl.to_string());
     }
     #[cfg(target_os = "macos")]
     {
-        cmd.arg("-t").arg(timeout_str);
+        cmd.arg("-t").arg(opts.timeout.as_secs().to_string());
+        cmd.arg("-m").arg(opts.ttl.to_string());
     }
-    let output = cmd
-        .arg(opts.address.to_string())
-        .run_stdout()
-        .await
-        .map_err(|_| Error::Timeout)?;
+    cmd.arg(opts.address.to_string());
+    let output = cmd.run_stdout(Logs::Print).await.map_err(|_| Error::Timeout)?;
     parse_duration(output)
 }
 

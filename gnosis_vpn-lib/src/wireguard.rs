@@ -7,7 +7,7 @@ use std::fmt::{self, Display};
 use std::{io, string};
 
 use crate::dirs;
-use crate::shell_command_ext::{self, ShellCommandExt};
+use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 
 pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
@@ -74,11 +74,13 @@ impl Config {
 }
 
 pub async fn available() -> Result<(), Error> {
-    Command::new("which")
+    let out = Command::new("which")
         .arg("wg")
-        .spawn_no_capture()
+        .run_stdout(Logs::Print)
         .await
-        .map_err(Error::from)
+        .map_err(Error::from)?;
+    tracing::debug!(at = %out, "wg command available");
+    Ok(())
 }
 
 pub async fn executable() -> Result<(), Error> {
@@ -92,7 +94,7 @@ pub async fn executable() -> Result<(), Error> {
 async fn generate_key() -> Result<String, Error> {
     Command::new("wg")
         .arg("genkey")
-        .run_stdout()
+        .run_stdout(Logs::Print)
         .await
         .map_err(|_| Error::WgGenKey)
 }
@@ -110,7 +112,7 @@ async fn public_key(priv_key: &str) -> Result<String, Error> {
 
     let cmd_debug = format!("{:?}", command);
     let output = command.wait_with_output().await?;
-    shell_command_ext::stdout_from_output(cmd_debug, output).map_err(|_| Error::WgGenKey)
+    shell_command_ext::stdout_from_output(cmd_debug, output, Logs::Print).map_err(|_| Error::WgGenKey)
 }
 
 impl WireGuard {
