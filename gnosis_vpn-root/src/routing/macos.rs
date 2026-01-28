@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
-use gnosis_vpn_lib::{event, wireguard, worker};
+use gnosis_vpn_lib::{event, worker};
 
 use crate::wg_tooling;
 use std::net::Ipv4Addr;
@@ -35,7 +35,7 @@ pub struct StaticRouter {
 impl Routing for StaticRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
-        let extra = build_static_extra_lines(&self.peer_ips, interface_gateway, wireguard::WG_INTERFACE);
+        let extra = build_static_extra_lines(&self.peer_ips, interface_gateway);
 
         let wg_quick_content =
             self.wg_data
@@ -67,30 +67,23 @@ impl Routing for DynamicRouter {
 fn build_static_extra_lines(
     peer_ips: &[Ipv4Addr],
     interface_gateway: (String, Option<String>),
-    interface_name: &str,
 ) -> Vec<String> {
     let mut extra = vec!["Table = off".to_string()];
-    extra.extend(default_route_hook_lines(interface_name, "PreUp", "add"));
+    extra.extend(default_route_hook_lines("PreUp", "add"));
     extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
-    extra.extend(default_route_hook_lines(interface_name, "PreDown", "delete"));
+    extra.extend(default_route_hook_lines("PreDown", "delete"));
     extra.extend(
         peer_ips
             .iter()
             .map(|ip| pre_down_routing(ip, interface_gateway.clone())),
     );
-    extra.extend(default_route_hook_lines(interface_name, "PostDown", "delete"));
-    extra.extend(
-        peer_ips
-            .iter()
-            .map(|ip| post_down_routing(ip, interface_gateway.clone())),
-    );
     extra
 }
 
-fn default_route_hook_lines(interface_name: &str, hook: &str, action: &str) -> Vec<String> {
+fn default_route_hook_lines(hook: &str, action: &str) -> Vec<String> {
     ["0.0.0.0/1", "128.0.0.0/1"]
         .iter()
-        .map(|cidr| format!("{hook} = route -n {action} -inet {cidr} -interface {interface_name}"))
+        .map(|cidr| format!("{hook} = route -n {action} -inet {cidr} -interface %i"))
         .collect()
 }
 
