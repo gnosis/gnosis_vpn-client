@@ -5,7 +5,7 @@ use uzers::os::unix::UserExt;
 use std::io;
 use std::path::PathBuf;
 
-use crate::shell_command_ext::{self, ShellCommandExt};
+use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -91,7 +91,7 @@ impl Worker {
             .arg("--version")
             .uid(uid)
             .gid(gid)
-            .run_stdout()
+            .run_stdout(Logs::Print)
             .await?;
 
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();

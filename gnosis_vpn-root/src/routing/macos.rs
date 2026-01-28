@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use tokio::process::Command;
 
-use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
+use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::{event, wireguard, worker};
 
 use crate::wg_tooling;
@@ -46,8 +46,8 @@ impl Routing for StaticRouter {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<(), Error> {
-        wg_tooling::down().await?;
+    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        wg_tooling::down(logs).await?;
         Ok(())
     }
 }
@@ -59,7 +59,7 @@ impl Routing for DynamicRouter {
         Err(Error::NotAvailable)
     }
 
-    async fn teardown(&mut self) -> Result<(), Error> {
+    async fn teardown(&mut self, _logs: Logs) -> Result<(), Error> {
         Err(Error::NotAvailable)
     }
 }
@@ -122,7 +122,7 @@ async fn interface() -> Result<(String, Option<String>), Error> {
         .arg("-n")
         .arg("get")
         .arg("0.0.0.0")
-        .run_stdout()
+        .run_stdout(Logs::Print)
         .await?;
 
     let res = parse_interface(&output)?;

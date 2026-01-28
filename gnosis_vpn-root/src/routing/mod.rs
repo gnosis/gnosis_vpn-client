@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, shell_command_ext, wireguard};
+use gnosis_vpn_lib::{dirs, wireguard};
+use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -58,6 +59,5 @@ impl Error {
 #[async_trait]
 pub trait Routing {
     async fn setup(&mut self) -> Result<(), Error>;
-
-    async fn teardown(&mut self) -> Result<(), Error>;
+    async fn teardown(&mut self, logs: Logs) -> Result<(), Error>;
 }
