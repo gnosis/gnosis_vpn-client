@@ -14,7 +14,7 @@ use std::net::Ipv4Addr;
 use super::{Error, Routing};
 
 /// Dynamic routing not available on macOS.
-pub fn dynamic_router(_worker: worker::Worker, _wg_data: event::WireGuardData ) -> Result<DynamicRouter, Error> {
+pub fn dynamic_router(_worker: worker::Worker, _wg_data: event::WireGuardData) -> Result<DynamicRouter, Error> {
     Err(Error::NotAvailable)
 }
 
@@ -64,10 +64,7 @@ impl Routing for DynamicRouter {
     }
 }
 
-fn build_static_extra_lines(
-    peer_ips: &[Ipv4Addr],
-    interface_gateway: (String, Option<String>),
-) -> Vec<String> {
+fn build_static_extra_lines(peer_ips: &[Ipv4Addr], interface_gateway: (String, Option<String>)) -> Vec<String> {
     // take over routing from wg-quick
     let mut extra = vec!["Table = off".to_string()];
     // default routes are added PostUp on wg interface
@@ -76,7 +73,11 @@ fn build_static_extra_lines(
     // add routes exceptions to all connected peers
     extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
     // remove routes exceptions on PostDown
-    extra.extend(peer_ips.iter().map(|ip| post_down_routing(ip, interface_gateway.clone())));
+    extra.extend(
+        peer_ips
+            .iter()
+            .map(|ip| post_down_routing(ip, interface_gateway.clone())),
+    );
     extra
 }
 

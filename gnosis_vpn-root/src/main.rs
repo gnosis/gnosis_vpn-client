@@ -19,8 +19,8 @@ use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::hopr_params::HoprParams;
-use gnosis_vpn_lib::{ping, socket, worker};
 use gnosis_vpn_lib::shell_command_ext::Logs;
+use gnosis_vpn_lib::{ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -445,11 +445,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
 
 async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expected_up: bool) {
     if let Some(router) = maybe_router {
-        let logs = if expected_up {
-            Logs::Print
-        } else {
-            Logs::Suppress
-        };
+        let logs = if expected_up { Logs::Print } else { Logs::Suppress };
         match router.teardown(logs).await {
             Ok(_) => {
                 if !expected_up {

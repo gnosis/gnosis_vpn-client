@@ -5,7 +5,7 @@ use tokio::process::Command;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
-use crate::shell_command_ext::{ShellCommandExt, Logs};
+use crate::shell_command_ext::{Logs, ShellCommandExt};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Options {
@@ -168,5 +168,4 @@ round-trip min/avg/max/stddev = 17.999/33.538/57.212/17.011 ms
 
         Ok(())
     }
-
 }

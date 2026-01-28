@@ -29,7 +29,11 @@ pub async fn up(config_content: String) -> Result<(), wireguard::Error> {
     let content = config_content.as_bytes();
     fs::write(&conf_file, content).await?;
     fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
-    Command::new("wg-quick").arg("up").arg(conf_file).run(Logs::Print).await?;
+    Command::new("wg-quick")
+        .arg("up")
+        .arg(conf_file)
+        .run(Logs::Print)
+        .await?;
     Ok(())
 }
 

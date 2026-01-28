@@ -7,7 +7,7 @@ use std::fmt::{self, Display};
 use std::{io, string};
 
 use crate::dirs;
-use crate::shell_command_ext::{self, ShellCommandExt, Logs};
+use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 
 pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";

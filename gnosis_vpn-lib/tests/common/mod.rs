@@ -28,5 +28,7 @@ pub fn create_test_wg_data(interface_addr: &str, peer_endpoint: &str) -> WireGua
 
 /// Creates a simple test peer IP list
 pub fn create_test_peer_ips(ips: &[u8]) -> Vec<Ipv4Addr> {
-    ips.iter().map(|&last_octet| Ipv4Addr::new(10, 0, 0, last_octet)).collect()
+    ips.iter()
+        .map(|&last_octet| Ipv4Addr::new(10, 0, 0, last_octet))
+        .collect()
 }

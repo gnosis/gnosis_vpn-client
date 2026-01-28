@@ -20,7 +20,6 @@ pub enum Logs {
     Suppress,
 }
 
-
 pub trait ShellCommandExt {
     fn run(&mut self, logs: Logs) -> impl Future<Output = Result<(), Error>> + Send;
     fn run_stdout(&mut self, logs: Logs) -> impl Future<Output = Result<String, Error>> + Send;
