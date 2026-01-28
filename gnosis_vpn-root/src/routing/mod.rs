@@ -9,9 +9,9 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-pub use linux::{build_userspace_router as build_router, static_fallback_router};
+pub use linux::{build_userspace_router as build_router, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
-pub use macos::{build_firewall_router as build_router, static_router};
+pub use macos::static_router;
 
 #[derive(Debug, Error)]
 pub enum Error {

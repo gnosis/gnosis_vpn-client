@@ -92,7 +92,7 @@ impl Runner {
             self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
                 .await
         }
-        #[cfg(target_os != "macos")]
+        #[cfg(target_os = "linux")]
         {
             // 5a. request dynamic wg tunnel from root
             let _ = results_sender

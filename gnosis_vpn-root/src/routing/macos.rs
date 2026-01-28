@@ -13,18 +13,6 @@ use std::net::Ipv4Addr;
 
 use super::{Error, Routing};
 
-/// Builds the macOS router using the firewall-routing entrypoint.
-///
-/// The worker handle is unused on macOS but kept for API parity.
-pub fn build_firewall_router(
-    worker: worker::Worker,
-    wg_data: event::WireGuardData,
-    peer_ips: Vec<Ipv4Addr>,
-) -> Result<StaticRouter, Error> {
-    let _ = worker;
-    Ok(StaticRouter { wg_data, peer_ips })
-}
-
 /// Builds a static macOS router without a worker handle.
 pub fn static_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
     StaticRouter { wg_data, peer_ips }

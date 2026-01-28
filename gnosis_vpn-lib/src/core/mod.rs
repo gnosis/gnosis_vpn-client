@@ -634,13 +634,9 @@ impl Core {
             },
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RespondableRequestToRoot::DynamicWgRouting {
-                    wg_data,
-                    peer_ips,
-                    resp,
-                } => {
+                RespondableRequestToRoot::DynamicWgRouting { wg_data, resp } => {
                     self.responder_unit = Some(resp);
-                    let request = RequestToRoot::DynamicWgRouting { wg_data, peer_ips };
+                    let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
                 RespondableRequestToRoot::StaticWgRouting {
