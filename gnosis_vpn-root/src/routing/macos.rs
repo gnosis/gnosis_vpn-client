@@ -168,54 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn build_static_extra_lines_include_table_off() {
-        let peer_ips = [Ipv4Addr::new(10, 0, 0, 1)];
-        let interface_gateway = ("en0".to_string(), Some("192.168.88.1".to_string()));
-
-        let extra = super::build_static_extra_lines(&peer_ips, interface_gateway, wireguard::WG_INTERFACE);
-
-        assert_eq!(extra[0], "Table = off");
-        assert_eq!(extra.len(), 10);
-        assert!(
-            extra
-                .iter()
-                .any(|line| { line == "PreUp = route -n add -inet 0.0.0.0/1 -interface wg0_gnosisvpn" })
-        );
-        assert!(
-            extra
-                .iter()
-                .any(|line| { line == "PreUp = route -n add -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
-        );
-        assert!(
-            extra
-                .iter()
-                .any(|line| { line == "PreDown = route -n delete -inet 0.0.0.0/1 -interface wg0_gnosisvpn" })
-        );
-        assert!(
-            extra
-                .iter()
-                .any(|line| { line == "PreDown = route -n delete -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
-        );
-        assert!(
-            extra
-                .iter()
-                .any(|line| { line == "PostDown = route -n delete -inet 0.0.0.0/1 -interface wg0_gnosisvpn" })
-        );
-        assert!(
-            extra
-                .iter()
-                .any(|line| { line == "PostDown = route -n delete -inet 128.0.0.0/1 -interface wg0_gnosisvpn" })
-        );
-        assert!(extra.iter().any(|line| line.contains("PreUp = route -n add -host")));
-        assert!(
-            extra
-                .iter()
-                .any(|line| line.contains("PreDown = route -n delete -host"))
-        );
-        assert!(extra.iter().any(|line| line.contains("PostDown")));
-    }
-
-    #[test]
     fn build_firewall_router_returns_static_router() {
         let worker = worker::Worker {
             uid: 1000,

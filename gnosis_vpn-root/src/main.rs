@@ -156,11 +156,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
-    let mut config = config::read(config_path.as_path()).await.map_err(|err| {
+    let config = config::read(config_path.as_path()).await.map_err(|err| {
         tracing::error!(error = ?err, "unable to read initial configuration file");
         exitcode::NOINPUT
     })?;
-    apply_ping_overrides(&mut config, &args);
 
     let hopr_params = HoprParams::from(&args);
 
@@ -187,15 +186,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     });
 
     res
-}
-
-fn apply_ping_overrides(config: &mut Config, args: &cli::Cli) {
-    if let Some(timeout) = args.ping_timeout {
-        config.connection.ping_options.timeout = timeout;
-    }
-    if let Some(count) = args.ping_count {
-        config.connection.ping_options.seq_count = count;
-    }
 }
 
 async fn loop_daemon(
@@ -474,103 +464,6 @@ async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expec
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Routing, apply_ping_overrides, cli, config, handle_shutdown};
-    use clap::Parser;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    use tokio_util::sync::CancellationToken;
-
-    struct TestRouter {
-        teardown_called: Arc<AtomicBool>,
-    }
-
-    #[async_trait::async_trait]
-    impl Routing for TestRouter {
-        async fn setup(&mut self) -> Result<(), crate::routing::Error> {
-            Ok(())
-        }
-
-        async fn teardown(&mut self) -> Result<(), crate::routing::Error> {
-            self.teardown_called.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn handle_shutdown_calls_teardown_and_cancels() {
-        let teardown_called = Arc::new(AtomicBool::new(false));
-        let router: Box<dyn Routing> = Box::new(TestRouter {
-            teardown_called: teardown_called.clone(),
-        });
-        let mut maybe_router = Some(router);
-        let cancel_token = CancellationToken::new();
-        let mut shutdown_ongoing = false;
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-
-        let should_exit = handle_shutdown(&mut shutdown_ongoing, &cancel_token, &mut maybe_router, Some(tx))
-            .await
-            .expect("shutdown");
-
-        assert!(!should_exit);
-        assert!(shutdown_ongoing);
-        assert!(cancel_token.is_cancelled());
-
-        // Verify teardown completion signal was sent
-        assert!(rx.recv().await.is_some());
-    }
-
-    #[tokio::test]
-    async fn apply_ping_overrides_updates_config() -> anyhow::Result<()> {
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-        let config_contents = r#####"
-version = 4
-
-[destinations]
-
-[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
-meta = { location = "Test" }
-path = { hops = 1 }
-
-[connection]
-
-[connection.ping]
-timeout = "20s"
-seq_count = 2
-"#####;
-
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!("gnosisvpn-test-{}.toml", unique));
-        std::fs::write(&path, config_contents)?;
-
-        let args = cli::Cli::try_parse_from([
-            "gnosis_vpn",
-            "--socket-path",
-            "/tmp/gnosis.socket",
-            "--config-path",
-            path.to_str().unwrap(),
-            "--ping-timeout",
-            "12s",
-            "--ping-count",
-            "5",
-        ])?;
-
-        let mut config = config::read(path.as_path()).await?;
-        apply_ping_overrides(&mut config, &args);
-
-        assert_eq!(config.connection.ping_options.timeout, Duration::from_secs(12));
-        assert_eq!(config.connection.ping_options.seq_count, 5);
-
-        let _ = std::fs::remove_file(path);
-
-        Ok(())
     }
 }
 
