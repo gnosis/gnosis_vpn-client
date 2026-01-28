@@ -76,10 +76,6 @@ Check available params and env vars via:
 
 `gnosis_vpn-root --help` `gnosis_vpn-ctl --help`
 
-Ping verification can be overridden on startup:
-
-`gnosis_vpn-root --ping-timeout 15s --ping-count 1`
-
 ## Deployment
 
 Show potential deployment targets:
