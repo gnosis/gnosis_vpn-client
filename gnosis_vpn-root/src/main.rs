@@ -256,13 +256,12 @@ async fn loop_daemon(
             Some(_) = ctrlc_receiver.recv() => {
     if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
-        return Ok(());
-    }
-
+                    return Ok(());
+                }
                 tracing::info!("initiate shutdown");
-                    shutdown_ongoing = true;
-                    cancel_token.cancel();
-                    teardown_any_routing(maybe_router, true).await;
+                shutdown_ongoing = true;
+                cancel_token.cancel();
+                teardown_any_routing(maybe_router, true).await;
             },
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
