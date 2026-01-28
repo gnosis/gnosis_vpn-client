@@ -253,114 +253,114 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-                Some(_) = ctrlc_receiver.recv() => {
-        if shutdown_ongoing {
-                        tracing::info!("force shutdown immediately");
-                        return Ok(());
+            Some(_) = ctrlc_receiver.recv() => {
+                if shutdown_ongoing {
+                    tracing::info!("force shutdown immediately");
+                    return Ok(());
+                }
+                tracing::info!("initiate shutdown");
+                shutdown_ongoing = true;
+                cancel_token.cancel();
+                teardown_any_routing(maybe_router, true).await;
+            },
+            Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
+                let (socket_reader_half, socket_writer_half) = stream.into_split();
+                let socket_reader = BufReader::new(socket_reader_half);
+                socket_lines_reader = Some(socket_reader.lines());
+                socket_writer = Some(BufWriter::new(socket_writer_half));
+            }
+            Some(res) = ping_receiver.recv() => {
+                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut writer).await?;
+            }
+            Ok(Some(line)) = lines_reader.next_line() => {
+                let cmd = parse_outgoing_worker(line)?;
+                match cmd {
+                    WorkerToRoot::Ack => {
+                        tracing::debug!("received worker ack");
                     }
-                    tracing::info!("initiate shutdown");
-                    shutdown_ongoing = true;
-                    cancel_token.cancel();
-                    teardown_any_routing(maybe_router, true).await;
-                },
-                Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
-                    let (socket_reader_half, socket_writer_half) = stream.into_split();
-                    let socket_reader = BufReader::new(socket_reader_half);
-                    socket_lines_reader = Some(socket_reader.lines());
-                    socket_writer = Some(BufWriter::new(socket_writer_half));
-                }
-                Some(res) = ping_receiver.recv() => {
-                    send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut writer).await?;
-                }
-                Ok(Some(line)) = lines_reader.next_line() => {
-                    let cmd = parse_outgoing_worker(line)?;
-                    match cmd {
-                        WorkerToRoot::Ack => {
-                            tracing::debug!("received worker ack");
-                        }
-                        WorkerToRoot::OutOfSync => {
-                            tracing::error!("worker out of sync with root - exiting");
-                            return Err(exitcode::UNAVAILABLE);
-                        }
-                        WorkerToRoot::Response ( resp ) => {
-                            tracing::debug!(?resp, "received worker response");
-                            if let Some(mut writer) = socket_writer.take() {
-                            send_to_socket(&resp, &mut writer).await?;
-                            } else {
-                                tracing::error!(?resp, "failed to send response to socket - no socket connection");
-                            }
-                        }
-                        WorkerToRoot::RequestToRoot(request) => {
-                            tracing::debug!(?request, "received worker request to root");
-                            match request {
-                                RequestToRoot::DynamicWgRouting { wg_data  } => {
-                                    // ensure we run down before going up to ensure clean slate
-                                    teardown_any_routing(maybe_router, false).await;
-
-                                    let router_result = routing::dynamic_router(worker_user.clone(), wg_data);
-
-                                    match router_result {
-                                        Ok(mut router) => {
-                                            let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                            *maybe_router = Some(Box::new(router));
-                                            send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
-                                        },
-                                        Err(error) => {
-                                            if error.is_not_available() {
-                                                tracing::debug!(?error, "dynamic routing not available on this platform");
-                                            } else {
-                                                tracing::error!(?error, "failed to build dynamic router");
-                                            }
-                                            let res = Err(error.to_string());
-                                            send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
-                                        }
-                                    }
-                                },
-                                RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                                    let mut new_routing = routing::static_router(wg_data, peer_ips);
-
-                                    // ensure we run down before going up to ensure clean slate
-                                    teardown_any_routing(maybe_router, false).await;
-                                    let _ = new_routing.teardown(Logs::Suppress).await;
-
-                                    // bring up new static routing
-                                    let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                    *maybe_router = Some(Box::new(new_routing));
-                                    send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
-                                }
-                                RequestToRoot::TearDownWg => {
-                                    teardown_any_routing(maybe_router, true).await;
-                                }
-                                RequestToRoot::Ping { options } => {
-                                    spawn_ping(&options, &ping_sender, &cancel_token);
-                                }
-                            }
-                        },
+                    WorkerToRoot::OutOfSync => {
+                        tracing::error!("worker out of sync with root - exiting");
+                        return Err(exitcode::UNAVAILABLE);
                     }
-                },
-                Ok(Some(line)) = async { socket_lines_reader.take().unwrap().next_line().await }, if socket_lines_reader.is_some() => {
-                    let cmd: cmdCmd = parse_command(line)?;
-                    tracing::debug!(command = ?cmd, "received socket command");
-                    send_to_worker(RootToWorker::Command ( cmd ), &mut writer).await?;
-                }
-                Ok(status) = worker_child.wait() => {
-                    if shutdown_ongoing {
-                        if status.success() {
-                            tracing::info!("worker exited cleanly");
+                    WorkerToRoot::Response ( resp ) => {
+                        tracing::debug!(?resp, "received worker response");
+                        if let Some(mut writer) = socket_writer.take() {
+                        send_to_socket(&resp, &mut writer).await?;
                         } else {
-                            tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
+                            tracing::error!(?resp, "failed to send response to socket - no socket connection");
                         }
-                        return Ok(());
-                    } else {
-                        tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                        return Err(exitcode::IOERR);
                     }
+                    WorkerToRoot::RequestToRoot(request) => {
+                        tracing::debug!(?request, "received worker request to root");
+                        match request {
+                            RequestToRoot::DynamicWgRouting { wg_data  } => {
+                                // ensure we run down before going up to ensure clean slate
+                                teardown_any_routing(maybe_router, false).await;
+
+                                let router_result = routing::dynamic_router(worker_user.clone(), wg_data);
+
+                                match router_result {
+                                    Ok(mut router) => {
+                                        let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                        *maybe_router = Some(Box::new(router));
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                    },
+                                    Err(error) => {
+                                        if error.is_not_available() {
+                                            tracing::debug!(?error, "dynamic routing not available on this platform");
+                                        } else {
+                                            tracing::error!(?error, "failed to build dynamic router");
+                                        }
+                                        let res = Err(error.to_string());
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                    }
+                                }
+                            },
+                            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                                let mut new_routing = routing::static_router(wg_data, peer_ips);
+
+                                // ensure we run down before going up to ensure clean slate
+                                teardown_any_routing(maybe_router, false).await;
+                                let _ = new_routing.teardown(Logs::Suppress).await;
+
+                                // bring up new static routing
+                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                *maybe_router = Some(Box::new(new_routing));
+                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
+                            }
+                            RequestToRoot::TearDownWg => {
+                                teardown_any_routing(maybe_router, true).await;
+                            }
+                            RequestToRoot::Ping { options } => {
+                                spawn_ping(&options, &ping_sender, &cancel_token);
+                            }
+                        }
+                    },
                 }
-                else => {
-                    tracing::error!("unexpected channel closure");
+            },
+            Ok(Some(line)) = async { socket_lines_reader.take().unwrap().next_line().await }, if socket_lines_reader.is_some() => {
+                let cmd: cmdCmd = parse_command(line)?;
+                tracing::debug!(command = ?cmd, "received socket command");
+                send_to_worker(RootToWorker::Command ( cmd ), &mut writer).await?;
+            }
+            Ok(status) = worker_child.wait() => {
+                if shutdown_ongoing {
+                    if status.success() {
+                        tracing::info!("worker exited cleanly");
+                    } else {
+                        tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
+                    }
+                    return Ok(());
+                } else {
+                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
                     return Err(exitcode::IOERR);
                 }
             }
+            else => {
+                tracing::error!("unexpected channel closure");
+                return Err(exitcode::IOERR);
+            }
+        }
     }
 }
 
