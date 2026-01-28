@@ -68,15 +68,14 @@ fn build_static_extra_lines(
     peer_ips: &[Ipv4Addr],
     interface_gateway: (String, Option<String>),
 ) -> Vec<String> {
+    // take over routing from wg-quick
     let mut extra = vec!["Table = off".to_string()];
+    // default routes are added PostUp on wg interface
     extra.extend(default_route_hook_lines("PostUp", "add"));
+    // add routes exceptions to all connected peers
     extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
-    extra.extend(default_route_hook_lines("PreDown", "delete"));
-    extra.extend(
-        peer_ips
-            .iter()
-            .map(|ip| pre_down_routing(ip, interface_gateway.clone())),
-    );
+    // remove routes exceptions on PostDown
+    extra.extend(peer_ips.iter().map(|ip| post_down_routing(ip, interface_gateway.clone())));
     extra
 }
 
@@ -100,10 +99,6 @@ fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<Stri
             device = device
         ),
     }
-}
-
-fn pre_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
-    format!("PreDown = route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
 }
 
 fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
