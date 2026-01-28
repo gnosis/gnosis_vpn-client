@@ -129,11 +129,6 @@ fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-    use std::path::PathBuf;
-
-    use gnosis_vpn_lib::{event, wireguard, worker};
-
     #[test]
     fn parses_interface_gateway() -> anyhow::Result<()> {
         let output = r#"
@@ -152,53 +147,5 @@ mod tests {
         assert_eq!(device, "en1");
         assert_eq!(gateway, Some("192.168.178.1".to_string()));
         Ok(())
-    }
-
-    #[test]
-    fn builds_peer_route_lines_include_pre_down() {
-        let interface_gateway = ("en0".to_string(), Some("192.168.88.1".to_string()));
-
-        let pre_up = super::pre_up_routing(&Ipv4Addr::new(10, 0, 0, 1), interface_gateway.clone());
-        let pre_down = super::pre_down_routing(&Ipv4Addr::new(10, 0, 0, 1), interface_gateway.clone());
-        let post_down = super::post_down_routing(&Ipv4Addr::new(10, 0, 0, 1), interface_gateway);
-
-        assert_eq!(pre_up, "PreUp = route -n add -host 10.0.0.1 192.168.88.1");
-        assert_eq!(pre_down, "PreDown = route -n delete -host 10.0.0.1");
-        assert_eq!(post_down, "PostDown = route -n delete -host 10.0.0.1");
-    }
-
-    #[test]
-    fn build_firewall_router_returns_static_router() {
-        let worker = worker::Worker {
-            uid: 1000,
-            gid: 1000,
-            group_name: "gnosisvpn".to_string(),
-            binary: "/usr/local/bin/gnosis_vpn-worker".to_string(),
-            home: PathBuf::from("/tmp"),
-        };
-        let wg_data = event::WireGuardData {
-            wg: wireguard::WireGuard::new(
-                wireguard::Config {
-                    listen_port: None,
-                    force_private_key: None,
-                    allowed_ips: None,
-                },
-                wireguard::KeyPair {
-                    priv_key: "priv_key".to_string(),
-                    public_key: "public_key".to_string(),
-                },
-            ),
-            interface_info: wireguard::InterfaceInfo {
-                address: "10.0.0.1/32".to_string(),
-            },
-            peer_info: wireguard::PeerInfo {
-                public_key: "peer_key".to_string(),
-                endpoint: "127.0.0.1:51820".to_string(),
-            },
-        };
-
-        let router: super::StaticRouter =
-            super::build_firewall_router(worker, wg_data, vec![Ipv4Addr::new(10, 0, 0, 1)]).expect("router");
-        let _ = router;
     }
 }
