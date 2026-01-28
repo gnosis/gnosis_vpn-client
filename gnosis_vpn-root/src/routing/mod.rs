@@ -26,8 +26,9 @@ pub enum Error {
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
 
-    #[cfg(target_os = "macos")]
-    #[error("This functionality is not available on macOS")]
+    /// explicitly allowing dead_code here to avoid cumbersome cfg targets everywhere
+    #[error("This functionality is not available on this platform")]
+    #[allow(dead_code)]
     NotAvailable,
 
     #[cfg(target_os = "linux")]
@@ -49,7 +50,6 @@ impl Error {
         Self::IpTables(e.into().to_string())
     }
 
-    #[cfg(target_os = "macos")]
     pub fn is_not_available(&self) -> bool {
         matches!(self, Self::NotAvailable)
     }

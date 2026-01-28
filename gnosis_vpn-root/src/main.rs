@@ -313,16 +313,9 @@ async fn loop_daemon(
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
                                     },
                                     Err(error) => {
-                                        #[cfg(target_os = "macos")]
-                                        {
-                                            if error.is_not_available() {
-                                                tracing::debug!(?error, "dynamic routing not available on this platform");
-                                            } else {
-                                                tracing::error!(?error, "failed to build dynamic router");
-                                            }
-                                        }
-                                        #[cfg(target_os = "linux")]
-                                        {
+                                        if error.is_not_available() {
+                                            tracing::debug!(?error, "dynamic routing not available on this platform");
+                                        } else {
                                             tracing::error!(?error, "failed to build dynamic router");
                                         }
                                         let res = Err(error.to_string());
