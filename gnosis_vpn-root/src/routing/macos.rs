@@ -69,7 +69,7 @@ fn build_static_extra_lines(
     interface_gateway: (String, Option<String>),
 ) -> Vec<String> {
     let mut extra = vec!["Table = off".to_string()];
-    extra.extend(default_route_hook_lines("PreUp", "add"));
+    extra.extend(default_route_hook_lines("PostUp", "add"));
     extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
     extra.extend(default_route_hook_lines("PreDown", "delete"));
     extra.extend(
