@@ -78,8 +78,8 @@ pub async fn available() -> Result<(), Error> {
         .arg("wg")
         .run_stdout(Logs::Print)
         .await
-        .map_err(Error::from);
-    tracing::debug!(?out, "wg command available");
+        .map_err(Error::from)?;
+    tracing::debug!(at = %out, "wg command available");
     Ok(())
 }
 

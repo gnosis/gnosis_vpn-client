@@ -12,7 +12,7 @@ pub async fn available() -> Result<(), wireguard::Error> {
         .run_stdout(Logs::Print)
         .await
         .map_err(wireguard::Error::from)?;
-    tracing::debug!(?out, "wg-quick command available");
+    tracing::debug!(at = %out, "wg-quick command available");
     Ok(())
 }
 
