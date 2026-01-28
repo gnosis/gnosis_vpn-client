@@ -254,12 +254,15 @@ async fn loop_daemon(
     loop {
         tokio::select! {
             Some(_) = ctrlc_receiver.recv() => {
-                let should_exit = handle_shutdown(&mut shutdown_ongoing, &cancel_token, maybe_router, None).await?;
-                if should_exit {
+    if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
-                    return Ok(());
-                }
+        return Ok(());
+    }
+
                 tracing::info!("initiate shutdown");
+                    shutdown_ongoing = true;
+                    cancel_token.cancel();
+                    teardown_any_routing(maybe_router, true).await;
             },
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
@@ -399,28 +402,6 @@ async fn send_to_worker(
         exitcode::IOERR
     })?;
     Ok(())
-}
-
-async fn handle_shutdown(
-    shutdown_ongoing: &mut bool,
-    cancel_token: &CancellationToken,
-    maybe_router: &mut Option<Box<dyn Routing>>,
-    teardown_complete_tx: Option<tokio::sync::mpsc::Sender<()>>,
-) -> Result<bool, exitcode::ExitCode> {
-    if *shutdown_ongoing {
-        return Ok(true);
-    }
-
-    *shutdown_ongoing = true;
-    cancel_token.cancel();
-    teardown_any_routing(maybe_router, true).await;
-
-    // Signal teardown completion if sender provided
-    if let Some(tx) = teardown_complete_tx {
-        let _ = tx.send(()).await;
-    }
-
-    Ok(false)
 }
 
 async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
