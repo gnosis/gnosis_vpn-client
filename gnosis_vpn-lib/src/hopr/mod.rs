@@ -8,6 +8,7 @@ pub use {api::Hopr, errors::HoprError};
 pub mod config;
 pub mod identity;
 
-pub const CONFIG_ENV: &str = "GNOSISVPN_HOPR_CONFIG_PATH";
-pub const ID_FILE_ENV: &str = "GNOSISVPN_HOPR_IDENTITY_FILE";
-pub const ID_PASS_ENV: &str = "GNOSISVPN_HOPR_IDENTITY_PASS";
+pub const ENV_VAR_CONFIG: &str = "GNOSISVPN_HOPR_CONFIG_PATH";
+pub const ENV_VAR_ID_FILE: &str = "GNOSISVPN_HOPR_IDENTITY_FILE";
+pub const ENV_VAR_ID_PASS: &str = "GNOSISVPN_HOPR_IDENTITY_PASS";
+pub const ENV_VAR_BLOKLI_URL: &str = "GNOSISVPN_HOPR_BLOKLI_URL";
