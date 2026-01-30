@@ -64,9 +64,9 @@ pub struct Core {
 
     // cancellation tokens
     cancel_balances: CancellationToken,
-    cancel_channel_tasks: CancellationToken,
     cancel_connection: CancellationToken,
     cancel_for_shutdown: CancellationToken,
+    cancel_presafe_queries: CancellationToken,
 
     // user provided data
     target_destination: Option<Destination>,
@@ -88,13 +88,21 @@ pub struct Core {
 #[derive(Debug, Clone)]
 enum Phase {
     Initial,
-    CreatingSafe { presafe: Option<balance::PreSafe> },
+    CreatingSafe { presafe_balance: Querying<balance::PreSafe>, safe: Querying<Option<SafeModule>> },
     Starting,
     HoprSyncing,
     HoprRunning,
     Connecting(connection::up::Up),
     Connected(connection::up::Up),
     ShuttingDown,
+}
+
+#[derive(Debug, Clone)]
+enum Querying<T> {
+    Idle,
+    InProgress,
+    Success(T),
+    Error,
 }
 
 impl Core {
@@ -121,9 +129,9 @@ impl Core {
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
-            cancel_channel_tasks: CancellationToken::new(),
             cancel_connection: CancellationToken::new(),
             cancel_for_shutdown: CancellationToken::new(),
+            cancel_presafe_queries: CancellationToken::new(),
 
             // user provided data
             target_destination: None,
@@ -180,9 +188,9 @@ impl Core {
                 tracing::debug!("incoming shutdown request");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
-                self.cancel_channel_tasks.cancel();
                 self.cancel_connection.cancel();
                 self.cancel_for_shutdown.cancel();
+                self.cancel_presafe_queries.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
@@ -242,6 +250,7 @@ impl Core {
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
+                            Phase::QueryingSafe => RunMode::CheckingSafe,
                             Phase::CreatingSafe { presafe } => {
                                 RunMode::preparing_safe(self.node_address, &presafe, self.funding_tool.clone())
                             }
@@ -422,6 +431,31 @@ impl Core {
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                 }
             },
+
+            Results::SafeQuery { res } => match res {
+                Ok(Some(safe_module)) => {
+                    tracing::info!(%safe_module, "found safe module");
+                    self.spawn_store_safe(safe_module, results_sender);
+                }
+                Ok(None) => {
+                    tracing::info!("no safe module deployed - starting presafe balance check");
+                    self.phase = Phase::CreatingSafe { presafe: None };
+                    self.spawn_presafe_runner(results_sender, Duration::ZERO);
+                }
+                Err(err) => {
+                    tracing::error!(%err, "failed to query safe module - retrying");
+                    self.spawn_safe_query_runner(results_sender);
+                }
+
+        }
+
+
+
+
+            self.phase = Phase::CreatingSafe { presafe: None };
+            self.spawn_presafe_runner(results_sender, Duration::ZERO);
+
+                    self.phase = Phase::
 
             Results::PreSafe { res } => match res {
                 Ok(presafe) => {
@@ -670,26 +704,41 @@ impl Core {
             self.phase = Phase::Starting;
             self.spawn_hopr_runner(results_sender, Duration::ZERO);
         } else {
-            self.phase = Phase::CreatingSafe { presafe: None };
-            self.spawn_presafe_runner(results_sender, Duration::ZERO);
+            self.phase = Phase::CreatingSafe { presafe_balance: Querying::Idle, safe: Querying::Idle };
+            self.spawn_safe_query_runner(results_sender, Duration::ZERO);
+            self.spawn_presafe_balance_runner(results_sender, Duration::ZERO);
         }
     }
 
-    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
+    fn spawn_safe_query_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_presafe_queries.clone();
         let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::ticket_stats(safeless_interactor, results_sender).await;
+                    runner::safe_query(safeless_interactor, results_sender).await
                 })
                 .await
         });
     }
 
-    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_presafe_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_presafe_queries.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::presafe(safeless_interactor, results_sender).await
+                })
+                .await
+        });
+    }
+
+    fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_for_shutdown.clone();
         let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
@@ -702,6 +751,7 @@ impl Core {
                 .await
         });
     }
+
 
     fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_for_shutdown.clone();
@@ -757,6 +807,20 @@ impl Core {
         }
     }
 
+    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_for_shutdown.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::ticket_stats(safeless_interactor, results_sender).await;
+                })
+                .await
+        });
+    }
+
     fn spawn_balances_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_balances.clone();
@@ -802,7 +866,7 @@ impl Core {
         self.ongoing_channel_fundings.push(address);
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
-            let cancel = self.cancel_channel_tasks.clone();
+            let cancel = self.cancel_for_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -817,7 +881,7 @@ impl Core {
 
     fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_channel_tasks.clone();
+            let cancel = self.cancel_for_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel

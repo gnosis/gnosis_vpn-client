@@ -39,8 +39,11 @@ pub enum Results {
         target_dest: Address,
         res: Result<(), hopr_api::ChannelError>,
     },
-    PreSafe {
+    PreSafeBalance {
         res: Result<balance::PreSafe, Error>,
+    },
+    SafeQuery {
+        res: Result<Option<SafeModule>, Error>,
     },
     TicketStats {
         res: Result<TicketStats, Error>,
@@ -120,7 +123,12 @@ pub async fn ticket_stats(safeless_interactor: Arc<SafelessInteractor>, results_
 
 pub async fn presafe(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
     let res = run_presafe(safeless_interactor).await;
-    let _ = results_sender.send(Results::PreSafe { res }).await;
+    let _ = results_sender.send(Results::PreSafeBalance { res }).await;
+}
+
+pub async fn safe_query(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_safe_query(safeless_interactor).await;
+    let _ = results_sender.send(Results::SafeQuery { res }).await;
 }
 
 pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
@@ -402,9 +410,9 @@ impl Display for Results {
                     err
                 ),
             },
-            Results::PreSafe { res } => match res {
-                Ok(presafe) => write!(f, "PreSafe: {}", presafe),
-                Err(err) => write!(f, "PreSafe: Error({})", err),
+            Results::PreSafeBalance { res } => match res {
+                Ok(presafe) => write!(f, "PreSafeBalance: {}", presafe),
+                Err(err) => write!(f, "PreSafeBalance: Error({})", err),
             },
             Results::TicketStats { res } => match res {
                 Ok(stats) => write!(f, "TicketStats: {}", stats),
@@ -443,7 +451,6 @@ impl Display for Results {
                 Ok(_) => write!(f, "ConnectionResult: Success"),
                 Err(err) => write!(f, "ConnectionResult: Error({})", err),
             },
-
             Results::DisconnectionEvent { wg_public_key, evt } => {
                 write!(f, "DisconnectionEvent ({}): {}", wg_public_key, evt)
             }
@@ -452,6 +459,11 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
+            Results::SafeQuery { res } => match res {
+                Ok(Some(_)) => write!(f, "SafeQuery: Safe found"),
+                Ok(None) => write!(f, "SafeQuery: No safe found"),
+                Err(err) => write!(f, "SafeQuery: Error({})", err),
+            },
         }
     }
 }
