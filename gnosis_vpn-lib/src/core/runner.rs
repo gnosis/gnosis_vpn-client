@@ -3,6 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
+use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
@@ -191,19 +192,32 @@ pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, r
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
-    tracing::debug!("starting presafe balance runner");
-    let keys = hopr_params.calc_keys().await?;
-    let private_key = keys.chain_key.clone();
-    let url = hopr_params.blokli_url();
+async fn run_safe_query(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
+    tracing::debug!("starting safe query runner");
     (|| {
-        let url = url.clone();
-        let private_key = private_key.clone();
-
+        let blokli = safeless_interactor.clone();
         async move {
-            let (balance_wxhopr, balance_xdai) = edgli::blokli::SafelessInteractor::new(url, &private_key)
+            blokli
+                .retrieve_safe()
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))?
+                .map_err(|e| Error::Chain(e.to_string()))
+                .map(|b| b.map(SafeModule::from))
+        }
+    })
+    .retry(ExponentialBuilder::default())
+    .notify(|err, dur| {
+        tracing::warn!(?err, ?dur, "Safe query attempt failed, retrying...");
+    })
+    .await
+}
+
+async fn run_presafe(safeless_interactor: Arc<SafelessInteractor>) -> Result<balance::PreSafe, Error> {
+    tracing::debug!("starting presafe balance runner");
+    (|| {
+        let blokli = safeless_interactor.clone();
+        async move {
+            let (balance_wxhopr, balance_xdai) = blokli
+                .clone()
                 .balances()
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
@@ -221,21 +235,12 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
     .await
 }
 
-async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error> {
+async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
-    let keys = hopr_params.calc_keys().await?;
-    let private_key = keys.chain_key;
-    let url = hopr_params.blokli_url();
     (|| {
-        let url = url.clone();
-        let private_key = private_key.clone();
+        let blokli = safeless_interactor.clone();
         async move {
-            let ticket_stats = edgli::blokli::SafelessInteractor::new(url, &private_key)
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?
-                .ticket_stats()
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
+            let ticket_stats = blokli.ticket_stats().await.map_err(|e| Error::Chain(e.to_string()))?;
 
             Ok(TicketStats {
                 ticket_price: ticket_stats.ticket_price,
@@ -250,22 +255,19 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
     .await
 }
 
-async fn run_safe_deployment(hopr_params: HoprParams, presafe: balance::PreSafe) -> Result<SafeModule, Error> {
+async fn run_safe_deployment(
+    safeless_interactor: Arc<SafelessInteractor>,
+    presafe: balance::PreSafe,
+) -> Result<SafeModule, Error> {
     tracing::debug!("starting safe deployment runner");
-    let keys = hopr_params.calc_keys().await?;
-    let private_key = keys.chain_key.clone();
-    let url = hopr_params.blokli_url();
-
     (|| {
-        let url = url.clone();
-        let private_key = private_key.clone();
+        let blokli = safeless_interactor.clone();
         async move {
-            edgli::blokli::SafelessInteractor::new(url, &private_key)
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?
+            blokli
                 .deploy_safe(presafe.node_wxhopr)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))
+                .map(SafeModule::from)
         }
     })
     .retry(ExponentialBuilder::default())
@@ -273,7 +275,6 @@ async fn run_safe_deployment(hopr_params: HoprParams, presafe: balance::PreSafe)
         tracing::warn!(?err, ?dur, "Safe deployment attempt failed, retrying...");
     })
     .await
-    .map(SafeModule::from)
 }
 
 // Posts to the HOPR funding tool API to request an airdrop using the provided code.

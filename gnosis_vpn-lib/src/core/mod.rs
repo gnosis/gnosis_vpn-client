@@ -1,3 +1,4 @@
+use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::{Balance, WxHOPR};
@@ -43,10 +44,12 @@ pub enum Error {
     HoprIdentity(#[from] identity::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error(transparent)]
+    #[error("URL parse error: {0}")]
     Url(#[from] url::ParseError),
-    #[error(transparent)]
+    #[error("Hopr params error: {0}")]
     HoprParams(#[from] crate::hopr_params::Error),
+    #[error("Blokli creation error: {0}")]
+    BlokliCreation(String),
 }
 
 pub struct Core {
@@ -56,6 +59,7 @@ pub struct Core {
     // static data
     hopr_params: HoprParams,
     node_address: Address,
+    blokli: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
 
     // cancellation tokens
@@ -103,6 +107,9 @@ impl Core {
         wireguard::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
+        let blokli = edgli::blokli::SafelessInteractor::new(hopr_params.blokli_url(), &keys.chain_key)
+            .await
+            .map_err(|e| Error::BlokliCreation(e.to_string()))?;
         Ok(Core {
             // config data
             config,
@@ -126,6 +133,7 @@ impl Core {
             balances: None,
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
+            blokli: Arc::new(blokli),
             ticket_value: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),

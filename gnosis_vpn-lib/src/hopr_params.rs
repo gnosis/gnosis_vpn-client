@@ -1,3 +1,4 @@
+use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::HoprKeys;
 use edgli::hopr_lib::config::HoprLibConfig;
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,8 @@ pub enum Error {
     Config(#[from] config::Error),
     #[error("URL parse error: {0}")]
     UrlParse(#[from] url::ParseError),
+    #[error("Blokli creation error: {0}")]
+    BlokliCreation(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -115,6 +118,16 @@ impl HoprParams {
             // check status of config generation
             ConfigFileMode::Generated => config::generate().await.map_err(Error::from),
         }
+    }
+
+    /// Create safeless blokli instance
+    pub async fn create_safeless_interactor(&self) -> Result<SafelessInteractor, Error> {
+        let keys = self.calc_keys().await?;
+        let private_key = keys.chain_key;
+        let url = self.blokli_url();
+        edgli::blokli::SafelessInteractor::new(url, &private_key)
+            .await
+            .map_err(|e| Error::BlokliCreation(e.to_string()))
     }
 
     pub fn allow_insecure(&self) -> bool {
