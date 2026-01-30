@@ -48,8 +48,8 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("Hopr params error: {0}")]
     HoprParams(#[from] crate::hopr_params::Error),
-    #[error("Blokli creation error: {0}")]
-    BlokliCreation(String),
+    #[error("Safeless Interactor creation error: {0}")]
+    SafelessInteractorCreation(String),
 }
 
 pub struct Core {
@@ -59,7 +59,7 @@ pub struct Core {
     // static data
     hopr_params: HoprParams,
     node_address: Address,
-    blokli: Arc<SafelessInteractor>,
+    safeless_interactor: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
 
     // cancellation tokens
@@ -107,9 +107,9 @@ impl Core {
         wireguard::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let blokli = edgli::blokli::SafelessInteractor::new(hopr_params.blokli_url(), &keys.chain_key)
+        let safeless_interactor = edgli::blokli::SafelessInteractor::new(hopr_params.blokli_url(), &keys.chain_key)
             .await
-            .map_err(|e| Error::BlokliCreation(e.to_string()))?;
+            .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
         Ok(Core {
             // config data
             config,
@@ -133,7 +133,7 @@ impl Core {
             balances: None,
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
-            blokli: Arc::new(blokli),
+            safeless_interactor: Arc::new(safeless_interactor),
             ticket_value: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -677,13 +677,13 @@ impl Core {
 
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::ticket_stats(hopr_params, results_sender).await;
+                    runner::ticket_stats(safeless_interactor, results_sender).await;
                 })
                 .await
         });
@@ -691,13 +691,13 @@ impl Core {
 
     fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::presafe(hopr_params, results_sender).await
+                    runner::presafe(safeless_interactor, results_sender).await
                 })
                 .await
         });
@@ -716,13 +716,13 @@ impl Core {
 
     fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::safe_deployment(hopr_params, presafe, results_sender).await;
+                    runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
                 })
                 .await
         });

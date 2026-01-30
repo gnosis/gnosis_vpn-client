@@ -113,13 +113,13 @@ struct UnauthorizedError {
     error: String,
 }
 
-pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_ticket_stats(hopr_params).await;
+pub async fn ticket_stats(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_ticket_stats(safeless_interactor).await;
     let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
-pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_presafe(hopr_params).await;
+pub async fn presafe(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_presafe(safeless_interactor).await;
     let _ = results_sender.send(Results::PreSafe { res }).await;
 }
 
@@ -129,11 +129,11 @@ pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender:
 }
 
 pub async fn safe_deployment(
-    hopr_params: HoprParams,
+    safeless_interactor: Arc<SafelessInteractor>,
     presafe: balance::PreSafe,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_safe_deployment(hopr_params, presafe).await;
+    let res = run_safe_deployment(safeless_interactor, presafe).await;
     let _ = results_sender.send(Results::SafeDeployment { res }).await;
 }
 
