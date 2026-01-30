@@ -2441,7 +2441,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "1.0.2"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=0d3fd8aae09bff047c286e2286dab2d4da0cff1d#0d3fd8aae09bff047c286e2286dab2d4da0cff1d"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=9cccbafa91612135dccaab47b34bdda7b443826b#9cccbafa91612135dccaab47b34bdda7b443826b"
 dependencies = [
  "anyhow",
  "async-signal",
