@@ -235,12 +235,7 @@ async fn run_node_balance(safeless_interactor: Arc<SafelessInteractor>) -> Resul
     (|| {
         let blokli = safeless_interactor.clone();
         async move {
-            let (balance_wxhopr, balance_xdai) = blokli
-                .clone()
-                .balances()
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
-
+            let (balance_wxhopr, balance_xdai) = blokli.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
             Ok(balance::PreSafe {
                 node_xdai: balance_xdai,
                 node_wxhopr: balance_wxhopr,
