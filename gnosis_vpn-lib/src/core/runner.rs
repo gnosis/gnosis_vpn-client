@@ -39,24 +39,28 @@ pub enum Results {
         target_dest: Address,
         res: Result<(), hopr_api::ChannelError>,
     },
-    PreSafeBalance {
+    NodeBalance {
         res: Result<balance::PreSafe, Error>,
     },
-    SafeQuery {
+    QuerySafe {
         res: Result<Option<SafeModule>, Error>,
+    },
+    DeploySafe {
+        res: Result<SafeModule, Error>,
     },
     TicketStats {
         res: Result<TicketStats, Error>,
     },
-    SafeDeployment {
-        res: Result<SafeModule, Error>,
+    PersistSafe {
+        res: Result<(), hopr_config::Error>,
+        safe_module: SafeModule,
     },
-    SafePersisted,
     FundingTool {
         res: Result<Option<String>, Error>,
     },
     Hopr {
         res: Result<Hopr, Error>,
+        safe_module: SafeModule,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -121,14 +125,14 @@ pub async fn ticket_stats(safeless_interactor: Arc<SafelessInteractor>, results_
     let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
-pub async fn presafe(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
-    let res = run_presafe(safeless_interactor).await;
-    let _ = results_sender.send(Results::PreSafeBalance { res }).await;
+pub async fn node_balance(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_node_balance(safeless_interactor).await;
+    let _ = results_sender.send(Results::NodeBalance { res }).await;
 }
 
-pub async fn safe_query(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
-    let res = run_safe_query(safeless_interactor).await;
-    let _ = results_sender.send(Results::SafeQuery { res }).await;
+pub async fn query_safe(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_query_safe(safeless_interactor).await;
+    let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
 pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
@@ -142,21 +146,28 @@ pub async fn safe_deployment(
     results_sender: mpsc::Sender<Results>,
 ) {
     let res = run_safe_deployment(safeless_interactor, presafe).await;
-    let _ = results_sender.send(Results::SafeDeployment { res }).await;
+    let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
 pub async fn persist_safe(safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
-    while let Err(err) = hopr_config::store_safe(&safe_module).await {
-        log_output::print_safe_module_storage_error(err);
-        time::sleep(Duration::from_secs(5)).await;
-    }
-    let _ = results_sender.send(Results::SafePersisted).await;
+    let res = hopr_config::store_safe(&safe_module).await;
+    let _ = results_sender
+        .send(Results::PersistSafe {
+            res,
+            safe_module: safe_module.clone(),
+        })
+        .await;
 }
 
-pub async fn hopr(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params).await;
-    let _ = results_sender.send(Results::Hopr { res }).await;
+pub async fn hopr(hopr_params: HoprParams, safe_module: &SafeModule, results_sender: mpsc::Sender<Results>) {
+    let res = run_hopr(hopr_params, safe_module).await;
+    let _ = results_sender
+        .send(Results::Hopr {
+            res,
+            safe_module: safe_module.clone(),
+        })
+        .await;
 }
 
 pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
@@ -200,8 +211,8 @@ pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, r
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-async fn run_safe_query(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
-    tracing::debug!("starting safe query runner");
+async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
+    tracing::debug!("starting query safe runner");
     (|| {
         let blokli = safeless_interactor.clone();
         async move {
@@ -213,14 +224,14 @@ async fn run_safe_query(safeless_interactor: Arc<SafelessInteractor>) -> Result<
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Safe query attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Safe query attempt failed, retrying...");
     })
     .await
 }
 
-async fn run_presafe(safeless_interactor: Arc<SafelessInteractor>) -> Result<balance::PreSafe, Error> {
-    tracing::debug!("starting presafe balance runner");
+async fn run_node_balance(safeless_interactor: Arc<SafelessInteractor>) -> Result<balance::PreSafe, Error> {
+    tracing::debug!("starting node balance runner");
     (|| {
         let blokli = safeless_interactor.clone();
         async move {
@@ -237,8 +248,8 @@ async fn run_presafe(safeless_interactor: Arc<SafelessInteractor>) -> Result<bal
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "PreSafe attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "PreSafe attempt failed, retrying...");
     })
     .await
 }
@@ -257,8 +268,8 @@ async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Resul
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Ticket stats attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Ticket stats attempt failed, retrying...");
     })
     .await
 }
@@ -279,8 +290,8 @@ async fn run_safe_deployment(
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Safe deployment attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Safe deployment attempt failed, retrying...");
     })
     .await
 }
@@ -338,15 +349,15 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
         Ok(res)
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Funding tool attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Funding tool attempt failed, retrying...");
     })
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams) -> Result<Hopr, Error> {
+async fn run_hopr(hopr_params: HoprParams, safe_module: &SafeModule) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = hopr_params.to_config().await?;
+    let cfg = hopr_params.to_config(safe_module).await?;
     let keys = hopr_params.calc_keys().await?;
     let blokli_url = hopr_params.blokli_url();
     Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys, blokli_url)
@@ -367,8 +378,8 @@ async fn run_fund_channel(
         Ok(())
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Fund channel attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Fund channel attempt failed, retrying...");
     })
     .await
 }
@@ -410,25 +421,28 @@ impl Display for Results {
                     err
                 ),
             },
-            Results::PreSafeBalance { res } => match res {
-                Ok(presafe) => write!(f, "PreSafeBalance: {}", presafe),
-                Err(err) => write!(f, "PreSafeBalance: Error({})", err),
+            Results::NodeBalance { res } => match res {
+                Ok(presafe) => write!(f, "NodeBalance: {}", presafe),
+                Err(err) => write!(f, "NodeBalance: Error({})", err),
             },
             Results::TicketStats { res } => match res {
                 Ok(stats) => write!(f, "TicketStats: {}", stats),
                 Err(err) => write!(f, "TicketStats: Error({})", err),
             },
-            Results::SafeDeployment { res } => match res {
-                Ok(deployment) => write!(f, "SafeDeployment: {:?}", deployment),
-                Err(err) => write!(f, "SafeDeployment: Error({})", err),
+            Results::DeploySafe { res } => match res {
+                Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),
+                Err(err) => write!(f, "DeploySafe: Error({})", err),
             },
-            Results::SafePersisted => write!(f, "SafePersisted: Success"),
+            Results::PersistSafe { res, safe_module: _ } => match res {
+                Ok(_) => write!(f, "PersistSafe: Success"),
+                Err(err) => write!(f, "PersistSafe: Error({})", err),
+            },
             Results::FundingTool { res } => match res {
                 Ok(None) => write!(f, "FundingTool: Success"),
                 Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
             },
-            Results::Hopr { res } => match res {
+            Results::Hopr { res, safe_module: _ } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
             },
@@ -459,10 +473,10 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
-            Results::SafeQuery { res } => match res {
-                Ok(Some(_)) => write!(f, "SafeQuery: Safe found"),
-                Ok(None) => write!(f, "SafeQuery: No safe found"),
-                Err(err) => write!(f, "SafeQuery: Error({})", err),
+            Results::QuerySafe { res } => match res {
+                Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
+                Ok(None) => write!(f, "QuerySafe: No safe found"),
+                Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
         }
     }

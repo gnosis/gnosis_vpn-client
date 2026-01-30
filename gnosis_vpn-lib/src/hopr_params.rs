@@ -8,6 +8,7 @@ use url::Url;
 
 use std::path::PathBuf;
 
+use crate::compat::SafeModule;
 use crate::hopr::{config, identity};
 
 #[derive(Debug, Error)]
@@ -111,12 +112,12 @@ impl HoprParams {
         identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
     }
 
-    pub async fn to_config(&self) -> Result<HoprLibConfig, Error> {
+    pub async fn to_config(&self, safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             // use user provided configuration path
             ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
             // check status of config generation
-            ConfigFileMode::Generated => config::generate().await.map_err(Error::from),
+            ConfigFileMode::Generated => config::generate(safe_module).await.map_err(Error::from),
         }
     }
 

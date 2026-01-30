@@ -43,15 +43,18 @@ pub async fn store_safe(safe_module: &SafeModule) -> Result<(), Error> {
     fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
-pub fn has_safe() -> bool {
-    safe_file().is_ok_and(|path| path.exists())
+pub async fn read_safe() -> Result<SafeModule, Error> {
+    let content = fs::read_to_string(safe_file()?).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::NoFile
+        } else {
+            Error::IO(e)
+        }
+    })?;
+    serde_yaml::from_str::<SafeModule>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub async fn generate() -> Result<HoprLibConfig, Error> {
-    let safe_module: SafeModule = match fs::read_to_string(safe_file()?).await {
-        Ok(content) => serde_yaml::from_str::<SafeModule>(&content)?,
-        Err(e) => return Err(Error::IO(e)),
-    };
+pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
     let content = format!(
         r##"
 host:

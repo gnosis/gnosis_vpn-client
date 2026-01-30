@@ -4,8 +4,6 @@ use serde::ser::Serialize;
 
 use std::time::SystemTime;
 
-use crate::hopr::config as hopr_config;
-
 pub fn serialize<T>(v: &T) -> String
 where
     T: ?Sized + Serialize,
@@ -40,55 +38,6 @@ fn truncate_after_second_space(s: &str) -> &str {
     } else {
         s
     }
-}
-
-pub fn print_safe_module_storage_error(main_error: hopr_config::Error) {
-    let file = match hopr_config::safe_file() {
-        Ok(path) => path,
-        Err(error) => {
-            tracing::error!(
-                r#"
-
->>!!>> Critical error storing safe module after safe deployment:
->>!!>>
->>!!>> {main_error:?}.
->>!!>>
->>!!>> Cannot determine safe file path: {error:?}.
-"#,
-            );
-            return;
-        }
-    };
-    let parent = match file.parent() {
-        Some(p) => p,
-        None => {
-            tracing::error!(
-                r#"
-
->>!!>> Critical error storing safe module after safe deployment:
->>!!>>
->>!!>> {main_error:?}.
->>!!>>
->>!!>> Cannot determine safe file parent folder path.
-"#,
-            );
-            return;
-        }
-    };
-    tracing::error!(
-        r#"
-
->>!!>> Critical error storing safe module after safe deployment:
->>!!>>
->>!!>> {main_error:?}.
->>!!>>
->>!!>> If this is a permission problem, please fix permissions on folder "{parent}".
->>!!>> So that writing the safe file "{file}" will work.
->>!!>> Otherwise check for out of disk space issues or other IO related problems.
-"#,
-        parent = parent.display(),
-        file = file.display()
-    );
 }
 
 pub fn print_session_established(path: &str) {
