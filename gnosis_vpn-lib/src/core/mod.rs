@@ -688,6 +688,8 @@ impl Core {
                     query_safe,
                     deploy_safe,
                 };
+                // trigger retry - will be canceled if safe deployment starts
+                self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
                 self.trigger_deploy_safe(results_sender);
             }
             (
@@ -742,6 +744,8 @@ impl Core {
                     query_safe: Querying::Success(None),
                     deploy_safe,
                 };
+                // trigger retry - will be canceled if safe deployment starts
+                self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
                 self.trigger_deploy_safe(results_sender);
             }
             (
@@ -811,10 +815,9 @@ impl Core {
         } = &self.phase
         {
             if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                tracing::warn!("insufficient funds to start safe deployment - retrying presafe queries");
-                self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
-                self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
+                tracing::warn!("insufficient funds to start safe deployment - waiting for funding");
             } else {
+                self.cancel_presafe_queries.cancel();
                 self.spawn_safe_deployment_runner(presafe, results_sender);
             }
         }
@@ -846,7 +849,7 @@ impl Core {
         }
     }
 
-    fn spawn_query_safe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
