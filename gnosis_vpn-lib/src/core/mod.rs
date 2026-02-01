@@ -1,3 +1,4 @@
+use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::{Balance, WxHOPR};
@@ -43,10 +44,12 @@ pub enum Error {
     HoprIdentity(#[from] identity::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error(transparent)]
+    #[error("URL parse error: {0}")]
     Url(#[from] url::ParseError),
-    #[error(transparent)]
+    #[error("Hopr params error: {0}")]
     HoprParams(#[from] crate::hopr_params::Error),
+    #[error("Safeless Interactor creation error: {0}")]
+    SafelessInteractorCreation(String),
 }
 
 pub struct Core {
@@ -56,13 +59,14 @@ pub struct Core {
     // static data
     hopr_params: HoprParams,
     node_address: Address,
+    safeless_interactor: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
 
     // cancellation tokens
     cancel_balances: CancellationToken,
-    cancel_channel_tasks: CancellationToken,
     cancel_connection: CancellationToken,
     cancel_for_shutdown: CancellationToken,
+    cancel_presafe_queries: CancellationToken,
 
     // user provided data
     target_destination: Option<Destination>,
@@ -84,13 +88,26 @@ pub struct Core {
 #[derive(Debug, Clone)]
 enum Phase {
     Initial,
-    CreatingSafe { presafe: Option<balance::PreSafe> },
+    CreatingSafe {
+        node_balance: Querying<balance::PreSafe>,
+        query_safe: Querying<Option<SafeModule>>,
+        deploy_safe: Querying<SafeModule>,
+    },
     Starting,
     HoprSyncing,
     HoprRunning,
     Connecting(connection::up::Up),
     Connected(connection::up::Up),
     ShuttingDown,
+}
+
+#[derive(Debug, Clone)]
+enum Querying<T> {
+    Init,
+    Success(T),
+    // TODO expose error in status
+    #[allow(dead_code)]
+    Error(String),
 }
 
 impl Core {
@@ -103,6 +120,9 @@ impl Core {
         wireguard::executable().await?;
         let keys = hopr_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
+        let safeless_interactor = edgli::blokli::SafelessInteractor::new(hopr_params.blokli_url(), &keys.chain_key)
+            .await
+            .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
         Ok(Core {
             // config data
             config,
@@ -114,9 +134,9 @@ impl Core {
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
-            cancel_channel_tasks: CancellationToken::new(),
             cancel_connection: CancellationToken::new(),
             cancel_for_shutdown: CancellationToken::new(),
+            cancel_presafe_queries: CancellationToken::new(),
 
             // user provided data
             target_destination: None,
@@ -126,6 +146,7 @@ impl Core {
             balances: None,
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
+            safeless_interactor: Arc::new(safeless_interactor),
             ticket_value: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -138,7 +159,7 @@ impl Core {
 
     pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<WorkerToCore>) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.initial_runner(&results_sender);
+        self.initial_runner(&results_sender).await;
         loop {
             tokio::select! {
 
@@ -151,7 +172,7 @@ impl Core {
                     }
                 }
 
-                // React to internal results from longer lasting runner computations
+                // React to internal results from spawned runner tasks
                 Some(results) = results_receiver.recv() => {
                     self.on_results(results, &results_sender).await;
                 }
@@ -172,9 +193,9 @@ impl Core {
                 tracing::debug!("incoming shutdown request");
                 self.phase = Phase::ShuttingDown;
                 self.cancel_balances.cancel();
-                self.cancel_channel_tasks.cancel();
                 self.cancel_connection.cancel();
                 self.cancel_for_shutdown.cancel();
+                self.cancel_presafe_queries.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
@@ -231,11 +252,20 @@ impl Core {
             WorkerToCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
+                    // General TODO: improve status command
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
-                            Phase::CreatingSafe { presafe } => {
-                                RunMode::preparing_safe(self.node_address, &presafe, self.funding_tool.clone())
+                            Phase::CreatingSafe {
+                                node_balance,
+                                query_safe: _,
+                                deploy_safe: _,
+                            } => {
+                                let balance = match node_balance {
+                                    Querying::Success(b) => Some(b),
+                                    _ => None,
+                                };
+                                RunMode::preparing_safe(self.node_address, &balance, self.funding_tool.clone())
                             }
                             Phase::Starting => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprSyncing => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
@@ -415,42 +445,21 @@ impl Core {
                 }
             },
 
-            Results::PreSafe { res } => match res {
-                Ok(presafe) => {
-                    tracing::info!(%presafe, "on presafe balance");
-                    self.phase = Phase::CreatingSafe {
-                        presafe: Some(presafe.clone()),
-                    };
-                    if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                        tracing::warn!("insufficient funds to start safe deployment - waiting");
-                        self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
-                    } else {
-                        self.spawn_safe_deployment_runner(&presafe, results_sender);
-                    }
+            Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
+            Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
+            Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
+
+            Results::PersistSafe { res, safe_module } => match res {
+                Ok(()) => {
+                    tracing::info!("safe module persisted");
                 }
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch presafe balance - retrying");
-                    self.spawn_presafe_runner(results_sender, Duration::from_secs(10));
+                    tracing::error!(%err, "failed to persist safe module - retrying");
+                    self.spawn_store_safe(safe_module, results_sender, Duration::from_secs(10));
                 }
             },
 
-            Results::SafeDeployment { res } => match res {
-                Ok(safe_module) => {
-                    self.spawn_store_safe(safe_module, results_sender);
-                }
-                Err(err) => {
-                    tracing::error!(%err, "error deploying safe module - rechecking balance");
-                    self.spawn_presafe_runner(results_sender, Duration::from_secs(5));
-                }
-            },
-
-            Results::SafePersisted => {
-                tracing::info!("safe module persisted - starting hopr runner");
-                self.phase = Phase::Starting;
-                self.spawn_hopr_runner(results_sender, Duration::ZERO);
-            }
-
-            Results::Hopr { res } => match res {
+            Results::Hopr { res, safe_module } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
@@ -462,7 +471,7 @@ impl Core {
                 }
                 Err(err) => {
                     tracing::error!(%err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.spawn_hopr_runner(results_sender, Duration::from_secs(10));
+                    self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -639,6 +648,7 @@ impl Core {
                     let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
+
                 RespondableRequestToRoot::StaticWgRouting {
                     wg_data,
                     peer_ips,
@@ -648,6 +658,7 @@ impl Core {
                     let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
+
                 RespondableRequestToRoot::Ping { options, resp } => {
                     self.responder_duration = Some(resp);
                     let request = RequestToRoot::Ping { options };
@@ -657,39 +668,210 @@ impl Core {
         }
     }
 
-    fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
-        if hopr_config::has_safe() {
-            self.phase = Phase::Starting;
-            self.spawn_hopr_runner(results_sender, Duration::ZERO);
-        } else {
-            self.phase = Phase::CreatingSafe { presafe: None };
-            self.spawn_presafe_runner(results_sender, Duration::ZERO);
+    async fn on_results_node_balance(
+        &mut self,
+        res: Result<balance::PreSafe, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        match (res, self.phase.clone()) {
+            (
+                Ok(presafe),
+                Phase::CreatingSafe {
+                    node_balance: _,
+                    query_safe,
+                    deploy_safe,
+                },
+            ) => {
+                tracing::info!(%presafe, "on presafe node balance");
+                self.phase = Phase::CreatingSafe {
+                    node_balance: Querying::Success(presafe.clone()),
+                    query_safe,
+                    deploy_safe,
+                };
+                // trigger retry - will be canceled if safe deployment starts
+                self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
+                self.trigger_deploy_safe(results_sender);
+            }
+            (
+                Err(err),
+                Phase::CreatingSafe {
+                    node_balance: _,
+                    query_safe,
+                    deploy_safe,
+                },
+            ) => {
+                tracing::error!(%err, "failed to fetch presafe node balance - retrying");
+                self.phase = Phase::CreatingSafe {
+                    node_balance: Querying::Error(err.to_string()),
+                    query_safe,
+                    deploy_safe,
+                };
+                self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
+            }
+            (res, phase) => {
+                tracing::warn!(?phase, ?res, "ignoring presafe node balance result in unexpected phase");
+            }
         }
     }
 
-    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+    async fn on_results_query_safe(
+        &mut self,
+        res: Result<Option<SafeModule>, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        match (res, self.phase.clone()) {
+            (Ok(Some(safe_module)), Phase::CreatingSafe { .. }) => {
+                tracing::info!(?safe_module, "found safe module");
+                // we got our safe module - cancel presafe balance checks
+                self.cancel_presafe_queries.cancel();
+                // start edge client with queried safe module
+                self.phase = Phase::Starting;
+                self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
+                // try persisting safe module to disk - might fail but we consider this non critical
+                self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
+            }
+            (
+                Ok(None),
+                Phase::CreatingSafe {
+                    node_balance,
+                    query_safe: _,
+                    deploy_safe,
+                },
+            ) => {
+                tracing::info!("found no deployed safe module");
+                self.phase = Phase::CreatingSafe {
+                    node_balance,
+                    query_safe: Querying::Success(None),
+                    deploy_safe,
+                };
+                // trigger retry - will be canceled if safe deployment starts
+                self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
+                self.trigger_deploy_safe(results_sender);
+            }
+            (
+                Err(err),
+                Phase::CreatingSafe {
+                    node_balance,
+                    query_safe: _,
+                    deploy_safe,
+                },
+            ) => {
+                tracing::error!(%err, "failed to query safe module - retrying");
+                self.phase = Phase::CreatingSafe {
+                    node_balance,
+                    query_safe: Querying::Error(err.to_string()),
+                    deploy_safe,
+                };
+                self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
+            }
+            (res, phase) => {
+                tracing::warn!(?phase, ?res, "ignoring query safe result in unexpected phase");
+            }
+        }
+    }
+
+    async fn on_results_deploy_safe(
+        &mut self,
+        res: Result<SafeModule, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        match (res, self.phase.clone()) {
+            (Ok(safe_module), Phase::CreatingSafe { .. }) => {
+                tracing::info!(?safe_module, "deployed safe module");
+                // start edge client with new safe module
+                self.phase = Phase::Starting;
+                self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
+                // try persisting safe module to disk - might fail but we consider this non critical
+                self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
+            }
+            (
+                Err(err),
+                Phase::CreatingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe: _,
+                },
+            ) => {
+                tracing::error!(%err, "failed to deploy safe module - retrying from balance check");
+                self.phase = Phase::CreatingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe: Querying::Error(err.to_string()),
+                };
+                self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
+                self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
+            }
+            (res, phase) => {
+                tracing::warn!(?phase, ?res, "ignoring deploy safe result in unexpected phase");
+            }
+        }
+    }
+
+    fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
+        if let Phase::CreatingSafe {
+            node_balance: Querying::Success(presafe),
+            query_safe: Querying::Success(None),
+            deploy_safe: _,
+        } = &self.phase
+        {
+            if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
+                tracing::warn!("insufficient funds to start safe deployment - waiting for funding");
+            } else {
+                self.cancel_presafe_queries.cancel();
+                self.spawn_safe_deployment_runner(presafe, results_sender);
+            }
+        }
+    }
+
+    async fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
+        let res = hopr_config::read_safe().await;
+        match res {
+            Ok(safe_module) => {
+                tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
+                // start edge client with existing safe module
+                self.phase = Phase::Starting;
+                self.spawn_hopr_runner(safe_module, results_sender, Duration::ZERO);
+            }
+            Err(err) => {
+                if matches!(err, hopr_config::Error::NoFile) {
+                    tracing::info!("no persisted safe module found - querying safeless interactor");
+                } else {
+                    tracing::warn!(%err, "error deserializing existing safe module - querying safeless interactor");
+                }
+                self.phase = Phase::CreatingSafe {
+                    node_balance: Querying::Init,
+                    query_safe: Querying::Init,
+                    deploy_safe: Querying::Init,
+                };
+                self.spawn_query_safe_runner(results_sender, Duration::ZERO);
+                self.spawn_node_balance_runner(results_sender, Duration::ZERO);
+            }
+        }
+    }
+
+    fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_presafe_queries.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::ticket_stats(hopr_params, results_sender).await;
+                    runner::query_safe(safeless_interactor, results_sender).await
                 })
                 .await
         });
     }
 
-    fn spawn_presafe_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+    fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_presafe_queries.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::presafe(hopr_params, results_sender).await
+                    runner::node_balance(safeless_interactor, results_sender).await
                 })
                 .await
         });
@@ -708,45 +890,57 @@ impl Core {
 
     fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::safe_deployment(hopr_params, presafe, results_sender).await;
+                    runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
                 })
                 .await
         });
     }
 
-    fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_for_shutdown.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
+                    time::sleep(delay).await;
                     runner::persist_safe(safe_module, results_sender).await;
                 })
                 .await
         });
     }
 
-    fn spawn_hopr_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        // check if we are ready: safe available(Phase::Starting)
-        if let Phase::Starting = self.phase.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
-            let hopr_params = self.hopr_params.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        runner::hopr(hopr_params, results_sender).await;
-                    })
-                    .await
-            });
-        }
+    fn spawn_hopr_runner(&self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_for_shutdown.clone();
+        let hopr_params = self.hopr_params.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::hopr(hopr_params, &safe_module, results_sender).await;
+                })
+                .await
+        });
+    }
+
+    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_for_shutdown.clone();
+        let safeless_interactor = self.safeless_interactor.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::ticket_stats(safeless_interactor, results_sender).await;
+                })
+                .await
+        });
     }
 
     fn spawn_balances_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -794,7 +988,7 @@ impl Core {
         self.ongoing_channel_fundings.push(address);
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
-            let cancel = self.cancel_channel_tasks.clone();
+            let cancel = self.cancel_for_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -809,7 +1003,7 @@ impl Core {
 
     fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_channel_tasks.clone();
+            let cancel = self.cancel_for_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel

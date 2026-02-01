@@ -1,7 +1,7 @@
 use edgli::SafeModuleDeploymentResult;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SafeModule {
     pub safe_address: String,
     pub module_address: String,

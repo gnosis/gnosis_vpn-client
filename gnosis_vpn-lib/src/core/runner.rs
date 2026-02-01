@@ -3,6 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
+use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
@@ -38,21 +39,28 @@ pub enum Results {
         target_dest: Address,
         res: Result<(), hopr_api::ChannelError>,
     },
-    PreSafe {
+    NodeBalance {
         res: Result<balance::PreSafe, Error>,
+    },
+    QuerySafe {
+        res: Result<Option<SafeModule>, Error>,
+    },
+    DeploySafe {
+        res: Result<SafeModule, Error>,
     },
     TicketStats {
         res: Result<TicketStats, Error>,
     },
-    SafeDeployment {
-        res: Result<SafeModule, Error>,
+    PersistSafe {
+        res: Result<(), hopr_config::Error>,
+        safe_module: SafeModule,
     },
-    SafePersisted,
     FundingTool {
         res: Result<Option<String>, Error>,
     },
     Hopr {
         res: Result<Hopr, Error>,
+        safe_module: SafeModule,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -112,14 +120,19 @@ struct UnauthorizedError {
     error: String,
 }
 
-pub async fn ticket_stats(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_ticket_stats(hopr_params).await;
+pub async fn ticket_stats(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_ticket_stats(safeless_interactor).await;
     let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
-pub async fn presafe(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_presafe(hopr_params).await;
-    let _ = results_sender.send(Results::PreSafe { res }).await;
+pub async fn node_balance(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_node_balance(safeless_interactor).await;
+    let _ = results_sender.send(Results::NodeBalance { res }).await;
+}
+
+pub async fn query_safe(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+    let res = run_query_safe(safeless_interactor).await;
+    let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
 pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
@@ -128,26 +141,33 @@ pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender:
 }
 
 pub async fn safe_deployment(
-    hopr_params: HoprParams,
+    safeless_interactor: Arc<SafelessInteractor>,
     presafe: balance::PreSafe,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_safe_deployment(hopr_params, presafe).await;
-    let _ = results_sender.send(Results::SafeDeployment { res }).await;
+    let res = run_safe_deployment(safeless_interactor, presafe).await;
+    let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
 pub async fn persist_safe(safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
-    while let Err(err) = hopr_config::store_safe(&safe_module).await {
-        log_output::print_safe_module_storage_error(err);
-        time::sleep(Duration::from_secs(5)).await;
-    }
-    let _ = results_sender.send(Results::SafePersisted).await;
+    let res = hopr_config::store_safe(&safe_module).await;
+    let _ = results_sender
+        .send(Results::PersistSafe {
+            res,
+            safe_module: safe_module.clone(),
+        })
+        .await;
 }
 
-pub async fn hopr(hopr_params: HoprParams, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params).await;
-    let _ = results_sender.send(Results::Hopr { res }).await;
+pub async fn hopr(hopr_params: HoprParams, safe_module: &SafeModule, results_sender: mpsc::Sender<Results>) {
+    let res = run_hopr(hopr_params, safe_module).await;
+    let _ = results_sender
+        .send(Results::Hopr {
+            res,
+            safe_module: safe_module.clone(),
+        })
+        .await;
 }
 
 pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
@@ -191,23 +211,31 @@ pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, r
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error> {
-    tracing::debug!("starting presafe balance runner");
-    let keys = hopr_params.calc_keys().await?;
-    let private_key = keys.chain_key.clone();
-    let url = hopr_params.blokli_url();
+async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
+    tracing::debug!("starting query safe runner");
     (|| {
-        let url = url.clone();
-        let private_key = private_key.clone();
-
+        let blokli = safeless_interactor.clone();
         async move {
-            let (balance_wxhopr, balance_xdai) = edgli::blokli::SafelessInteractor::new(url, &private_key)
+            blokli
+                .retrieve_safe()
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))?
-                .balances()
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
+                .map_err(|e| Error::Chain(e.to_string()))
+                .map(|b| b.map(SafeModule::from))
+        }
+    })
+    .retry(ExponentialBuilder::default())
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Safe query attempt failed, retrying...");
+    })
+    .await
+}
 
+async fn run_node_balance(safeless_interactor: Arc<SafelessInteractor>) -> Result<balance::PreSafe, Error> {
+    tracing::debug!("starting node balance runner");
+    (|| {
+        let blokli = safeless_interactor.clone();
+        async move {
+            let (balance_wxhopr, balance_xdai) = blokli.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
             Ok(balance::PreSafe {
                 node_xdai: balance_xdai,
                 node_wxhopr: balance_wxhopr,
@@ -215,27 +243,18 @@ async fn run_presafe(hopr_params: HoprParams) -> Result<balance::PreSafe, Error>
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "PreSafe attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "PreSafe attempt failed, retrying...");
     })
     .await
 }
 
-async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error> {
+async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
-    let keys = hopr_params.calc_keys().await?;
-    let private_key = keys.chain_key;
-    let url = hopr_params.blokli_url();
     (|| {
-        let url = url.clone();
-        let private_key = private_key.clone();
+        let blokli = safeless_interactor.clone();
         async move {
-            let ticket_stats = edgli::blokli::SafelessInteractor::new(url, &private_key)
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?
-                .ticket_stats()
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
+            let ticket_stats = blokli.ticket_stats().await.map_err(|e| Error::Chain(e.to_string()))?;
 
             Ok(TicketStats {
                 ticket_price: ticket_stats.ticket_price,
@@ -244,36 +263,32 @@ async fn run_ticket_stats(hopr_params: HoprParams) -> Result<TicketStats, Error>
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Ticket stats attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Ticket stats attempt failed, retrying...");
     })
     .await
 }
 
-async fn run_safe_deployment(hopr_params: HoprParams, presafe: balance::PreSafe) -> Result<SafeModule, Error> {
+async fn run_safe_deployment(
+    safeless_interactor: Arc<SafelessInteractor>,
+    presafe: balance::PreSafe,
+) -> Result<SafeModule, Error> {
     tracing::debug!("starting safe deployment runner");
-    let keys = hopr_params.calc_keys().await?;
-    let private_key = keys.chain_key.clone();
-    let url = hopr_params.blokli_url();
-
     (|| {
-        let url = url.clone();
-        let private_key = private_key.clone();
+        let blokli = safeless_interactor.clone();
         async move {
-            edgli::blokli::SafelessInteractor::new(url, &private_key)
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?
+            blokli
                 .deploy_safe(presafe.node_wxhopr)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))
+                .map(SafeModule::from)
         }
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Safe deployment attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Safe deployment attempt failed, retrying...");
     })
     .await
-    .map(SafeModule::from)
 }
 
 // Posts to the HOPR funding tool API to request an airdrop using the provided code.
@@ -329,15 +344,15 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
         Ok(res)
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Funding tool attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Funding tool attempt failed, retrying...");
     })
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams) -> Result<Hopr, Error> {
+async fn run_hopr(hopr_params: HoprParams, safe_module: &SafeModule) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = hopr_params.to_config().await?;
+    let cfg = hopr_params.to_config(safe_module).await?;
     let keys = hopr_params.calc_keys().await?;
     let blokli_url = hopr_params.blokli_url();
     Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys, blokli_url)
@@ -358,8 +373,8 @@ async fn run_fund_channel(
         Ok(())
     })
     .retry(ExponentialBuilder::default())
-    .notify(|err, dur| {
-        tracing::warn!(?err, ?dur, "Fund channel attempt failed, retrying...");
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Fund channel attempt failed, retrying...");
     })
     .await
 }
@@ -401,25 +416,28 @@ impl Display for Results {
                     err
                 ),
             },
-            Results::PreSafe { res } => match res {
-                Ok(presafe) => write!(f, "PreSafe: {}", presafe),
-                Err(err) => write!(f, "PreSafe: Error({})", err),
+            Results::NodeBalance { res } => match res {
+                Ok(presafe) => write!(f, "NodeBalance: {}", presafe),
+                Err(err) => write!(f, "NodeBalance: Error({})", err),
             },
             Results::TicketStats { res } => match res {
                 Ok(stats) => write!(f, "TicketStats: {}", stats),
                 Err(err) => write!(f, "TicketStats: Error({})", err),
             },
-            Results::SafeDeployment { res } => match res {
-                Ok(deployment) => write!(f, "SafeDeployment: {:?}", deployment),
-                Err(err) => write!(f, "SafeDeployment: Error({})", err),
+            Results::DeploySafe { res } => match res {
+                Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),
+                Err(err) => write!(f, "DeploySafe: Error({})", err),
             },
-            Results::SafePersisted => write!(f, "SafePersisted: Success"),
+            Results::PersistSafe { res, safe_module: _ } => match res {
+                Ok(_) => write!(f, "PersistSafe: Success"),
+                Err(err) => write!(f, "PersistSafe: Error({})", err),
+            },
             Results::FundingTool { res } => match res {
                 Ok(None) => write!(f, "FundingTool: Success"),
                 Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
             },
-            Results::Hopr { res } => match res {
+            Results::Hopr { res, safe_module: _ } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
             },
@@ -442,7 +460,6 @@ impl Display for Results {
                 Ok(_) => write!(f, "ConnectionResult: Success"),
                 Err(err) => write!(f, "ConnectionResult: Error({})", err),
             },
-
             Results::DisconnectionEvent { wg_public_key, evt } => {
                 write!(f, "DisconnectionEvent ({}): {}", wg_public_key, evt)
             }
@@ -451,6 +468,11 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
+            Results::QuerySafe { res } => match res {
+                Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
+                Ok(None) => write!(f, "QuerySafe: No safe found"),
+                Err(err) => write!(f, "QuerySafe: Error({})", err),
+            },
         }
     }
 }
