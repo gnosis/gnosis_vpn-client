@@ -215,7 +215,7 @@ impl Routing for Router {
             &self.wg_data.interface_info,
             &self.wg_data.peer_info,
             true,
-            Some(["Table = off".to_string()].into_iter().collect()),
+            vec!["Table = off".to_string()],
         );
         // Run wg-quick up
         wg_tooling::up(wg_quick_content).await?;
@@ -419,7 +419,7 @@ impl Routing for FallbackRouter {
         let wg_quick_content =
             self.wg_data
                 .wg
-                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, Some(extra));
+                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, true, extra);
         wg_tooling::up(wg_quick_content).await?;
         Ok(())
     }
