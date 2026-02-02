@@ -212,6 +212,8 @@ async fn loop_daemon(
         .current_dir(&worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .env("HOME", &worker_user.home)
+        .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0")    // the client does not want to mix
+        .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1")      // the mix range must be minimal to retain the QoS of the client
         .uid(worker_user.uid)
         .gid(worker_user.gid)
         .spawn()
