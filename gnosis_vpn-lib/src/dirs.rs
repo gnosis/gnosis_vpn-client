@@ -22,19 +22,35 @@ fn project() -> Result<ProjectDirs, Error> {
 }
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
-    let pdir = project()?;
-    let cache_dir = pdir.cache_dir();
-    tracing::debug!("Ensuring cache directory: {}", cache_dir.display());
-    fs::create_dir_all(cache_dir)?;
-    Ok(cache_dir.join(file))
+    let dir = if let Ok(home) = std::env::var("GNOSISVPN_HOME") {
+        let path = PathBuf::from(home).join("cache");
+        tracing::debug!("Using GNOSISVPN_HOME for cache directory: {}", path.display());
+        path
+    } else {
+        let pdir = project()?;
+        let dir = pdir.cache_dir();
+        tracing::debug!("Ensuring cache directory: {}", dir.display());
+        dir.to_path_buf()
+    };
+
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(file))
 }
 
 pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let pdir = project()?;
-    let config_dir = pdir.config_dir();
-    tracing::debug!("Ensuring config directory: {}", config_dir.display());
-    fs::create_dir_all(config_dir)?;
-    Ok(config_dir.join(file))
+    let dir = if let Ok(home) = std::env::var("GNOSISVPN_HOME") {
+        let path = PathBuf::from(home);
+        tracing::debug!("Using GNOSISVPN_HOME for config directory: {}", path.display());
+        path
+    } else {
+        let pdir = project()?;
+        let dir = pdir.config_dir();
+        tracing::debug!("Ensuring config directory: {}", dir.display());
+        dir.to_path_buf()
+    };
+
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(file))
 }
 
 #[cfg(test)]
