@@ -135,7 +135,7 @@ impl WireGuard {
         interface: &InterfaceInfo,
         peer: &PeerInfo,
         route_all_traffic: bool,
-        extra_interface_lines: Option<Vec<String>>,
+        extra_interface_lines: Vec<String>,
     ) -> String {
         let allowed_ips = match (route_all_traffic, &self.config.allowed_ips) {
             (true, _) => "0.0.0.0/0".to_string(),
@@ -152,8 +152,24 @@ impl WireGuard {
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));
         }
-        if let Some(extra_lines) = extra_interface_lines {
-            lines.extend(extra_lines);
+        lines.extend(extra_interface_lines);
+
+        #[cfg(target_os = "linux")]
+        {
+            // we cannot handle IPv6 yet, so blackhole it for now
+            // on linux there is a metric system for ip route commands
+            // this last command gets the smallest metric so it should take precedence
+            lines.push("PostUp = ip -6 route add blackhole ::/0".to_string());
+            lines.push("PreDown = ip -6 route del blackhole ::/0".to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // on macos to avoid fighting router specific rules we split the range in two
+            // this way the routes are more specific and take precedence over other rules
+            lines.push("PostUp = route -n add -inet6 ::/1 -blackhole".to_string());
+            lines.push("PostUp = route -n add -inet6 8000::/1 -blackhole".to_string());
+            lines.push("PreDown = route -n delete -inet6 ::/1 -blackhole".to_string());
+            lines.push("PreDown = route -n delete -inet6 8000::/1 -blackhole".to_string());
         }
 
         lines.push("".to_string()); // Empty line for spacing
