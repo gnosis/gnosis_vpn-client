@@ -38,6 +38,8 @@ jobs:
     needs:
       - build-binaries
     runs-on: ubuntu-latest # Use default runner for utility jobs
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
