@@ -137,7 +137,6 @@ jobs:
       - uses: EndBug/add-and-commit@v9
         with:
           add: '["Cargo.*", "LATEST" ]'
-          new_branch: main
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
       - name: Notify release
