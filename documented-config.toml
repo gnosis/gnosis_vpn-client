@@ -60,7 +60,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
-# capabilities = [ "segmentation", "retransmission" ]
+# capabilities = [ "segmentation", "retransmission", "retransmission_ack_only" ]
 # target = "172.30.0.1:8000"
 
 # determine specific connection parameters for persistent main connection
