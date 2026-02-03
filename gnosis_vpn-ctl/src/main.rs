@@ -1,4 +1,5 @@
 use exitcode::{self, ExitCode};
+
 use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
@@ -66,8 +67,12 @@ fn pretty_print(resp: &Response) {
         Response::Status(command::StatusResponse { run_mode, destinations }) => {
             let mut str_resp = format!("Status: {run_mode}\n");
             str_resp.push_str("Destinations:\n");
-            for dest in destinations {
-                str_resp.push_str(&format!("  {dest}\n"));
+            for dest_state in destinations {
+                str_resp.push_str(&format!("- {dest}\n", dest = dest_state.destination));
+                str_resp.push_str(&format!("  {conn}\n", conn = dest_state.connection_state));
+                if let Some(health) = dest_state.health.as_ref() {
+                    str_resp.push_str(&format!("  {health}\n"));
+                }
             }
             println!("{str_resp}");
         }

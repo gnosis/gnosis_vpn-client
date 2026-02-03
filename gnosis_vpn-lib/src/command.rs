@@ -294,17 +294,6 @@ impl Display for ConnectionState {
     }
 }
 
-impl Display for DestinationState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let output = format!("{} - {}", self.destination, self.connection_state);
-        if let Some(health) = self.health.as_ref() {
-            write!(f, "{} (Health: {})", output, health)
-        } else {
-            write!(f, "{}", output)
-        }
-    }
-}
-
 impl Display for FundingState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -339,6 +328,7 @@ mod tests {
 
     fn destination() -> Destination {
         Destination::new(
+            "test-destination".to_string(),
             address(1),
             RoutingOptions::IntermediatePath(Default::default()),
             HashMap::new(),
@@ -347,6 +337,7 @@ mod tests {
 
     fn health() -> DestinationHealth {
         DestinationHealth {
+            id: "test-destination".to_string(),
             last_error: None,
             health: Health::ReadyToConnect,
             need: Need::Nothing,
@@ -404,7 +395,10 @@ mod tests {
         let unable = ConnectResponse::unable(dest.clone(), health());
         assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
 
-        assert_eq!(ConnectResponse::address_not_found(), ConnectResponse::AddressNotFound);
+        assert_eq!(
+            ConnectResponse::destination_not_found(),
+            ConnectResponse::DestinationNotFound
+        );
         Ok(())
     }
 

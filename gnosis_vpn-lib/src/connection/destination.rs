@@ -75,7 +75,8 @@ impl Display for Destination {
         let short_addr = log_output::address(&self.address);
         write!(
             f,
-            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
+            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), {meta})",
+            id = self.id,
             meta = self.meta_str(),
             path = self.pretty_print_path(),
             address = self.address,
