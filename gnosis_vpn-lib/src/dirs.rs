@@ -17,15 +17,14 @@ pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVP
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
     let cache_path = get_home().join(CACHE_DIRECTORY);
-    tracing::debug!("Using GNOSISVPN_HOME for cache directory: {}", cache_path.display());
+    tracing::debug!("Using cache file at: {}", cache_path.display());
     fs::create_dir_all(&cache_path)?;
     Ok(cache_path.join(file))
 }
 
 pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
     let config_path = get_home().join(CONFIG_DIRECTORY);
-    tracing::debug!("Using GNOSISVPN_HOME for config directory: {}", config_path.display());
-
+    tracing::debug!("Using config file at: {}", config_path.display());
     fs::create_dir_all(&config_path)?;
     Ok(config_path.join(file))
 }
