@@ -153,24 +153,26 @@ jobs:
           CERT_INFO=$(security find-identity -v -p codesigning build.keychain)
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
           suffix=${{ steps.vars.outputs.architecture}}
-          for f in binaries/*; do
-            echo "Signing binary $(basename $f) with certificate ID ${CERT_ID}"
+          cd binaries
+          for f in *; do
+            echo "Signing binary $f with certificate ID ${CERT_ID}"
             codesign --sign "${CERT_ID}" --options runtime --timestamp $f
-            echo "Verifying signature for binary $(basename $f)"
+            echo "Verifying signature for binary $f"
             codesign --verify --deep --strict --verbose=4 $f
-            echo "Generating SHA256 checksum for binary $(basename $f)"
-            shasum -a 256 $f > ${f}.sha256
+            echo "Generating SHA256 checksum for binary $f"
+            shasum -a 256 ./$f > ${f}.sha256
           done
       - name: Sign binary on linux architectures
         if: endsWith(steps.vars.outputs.architecture, '-linux')
         run: |
           set -o errexit -o nounset -o pipefail
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-          for f in binaries/*; do
-            echo "Signing binary $(basename $f) with GPG key"
+          cd binaries
+          for f in *; do
+            echo "Signing binary $f with GPG key"
             gpg --armor --output ${f}.asc --detach-sign $f
-            echo "Generating SHA256 checksum for binary $(basename $f)"
-            shasum -a 256 $f > ${f}.sha256
+            echo "Generating SHA256 checksum for binary $f"
+            shasum -a 256 ./$f > ${f}.sha256
           done
       - name: Setup GCP
         if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
