@@ -13,6 +13,7 @@ use crate::log_output;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DestinationHealth {
+    pub id: String,
     pub last_error: Option<String>,
     pub health: Health,
     pub need: Need,
@@ -71,12 +72,14 @@ impl DestinationHealth {
             RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => {
                 if allow_insecure {
                     Self {
+                        id: dest.id.clone(),
                         last_error: None,
                         health: Health::NotPeered,
                         need: Need::Peering(dest.address),
                     }
                 } else {
                     Self {
+                        id: dest.id.clone(),
                         last_error: None,
                         health: Health::NotAllowed,
                         need: Need::Nothing,
@@ -84,6 +87,7 @@ impl DestinationHealth {
                 }
             }
             RoutingOptions::Hops(_) => Self {
+                id: dest.id.clone(),
                 last_error: None,
                 health: Health::MissingPeeredFundedChannel,
                 need: Need::AnyChannel,
@@ -91,17 +95,20 @@ impl DestinationHealth {
             RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
                 Some(first) => match first {
                     NodeId::Chain(address) => Self {
+                        id: dest.id.clone(),
                         last_error: None,
                         health: Health::MissingPeeredFundedChannel,
                         need: Need::Channel(address),
                     },
                     NodeId::Offchain(_) => Self {
+                        id: dest.id.clone(),
                         last_error: None,
                         health: Health::InvalidAddress,
                         need: Need::Nothing,
                     },
                 },
                 None => Self {
+                    id: dest.id.clone(),
                     last_error: None,
                     health: Health::InvalidPath,
                     need: Need::Nothing,
@@ -112,6 +119,7 @@ impl DestinationHealth {
 
     pub fn with_error(&self, err: String) -> Self {
         Self {
+            id: self.id.clone(),
             health: self.health.clone(),
             need: self.need.clone(),
             last_error: Some(err),
@@ -120,6 +128,7 @@ impl DestinationHealth {
 
     pub fn no_error(&self) -> Self {
         Self {
+            id: self.id.clone(),
             health: self.health.clone(),
             need: self.need.clone(),
             last_error: None,
@@ -159,6 +168,7 @@ impl DestinationHealth {
             Need::Nothing => self.health.clone(),
         };
         Self {
+            id: self.id.clone(),
             health,
             need: self.need.clone(),
             last_error: self.last_error.clone(),
@@ -182,6 +192,7 @@ impl DestinationHealth {
             _ => self.health.clone(),
         };
         Self {
+            id: self.id.clone(),
             health,
             need: self.need.clone(),
             last_error: self.last_error.clone(),
@@ -258,26 +269,31 @@ mod tests {
         let addr_2 = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
 
         let dh1 = DestinationHealth {
+            id: "dest1".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_1),
         };
         let dh2 = DestinationHealth {
+            id: "dest2".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_2),
         };
         let dh3 = DestinationHealth {
+            id: "dest3".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_1),
         };
         let dh4 = DestinationHealth {
+            id: "dest4".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::AnyChannel,
         };
         let dh5 = DestinationHealth {
+            id: "dest5".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Peering(addr_1),

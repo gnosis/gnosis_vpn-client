@@ -410,7 +410,7 @@ pub fn convert_destinations(
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(dest.address, path, meta);
+        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
         result.insert(id.to_string(), dest);
     }
     Ok(result)

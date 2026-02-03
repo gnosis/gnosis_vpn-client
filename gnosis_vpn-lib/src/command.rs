@@ -16,7 +16,7 @@ use crate::log_output;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
-    Connect(Address),
+    Connect(String),
     Metrics,
     Disconnect,
     Balance,
@@ -85,7 +85,7 @@ pub enum ConnectResponse {
     Connecting(Destination),
     WaitingToConnect(Destination, Option<DestinationHealth>),
     UnableToConnect(Destination, DestinationHealth),
-    AddressNotFound,
+    DestinationNotFound,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -156,8 +156,8 @@ impl ConnectResponse {
     pub fn unable(destination: Destination, health: DestinationHealth) -> Self {
         ConnectResponse::UnableToConnect(destination, health)
     }
-    pub fn address_not_found() -> Self {
-        ConnectResponse::AddressNotFound
+    pub fn destination_not_found() -> Self {
+        ConnectResponse::DestinationNotFound
     }
 }
 
