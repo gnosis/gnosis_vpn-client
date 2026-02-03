@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::vec::Vec;
 
 use crate::config;
-use crate::config::v4;
+use crate::config::{v4, v5};
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -17,8 +17,8 @@ pub struct Config {
     pub(super) hoprd_node: HoprdNode,
     #[serde_as(as = "Option<HashMap<DisplayFromStr, _>>")]
     pub(super) destinations: Option<HashMap<Address, v4::Destination>>,
-    pub(super) connection: Option<v4::Connection>,
-    pub(super) wireguard: Option<v4::WireGuard>,
+    pub(super) connection: Option<v5::Connection>,
+    pub(super) wireguard: Option<v5::WireGuard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

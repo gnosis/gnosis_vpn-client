@@ -38,7 +38,7 @@ pub(super) struct Destination {
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum DestinationPath {
+pub(super) enum DestinationPath {
     #[serde(alias = "intermediates")]
     Intermediates(#[serde_as(as = "Vec<DisplayFromStr>")] Vec<Address>),
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
@@ -189,17 +189,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
-                for (address, v) in destinations.iter() {
+                for (id, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _v) in dest.iter() {
-                            if k == "meta" || k == "path" {
+                            if k == "address" || k == "meta" || k == "path" {
                                 continue;
                             }
-                            wrong_keys.push(format!("destinations.{address}.{k}"));
+                            wrong_keys.push(format!("destinations.{id}.{k}"));
                         }
                         continue;
                     }
-                    wrong_keys.push(format!("destinations.{address}"));
+                    wrong_keys.push(format!("destinations.{id}"));
                 }
             }
             continue;

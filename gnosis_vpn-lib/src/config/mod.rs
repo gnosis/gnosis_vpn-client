@@ -73,6 +73,14 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             }
             res.try_into()
         }
+        5 => {
+            let res = toml::from_str::<v5::Config>(&content)?;
+            let wrong_keys = v5::wrong_keys(&table);
+            for key in wrong_keys.iter() {
+                tracing::warn!(%key, "ignoring unsupported key in configuration file");
+            }
+            res.try_into()
+        }
         _ => Err(Error::VersionMismatch(version as u8)),
     }
 }
