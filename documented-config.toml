@@ -6,48 +6,35 @@
 ###
 
 # general config file version
-version = 3
-
-###
-## hoprd node section - your hoprd node that acts as the connection entry point
-
-[hoprd_node]
-
-# URL pointing to the API access of your hoprd node with scheme and port (e.g., `http://192.168.0.89:3001`)
-endpoint = "<your hoprd node API endpoint>"
-
-# API access token
-api_token = "<your hoprd node API token>"
-
-# Container forwarded connection port – if your hoprd node runs inside a Docker container,
-# this should match the forwarded TCP/UDP port into the container.
-# Note: This is NOT your API port, which must be specified in the `endpoint` field.
-# This port is an additional port used to establish the tunnel connection on your hoprd node.
-# In general, if you want to establish a connection on a specific port, simply provide that port here.
-internal_connection_port = 1422
+version = 5
 
 ###
 ## destinations section - configure available target destinations
 
 [destinations]
 
+# identifier for a destination and its routing options
+# [destinations.<id>]
 # exit node address (where the connection should terminate)
-# [destinations.<address>]
+# address = "<exit node address>"
 # additional information about this exit node
 # meta = { location = <location> }
 # session path should either be intermediates or hops = {nr}
 # path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
 # path = { hops = 1 }
 
-[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 meta = { location = "Germany" }
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
+[destinations.USA]
+address = "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"
 meta = { location = "USA" }
 path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
 
-[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
+[destinations.Spain]
+address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
 meta = { location = "Spain" }
 path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
@@ -93,6 +80,6 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # interface listen port for incoming connections; defaults to 51820
 # listen_port = 51820
 # manually override derived allowed_ips for the WireGuard interface
-# allowed_ips = "10.128.0.1/9"
+# allowed_ips = "0.0.0.0/0"
 # If you want to disable WireGuard key rotation, provide a static private key here.
 # force_private_key = "<your WireGuard private key>"
