@@ -54,8 +54,8 @@ fn pretty_print(resp: &Response) {
         Response::Connect(command::ConnectResponse::UnableToConnect(dest, health)) => {
             eprintln!("Unable to connect to {dest}: {health}");
         }
-        Response::Connect(command::ConnectResponse::AddressNotFound) => {
-            eprintln!("Destination address not found");
+        Response::Connect(command::ConnectResponse::DestinationNotFound) => {
+            eprintln!("Destination not found");
         }
         Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
             println!("Disconnecting from {dest}");
@@ -112,7 +112,7 @@ fn pretty_print(resp: &Response) {
 fn determine_exitcode(resp: &Response) -> ExitCode {
     match resp {
         Response::Connect(command::ConnectResponse::Connecting(..)) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::AddressNotFound) => exitcode::UNAVAILABLE,
+        Response::Connect(command::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
         Response::Connect(command::ConnectResponse::WaitingToConnect(..)) => exitcode::OK,
         Response::Connect(command::ConnectResponse::UnableToConnect(..)) => exitcode::UNAVAILABLE,
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
