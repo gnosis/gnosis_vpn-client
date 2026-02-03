@@ -2247,7 +2247,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 2.0.114",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3085,6 +3085,7 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
+ "mimalloc",
  "serde_json",
  "tokio",
 ]
@@ -3136,6 +3137,7 @@ dependencies = [
  "humantime",
  "iptables",
  "libc",
+ "mimalloc",
  "parking_lot",
  "rtnetlink 0.20.0",
  "serde_json",
@@ -3154,6 +3156,7 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
+ "mimalloc",
  "serde_json",
  "tokio",
  "tracing",
