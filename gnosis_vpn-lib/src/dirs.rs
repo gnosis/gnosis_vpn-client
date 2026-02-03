@@ -8,7 +8,7 @@ pub enum Error {
     IO(#[from] io::Error),
 }
 
-const CONFIG_DIRECTORY: &str = "config";
+const CONFIG_DIRECTORY: &str = ".config";
 const CACHE_DIRECTORY: &str = ".cache";
 
 pub const ENV_VAR_HOME: &str = "GNOSISVPN_HOME";
@@ -16,7 +16,7 @@ pub const DEFAULT_STATE_DIR_LINUX: &str = "/var/lib/gnosisvpn";
 pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVPN";
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
-    let cache_path = get_home().join(CACHE_DIRECTORY);
+    let cache_path = home().join(CACHE_DIRECTORY);
     let cache_file = cache_path.join(file);
     tracing::debug!("Using cache file: {}", cache_file.display());
     fs::create_dir_all(&cache_path)?;
@@ -24,14 +24,14 @@ pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
 }
 
 pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let config_path = get_home().join(CONFIG_DIRECTORY);
+    let config_path = home().join(CONFIG_DIRECTORY);
     let config_file = config_path.join(file);
     tracing::debug!("Using config file: {}", config_file.display());
     fs::create_dir_all(&config_path)?;
     Ok(config_file)
 }
 
-fn get_home() -> PathBuf {
+fn home() -> PathBuf {
     if let Ok(home) = std::env::var(ENV_VAR_HOME) {
         return PathBuf::from(home);
     }
@@ -89,7 +89,7 @@ mod tests {
         let temp_path_str = temp_path.to_str().unwrap();
 
         with_env_var(Some(temp_path_str), || {
-            let home = get_home();
+            let home = home();
             assert_eq!(home, temp_path, "Home should match the custom environment variable");
 
             let cache = cache_dir("test").unwrap();
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_default_gnosisvpn_home_unset() {
         with_env_var(None, || {
-            let home = get_home();
+            let home = home();
 
             #[cfg(target_os = "macos")]
             assert_eq!(home, PathBuf::from(DEFAULT_STATE_DIR_MACOS));
