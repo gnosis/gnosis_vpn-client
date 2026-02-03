@@ -10,3 +10,7 @@ exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+
+# Target-specific dependencies for memory allocators
+[target.'cfg(target_os = "linux")'.dependencies]
+mimalloc = { workspace = true }

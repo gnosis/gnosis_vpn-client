@@ -49,7 +49,8 @@ let
     doCheck = false;
   };
 
-  postInstall = ''
+  # libiconv fixup is only needed/supported on Darwin
+  postInstall = lib.optionalString pkgs.stdenv.isDarwin ''
     for bin in $(find "$out/bin" -type f); do
       local linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
 
