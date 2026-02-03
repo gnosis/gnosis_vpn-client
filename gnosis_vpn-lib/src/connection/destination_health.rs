@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::fmt::{self, Display};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
-use crate::log_output;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DestinationHealth {
@@ -251,9 +250,9 @@ impl Display for DestinationHealth {
 impl Display for Need {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Need::Channel(addr) => write!(f, "needs peered channel to {}", log_output::address(addr)),
+            Need::Channel(addr) => write!(f, "needs peered channel to {}", addr),
             Need::AnyChannel => write!(f, "needs any peered channel"),
-            Need::Peering(addr) => write!(f, "needs peer {}", log_output::address(addr)),
+            Need::Peering(addr) => write!(f, "needs peer {}", addr),
             Need::Nothing => write!(f, "unable to connect"),
         }
     }
