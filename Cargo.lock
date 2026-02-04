@@ -1470,7 +1470,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.18.0"
-source = "git+https://github.com/hoprnet/blokli#8797aff2fbcff2c1a0ce1149438237902cf56979"
+source = "git+https://github.com/hoprnet/blokli#8dfbd0715b2306680c9b692674d9a6553e04a8af"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2247,7 +2247,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -2440,8 +2440,8 @@ dependencies = [
 
 [[package]]
 name = "edgli"
-version = "1.0.3"
-source = "git+https://github.com/hoprnet/edge-client.git#339f412f1768103aa369b94f48d3585ad73d25c7"
+version = "1.0.5"
+source = "git+https://github.com/hoprnet/edge-client.git#040d501039ff51e754b90a57305fe292ab1df98a"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3080,7 +3080,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.64.2"
+version = "0.64.3"
 dependencies = [
  "clap",
  "exitcode",
@@ -3092,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.64.2"
+version = "0.64.3"
 dependencies = [
  "anyhow",
  "backon",
@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-root"
-version = "0.64.2"
+version = "0.64.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3151,7 +3151,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-worker"
-version = "0.64.2"
+version = "0.64.3"
 dependencies = [
  "clap",
  "exitcode",
