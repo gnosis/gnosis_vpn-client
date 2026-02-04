@@ -87,7 +87,8 @@ impl Hopr {
         if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
             match channel.status {
                 edgli::hopr_lib::ChannelStatus::Open => {
-                    if channel.balance < threshold {
+                    // mirror AutoFunding strategy behaviour on startup (fund if less than or equal to threshold)
+                    if channel.balance.le(&threshold) {
                         tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
                         self.edgli
                             .fund_channel(channel.get_id(), amount)
