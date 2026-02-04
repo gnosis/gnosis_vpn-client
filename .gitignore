@@ -25,3 +25,6 @@ gcp-sa-*.json
 
 # general log files
 *.log
+
+# VsCode settings
+.vscode/*

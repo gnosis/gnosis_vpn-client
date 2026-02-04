@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use std::{fs, io, path::PathBuf};
+use std::{fs, io, os::unix::fs::PermissionsExt, path::PathBuf};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -14,6 +14,27 @@ const CACHE_DIRECTORY: &str = ".cache";
 pub const ENV_VAR_HOME: &str = "GNOSISVPN_HOME";
 pub const DEFAULT_STATE_DIR_LINUX: &str = "/var/lib/gnosisvpn";
 pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVPN";
+
+pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
+    let home = home();
+    let cache_path = home.join(CACHE_DIRECTORY);
+    let config_path = home.join(CONFIG_DIRECTORY);
+    fs::create_dir_all(&cache_path)?;
+    fs::create_dir_all(&config_path)?;
+    for entry in walkdir::WalkDir::new(&home.clone()) {
+        let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        #[cfg(target_os = "macos")]
+        if entry.path().ends_with("uninstall.sh") {
+            continue;
+        }
+        fs::set_permissions(entry.path(), fs::Permissions::from_mode(0o700))?;
+        std::os::unix::fs::chown(entry.path(), Some(uid), Some(gid))?;
+    }
+
+    tracing::debug!("Using gnosisvpn home directory: {}", home.display());
+    Ok(home)
+}
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
     let cache_path = home().join(CACHE_DIRECTORY);

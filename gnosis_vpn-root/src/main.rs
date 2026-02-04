@@ -20,7 +20,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::hopr_params::HoprParams;
 use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::{ping, socket, worker};
+use gnosis_vpn_lib::{dirs, ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -210,7 +210,7 @@ async fn loop_daemon(
     let mut worker_child = Command::new(worker_user.binary.clone())
         .current_dir(&worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-        .env("HOME", &worker_user.home)
+        .env(dirs::ENV_VAR_HOME, &worker_user.home)
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
         .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
         .uid(worker_user.uid)

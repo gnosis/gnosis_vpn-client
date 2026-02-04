@@ -53,6 +53,7 @@ serde_with = "3.16.1"
 serde_yaml = "0.9.34"
 tokio-util = { version = "0.7.17", features = ["rt"] }
 uzers = "0.12.2"
+walkdir = "2.5.0"
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 

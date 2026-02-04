@@ -1,11 +1,12 @@
-use thiserror::Error;
-use tokio::process::Command;
-use uzers::os::unix::UserExt;
-
 use std::io;
 use std::path::PathBuf;
+use thiserror::Error;
+use tokio::process::Command;
 
-use crate::shell_command_ext::{self, Logs, ShellCommandExt};
+use crate::{
+    dirs,
+    shell_command_ext::{self, Logs, ShellCommandExt},
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -96,7 +97,11 @@ impl Worker {
 
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
-            let home = worker_user.home_dir().to_path_buf();
+            // set up application state directory
+            let home = dirs::setup(uid, gid).map_err(|err| {
+                tracing::error!(error = ?err, "error setting up home directory");
+                Error::IO(io::Error::new(io::ErrorKind::Other, err.to_string()))
+            })?;
             Ok(Worker {
                 uid,
                 binary: binary.to_string(),
