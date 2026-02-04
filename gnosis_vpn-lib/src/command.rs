@@ -66,9 +66,16 @@ pub enum RunMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprStatus {
-    Running,
-    Initializing,
     Uninitialized,
+    WaitingForFunds,
+    CheckingBalance,
+    ValidatingNetworkConfig,
+    SubscribingToAnnouncements,
+    RegisteringSafe,
+    AnnouncingNode,
+    AwaitingKeyBinding,
+    InitializingServices,
+    Running,
     Terminated,
 }
 
@@ -242,9 +249,16 @@ impl From<&Option<Vec<FundingIssue>>> for FundingState {
 impl From<&Option<HoprState>> for HoprStatus {
     fn from(state: &Option<HoprState>) -> Self {
         match state {
-            Some(HoprState::Running) => HoprStatus::Running,
-            Some(HoprState::Initializing) => HoprStatus::Initializing,
             Some(HoprState::Uninitialized) => HoprStatus::Uninitialized,
+            Some(HoprState::WaitingForFunds) => HoprStatus::WaitingForFunds,
+            Some(HoprState::CheckingBalance) => HoprStatus::CheckingBalance,
+            Some(HoprState::ValidatingNetworkConfig) => HoprStatus::ValidatingNetworkConfig,
+            Some(HoprState::SubscribingToAnnouncements) => HoprStatus::SubscribingToAnnouncements,
+            Some(HoprState::RegisteringSafe) => HoprStatus::RegisteringSafe,
+            Some(HoprState::AnnouncingNode) => HoprStatus::AnnouncingNode,
+            Some(HoprState::AwaitingKeyBinding) => HoprStatus::AwaitingKeyBinding,
+            Some(HoprState::InitializingServices) => HoprStatus::InitializingServices,
+            Some(HoprState::Running) => HoprStatus::Running,
             Some(HoprState::Terminated) => HoprStatus::Terminated,
             None => HoprStatus::Uninitialized,
         }
@@ -307,10 +321,17 @@ impl Display for FundingState {
 impl Display for HoprStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            HoprStatus::Running => write!(f, "Running"),
-            HoprStatus::Initializing => write!(f, "Initializing"),
-            HoprStatus::Uninitialized => write!(f, "Uninitialized"),
-            HoprStatus::Terminated => write!(f, "Terminated"),
+            HoprStatus::Uninitialized => write!(f, "Node is not yet initialized"),
+            HoprStatus::WaitingForFunds => write!(f, "Waiting for initial wallet funding"),
+            HoprStatus::CheckingBalance => write!(f, "Verifying wallet balance"),
+            HoprStatus::ValidatingNetworkConfig => write!(f, "Validating network configuration"),
+            HoprStatus::SubscribingToAnnouncements => write!(f, "Subscribing to network announcements"),
+            HoprStatus::RegisteringSafe => write!(f, "Registering Safe contract"),
+            HoprStatus::AnnouncingNode => write!(f, "Announcing node on chain"),
+            HoprStatus::AwaitingKeyBinding => write!(f, "Waiting for on-chain key binding confirmation"),
+            HoprStatus::InitializingServices => write!(f, "Initializing internal services"),
+            HoprStatus::Running => write!(f, "Node is running"),
+            HoprStatus::Terminated => write!(f, "Node has been terminated"),
         }
     }
 }
