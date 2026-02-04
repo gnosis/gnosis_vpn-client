@@ -94,5 +94,5 @@ result/bin/:
 total 4752
 -r-xr-xr-x 1 root root  4863367 Jan  1  1970 gnosis_vpn-root
 -r-xr-xr-x 1 root root 14863367 Jan  1  1970 gnosis_vpn-worker
--r-xr-xr-x 1 root root  1740051 Jan  1  1970 gnosis_vpn-ctl
+-r-xr-xr-x 1 root root  1740052 Jan  1  1970 gnosis_vpn-ctl
 ```
