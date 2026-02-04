@@ -100,7 +100,7 @@ impl Worker {
             // set up application state directory
             let home = dirs::setup(uid, gid).map_err(|err| {
                 tracing::error!(error = ?err, "error setting up home directory");
-                Error::IO(io::Error::new(io::ErrorKind::Other, err.to_string()))
+                Error::IO(io::Error::other(err.to_string()))
             })?;
             Ok(Worker {
                 uid,
