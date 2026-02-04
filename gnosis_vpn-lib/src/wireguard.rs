@@ -11,6 +11,7 @@ use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 
 pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
+pub const WG_MTU: u32 = 1420;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -149,6 +150,7 @@ impl WireGuard {
         lines.push("[Interface]".to_string());
         lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
         lines.push(format!("Address = {}", interface.address));
+        lines.push(format!("MTU = {WG_MTU}"));
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));
         }
