@@ -57,9 +57,15 @@ impl Hopr {
         blokli_url: Option<url::Url>,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
-        let edge_node = Edgli::new(cfg, db_data_dir, keys, blokli_url.map(|u| u.to_string()))
-            .await
-            .map_err(|e| HoprError::Construction(e.to_string()))?;
+        let edge_node = Edgli::new(
+            cfg,
+            db_data_dir,
+            keys,
+            blokli_url.map(|u| u.to_string()),
+            None::<fn(edgli::EdgliInitState)>,
+        )
+        .await
+        .map_err(|e| HoprError::Construction(e.to_string()))?;
 
         tracing::debug!("hopr edge node finished setup");
         Ok(Self {
