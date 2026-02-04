@@ -21,8 +21,8 @@ pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
     let config_path = home.join(CONFIG_DIRECTORY);
     fs::create_dir_all(&cache_path)?;
     fs::create_dir_all(&config_path)?;
-    for entry in walkdir::WalkDir::new(&home.clone()) {
-        let entry = entry.map_err(|e| std::io::Error::other(e))?;
+    for entry in walkdir::WalkDir::new(home.clone()) {
+        let entry = entry.map_err(std::io::Error::other)?;
 
         #[cfg(target_os = "macos")]
         if entry.path().ends_with("uninstall.sh") {
