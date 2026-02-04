@@ -1,6 +1,10 @@
 use thiserror::Error;
 
-use std::{fs, io, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::fs::DirBuilder;
+use std::io::{self, ErrorKind};
+use std::os::unix::fs as unix_fs;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::PathBuf;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -17,22 +21,18 @@ pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVP
 
 pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
     let home = home();
+    tracing::debug!("Using gnosisvpn home directory: {}", home.display());
+    // home folder will be created by installer
     let cache_path = home.join(CACHE_DIRECTORY);
     let config_path = home.join(CONFIG_DIRECTORY);
-    fs::create_dir_all(&cache_path)?;
-    fs::create_dir_all(&config_path)?;
-    for entry in walkdir::WalkDir::new(home.clone()) {
-        let entry = entry.map_err(std::io::Error::other)?;
-
-        #[cfg(target_os = "macos")]
-        if entry.path().ends_with("uninstall.sh") {
-            continue;
-        }
-        fs::set_permissions(entry.path(), fs::Permissions::from_mode(0o700))?;
-        std::os::unix::fs::chown(entry.path(), Some(uid), Some(gid))?;
-    }
-
-    tracing::debug!("Using gnosisvpn home directory: {}", home.display());
+    ensure_dir_with_owner(&cache_path, uid, gid).map_err(|error| {
+        tracing::error!(?error, path = %cache_path.display(), uid, gid, "Failed to create cache directory");
+        error
+    })?;
+    ensure_dir_with_owner(&config_path, uid, gid).map_err(|error| {
+        tracing::error!(?error, path = %config_path.display(), uid, gid, "Failed to create config directory");
+        error
+    })?;
     Ok(home)
 }
 
@@ -61,6 +61,16 @@ fn home() -> PathBuf {
     {
         PathBuf::from(DEFAULT_STATE_DIR_LINUX)
     }
+}
+
+fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
+    let res = DirBuilder::new().mode(0o700).create(path);
+    match res {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }?;
+    unix_fs::chown(path, Some(uid), Some(gid))
 }
 
 #[cfg(test)]
