@@ -3101,7 +3101,6 @@ dependencies = [
  "tracing",
  "url",
  "uzers",
- "walkdir",
 ]
 
 [[package]]
