@@ -37,18 +37,14 @@ pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
 }
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
-    let cache_path = home().join(CACHE_DIRECTORY);
-    let cache_file = cache_path.join(file);
+    let cache_file = home().join(CACHE_DIRECTORY).join(file);
     tracing::debug!("Using cache file: {}", cache_file.display());
-    fs::create_dir_all(&cache_path)?;
     Ok(cache_file)
 }
 
 pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let config_path = home().join(CONFIG_DIRECTORY);
-    let config_file = config_path.join(file);
+    let config_file = home().join(CONFIG_DIRECTORY).join(file);
     tracing::debug!("Using config file: {}", config_file.display());
-    fs::create_dir_all(&config_path)?;
     Ok(config_file)
 }
 
