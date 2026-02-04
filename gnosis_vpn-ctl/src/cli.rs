@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use gnosis_vpn_lib::command::Command as LibCommand;
-use gnosis_vpn_lib::prelude::Address;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 
@@ -35,7 +34,7 @@ pub enum Command {
     #[command()]
     Connect {
         /// Endpoint node address
-        address: Address,
+        id: String,
     },
 
     /// Disconnect from current exit location
@@ -62,7 +61,7 @@ impl From<Command> for LibCommand {
     fn from(val: Command) -> Self {
         match val {
             Command::Status {} => LibCommand::Status,
-            Command::Connect { address } => LibCommand::Connect(address),
+            Command::Connect { id } => LibCommand::Connect(id),
             Command::Disconnect {} => LibCommand::Disconnect,
             Command::Balance {} => LibCommand::Balance,
             Command::RefreshNode {} => LibCommand::RefreshNode,

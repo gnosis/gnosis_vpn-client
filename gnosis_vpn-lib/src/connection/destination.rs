@@ -8,14 +8,30 @@ use crate::log_output;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
+    pub id: String,
     pub meta: HashMap<String, String>,
     pub address: Address,
     pub routing: RoutingOptions,
 }
 
 impl Destination {
-    pub fn new(address: Address, routing: RoutingOptions, meta: HashMap<String, String>) -> Self {
-        Self { address, routing, meta }
+    pub fn new(id: String, address: Address, routing: RoutingOptions, meta: HashMap<String, String>) -> Self {
+        Self {
+            id,
+            address,
+            routing,
+            meta,
+        }
+    }
+
+    pub fn has_intermediate_channel(&self, address: Address) -> bool {
+        match self.routing.clone() {
+            RoutingOptions::Hops(_) => false,
+            RoutingOptions::IntermediatePath(nodes) => nodes.into_iter().next().is_some_and(|node_id| match node_id {
+                NodeId::Chain(addr) => addr == address,
+                NodeId::Offchain(_) => false,
+            }),
+        }
     }
 
     pub fn pretty_print_path(&self) -> String {
@@ -59,7 +75,8 @@ impl Display for Destination {
         let short_addr = log_output::address(&self.address);
         write!(
             f,
-            "Address: {address}, Route: (entry){path}({short_addr}), {meta}",
+            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), {meta})",
+            id = self.id,
             meta = self.meta_str(),
             path = self.pretty_print_path(),
             address = self.address,

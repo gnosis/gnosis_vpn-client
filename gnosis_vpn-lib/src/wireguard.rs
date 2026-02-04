@@ -135,15 +135,9 @@ impl WireGuard {
         &self,
         interface: &InterfaceInfo,
         peer: &PeerInfo,
-        route_all_traffic: bool,
         extra_interface_lines: Vec<String>,
     ) -> String {
-        let allowed_ips = match (route_all_traffic, &self.config.allowed_ips) {
-            (true, _) => "0.0.0.0/0".to_string(),
-            (_, Some(allowed_ips)) => allowed_ips.clone(),
-            _ => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
-        };
-
+        let allowed_ips = &self.config.allowed_ips.clone().unwrap_or("0.0.0.0/0".to_string());
         let mut lines = Vec::new();
 
         // [Interface] section

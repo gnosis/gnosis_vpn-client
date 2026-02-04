@@ -78,7 +78,7 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
-    destination_health: HashMap<Address, DestinationHealth>,
+    destination_health: HashMap<String, DestinationHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
@@ -312,7 +312,7 @@ impl Core {
                                 command::DestinationState {
                                     destination,
                                     connection_state,
-                                    health: self.destination_health.get(&v.address).cloned(),
+                                    health: self.destination_health.get(&v.id).cloned(),
                                 }
                             })
                             .collect();
@@ -320,9 +320,9 @@ impl Core {
                         let _ = resp.send(res);
                     }
 
-                    Command::Connect(address) => match self.config.destinations.clone().get(&address) {
+                    Command::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
-                            if let Some(health) = self.destination_health.get(&dest.address) {
+                            if let Some(health) = self.destination_health.get(&dest.id) {
                                 if health.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
@@ -347,8 +347,8 @@ impl Core {
                             }
                         }
                         None => {
-                            tracing::info!(address = %address, "cannot connect to destination - address not configured");
-                            let _ = resp.send(Response::connect(command::ConnectResponse::address_not_found()));
+                            tracing::info!(%id, "cannot connect to destination - not configured");
+                            let _ = resp.send(Response::connect(command::ConnectResponse::destination_not_found()));
                         }
                     },
 
@@ -510,7 +510,7 @@ impl Core {
                         if let Some(addr) = updated_health.needs_channel_funding()
                             && !updated_health.needs_peer()
                         {
-                            self.spawn_channel_funding(addr, target, results_sender, Duration::ZERO);
+                            self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
                         }
                         self.destination_health.insert(target, updated_health);
                     }
@@ -530,21 +530,33 @@ impl Core {
                 }
             },
 
-            Results::FundChannel {
-                address,
-                res,
-                target_dest,
-            } => {
+            Results::FundChannel { address, res } => {
                 self.ongoing_channel_fundings.retain(|a| a != &address);
+                let destinations = self
+                    .config
+                    .destinations
+                    .iter()
+                    .filter_map(|(_, d)| {
+                        if d.has_intermediate_channel(address) {
+                            Some(d.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 match res {
                     Ok(()) => {
                         tracing::info!(%address, "channel funded");
-                        self.update_health(target_dest, |h| h.channel_funded(address));
+                        for d in destinations.iter() {
+                            self.update_health(d.id.clone(), |h| h.channel_funded(address));
+                        }
                         self.act_on_target(results_sender);
                     }
                     Err(err) => {
                         tracing::error!(%err, %address, "failed to ensure channel funding");
-                        self.update_health(target_dest, |h| h.with_error(err.to_string()));
+                        for d in destinations.iter() {
+                            self.update_health(d.id.clone(), |h| h.with_error(err.to_string()));
+                        }
                     }
                 }
             }
@@ -558,7 +570,7 @@ impl Core {
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::Event::Setback(e) => {
-                            self.update_health(conn.destination.address, |h| h.with_error(e.to_string()));
+                            self.update_health(conn.destination.id, |h| h.with_error(e.to_string()));
                         }
                     },
                     phase => {
@@ -591,7 +603,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.update_health(conn.destination.address, |h| h.no_error());
+                    self.update_health(conn.destination.id.clone(), |h| h.no_error());
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -605,7 +617,7 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, %err, "connection failed");
-                    self.update_health(conn.destination.address, |h| h.with_error(err.to_string()));
+                    self.update_health(conn.destination.id.clone(), |h| h.with_error(err.to_string()));
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
@@ -974,13 +986,7 @@ impl Core {
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    fn spawn_channel_funding(
-        &mut self,
-        address: Address,
-        target_dest: Address,
-        results_sender: &mpsc::Sender<Results>,
-        delay: Duration,
-    ) {
+    fn spawn_channel_funding(&mut self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if self.ongoing_channel_fundings.contains(&address) {
             tracing::debug!(%address, "channel funding already ongoing - skipping");
             return;
@@ -994,7 +1000,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::fund_channel(hopr, address, ticket_value, target_dest, results_sender).await;
+                        runner::fund_channel(hopr, address, ticket_value, results_sender).await;
                     })
                     .await
             });
@@ -1085,7 +1091,7 @@ impl Core {
             // Connecting from ready
             (Some(dest), Phase::HoprRunning) => {
                 // Checking health
-                if let Some(health) = self.destination_health.get(&dest.address) {
+                if let Some(health) = self.destination_health.get(&dest.id) {
                     if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
                         self.spawn_connection_runner(dest.clone(), results_sender);
@@ -1176,15 +1182,15 @@ impl Core {
         }
     }
 
-    fn update_health<F>(&mut self, address: Address, cb: F) -> bool
+    fn update_health<F>(&mut self, id: String, cb: F) -> bool
     where
         F: Fn(&DestinationHealth) -> DestinationHealth,
     {
-        if let Some(health) = self.destination_health.get(&address) {
-            self.destination_health.insert(address, cb(health));
+        if let Some(health) = self.destination_health.get(&id) {
+            self.destination_health.insert(id, cb(health));
             true
         } else {
-            tracing::warn!(?address, "connection destination has no health tracker");
+            tracing::warn!(?id, "connection destination has no health tracker");
             false
         }
     }

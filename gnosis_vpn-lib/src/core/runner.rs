@@ -36,7 +36,6 @@ use crate::{event, remote_data};
 pub enum Results {
     FundChannel {
         address: Address,
-        target_dest: Address,
         res: Result<(), hopr_api::ChannelError>,
     },
     NodeBalance {
@@ -187,17 +186,10 @@ pub async fn fund_channel(
     hopr: Arc<Hopr>,
     address: Address,
     ticket_value: Balance<WxHOPR>,
-    target_dest: Address,
     results_sender: mpsc::Sender<Results>,
 ) {
     let res = run_fund_channel(hopr, address, ticket_value).await;
-    let _ = results_sender
-        .send(Results::FundChannel {
-            address,
-            res,
-            target_dest,
-        })
-        .await;
+    let _ = results_sender.send(Results::FundChannel { address, res }).await;
 }
 
 pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
@@ -397,22 +389,12 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
 impl Display for Results {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Results::FundChannel {
-                address,
-                res,
-                target_dest,
-            } => match res {
-                Ok(_) => write!(
-                    f,
-                    "FundChannel (-> {} -> {}): Success",
-                    log_output::address(address),
-                    log_output::address(target_dest)
-                ),
+            Results::FundChannel { address, res } => match res {
+                Ok(_) => write!(f, "FundChannel (-> {} ->): Success", log_output::address(address),),
                 Err(err) => write!(
                     f,
-                    "FundChannel (-> {} -> {}): Error({})",
+                    "FundChannel (-> {} ->): Error({})",
                     log_output::address(address),
-                    log_output::address(target_dest),
                     err
                 ),
             },
