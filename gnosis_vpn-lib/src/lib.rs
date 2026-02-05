@@ -6,6 +6,7 @@ pub mod connection;
 pub mod core;
 pub mod dirs;
 pub mod event;
+pub mod health;
 pub mod hopr;
 pub mod info;
 pub mod ping;

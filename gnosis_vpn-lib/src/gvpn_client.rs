@@ -63,32 +63,32 @@ impl Registration {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Health {
-    slots: Slots,
-    load_avg: LoadAvg,
+    pub slots: Slots,
+    pub load_avg: LoadAvg,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Slots {
-    available: u32,
-    connected: u32,
+    pub available: u32,
+    pub connected: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LoadAvg {
-    one: f32,
-    five: f32,
-    fifteen: f32,
-    nproc: u16,
+    pub one: f32,
+    pub five: f32,
+    pub fifteen: f32,
+    pub nproc: u16,
 }
 
-pub async fn health(client: &Client, input: &Input) -> Result<Health, Error> {
+pub async fn health(client: &Client, port: u16, timeout: Duration) -> Result<Health, Error> {
     let headers = remote_data::json_headers();
     let mut url = Url::parse("http://localhost/api/v1/status")?;
-    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
-    tracing::debug!(?headers, body = ?json, ?url, "get server health");
+    url.set_port(Some(port)).map_err(|_| Error::InvalidPort)?;
+    tracing::debug!(?headers, ?url, "get server health");
     let resp = client
         .get(url)
-        .timeout(input.timeout)
+        .timeout(timeout)
         .headers(headers)
         .send()
         .await

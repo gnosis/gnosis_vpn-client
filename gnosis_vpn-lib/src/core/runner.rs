@@ -26,6 +26,7 @@ use std::time::Duration;
 use crate::balance;
 use crate::compat::SafeModule;
 use crate::connection;
+use crate::health::{self, Health};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
@@ -85,6 +86,9 @@ pub enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
+    HealthResult {
+        res: Result<Health, health::Error>,
+    },
 }
 
 #[derive(Debug, Error)]
