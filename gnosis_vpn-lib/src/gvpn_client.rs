@@ -61,6 +61,46 @@ impl Registration {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Health {
+    slots: Slots,
+    load_avg: LoadAvg,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Slots {
+    available: u32,
+    connected: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LoadAvg {
+    one: f32,
+    five: f32,
+    fifteen: f32,
+    nproc: u16,
+}
+
+pub async fn health(client: &Client, input: &Input) -> Result<Health, Error> {
+    let headers = remote_data::json_headers();
+    let mut url = Url::parse("http://localhost/api/v1/status")?;
+    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
+    tracing::debug!(?headers, body = ?json, ?url, "get server health");
+    let resp = client
+        .get(url)
+        .timeout(input.timeout)
+        .headers(headers)
+        .send()
+        .await
+        // connection error checks happen before response
+        .map_err(connect_errors)?
+        .error_for_status()?
+        .json::<Health>()
+        .await?;
+
+    Ok(resp)
+}
+
 pub async fn register(client: &Client, input: &Input) -> Result<Registration, Error> {
     let headers = remote_data::json_headers();
     let mut url = Url::parse("http://localhost/api/v1/clients/register")?;
