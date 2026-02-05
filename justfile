@@ -53,6 +53,8 @@ system-tests test_binary="gnosis_vpn-system_tests":
     if [ -z "${worker_home}" ]; then
         echo "Failed to resolve home for user ${worker_user}" >&2
         exit 1
+    else
+        echo "Resolved home for user ${worker_user}: ${worker_home}"
     fi
 
     export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${worker_home}/.config}"
@@ -68,11 +70,10 @@ system-tests test_binary="gnosis_vpn-system_tests":
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${cache_dir}/gnosisvpn-hopr.safe" > /dev/null
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
-    sudo chown -R "${worker_user}:${worker_user}" "${cache_dir}"
-
-    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_dst}"
+    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
     sudo chown "${worker_user}:${worker_user}" "${worker_dst}"
-    sudo chmod 0755 "${worker_dst}"
+
+    echo "worker binary permissions: $(ls -l "${worker_dst}")"
 
     export SYSTEM_TEST_WORKER_BINARY="${worker_dst}"
 
