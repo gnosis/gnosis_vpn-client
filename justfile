@@ -45,6 +45,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
+    : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
 
     worker_user="gnosisvpn"
@@ -52,6 +53,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     worker_home="/var/lib/${worker_user}"
     worker_config_dir="${worker_home}/.config"
     state_dir="/var/lib/${worker_user}"
+    config_dir="/etc/${worker_user}"
     runtime_dir="/var/run/${worker_user}"
     worker_binary="${worker_home}/gnosis_vpn-worker"
 
@@ -77,12 +79,13 @@ system-tests test_binary="gnosis_vpn-system_tests":
     fi
     
     # Create worker home directory
-    sudo mkdir -p "${worker_config_dir}" "${state_dir}" "${runtime_dir}"
+    sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
     
     # Moves the ID, password, safe, and config into the worker's config directory 
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
+    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
     # Copy the worker binary to the worker's home directory
     sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
