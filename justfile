@@ -82,23 +82,23 @@ system-tests test_binary="gnosis_vpn-system_tests":
     fi
 
     worker_home="${worker_home:-/var/lib/${worker_user}}"
-    worker_dst="${worker_home}/gnosis_vpn-worker"
-    worker_config_dir="${worker_home}/.config"
-    worker_cache_dir="${worker_home}/.cache"
+    worker_binary="${worker_home}/gnosis_vpn-worker"
+    worker_config_dir="/etc/${worker_user}"
+    state_dir="/var/lib/${worker_user}"
+    runtime_dir="/var/run/${worker_user}"
 
-    sudo mkdir -p "${worker_home}" "${worker_config_dir}" "${worker_cache_dir}"
-    sudo mkdir -p "/etc/${worker_user}"
+    sudo mkdir -p "${worker_config_dir}" "${state_dir}" "${runtime_dir}"
     sudo chown -R "${worker_user}:${worker_group}" "${worker_home}"
     
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
-    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "/etc/${worker_user}/config.toml" > /dev/null
+    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${worker_config_dir}/config.toml" > /dev/null
 
-    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_dst}"
-    sudo chown "${worker_user}:${worker_group}" "${worker_dst}"
-    sudo chmod 0755 "${worker_dst}"
+    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_binary}"
+    sudo chown "${worker_user}:${worker_group}" "${worker_binary}"
+    sudo chmod 0755 "${worker_binary}"
 
-    echo "worker binary permissions: $(ls -l "${worker_dst}")"
+    echo "worker binary permissions: $(ls -l "${worker_binary}")"
 
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_dst}" RUST_LOG="debug" {{ test_binary }} download
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" WORKER_USER="${worker_user}" WORKER_BINARY="${worker_binary}" RUST_LOG="debug" {{ test_binary }} download

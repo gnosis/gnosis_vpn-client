@@ -29,6 +29,8 @@ impl Service {
             cmd.arg("--allow-insecure");
         }
 
+        info!("Spawning gnosis-vpn service with command: {:?}", cmd);
+
         match cmd.spawn() {
             Ok(_child) => {
                 info!("Started gnosis-vpn service");
