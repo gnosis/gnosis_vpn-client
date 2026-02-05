@@ -174,7 +174,15 @@ impl Runner {
             .await;
         let main_config =
             runner::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main)?;
-        adjust_to_main_session(&self.hopr, main_config, session).await?;
+
+        let active_client = match session.active_clients.as_slice() {
+            [] => return Err(HoprError::SessionNotFound.into()),
+            [client] => client.clone(),
+            _ => return Err(HoprError::SessionAmbiguousClient.into()),
+        };
+        tracing::debug!(bound_host = ?session.bound_host, "adjusting to main session");
+        self.hopr.adjust_session(main_config, active_client).await?;
+
         Ok(session.clone())
     }
 }
@@ -434,20 +442,6 @@ async fn request_ping(
         });
     })
     .await
-}
-
-async fn adjust_to_main_session(
-    hopr: &Hopr,
-    surb_management: SurbBalancerConfig,
-    session_client_metadata: &SessionClientMetadata,
-) -> Result<(), HoprError> {
-    let active_client = match session_client_metadata.active_clients.as_slice() {
-        [] => return Err(HoprError::SessionNotFound),
-        [client] => client.clone(),
-        _ => return Err(HoprError::SessionAmbiguousClient),
-    };
-    tracing::debug!(bound_host = ?session_client_metadata.bound_host, "adjusting to main session");
-    hopr.adjust_session(surb_management, active_client).await
 }
 
 fn setback(setback: Setback) -> Results {
