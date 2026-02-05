@@ -84,7 +84,6 @@ system-tests test_binary="gnosis_vpn-system_tests":
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
-    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${worker_config_dir}/config.toml" > /dev/null
 
     # Copy the worker binary to the worker's home directory
     sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
