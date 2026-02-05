@@ -121,7 +121,7 @@ jobs:
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
           SYSTEM_TEST_WORKER_BINARY: ./result/bin/gnosis_vpn-worker
-          RUST_LOG: info,gnosis_vpn_system_tests=info
+          RUST_LOG: debug,gnosis_vpn_system_tests=info
         run: just system-tests ./result/bin/gnosis_vpn-system_tests
   build-binaries:
     strategy:
