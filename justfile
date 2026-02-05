@@ -74,7 +74,6 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo chown "${worker_user}:${worker_user}" "${worker_dst}"
     sudo chmod 0755 "${worker_dst}"
 
-    export CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_dst}"
-    export CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${CARGO_BIN_EXE_GNOSIS_VPN_ROOT:-./result/bin/gnosis_vpn-root}"
+    export SYSTEM_TEST_WORKER_BINARY="${worker_dst}"
 
     sudo {{ test_binary }} download
