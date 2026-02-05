@@ -94,7 +94,10 @@ impl Runner {
         let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
 
         match res {
-            Ok(()) => self.run_after_wg_tunnel_established(&session, &results_sender).await,
+            Ok(()) => {
+                self.run_check_dynamic_routing(&wg, &registration, &session, &results_sender)
+                    .await
+            }
             Err(err) => {
                 tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
                 self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
@@ -119,18 +122,52 @@ impl Runner {
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
         request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
-        self.run_after_wg_tunnel_established(session, results_sender).await
+        self.run_check_static_routing(session, results_sender).await
     }
 
-    async fn run_after_wg_tunnel_established(
+    async fn run_check_dynamic_routing(
+        &self,
+        wg: &WireGuard,
+        registration: &Registration,
+        session: &SessionClientMetadata,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> Result<SessionClientMetadata, Error> {
+        // 6a. request ping from root to check if dynamic routing works
+        let _ = results_sender.send(progress(Progress::Ping)).await;
+        // only one retry to avoid long fallback time in case dynamic routing doesn't work
+        let res = request_ping(&self.options.ping_options, 1, results_sender).await;
+        match res {
+            Ok(round_trip_time) => {
+                self.run_after_verified_working(round_trip_time, session, results_sender)
+                    .await
+            }
+            Err(err) => {
+                tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
+                self.run_fallback_to_static_wg_tunnel(wg, registration, session, results_sender)
+                    .await
+            }
+        }
+    }
+
+    async fn run_check_static_routing(
         &self,
         session: &SessionClientMetadata,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 6. request ping from root
+        // 6b. request ping from root to check if static routing works
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        let round_trip_time = request_ping(&self.options.ping_options, results_sender).await?;
+        // this is our last chance - give it some leeway with 5 retries
+        let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
+        self.run_after_verified_working(round_trip_time, session, results_sender)
+            .await
+    }
 
+    async fn run_after_verified_working(
+        &self,
+        round_trip_time: Duration,
+        session: &SessionClientMetadata,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> Result<SessionClientMetadata, Error> {
         // 7. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
@@ -362,7 +399,11 @@ async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr
     Ok(peer_ips)
 }
 
-async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Results>) -> Result<Duration, Error> {
+async fn request_ping(
+    options: &ping::Options,
+    max_backoff: usize,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<Duration, Error> {
     (|| async {
         let (tx, rx) = oneshot::channel();
         let _ = results_sender
@@ -382,7 +423,7 @@ async fn request_ping(options: &ping::Options, results_sender: &mpsc::Sender<Res
             }
         )
     })
-    .retry(FibonacciBuilder::new().with_jitter().with_max_times(5))
+    .retry(FibonacciBuilder::new().with_jitter().with_max_times(max_backoff))
     .when(|err: &Error| err.is_ping_error())
     .notify(|err: &Error, dur: Duration| {
         tracing::warn!(error = ?err, "ping request failed - will retry after {:?}", dur);
