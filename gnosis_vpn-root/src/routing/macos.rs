@@ -84,11 +84,13 @@ fn build_static_extra_lines(peer_ips: &[Ipv4Addr], interface_gateway: (String, O
 fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
     match gateway {
         Some(gw) => format!(
+            // NOTE: difference to linux: route command acts idempotent in a way that it always returns exit code 0 - even if a route already exists
             "PreUp = route -n add -host {relayer_ip} {gateway}",
             relayer_ip = relayer_ip,
             gateway = gw,
         ),
         None => format!(
+            // NOTE: difference to linux: route command acts idempotent in a way that it always returns exit code 0 - even if a route already exists
             "PreUp = route -n add -host {relayer_ip} -interface {device}",
             relayer_ip = relayer_ip,
             device = device
