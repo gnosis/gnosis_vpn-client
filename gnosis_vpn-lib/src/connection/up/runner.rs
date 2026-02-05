@@ -105,6 +105,7 @@ impl Runner {
         // gather peers before we start any routing attempt to ensure static routing might still work
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
         if self.hopr_params.force_static_routing() {
+            tracing::info!("force static routing enabled - skipping dynamic routing attempt");
             self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                 .await
         } else {
