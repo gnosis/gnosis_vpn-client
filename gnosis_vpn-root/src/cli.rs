@@ -57,6 +57,10 @@ pub struct Cli {
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
     pub allow_insecure: bool,
+
+    /// Avoid dynamic peer discovery while connected to the VPN
+    #[arg(long)]
+    pub force_static_routing: bool,
 }
 
 pub fn parse() -> Cli {
@@ -70,6 +74,7 @@ impl From<&Cli> for HoprParams {
             None => hopr_params::ConfigFileMode::Generated,
         };
         let allow_insecure = cli.allow_insecure;
+        let force_static_routing = cli.force_static_routing;
 
         HoprParams::new(
             cli.hopr_identity_file.clone(),
@@ -77,6 +82,7 @@ impl From<&Cli> for HoprParams {
             config_mode,
             allow_insecure,
             cli.hopr_blokli_url.clone(),
+            force_static_routing,
         )
     }
 }

@@ -18,6 +18,7 @@ use crate::event::{self, RespondableRequestToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::hopr_params::HoprParams;
 use crate::ping;
 use crate::wireguard::{self, WireGuard};
 
@@ -28,15 +29,23 @@ pub struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
+    hopr_params: HoprParams,
 }
 
 impl Runner {
-    pub fn new(destination: Destination, options: Options, wg_config: wireguard::Config, hopr: Arc<Hopr>) -> Self {
+    pub fn new(
+        destination: Destination,
+        options: Options,
+        wg_config: wireguard::Config,
+        hopr: Arc<Hopr>,
+        hopr_params: HoprParams,
+    ) -> Self {
         Self {
             destination,
             hopr,
             options,
             wg_config,
+            hopr_params,
         }
     }
 
@@ -95,16 +104,21 @@ impl Runner {
         // this leads to loosing peers and thus falling back to static routing might break because of that
         // gather peers before we start any routing attempt to ensure static routing might still work
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
-        match res {
-            Ok(()) => {
-                self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
-                    .await
-            }
-            Err(err) => {
-                tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
-                    .await
+        if self.hopr_params.force_static_routing() {
+            self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+                .await
+        } else {
+            let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
+            match res {
+                Ok(()) => {
+                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
+                        .await
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
+                    self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+                        .await
+                }
             }
         }
     }

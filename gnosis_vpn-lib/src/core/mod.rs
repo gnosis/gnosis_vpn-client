@@ -1039,6 +1039,7 @@ impl Core {
                 config_connection,
                 config_wireguard,
                 hopr,
+                self.hopr_params.clone(),
             );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
