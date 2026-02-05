@@ -77,4 +77,4 @@ system-tests test_binary="gnosis_vpn-system_tests":
 
     export SYSTEM_TEST_WORKER_BINARY="${worker_dst}"
 
-    sudo {{ test_binary }} download
+    sudo RUST_LOG="debug" {{ test_binary }} download
