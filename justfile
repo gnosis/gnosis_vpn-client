@@ -60,7 +60,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     if ! getent passwd "${worker_user}" >/dev/null 2>&1; then
         echo "INFO: Creating system user '${worker_user}'..."
         sudo useradd --system \
-            ---user-group \
+            --user-group \
             --home "${worker_home}" -m \
             "${worker_user}"
         echo "SUCCESS: User '${worker_user}' created successfully"
