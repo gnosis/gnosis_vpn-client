@@ -91,16 +91,19 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::DynamicWgTunnel(session.clone())))
             .await;
+        // dynamic routing might block all outgoing communication
+        // this leads to loosing peers and thus falling back to static routing might break because of that
+        // gather peers before we start any routing attempt to ensure static routing might still work
+        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
         let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
-
         match res {
             Ok(()) => {
-                self.run_check_dynamic_routing(&wg, &registration, &session, &results_sender)
+                self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
                     .await
             }
             Err(err) => {
                 tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, &results_sender)
+                self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                     .await
             }
         }
@@ -111,11 +114,11 @@ impl Runner {
         wg: &WireGuard,
         registration: &Registration,
         session: &SessionClientMetadata,
+        peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
         // 5b. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
 
         // 5c. request static wg tunnel from root
         let _ = results_sender
@@ -130,6 +133,7 @@ impl Runner {
         wg: &WireGuard,
         registration: &Registration,
         session: &SessionClientMetadata,
+        peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
         // 6a. request ping from root to check if dynamic routing works
@@ -143,7 +147,7 @@ impl Runner {
             }
             Err(err) => {
                 tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(wg, registration, session, results_sender)
+                self.run_fallback_to_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
                     .await
             }
         }
