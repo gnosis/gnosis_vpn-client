@@ -403,18 +403,13 @@ impl Routing for Router {
 impl Routing for FallbackRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         let interface_gateway = interface().await?;
-        let mut extra = self
-            .peer_ips
-            .iter()
-            .map(|ip| pre_up_routing(ip, interface_gateway.clone()))
-            .collect::<Vec<String>>();
-        extra.extend(
-            self.peer_ips
-                .iter()
-                .map(|ip| post_down_routing(ip, interface_gateway.clone()))
-                .collect::<Vec<String>>(),
-        );
-
+        let mut extra = vec![];
+        for ip in &self.peer_ips {
+            extra.extend(pre_up_routing(ip, interface_gateway.clone()));
+        }
+        for ip in &self.peer_ips {
+            extra.push(post_down_routing(ip, interface_gateway.clone()));
+        }
         let wg_quick_content =
             self.wg_data
                 .wg
@@ -429,20 +424,37 @@ impl Routing for FallbackRouter {
     }
 }
 
-fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
+fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> Vec<String> {
     // TODO: rewrite via rtnetlink
     match gateway {
-        Some(gw) => format!(
-            "PreUp = ip route add {relayer_ip} via {gateway} dev {device}",
-            relayer_ip = relayer_ip,
-            gateway = gw,
-            device = device
-        ),
-        None => format!(
-            "PreUp = ip route add {relayer_ip} dev {device}",
-            relayer_ip = relayer_ip,
-            device = device
-        ),
+        Some(gw) => vec![
+            // make routing idempotent by deleting routes before adding them ignoring errors
+            format!(
+                "PreUp = ip route del {relayer_ip} via {gateway} dev {device} || true",
+                relayer_ip = relayer_ip,
+                gateway = gw,
+                device = device
+            ),
+            format!(
+                "PreUp = ip route add {relayer_ip} via {gateway} dev {device}",
+                relayer_ip = relayer_ip,
+                gateway = gw,
+                device = device
+            ),
+        ],
+        None => vec![
+            // make routing idempotent by deleting routes before adding them ignoring errors
+            format!(
+                "PreUp = ip route del {relayer_ip} dev {device} || true",
+                relayer_ip = relayer_ip,
+                device = device
+            ),
+            format!(
+                "PreUp = ip route add {relayer_ip} dev {device}",
+                relayer_ip = relayer_ip,
+                device = device
+            ),
+        ],
     }
 }
 
@@ -450,13 +462,15 @@ fn post_down_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<S
     // TODO: rewrite via rtnetlink
     match gateway {
         Some(gw) => format!(
-            "PostDown = ip route del {relayer_ip} via {gateway} dev {device}",
+            // wg-quick stops exeuction on error, ignore errors to hit all PostDown commands
+            "PostDown = ip route del {relayer_ip} via {gateway} dev {device} || true",
             relayer_ip = relayer_ip,
             gateway = gw,
             device = device,
         ),
         None => format!(
-            "PostDown = ip route del {relayer_ip} dev {device}",
+            // wg-quick stops exeuction on error, ignore errors to hit all PostDown commands
+            "PostDown = ip route del {relayer_ip} dev {device} || true",
             relayer_ip = relayer_ip,
             device = device,
         ),
