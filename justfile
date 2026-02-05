@@ -87,14 +87,13 @@ system-tests test_binary="gnosis_vpn-system_tests":
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${worker_config_dir}/config.toml" > /dev/null
 
     # Copy the worker binary to the worker's home directory
-    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_binary}"
+    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
 
     # Set ownership and permissions for the worker binary and config directory
-    sudo chown "${worker_user}:${worker_user}" "${worker_binary}"
     sudo chown -R "${worker_user}:${worker_user}" "${worker_home}"
     sudo chmod 0755 "${worker_binary}"
 
-    echo "worker binary permissions: $(ls -l "${worker_binary}")"
+    echo "worker binary permissions: $(sudo ls -l "${worker_binary}")"
 
     # Run the test binary with the appropriate environment variables
     sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" WORKER_USER="${worker_user}" WORKER_BINARY="${worker_binary}" RUST_LOG="debug" {{ test_binary }} download
