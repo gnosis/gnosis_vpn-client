@@ -107,8 +107,10 @@ jobs:
           wget -qO - 'https://proget.makedeb.org/debian-feeds/prebuilt-mpr.pub' | gpg --dearmor | sudo tee /usr/share/keyrings/prebuilt-mpr-archive-keyring.gpg 1> /dev/null
           echo "deb [arch=all,$(dpkg --print-architecture) signed-by=/usr/share/keyrings/prebuilt-mpr-archive-keyring.gpg] https://proget.makedeb.org prebuilt-mpr $(lsb_release -cs)" | sudo tee /etc/apt/sources.list.d/prebuilt-mpr.list
           sudo apt update
-          sudo apt-get install -y wireguard just
+          sudo apt-get install -y wireguard
           sudo useradd -m gnosisvpn #  -m to create a home directory
+      - name: Install just
+        uses: extractions/setup-just@v2
       - name: Build system service and test binary
         run: |
           nix build .#gnosis_vpn-dev
