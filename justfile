@@ -51,10 +51,10 @@ system-tests test_binary="gnosis_vpn-system_tests":
     worker_user="gnosisvpn"
 
     worker_home="/var/lib/${worker_user}"
-    worker_binary="${worker_home}/gnosis_vpn-worker"
-    worker_config_dir="/etc/${worker_user}"
+    worker_config_dir="${worker_home}/.config"
     state_dir="/var/lib/${worker_user}"
     runtime_dir="/var/run/${worker_user}"
+    worker_binary="${worker_home}/gnosis_vpn-worker"
 
     # Create a system user and add it to a group with its own name, if it doesn't already exist
     if ! getent passwd "${worker_user}" >/dev/null 2>&1; then
