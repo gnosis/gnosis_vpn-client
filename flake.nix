@@ -42,9 +42,7 @@
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [
-        treefmt-nix.flakeModule
-      ];
+      imports = [ treefmt-nix.flakeModule ];
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -65,10 +63,12 @@
           pkgs = (
             import nixpkgs {
               localSystem = system;
-              crossSystem = system;
               overlays = [ (import rust-overlay) ];
             }
           );
+
+          # use for statically linked musl libraries on linux
+          staticPkgs = pkgs.pkgsStatic;
 
           # Map Nix system names to Rust target triples
           # Linux targets use musl for static linking, Darwin uses standard targets
@@ -82,6 +82,66 @@
           # Map current system to its corresponding Rust target triple
           # This ensures we build for the correct architecture and platform
           targetForSystem = builtins.getAttr system systemTargets;
+
+          # Target-specific build arguments
+          # Each target triple has its own compiler flags and build configuration.
+          # - Linux targets use musl for static linking and mold for faster linking
+          # - Darwin targets use different profiles based on architecture (intelmac for x86_64)
+          # - All targets enable crt-static for standalone binaries
+          targetCrateArgs = {
+            "x86_64-unknown-linux-musl" = {
+              CARGO_PROFILE = "release";
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              # Add musl-specific configuration for C dependencies (SQLite, etc.)
+              # Disable Nix hardening features that are incompatible with musl
+              hardeningDisable = [ "fortify" ];
+              # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+
+              # Use the musl-gcc linker from the staticPkgs overlay
+              CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
+
+              # Variables for cc-rs (C compilations)
+              CC_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
+              CXX_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
+
+              # poing pkg-config to static libraries
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+            };
+            "aarch64-unknown-linux-musl" = {
+              CARGO_PROFILE = "release";
+              CARGO_BUILD_TARGET = "aarch64-unknown-linux-musl";
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+              # Add musl-specific configuration for C dependencies (SQLite, etc.)
+              # Disable Nix hardening features that are incompatible with musl
+              hardeningDisable = [ "fortify" ];
+              # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+
+              # Use the musl-gcc linker from the staticPkgs overlay
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
+
+              # Variables for cc-rs (C compilations)
+              CC_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
+              CXX_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
+
+              # poing pkg-config to static libraries
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+            };
+            "x86_64-apple-darwin" = {
+              CARGO_PROFILE = "intelmac";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+            };
+            "aarch64-apple-darwin" = {
+              CARGO_PROFILE = "release";
+              # force libiconv from macos lib folder
+              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+            };
+          };
+
+          crateArgsForTarget = builtins.getAttr targetForSystem targetCrateArgs;
 
           # Configure crane with custom Rust toolchain
           # We don't overlay the custom toolchain for the *entire* pkgs (which
@@ -100,87 +160,89 @@
 
           # Common build arguments shared across all crane operations
           # These are used for dependency building, clippy, docs, tests, etc.
-          commonArgs = {
+          # CARGO_PROFILE is part of the commonArgs to make depsonly build match the target derivations
+          commonArgsRelease = {
             inherit src;
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
             # Build-time dependencies (available during compilation)
             nativeBuildInputs = [
               pkgs.pkg-config # For finding OpenSSL and other system libraries
+              pkgs.cmake
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
-              pkgs.mold # Faster linker for Linux builds
+              staticPkgs.stdenv.cc
+            ]
+            ++ lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.libiconv
             ];
 
             # Runtime dependencies (linked into the final binary)
-            buildInputs = [
-              pkgs.pkgsStatic.openssl # Static OpenSSL for standalone binaries
-              pkgs.pkgsStatic.sqlite # Static SQLite for standalone binaries
-            ]
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.libiconv # Required for Darwin builds
-            ];
+            buildInputs =
+              if pkgs.stdenv.isLinux then
+                [
+                  staticPkgs.openssl
+                  staticPkgs.sqlite
+                ]
+              else
+                [
+                  pkgs.openssl
+                  pkgs.sqlite
+                ];
           }
-          # Add musl-specific configuration for C dependencies (SQLite, mimalloc, etc.)
-          // lib.optionalAttrs (lib.hasInfix "musl" targetForSystem) {
-            # Disable Nix hardening features that are incompatible with musl
-            hardeningDisable = [ "fortify" ];
-            # Tell libsqlite3-sys to use pkg-config to find system SQLite instead of building from source
-            LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+          // crateArgsForTarget;
+
+          commonArgsDev = commonArgsRelease // {
+            CARGO_PROFILE = "dev";
           };
 
           # Build *just* the cargo dependencies (of the entire workspace)
           # This creates a separate derivation containing only compiled dependencies,
           # allowing us to cache and reuse them across all packages (via cachix in CI).
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          cargoArtifacts-release = craneLib.buildDepsOnly (
+            commonArgsRelease
+            // {
+              doCheck = false; # Disable tests for deps-only build
+            }
+          );
+          cargoArtifacts-dev = craneLib.buildDepsOnly (
+            commonArgsDev
+            // {
+              doCheck = false; # Disable tests for deps-only build
+            }
+          );
 
           # Import the package builder function from nix/mkPackage.nix
           # This function encapsulates all the logic for building gnosis_vpn packages
           # with consistent source files, target configurations, and build settings.
           # See nix/mkPackage.nix for detailed documentation on the builder function.
-          mkPackage = import ./nix/mkPackage.nix {
+          # Production build with release profile optimizations
+          gnosis_vpn-release = import ./nix/mkPackage.nix {
             inherit
               craneLib
               lib
-              targetForSystem
-              cargoArtifacts
               pkgs
-              commonArgs
               ;
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-          };
-
-          getSecretEnv =
-            name:
-            let
-              value = builtins.getEnv name;
-            in
-            if value == "" then null else value;
-
-          # Build the top-level crates of the workspace as individual derivations
-          # This modular approach allows consumers to depend on and build only what
-          # they need, rather than building the entire workspace as a single derivation.
-
-          # Production build with release profile optimizations
-          gnosis_vpn = mkPackage {
             pname = "gnosis_vpn";
-            profile = "release";
-            cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
+            commonArgs = commonArgsRelease;
+            cargoArtifacts = cargoArtifacts-release;
           };
 
           # Development build with faster compilation and debug symbols
-          gnosis_vpn-dev = mkPackage {
+          # Override release profile set in commonArgs with "dev" profile
+          gnosis_vpn-dev = import ./nix/mkPackage.nix {
+            inherit
+              craneLib
+              lib
+              pkgs
+              ;
+            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
             pname = "gnosis_vpn-dev";
-            profile = "dev";
-            cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
+            commonArgs = commonArgsDev;
+            cargoArtifacts = cargoArtifacts-dev;
           };
-
-          gnosis_vpn-system-tests = mkPackage {
-            pname = "gnosis_vpn-system-tests";
-            profile = "dev";
-            cargoExtraArgs = "--bin gnosis_vpn-system-tests";
-          };
-
+          
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
             hooks = {
@@ -210,10 +272,7 @@
               "modules/*"
             ];
 
-            programs.nixfmt = {
-              enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt-rfc-style.compiler;
-              package = pkgs.nixfmt-rfc-style;
-            };
+            programs.nixfmt.enable = pkgs.lib.meta.availableOn pkgs.stdenv.buildPlatform pkgs.nixfmt.compiler;
             programs.deno.enable = true;
             settings.formatter.deno.excludes = [
               "*.toml"
@@ -221,9 +280,6 @@
               "*.yaml"
             ];
             programs.rustfmt.enable = true;
-            settings.formatter.rustfmt = {
-              command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
-            };
             programs.shellcheck.enable = true;
             programs.shfmt = {
               enable = true;
@@ -264,17 +320,17 @@
             # we can block the CI if there are issues here, but not
             # prevent downstream consumers from building our crate by itself.
             clippy = craneLib.cargoClippy (
-              commonArgs
+              commonArgsDev
               // {
-                inherit cargoArtifacts;
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+                cargoArtifacts = cargoArtifacts-dev;
               }
             );
 
             docs = craneLib.cargoDoc (
-              commonArgs
+              commonArgsDev
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifacts-dev;
               }
             );
 
@@ -294,9 +350,9 @@
             # Consider setting `doCheck = false` on other crate derivations
             # if you do not want the tests to run twice
             test = craneLib.cargoNextest (
-              commonArgs
+              commonArgsDev
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifacts-dev;
                 partitions = 1;
                 partitionType = "count";
                 cargoNextestPartitionsExtraArgs = "--no-tests=pass";
@@ -306,11 +362,11 @@
           };
 
           packages = {
-            inherit gnosis_vpn;
+            gnosis_vpn = gnosis_vpn-release;
             inherit gnosis_vpn-dev;
             inherit gnosis_vpn-system-tests;
             inherit pre-commit-check;
-            default = gnosis_vpn;
+            default = gnosis_vpn-release;
           };
           # // systemTestsDockerPackages;
 
@@ -318,7 +374,11 @@
             inherit pre-commit-check;
             checks = self.checks.${system};
 
-            packages = [ ];
+            packages = [
+              pkgs.cargo-machete
+              pkgs.cargo-shear
+              pkgs.rust-analyzer
+            ];
 
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
           };

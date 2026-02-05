@@ -1,6 +1,6 @@
 pub mod balance;
-pub mod chain;
 pub mod command;
+pub mod compat;
 pub mod config;
 pub mod connection;
 pub mod core;
@@ -9,7 +9,7 @@ pub mod event;
 pub mod hopr;
 pub mod hopr_params;
 pub mod info;
-pub mod network;
+pub mod ping;
 pub mod shell_command_ext;
 pub mod socket;
 pub mod wireguard;
@@ -17,7 +17,7 @@ pub mod worker;
 
 mod gvpn_client;
 mod log_output;
-mod ping;
+mod peer;
 mod remote_data;
 mod ticket_stats;
 

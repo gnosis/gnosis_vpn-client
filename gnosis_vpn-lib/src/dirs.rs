@@ -1,65 +1,75 @@
-use directories::ProjectDirs;
 use thiserror::Error;
 
-use std::{fs, io, path::PathBuf};
+use std::fs::DirBuilder;
+use std::io::{self, ErrorKind};
+use std::os::unix::fs as unix_fs;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::PathBuf;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Unable to determine project directories")]
-    NoProjectDirs,
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
 }
 
-fn project() -> Result<ProjectDirs, Error> {
-    let reverse_domain = crate::IDENTIFIER;
-    let parts: Vec<&str> = reverse_domain.split('.').collect();
-    if parts.len() < 2 {
-        return Err(Error::NoProjectDirs);
-    }
-    let dirs = ProjectDirs::from(parts[0], parts[1], parts[2]);
-    dirs.ok_or(Error::NoProjectDirs)
+const CONFIG_DIRECTORY: &str = ".config";
+const CACHE_DIRECTORY: &str = ".cache";
+
+pub const ENV_VAR_HOME: &str = "GNOSISVPN_HOME";
+pub const DEFAULT_STATE_DIR_LINUX: &str = "/var/lib/gnosisvpn";
+pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVPN";
+
+pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
+    let home = home();
+    tracing::debug!("Using gnosisvpn home directory: {}", home.display());
+    // home folder will be created by installer
+    let cache_path = home.join(CACHE_DIRECTORY);
+    let config_path = home.join(CONFIG_DIRECTORY);
+    ensure_dir_with_owner(&cache_path, uid, gid).map_err(|error| {
+        tracing::error!(?error, path = %cache_path.display(), uid, gid, "Failed to create cache directory");
+        error
+    })?;
+    ensure_dir_with_owner(&config_path, uid, gid).map_err(|error| {
+        tracing::error!(?error, path = %config_path.display(), uid, gid, "Failed to create config directory");
+        error
+    })?;
+    Ok(home)
 }
 
 pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
-    let pdir = project()?;
-    let cache_dir = pdir.cache_dir();
-    tracing::debug!("Ensuring cache directory: {}", cache_dir.display());
-    fs::create_dir_all(cache_dir)?;
-    Ok(cache_dir.join(file))
+    let cache_file = home().join(CACHE_DIRECTORY).join(file);
+    tracing::debug!("Using cache file: {}", cache_file.display());
+    Ok(cache_file)
 }
 
 pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let pdir = project()?;
-    let config_dir = pdir.config_dir();
-    tracing::debug!("Ensuring config directory: {}", config_dir.display());
-    fs::create_dir_all(config_dir)?;
-    Ok(config_dir.join(file))
+    let config_file = home().join(CONFIG_DIRECTORY).join(file);
+    tracing::debug!("Using config file: {}", config_file.display());
+    Ok(config_file)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "fails in the CI as nix is a readonly environment"]
-    fn cache_dir_creates_directory_and_appends_file_name() -> anyhow::Result<()> {
-        let file_name = "test_cache.txt";
-        let path = cache_dir(file_name).expect("cache dir should be creatable on writable systems");
-
-        path.parent().expect("cache path should include parent directories");
-        assert!(path.ends_with(file_name), "cache path keeps the provided filename");
-        Ok(())
+fn home() -> PathBuf {
+    if let Ok(home) = std::env::var(ENV_VAR_HOME) {
+        return PathBuf::from(home);
     }
 
-    #[test]
-    #[ignore = "fails in the CI as nix is a readonly environment"]
-    fn config_dir_creates_directory_and_appends_file_name() -> anyhow::Result<()> {
-        let file_name = "test_config.toml";
-        let path = config_dir(file_name).expect("config dir should be creatable on writable systems");
-
-        path.parent().expect("config path should include parent directories");
-        assert!(path.ends_with(file_name), "config path keeps the provided filename");
-        Ok(())
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from(DEFAULT_STATE_DIR_MACOS)
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PathBuf::from(DEFAULT_STATE_DIR_LINUX)
+    }
+}
+
+fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
+    let res = DirBuilder::new().mode(0o700).create(path);
+    println!("res: {:?}", res);
+    match res {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }?;
+    unix_fs::chown(path, Some(uid), Some(gid))
 }

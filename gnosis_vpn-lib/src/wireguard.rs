@@ -7,23 +7,25 @@ use std::fmt::{self, Display};
 use std::{io, string};
 
 use crate::dirs;
-use crate::shell_command_ext::{self, ShellCommandExt};
+use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 
+pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
+pub const WG_MTU: u32 = 1420;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     IO(#[from] io::Error),
-    #[error(transparent)]
+    #[error("UTF8 conversion error: {0}")]
     FromUtf8Error(#[from] string::FromUtf8Error),
-    #[error(transparent)]
+    #[error("TOML serialization error: {0}")]
     Toml(#[from] toml::ser::Error),
     #[error("error generating wg key")]
     WgGenKey,
-    #[error(transparent)]
+    #[error("Dirs error: {0}")]
     Dirs(#[from] dirs::Error),
-    #[error(transparent)]
+    #[error("Shell command error: {0}")]
     ShellCommandExt(#[from] shell_command_ext::Error),
 }
 
@@ -73,11 +75,13 @@ impl Config {
 }
 
 pub async fn available() -> Result<(), Error> {
-    Command::new("which")
+    let out = Command::new("which")
         .arg("wg")
-        .spawn_no_capture()
+        .run_stdout(Logs::Print)
         .await
-        .map_err(Error::from)
+        .map_err(Error::from)?;
+    tracing::debug!(at = %out, "wg command available");
+    Ok(())
 }
 
 pub async fn executable() -> Result<(), Error> {
@@ -91,7 +95,7 @@ pub async fn executable() -> Result<(), Error> {
 async fn generate_key() -> Result<String, Error> {
     Command::new("wg")
         .arg("genkey")
-        .run_stdout()
+        .run_stdout(Logs::Print)
         .await
         .map_err(|_| Error::WgGenKey)
 }
@@ -109,7 +113,7 @@ async fn public_key(priv_key: &str) -> Result<String, Error> {
 
     let cmd_debug = format!("{:?}", command);
     let output = command.wait_with_output().await?;
-    shell_command_ext::stdout_from_output(cmd_debug, output).map_err(|_| Error::WgGenKey)
+    shell_command_ext::stdout_from_output(cmd_debug, output, Logs::Print).map_err(|_| Error::WgGenKey)
 }
 
 impl WireGuard {
@@ -127,37 +131,52 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub fn to_file_string(&self, interface: &InterfaceInfo, peer: &PeerInfo, route_all_traffic: bool) -> String {
-        let listen_port_line = self
-            .config
-            .listen_port
-            .map(|port| format!("ListenPort = {port}\n"))
-            .unwrap_or_default();
+    pub fn to_file_string(
+        &self,
+        interface: &InterfaceInfo,
+        peer: &PeerInfo,
+        extra_interface_lines: Vec<String>,
+    ) -> String {
+        let allowed_ips = &self.config.allowed_ips.clone().unwrap_or("0.0.0.0/0".to_string());
+        let mut lines = Vec::new();
 
-        let allowed_ips = match (route_all_traffic, &self.config.allowed_ips) {
-            (true, _) => "0.0.0.0/0".to_string(),
-            (_, Some(allowed_ips)) => allowed_ips.clone(),
-            _ => interface.address.split('.').take(2).collect::<Vec<&str>>().join(".") + ".0.0/9",
-        };
+        // [Interface] section
+        lines.push("[Interface]".to_string());
+        lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
+        lines.push(format!("Address = {}", interface.address));
+        lines.push(format!("MTU = {WG_MTU}"));
+        if let Some(listen_port) = self.config.listen_port {
+            lines.push(format!("ListenPort = {}", listen_port));
+        }
+        lines.extend(extra_interface_lines);
 
-        format!(
-            "[Interface]
-PrivateKey = {private_key}
-Address = {address}
-{listen_port_line}
+        #[cfg(target_os = "linux")]
+        {
+            // we cannot handle IPv6 yet, so blackhole it for now
+            // on linux there is a metric system for ip route commands
+            // this last command gets the smallest metric so it should take precedence
+            lines.push("PostUp = ip -6 route add blackhole ::/0".to_string());
+            lines.push("PreDown = ip -6 route del blackhole ::/0".to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // on macos to avoid fighting router specific rules we split the range in two
+            // this way the routes are more specific and take precedence over other rules
+            lines.push("PostUp = route -n add -inet6 ::/1 -blackhole".to_string());
+            lines.push("PostUp = route -n add -inet6 8000::/1 -blackhole".to_string());
+            lines.push("PreDown = route -n delete -inet6 ::/1 -blackhole".to_string());
+            lines.push("PreDown = route -n delete -inet6 8000::/1 -blackhole".to_string());
+        }
 
-[Peer]
-PublicKey = {public_key}
-Endpoint = {endpoint}
-AllowedIPs = {allowed_ips}
-",
-            private_key = self.key_pair.priv_key,
-            address = interface.address,
-            public_key = peer.public_key,
-            endpoint = peer.endpoint,
-            listen_port_line = listen_port_line,
-            allowed_ips = allowed_ips,
-        )
+        lines.push("".to_string()); // Empty line for spacing
+
+        // [Peer] section
+        lines.push("[Peer]".to_string());
+        lines.push(format!("PublicKey = {}", peer.public_key));
+        lines.push(format!("Endpoint = {}", peer.endpoint));
+        lines.push(format!("AllowedIPs = {}", allowed_ips));
+
+        lines.join("\n")
     }
 }
 

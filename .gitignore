@@ -19,7 +19,12 @@ docker/gnosis_vpn
 docker/gnosis_vpn-ctl
 gnosisvpn-ctl.log.*
 # ci test
-cluster.log
 gpg-ed25519.conf
 gcp-sa-*.json
 *.p12
+
+# general log files
+*.log
+
+# VsCode settings
+.vscode/*

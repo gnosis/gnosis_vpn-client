@@ -1,6 +1,8 @@
+use async_trait::async_trait;
 use thiserror::Error;
 
-use gnosis_vpn_lib::{dirs, event, shell_command_ext, wireguard, worker};
+use gnosis_vpn_lib::shell_command_ext::{self, Logs};
+use gnosis_vpn_lib::{dirs, wireguard};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -8,15 +10,14 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-use linux::{setup, teardown};
+pub use linux::{dynamic_router, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
-use macos::{setup, teardown};
+pub use macos::{dynamic_router, static_router};
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     ShellCommand(#[from] shell_command_ext::Error),
-    #[cfg(target_os = "macos")]
     #[error("Unable to determine default interface")]
     NoInterface,
     #[error("Directories error: {0}")]
@@ -25,23 +26,38 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
+
+    /// explicitly allowing dead_code here to avoid cumbersome cfg targets everywhere
+    #[error("This functionality is not available on this platform")]
+    #[allow(dead_code)]
+    NotAvailable,
+
+    #[cfg(target_os = "linux")]
+    #[error("General error: {0}")]
+    General(String),
+
+    #[cfg(target_os = "linux")]
+    #[error("rtnetlink error: {0} ")]
+    Rtnetlink(#[from] rtnetlink::Error),
+
+    #[cfg(target_os = "linux")]
+    #[error("iptables error: {0} ")]
+    IpTables(String),
 }
 
-pub struct Routing {
-    worker: worker::Worker,
-    wg_data: event::WgData,
+impl Error {
+    #[cfg(target_os = "linux")]
+    pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
+        Self::IpTables(e.into().to_string())
+    }
+
+    pub fn is_not_available(&self) -> bool {
+        matches!(self, Self::NotAvailable)
+    }
 }
 
-impl Routing {
-    pub fn new(worker: worker::Worker, wg_data: event::WgData) -> Self {
-        Self { worker, wg_data }
-    }
-
-    pub async fn setup(&self) -> Result<(), Error> {
-        setup(&self.worker, &self.wg_data).await
-    }
-
-    pub async fn teardown(&self) -> Result<(), Error> {
-        teardown(&self.worker, &self.wg_data).await
-    }
+#[async_trait]
+pub trait Routing {
+    async fn setup(&mut self) -> Result<(), Error>;
+    async fn teardown(&mut self, logs: Logs) -> Result<(), Error>;
 }

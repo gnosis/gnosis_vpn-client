@@ -7,18 +7,17 @@ license = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-alloy.workspace = true
 anyhow.workspace = true
-async-lock.workspace = true
 backon.workspace = true
 bytesize = { workspace = true, features = ["serde"] }
-directories.workspace = true
 edgli.workspace = true
+futures-util.workspace = true
+hopr-utils-session.workspace = true
 human-bandwidth = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 humantime-serde.workspace = true
+multiaddr.workspace = true
 ping.workspace = true
-primitive-types.workspace = true
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true

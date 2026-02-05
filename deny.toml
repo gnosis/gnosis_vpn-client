@@ -17,7 +17,6 @@ allow = [
   # "BSD-3-Clause-Clear",
   # "FTL",
   # "NCSA",
-  # "OpenSSL",
   # "PostgreSQL",
   # "Python-2.0",
   # "WTFPL",
@@ -33,12 +32,13 @@ allow = [
   "ISC",
   "MIT",
   "MPL-2.0",
+  "OpenSSL",
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
   # need to allow our own license
   "LGPL-3.0",
   # HOPR dependencies use GPL-3.0 and GPL-3.0-only
-  "GPL-3.0",
+  # "GPL-3.0",
   "GPL-3.0-only",
 ]

@@ -7,24 +7,30 @@ license = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait.workspace = true
 clap.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
-notify.workspace = true
+humantime.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 
-# Target-specific dependencies for memory allocators
+# Target-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-mimalloc.workspace = true
+cidr = { workspace = true }
+rtnetlink = { workspace = true }
+iptables = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+mimalloc = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
-tempfile = "3.23.0"

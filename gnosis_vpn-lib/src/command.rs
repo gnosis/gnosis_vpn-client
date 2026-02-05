@@ -16,7 +16,7 @@ use crate::log_output;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
-    Connect(Address),
+    Connect(String),
     Metrics,
     Disconnect,
     Balance,
@@ -53,9 +53,7 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
     },
-    /// Before config generation
-    ValueingTicket,
-    /// Subsequent service start up in this state and after preparing safe
+    /// Hopr started, determining ticket value for strategies
     Warmup { hopr_status: HoprStatus },
     /// Normal operation where connections can be made
     Running {
@@ -68,12 +66,17 @@ pub enum RunMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprStatus {
-    Running,
-    Syncing,
-    Starting,
-    Indexing,
-    Initializing,
     Uninitialized,
+    WaitingForFunds,
+    CheckingBalance,
+    ValidatingNetworkConfig,
+    SubscribingToAnnouncements,
+    RegisteringSafe,
+    AnnouncingNode,
+    AwaitingKeyBinding,
+    InitializingServices,
+    Running,
+    Terminated,
 }
 
 // in order of priority
@@ -89,7 +92,7 @@ pub enum ConnectResponse {
     Connecting(Destination),
     WaitingToConnect(Destination, Option<DestinationHealth>),
     UnableToConnect(Destination, DestinationHealth),
-    AddressNotFound,
+    DestinationNotFound,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -160,8 +163,8 @@ impl ConnectResponse {
     pub fn unable(destination: Destination, health: DestinationHealth) -> Self {
         ConnectResponse::UnableToConnect(destination, health)
     }
-    pub fn address_not_found() -> Self {
-        ConnectResponse::AddressNotFound
+    pub fn destination_not_found() -> Self {
+        ConnectResponse::DestinationNotFound
     }
 }
 
@@ -246,11 +249,17 @@ impl From<&Option<Vec<FundingIssue>>> for FundingState {
 impl From<&Option<HoprState>> for HoprStatus {
     fn from(state: &Option<HoprState>) -> Self {
         match state {
-            Some(HoprState::Running) => HoprStatus::Running,
-            Some(HoprState::Starting) => HoprStatus::Starting,
-            Some(HoprState::Indexing) => HoprStatus::Indexing,
-            Some(HoprState::Initializing) => HoprStatus::Initializing,
             Some(HoprState::Uninitialized) => HoprStatus::Uninitialized,
+            Some(HoprState::WaitingForFunds) => HoprStatus::WaitingForFunds,
+            Some(HoprState::CheckingBalance) => HoprStatus::CheckingBalance,
+            Some(HoprState::ValidatingNetworkConfig) => HoprStatus::ValidatingNetworkConfig,
+            Some(HoprState::SubscribingToAnnouncements) => HoprStatus::SubscribingToAnnouncements,
+            Some(HoprState::RegisteringSafe) => HoprStatus::RegisteringSafe,
+            Some(HoprState::AnnouncingNode) => HoprStatus::AnnouncingNode,
+            Some(HoprState::AwaitingKeyBinding) => HoprStatus::AwaitingKeyBinding,
+            Some(HoprState::InitializingServices) => HoprStatus::InitializingServices,
+            Some(HoprState::Running) => HoprStatus::Running,
+            Some(HoprState::Terminated) => HoprStatus::Terminated,
             None => HoprStatus::Uninitialized,
         }
     }
@@ -260,7 +269,6 @@ impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RunMode::Init => write!(f, "Initializing"),
-            RunMode::ValueingTicket => write!(f, "Determine ticket value"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
@@ -300,17 +308,6 @@ impl Display for ConnectionState {
     }
 }
 
-impl Display for DestinationState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let output = format!("{} - {}", self.destination, self.connection_state);
-        if let Some(health) = self.health.as_ref() {
-            write!(f, "{} (Health: {})", output, health)
-        } else {
-            write!(f, "{}", output)
-        }
-    }
-}
-
 impl Display for FundingState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -324,12 +321,17 @@ impl Display for FundingState {
 impl Display for HoprStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            HoprStatus::Running => write!(f, "Running"),
-            HoprStatus::Syncing => write!(f, "Syncing"),
-            HoprStatus::Starting => write!(f, "Starting"),
-            HoprStatus::Indexing => write!(f, "Indexing"),
-            HoprStatus::Initializing => write!(f, "Initializing"),
-            HoprStatus::Uninitialized => write!(f, "Uninitialized"),
+            HoprStatus::Uninitialized => write!(f, "Node is not yet initialized"),
+            HoprStatus::WaitingForFunds => write!(f, "Waiting for initial wallet funding"),
+            HoprStatus::CheckingBalance => write!(f, "Verifying wallet balance"),
+            HoprStatus::ValidatingNetworkConfig => write!(f, "Validating network configuration"),
+            HoprStatus::SubscribingToAnnouncements => write!(f, "Subscribing to network announcements"),
+            HoprStatus::RegisteringSafe => write!(f, "Registering Safe contract"),
+            HoprStatus::AnnouncingNode => write!(f, "Announcing node on chain"),
+            HoprStatus::AwaitingKeyBinding => write!(f, "Waiting for on-chain key binding confirmation"),
+            HoprStatus::InitializingServices => write!(f, "Initializing internal services"),
+            HoprStatus::Running => write!(f, "Node is running"),
+            HoprStatus::Terminated => write!(f, "Node has been terminated"),
         }
     }
 }
@@ -347,6 +349,7 @@ mod tests {
 
     fn destination() -> Destination {
         Destination::new(
+            "test-destination".to_string(),
             address(1),
             RoutingOptions::IntermediatePath(Default::default()),
             HashMap::new(),
@@ -355,6 +358,7 @@ mod tests {
 
     fn health() -> DestinationHealth {
         DestinationHealth {
+            id: "test-destination".to_string(),
             last_error: None,
             health: Health::ReadyToConnect,
             need: Need::Nothing,
@@ -412,7 +416,10 @@ mod tests {
         let unable = ConnectResponse::unable(dest.clone(), health());
         assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
 
-        assert_eq!(ConnectResponse::address_not_found(), ConnectResponse::AddressNotFound);
+        assert_eq!(
+            ConnectResponse::destination_not_found(),
+            ConnectResponse::DestinationNotFound
+        );
         Ok(())
     }
 

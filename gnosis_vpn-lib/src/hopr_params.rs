@@ -1,5 +1,6 @@
+use edgli::blokli::SafelessInteractor;
+use edgli::hopr_lib::HoprKeys;
 use edgli::hopr_lib::config::HoprLibConfig;
-use edgli::hopr_lib::{Balance, HoprKeys, WxHOPR};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
@@ -7,17 +8,21 @@ use url::Url;
 
 use std::path::PathBuf;
 
+use crate::compat::SafeModule;
 use crate::hopr::{config, identity};
-use crate::network::Network;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("HOPR identity error: {0}")]
     HoprIdentity(#[from] identity::Error),
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error(transparent)]
+    #[error("HOPR config error: {0}")]
     Config(#[from] config::Error),
+    #[error("URL parse error: {0}")]
+    UrlParse(#[from] url::ParseError),
+    #[error("Blokli creation error: {0}")]
+    BlokliCreation(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,9 +30,8 @@ pub struct HoprParams {
     identity_file: Option<PathBuf>,
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
-    network: Network,
-    rpc_provider: Url,
     allow_insecure: bool,
+    blokli_url: Option<Url>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,17 +45,15 @@ impl HoprParams {
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
-        network: Network,
-        rpc_provider: Url,
         allow_insecure: bool,
+        blokli_url: Option<Url>,
     ) -> Self {
         Self {
             identity_file,
             identity_pass,
             config_mode,
-            network,
-            rpc_provider,
             allow_insecure,
+            blokli_url,
         }
     }
 
@@ -110,79 +112,30 @@ impl HoprParams {
         identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
     }
 
-    pub async fn to_config(&self, ticket_value: Balance<WxHOPR>) -> Result<HoprLibConfig, Error> {
+    pub async fn to_config(&self, safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             // use user provided configuration path
             ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
             // check status of config generation
-            ConfigFileMode::Generated => config::generate(self.network(), self.rpc_provider(), ticket_value)
-                .await
-                .map_err(Error::from),
+            ConfigFileMode::Generated => config::generate(safe_module).await.map_err(Error::from),
         }
     }
 
-    pub fn rpc_provider(&self) -> Url {
-        self.rpc_provider.clone()
-    }
-
-    pub fn network(&self) -> Network {
-        self.network.clone()
+    /// Create safeless blokli instance
+    pub async fn create_safeless_interactor(&self) -> Result<SafelessInteractor, Error> {
+        let keys = self.calc_keys().await?;
+        let private_key = keys.chain_key;
+        let url = self.blokli_url();
+        edgli::blokli::SafelessInteractor::new(url, &private_key)
+            .await
+            .map_err(|e| Error::BlokliCreation(e.to_string()))
     }
 
     pub fn allow_insecure(&self) -> bool {
         self.allow_insecure
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::hopr::config::HoprLibConfig;
-    use std::fs;
-    use tempfile::NamedTempFile;
-    use tokio::runtime::Runtime;
-
-    fn sample_url() -> Url {
-        Url::parse("https://example.com").expect("valid url")
-    }
-
-    fn params_with_mode(mode: ConfigFileMode) -> HoprParams {
-        HoprParams::new(None, None, mode, Network::Dufour, sample_url(), true)
-    }
-
-    fn rt() -> Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("rt")
-    }
-
-    #[test]
-    fn manual_mode_reads_hopr_config_from_file() -> anyhow::Result<()> {
-        let temp = NamedTempFile::new().expect("temp config");
-        let config = HoprLibConfig::default();
-        let yaml = serde_yaml::to_string(&config).expect("yaml");
-
-        fs::write(temp.path(), yaml).expect("write config");
-
-        let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
-        let cfg = rt().block_on(params.to_config(Balance::<WxHOPR>::default()))?;
-
-        assert_eq!(cfg, config);
-        Ok(())
-    }
-
-    #[test]
-    fn manual_mode_propagates_parsing_error() -> anyhow::Result<()> {
-        let temp = NamedTempFile::new().expect("temp config");
-        fs::write(temp.path(), "invalid: [::yaml").expect("write invalid");
-
-        let params = params_with_mode(ConfigFileMode::Manual(temp.path().to_path_buf()));
-        let err = rt()
-            .block_on(params.to_config(Balance::<WxHOPR>::default()))
-            .expect_err("invalid config should bubble up parse error");
-
-        assert!(matches!(err, Error::Config(_)));
-        Ok(())
+    pub fn blokli_url(&self) -> Option<Url> {
+        self.blokli_url.clone()
     }
 }

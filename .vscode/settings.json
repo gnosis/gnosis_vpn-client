@@ -10,5 +10,8 @@
     "editor.defaultFormatter": "rust-lang.rust-analyzer",
     "editor.formatOnSave": true
   },
-  "makefile.configureOnOpen": false
+  "makefile.configureOnOpen": false,
+  "chat.tools.terminal.autoApprove": {
+    "cargo build": true
+  }
 }

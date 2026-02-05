@@ -1,18 +1,14 @@
-pub use edgli::hopr_lib::config::{HoprLibConfig, SafeModule};
-use edgli::hopr_lib::{Balance, WxHOPR};
 use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
 use tokio::fs;
-use tracing::debug;
-use url::Url;
 
 use std::path::{Path, PathBuf};
 
-use crate::balance;
-use crate::chain::contracts::SafeModuleDeploymentResult;
+use crate::compat::SafeModule;
 use crate::dirs;
-use crate::network::Network;
+
+pub use edgli::hopr_lib::config::HoprLibConfig;
 
 const DB_FILE: &str = "gnosisvpn-hopr.db";
 const SAFE_FILE: &str = "gnosisvpn-hopr.safe";
@@ -27,16 +23,6 @@ pub enum Error {
     YamlDeserialization(#[from] serde_yaml::Error),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
-}
-
-impl From<SafeModuleDeploymentResult> for SafeModule {
-    fn from(result: SafeModuleDeploymentResult) -> Self {
-        Self {
-            safe_address: result.safe_address.into(),
-            module_address: result.module_address.into(),
-            ..Default::default()
-        }
-    }
 }
 
 pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
@@ -57,63 +43,30 @@ pub async fn store_safe(safe_module: &SafeModule) -> Result<(), Error> {
     fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
-pub fn has_safe() -> bool {
-    safe_file().is_ok_and(|path| path.exists())
+pub async fn read_safe() -> Result<SafeModule, Error> {
+    let content = fs::read_to_string(safe_file()?).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::NoFile
+        } else {
+            Error::IO(e)
+        }
+    })?;
+    serde_yaml::from_str::<SafeModule>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub async fn generate(
-    network: Network,
-    rpc_provider: Url,
-    ticket_value: Balance<WxHOPR>,
-) -> Result<HoprLibConfig, Error> {
-    let safe_module: SafeModule = match fs::read_to_string(safe_file()?).await {
-        Ok(content) => serde_yaml::from_str::<SafeModule>(&content)?,
-        Err(e) => return Err(Error::IO(e)),
-    };
+pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
     let content = format!(
-        r#"
-db:
-    data: {db_file}
+        r##"
 host:
     port: {port}
     address: !Domain edge.example.com
-chain:
-    network: {network}
-    provider: {rpc_provider}
-    announce: true
-    enable_logs_snapshot: true
-    logs_snapshot_url: {logs_snapshot_url}
 safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
-strategy:
-    on_fail_continue: true
-    strategies:
-        - !AutoFunding
-          funding_amount: {funding_amount}
-          min_stake_threshold: {min_stake_threshold}
-        - !ClosureFinalizer
-          max_closure_overdue: 300
-network_options:
-    # Minimum delay (seconds) will be multiplied by backoff, it will be half the actual minimum value.
-    min_delay: 1
-    max_delay: 30 # down from 300, means that at most 30 seconds will be the maximum backed off timeout in case of failed probes
-    # Minimum score to add a node to the routing table
-    node_score_auto_path_threshold: 0.90 # down from 0.95
-    # Maximum latency for the first hop in ms
-    max_first_hop_latency_threshold: 400 # up from 250
-    # Indicates how long (in seconds) a node is considered "ignored"
-    ignore_timeframe: 0 # down from 2 minutes
-"#,
-        db_file = db_file()?.to_string_lossy(),
+"##,
         port = rand::rng().random_range(20000..65000),
-        network = network,
-        rpc_provider = rpc_provider,
-        logs_snapshot_url = snapshot_url(network.clone()),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
-        funding_amount = balance::funding_amount(ticket_value),
-        min_stake_threshold = balance::min_stake_threshold(ticket_value),
     );
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
@@ -124,15 +77,6 @@ pub fn safe_file() -> Result<PathBuf, Error> {
     Ok(file)
 }
 
-fn db_file() -> Result<PathBuf, Error> {
-    let file = dirs::config_dir(DB_FILE).map_err(Error::Dirs)?;
-    debug!("Using db file at {:?}", file);
-    Ok(file)
-}
-
-fn snapshot_url(network: Network) -> &'static str {
-    match network {
-        Network::Dufour => "https://logs-snapshots.hoprnet.org/dufour-v3.0-latest.tar.xz",
-        Network::Rotsee => "https://logs-snapshots-rotsee.hoprnet.org/rotsee-v3.0-latest.tar.xz",
-    }
+pub(crate) fn db_file() -> Result<PathBuf, Error> {
+    dirs::config_dir(DB_FILE).map_err(Error::Dirs)
 }

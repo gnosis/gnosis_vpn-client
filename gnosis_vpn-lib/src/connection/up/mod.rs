@@ -2,17 +2,17 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
+use crate::core::runner::SurbConfigError;
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wireguard::WireGuard;
-use crate::{gvpn_client, log_output, ping, wireguard};
+use crate::{gvpn_client, log_output, wireguard};
 
-pub mod runner_post_wg;
-pub mod runner_pre_wg;
+pub mod runner;
 
 #[derive(Debug)]
 pub enum Event {
@@ -27,9 +27,11 @@ pub enum Progress {
     RegisterWg,
     CloseBridge(Registration),
     OpenPing,
-    WgTunnel(SessionClientMetadata),
+    DynamicWgTunnel(SessionClientMetadata),
+    PeerIps,
+    StaticWgTunnel(usize),
     Ping,
-    AdjustToMain,
+    AdjustToMain(Duration),
 }
 
 #[derive(Debug)]
@@ -37,18 +39,25 @@ pub enum Setback {
     OpenBridge(String),
     RegisterWg(String),
     OpenPing(String),
+    Ping(String),
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("Hopr error: {0}")]
     Hopr(#[from] HoprError),
-    #[error(transparent)]
+    #[error("Gvpn client error: {0}")]
     GvpnClient(#[from] gvpn_client::Error),
-    #[error(transparent)]
+    #[error("Ping error: {0}")]
+    Ping(String),
+    #[error("Critical error: {0}")]
+    Runtime(String),
+    #[error("Surb config error: {0}")]
+    SurbConfig(#[from] SurbConfigError),
+    #[error("Routing error: {0}")]
+    Routing(String),
+    #[error("WireGuard error: {0}")]
     WireGuard(#[from] wireguard::Error),
-    #[error(transparent)]
-    Ping(#[from] ping::Error),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.
@@ -57,6 +66,7 @@ pub enum Error {
 /// And avoid duplicating structs in both `core` and `connection` modules.
 #[derive(Clone, Debug)]
 pub struct Up {
+    // TODO phase out this struct of in between storage
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
     pub wireguard: Option<WireGuard>,
@@ -72,10 +82,18 @@ pub enum Phase {
     RegisterWg,
     ClosingBridge,
     OpeningPing,
-    EstablishWgTunnel,
+    EstablishDynamicWgTunnel,
+    FallbackGatherPeerIps,
+    FallbackToStaticWgTunnel,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
+}
+
+impl Error {
+    pub fn is_ping_error(&self) -> bool {
+        matches!(self, Error::Ping(_))
+    }
 }
 
 impl Up {
@@ -103,12 +121,16 @@ impl Up {
                 self.registration = Some(reg);
             }
             Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::WgTunnel(session) => {
-                self.phase = (now, Phase::EstablishWgTunnel);
+            Progress::DynamicWgTunnel(session) => {
+                self.phase = (now, Phase::EstablishDynamicWgTunnel);
                 self.session = Some(session);
             }
+            Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::StaticWgTunnel(_announced_peer_count) => {
+                self.phase = (now, Phase::FallbackToStaticWgTunnel);
+            }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
-            Progress::AdjustToMain => self.phase = (now, Phase::AdjustToMain),
+            Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
         }
     }
 
@@ -138,7 +160,9 @@ impl Display for Phase {
             Phase::RegisterWg => "Registering WireGuard public key",
             Phase::ClosingBridge => "Closing bridge connection",
             Phase::OpeningPing => "Opening main connection",
-            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
+            Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
+            Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
             Phase::ConnectionEstablished => "Connection established",
@@ -164,9 +188,16 @@ impl Display for Progress {
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
             Progress::OpenPing => write!(f, "Opening main connection"),
-            Progress::WgTunnel(_) => write!(f, "Establishing WireGuard tunnel"),
+            Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
+            Progress::PeerIps => write!(f, "Retrieving peer IPs"),
+            Progress::StaticWgTunnel(announced_peer_count) => write!(
+                f,
+                "Establishing static WireGuard tunnel with {announced_peer_count} announced peers"
+            ),
             Progress::Ping => write!(f, "Verifying established connection"),
-            Progress::AdjustToMain => write!(f, "Upgrading for general traffic"),
+            Progress::AdjustToMain(round_trip_time) => {
+                write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)
+            }
         }
     }
 }
@@ -174,9 +205,10 @@ impl Display for Progress {
 impl Display for Setback {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Setback::OpenBridge(reason) => write!(f, "Failed to open bridge session: {}", reason),
-            Setback::RegisterWg(reason) => write!(f, "Failed to register WireGuard public key: {}", reason),
-            Setback::OpenPing(reason) => write!(f, "Failed to open main session: {}", reason),
+            Setback::OpenBridge(err) => write!(f, "Failed to open bridge connection: {err}"),
+            Setback::RegisterWg(err) => write!(f, "Failed to register WireGuard key: {err}"),
+            Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
+            Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),
         }
     }
 }
