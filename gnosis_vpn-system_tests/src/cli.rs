@@ -44,15 +44,6 @@ pub struct SharedArgs {
     )]
     pub proxy: Option<Url>,
 
-    /// Path to the worker binary used by the system tests.
-    #[arg(
-        long = "workerBinary",
-        env = "SYSTEM_TEST_WORKER_BINARY",
-        value_name = "PATH",
-        default_value = "./gnosisvpn-worker"
-    )]
-    pub worker_binary: std::path::PathBuf,
-
     /// Allow insecure connections (e.g., self-signed certificates).
     #[arg(long = "allowInsecure", env = "SYSTEM_TEST_ALLOW_INSECURE", default_value_t = false)]
     pub allow_insecure: bool,

@@ -49,56 +49,52 @@ system-tests test_binary="gnosis_vpn-system_tests":
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
 
     worker_user="gnosisvpn"
-    worker_group="gnosisvpn"
 
-    if ! getent group "${worker_group}" >/dev/null 2>&1; then
-        echo "INFO: Creating group '${worker_group}'..."
-        sudo groupadd --system "${worker_group}"
-        echo "SUCCESS: Group '${worker_group}' created successfully"
-    else
-        echo "INFO: Group '${worker_group}' already exists"
-    fi
+    worker_home="/var/lib/${worker_user}"
+    worker_binary="${worker_home}/gnosis_vpn-worker"
+    worker_config_dir="/etc/${worker_user}"
+    state_dir="/var/lib/${worker_user}"
+    runtime_dir="/var/run/${worker_user}"
 
+# Create a system user and add it to a group with its own name, if it doesn't already exist
     if ! getent passwd "${worker_user}" >/dev/null 2>&1; then
         echo "INFO: Creating system user '${worker_user}'..."
         sudo useradd --system \
-            --gid "${worker_group}" \
-            --home-dir "/var/lib/${worker_user}" \
-            --shell /usr/sbin/nologin \
-            --comment "Gnosis VPN Service User" \
+            ---user-group \
+            --home "${worker_home}" -m \
             "${worker_user}"
         echo "SUCCESS: User '${worker_user}' created successfully"
     else
         echo "INFO: User '${worker_user}' already exists"
     fi
 
-
-    worker_home="$(getent passwd "${worker_user}" | cut -d: -f6)"
-    if [ -z "${worker_home}" ]; then
+# Verify that the worker user's home directory can be resolved
+    res_worker_home="$(getent passwd "${worker_user}" | cut -d: -f6)"
+    if [ -z "${res_worker_home}" ]; then
         echo "Failed to resolve home for user ${worker_user}" >&2
         exit 1
     else
-        echo "Resolved home for user ${worker_user}: ${worker_home}"
+        echo "Resolved home for user ${worker_user}: ${res_worker_home}"
     fi
-
-    worker_home="${worker_home:-/var/lib/${worker_user}}"
-    worker_binary="${worker_home}/gnosis_vpn-worker"
-    worker_config_dir="/etc/${worker_user}"
-    state_dir="/var/lib/${worker_user}"
-    runtime_dir="/var/run/${worker_user}"
-
-    sudo mkdir -p "${worker_config_dir}" "${state_dir}" "${runtime_dir}"
-    sudo chown -R "${worker_user}:${worker_group}" "${worker_home}"
     
+# Create worker home directory
+    sudo mkdir -p "${worker_config_dir}" "${state_dir}" "${runtime_dir}"
+    
+# Moves the ID, password, safe, and config into the worker's config directory 
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${worker_config_dir}/config.toml" > /dev/null
 
+# Copy the worker binary to the worker's home directory
     sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_binary}"
-    sudo chown "${worker_user}:${worker_group}" "${worker_binary}"
+
+# Set ownership and permissions for the worker binary and config directory
+    sudo chown "${worker_user}:${worker_user}" "${worker_binary}"
+    sudo chown -R "${worker_user}:${worker_user}" "${worker_home}"
     sudo chmod 0755 "${worker_binary}"
 
     echo "worker binary permissions: $(ls -l "${worker_binary}")"
 
+# Run the test binary with the appropriate environment variables
     sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" WORKER_USER="${worker_user}" WORKER_BINARY="${worker_binary}" RUST_LOG="debug" {{ test_binary }} download
