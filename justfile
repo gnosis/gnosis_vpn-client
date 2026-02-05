@@ -96,4 +96,4 @@ system-tests test_binary="gnosis_vpn-system_tests":
     echo "worker binary permissions: $(sudo ls -l "${worker_binary}")"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" WORKER_USER="${worker_user}" WORKER_BINARY="${worker_binary}" RUST_LOG="debug" {{ test_binary }} download
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" RUST_LOG="debug" {{ test_binary }} download
