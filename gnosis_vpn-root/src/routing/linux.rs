@@ -244,7 +244,7 @@ impl Routing for Router {
             .table_id(TABLE_ID)
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
-            .gateway(wan_gw) // TODO: check if this is necessary
+            .gateway(wan_gw)
             .build();
         self.handle.route().add(no_vpn_route).execute().await?;
         tracing::debug!("ip route add default via {wan_gw} dev {wan_if_index} table {TABLE_ID}");
@@ -303,28 +303,31 @@ impl Routing for Router {
             vpn_if_index,
             vpn_gw,
             vpn_cidr,
+            wan_gw,
             ..
         } = self
             .if_indices
             .take()
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
-        // Remove existing default route before restoring it
-        let prev_default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-            .output_interface(vpn_if_index)
-            .build();
-        let res = self.handle.route().del(prev_default_route).execute().await;
-        if let Err(error) = res {
-            tracing::error!(%error, "failed to delete default route via vpn interface, continuing anyway");
-        } else {
-            tracing::debug!("ip route del default dev {vpn_if_index}");
-        }
+        //         // Remove existing default route before restoring it
+        //         let prev_default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+        //             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+        //             .output_interface(vpn_if_index)
+        //             .build();
+        //         let res = self.handle.route().del(prev_default_route).execute().await;
+        //         if let Err(error) = res {
+        //             tracing::error!(%error, "failed to delete default route via vpn interface, continuing anyway");
+        //         } else {
+        //             tracing::debug!("ip route del default dev {vpn_if_index}");
+        //         }
+        //
 
         // Set the default route back to the WAN interface
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
+            .gateway(wan_gw)
             .build();
 
         if let Err(error) = self.handle.route().add(default_route).execute().await {
