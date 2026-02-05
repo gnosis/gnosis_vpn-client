@@ -1,3 +1,4 @@
+/// This module helps identifiying the health of a destination's exit.
 use edgli::hopr_lib::SessionClientConfig;
 use edgli::hopr_lib::SurbBalancerConfig;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use crate::hopr::{Hopr, HoprError};
 
 /// Health status of the exit and routing
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Health {
+pub struct DestinationHealth {
     pub slots: gvpn_client::Slots,
     pub load_avg: gvpn_client::LoadAvg,
     pub round_trip_time: Duration,
@@ -54,7 +55,7 @@ impl Runner {
         let _ = results_sender.send(Results::HealthResult { res }).await;
     }
 
-    async fn run(&self) -> Result<Health, Error> {
+    async fn run(&self) -> Result<DestinationHealth, Error> {
         let checked_at = SystemTime::now();
         let measure = Instant::now();
 

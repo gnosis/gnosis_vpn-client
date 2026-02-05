@@ -1,7 +1,5 @@
-/// This module keeps track of a destination's health indicating wether a connection can be
-/// successful.
-/// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted
-/// connections.
+/// This module keeps track of a destination's connectivity health indicating wether a connection can be successful.
+/// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted connections.
 /// The **need** field indicates what is required to make the destination healthy in general.
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +9,7 @@ use std::fmt::{self, Display};
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DestinationHealth {
+pub struct ConnectivityHealth {
     pub id: String,
     pub last_error: Option<String>,
     pub health: Health,
@@ -45,13 +43,13 @@ pub enum Health {
 }
 
 // Determine if any destination needs peers
-pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
+pub fn needs_peers(dest_healths: &[&ConnectivityHealth]) -> bool {
     dest_healths
         .iter()
         .any(|v| matches!(v.need, Need::Channel(_) | Need::Peering(_) | Need::AnyChannel))
 }
 
-pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
+pub fn count_distinct_channels(dest_healths: &[&ConnectivityHealth]) -> usize {
     let mut addresses = HashSet::new();
     for dh in dest_healths {
         if let Need::Channel(addr) = dh.need {
@@ -65,7 +63,7 @@ pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
     count
 }
 
-impl DestinationHealth {
+impl ConnectivityHealth {
     pub fn from_destination(dest: &Destination, allow_insecure: bool) -> Self {
         match dest.routing.clone() {
             RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => {
@@ -231,7 +229,7 @@ impl DestinationHealth {
     }
 }
 
-impl Display for DestinationHealth {
+impl Display for ConnectivityHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let error = if let Some(err) = self.last_error.as_ref() {
             format!("Last error: {}, ", err)
@@ -267,31 +265,31 @@ mod tests {
         let addr_1 = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
         let addr_2 = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
 
-        let dh1 = DestinationHealth {
+        let dh1 = ConnectivityHealth {
             id: "dest1".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_1),
         };
-        let dh2 = DestinationHealth {
+        let dh2 = ConnectivityHealth {
             id: "dest2".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_2),
         };
-        let dh3 = DestinationHealth {
+        let dh3 = ConnectivityHealth {
             id: "dest3".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_1),
         };
-        let dh4 = DestinationHealth {
+        let dh4 = ConnectivityHealth {
             id: "dest4".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::AnyChannel,
         };
-        let dh5 = DestinationHealth {
+        let dh5 = ConnectivityHealth {
             id: "dest5".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,

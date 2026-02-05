@@ -19,7 +19,8 @@ use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
-use crate::connection::destination_health::{self, DestinationHealth};
+use crate::connectivity_health::{self, ConnectivityHealth};
+use crate::destination_health::{self, DestinationHealth};
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
@@ -80,6 +81,7 @@ pub struct Core {
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
     destination_health: HashMap<String, DestinationHealth>,
+    connectivity_health: HashMap<String, ConnectivityHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
@@ -153,6 +155,7 @@ impl Core {
             ongoing_disconnections: Vec::new(),
             ongoing_channel_fundings: Vec::new(),
             destination_health: HashMap::new(),
+            connectivity_health: HashMap::new(),
             responder_unit: None,
             responder_duration: None,
         })
@@ -271,8 +274,8 @@ impl Core {
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                                 if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
-                                    let min_channel_count = destination_health::count_distinct_channels(
-                                        &self.destination_health.values().collect::<Vec<_>>(),
+                                    let min_channel_count = connectivity_health::count_distinct_channels(
+                                        &self.connectivity_health.values().collect::<Vec<_>>(),
                                     );
                                     let issues = balances.to_funding_issues(min_channel_count, ticket_value);
                                     RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
@@ -312,7 +315,7 @@ impl Core {
                                 command::DestinationState {
                                     destination,
                                     connection_state,
-                                    health: self.destination_health.get(&v.id).cloned(),
+                                    health: self.connectivity_health.get(&v.id).cloned(),
                                 }
                             })
                             .collect();
@@ -322,7 +325,7 @@ impl Core {
 
                     Command::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
-                            if let Some(health) = self.destination_health.get(&dest.id) {
+                            if let Some(health) = self.connectivity_health.get(&dest.id) {
                                 if health.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
@@ -374,8 +377,8 @@ impl Core {
                             (self.hopr.clone(), self.balances.clone(), self.ticket_value)
                         {
                             let info = hopr.info();
-                            let min_channel_count = destination_health::count_distinct_channels(
-                                &self.destination_health.values().collect::<Vec<_>>(),
+                            let min_channel_count = connectivity_health::count_distinct_channels(
+                                &self.connectivity_health.values().collect::<Vec<_>>(),
                             );
                             let issues: Vec<balance::FundingIssue> =
                                 balances.to_funding_issues(min_channel_count, ticket_value);
@@ -511,7 +514,7 @@ impl Core {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
-                    for (target, health) in self.destination_health.clone() {
+                    for (target, health) in self.connectivity_health.clone() {
                         let updated_health = health.peers(&all_peers);
                         // only spawn channel funding when we are peered
                         if let Some(addr) = updated_health.needs_channel_funding()
@@ -519,11 +522,11 @@ impl Core {
                         {
                             self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
                         }
-                        self.destination_health.insert(target, updated_health);
+                        self.connectivity_health.insert(target, updated_health);
                     }
 
                     let delay =
-                        if destination_health::needs_peers(&self.destination_health.values().collect::<Vec<_>>()) {
+                        if connectivity_health::needs_peers(&self.connectivity_health.values().collect::<Vec<_>>()) {
                             Duration::from_secs(10)
                         } else {
                             Duration::from_secs(90)
@@ -1103,7 +1106,7 @@ impl Core {
             // Connecting from ready
             (Some(dest), Phase::HoprRunning) => {
                 // Checking health
-                if let Some(health) = self.destination_health.get(&dest.id) {
+                if let Some(health) = self.connectivity_health.get(&dest.id) {
                     if health.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
                         self.spawn_connection_runner(dest.clone(), results_sender);
@@ -1156,12 +1159,16 @@ impl Core {
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
         for (address, dest) in self.config.destinations.clone() {
-            self.destination_health.insert(
+            self.connectivity_health.insert(
                 address,
+<<<<<<< HEAD
                 DestinationHealth::from_destination(&dest, self.worker_params.allow_insecure()),
+=======
+                ConnectivityHealth::from_destination(&dest, self.hopr_params.allow_insecure()),
+>>>>>>> a40e3cff (preparing for destination health tracking)
             );
         }
-        if destination_health::needs_peers(&self.destination_health.values().collect::<Vec<_>>()) {
+        if connectivity_health::needs_peers(&self.connectivity_health.values().collect::<Vec<_>>()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         }
         self.act_on_target(results_sender);
@@ -1196,10 +1203,10 @@ impl Core {
 
     fn update_health<F>(&mut self, id: String, cb: F) -> bool
     where
-        F: Fn(&DestinationHealth) -> DestinationHealth,
+        F: Fn(&ConnectivityHealth) -> ConnectivityHealth,
     {
-        if let Some(health) = self.destination_health.get(&id) {
-            self.destination_health.insert(id, cb(health));
+        if let Some(health) = self.connectivity_health.get(&id) {
+            self.connectivity_health.insert(id, cb(health));
             true
         } else {
             tracing::warn!(?id, "connection destination has no health tracker");
