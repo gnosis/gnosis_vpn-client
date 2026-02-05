@@ -17,14 +17,14 @@ pub enum Command {
 
 #[derive(Debug, Clone, Args)]
 pub struct SharedArgs {
-    /// RPC endpoint used by the system tests.
+    /// Blokli URL used by the system tests.
     #[arg(
-        long = "rpcProvider",
-        env = "SYSTEM_TEST_RPC_PROVIDER",
+        long = "blokliUrl",
+        env = "SYSTEM_TEST_BLOKLI_URL",
         value_name = "URL",
-        default_value = "https://gnosis-rpc.publicnode.com"
+        default_value = "https://blokli.rotsee.hoprnet.link"
     )]
-    pub rpc_provider: Url,
+    pub blokli_url: Url,
 
     /// Public IP echo endpoint leveraged to verify outbound connectivity.
     #[arg(
@@ -34,15 +34,6 @@ pub struct SharedArgs {
         default_value = "https://api.ipify.org"
     )]
     pub ip_echo_url: Url,
-
-    /// Network to use for the system tests.
-    #[arg(
-        long = "network",
-        env = "SYSTEM_TEST_NETWORK",
-        value_name = "NETWORK",
-        default_value = "rotsee"
-    )]
-    pub network: String,
 
     /// Optional HTTP proxy used for download/upload requests.
     #[arg(

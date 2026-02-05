@@ -72,9 +72,7 @@ safe_module:
 }
 
 pub fn safe_file() -> Result<PathBuf, Error> {
-    let file = dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)?;
-    debug!("Using safe file at {:?}", file);
-    Ok(file)
+    dirs::config_dir(SAFE_FILE).map_err(Error::Dirs)
 }
 
 pub(crate) fn db_file() -> Result<PathBuf, Error> {

@@ -16,10 +16,8 @@ impl Service {
         }
 
         let mut cmd = Command::new(binary);
-        cmd.arg("--hopr-rpc-provider")
-            .arg(cfg.rpc_provider.as_str())
-            .arg("--hopr-network")
-            .arg(cfg.network.as_str())
+        cmd.arg("--hopr-blokli-url")
+            .arg(cfg.blokli_url.as_str())
             .arg("--socket-path")
             .arg(socket_path.as_os_str())
             .arg("--worker-binary")

@@ -79,7 +79,7 @@ let
     // {
       inherit pname;
       inherit postInstall;
-      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
+      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl --bin gnosis_vpn-system_tests";
       src = srcFiles;
     };
 in

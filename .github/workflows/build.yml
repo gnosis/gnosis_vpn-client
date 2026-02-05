@@ -108,10 +108,10 @@ jobs:
           echo "deb [arch=all,$(dpkg --print-architecture) signed-by=/usr/share/keyrings/prebuilt-mpr-archive-keyring.gpg] https://proget.makedeb.org prebuilt-mpr $(lsb_release -cs)" | sudo tee /etc/apt/sources.list.d/prebuilt-mpr.list
           sudo apt update
           sudo apt-get install -y wireguard just
-          sudo useradd -r gnosisvpn
+          sudo useradd -m gnosisvpn #  -m to create a home directory
       - name: Build system service and test binary
         run: |
-          nix build .#gnosis_vpn .#gnosis_vpn-system-tests -L # binaries created in ./result/bin/ and ./result-1/bin/
+          nix build .#gnosis_vpn-dev
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
@@ -121,7 +121,7 @@ jobs:
           SYSTEM_TEST_WORKER_BINARY: ./result/bin/gnosis_vpn-worker
           CARGO_BIN_EXE_GNOSIS_VPN_ROOT: ./result/bin/gnosis_vpn-root
           RUST_LOG: none,gnosis_vpn_system_tests=info
-        run: just system-tests ./result-1/bin/gnosis_vpn-system-tests rotsee
+        run: just system-tests ./result/bin/gnosis_vpn-system_tests
   build-binaries:
     strategy:
       matrix:

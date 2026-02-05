@@ -1,5 +1,5 @@
 [package]
-name = "gnosis_vpn-system-tests"
+name = "gnosis_vpn-system_tests"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }

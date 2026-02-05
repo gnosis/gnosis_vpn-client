@@ -27,10 +27,10 @@ pub struct SystemTestWorkflow {
 
 impl SystemTestWorkflow {
     pub async fn new(cli: Cli) -> Result<Self> {
-        let (gnosis_bin, socket_path) = lib::prepare_configs().await?;
+        let (gnosis_bin_root, socket_path) = lib::prepare_configs().await?;
         let client = ControlClient::new(socket_path.clone());
 
-        Service::spawn(&gnosis_bin, &cli.shared, &socket_path)?;
+        Service::spawn(&gnosis_bin_root, &cli.shared, &socket_path)?;
 
         Ok(Self { cli, client })
     }

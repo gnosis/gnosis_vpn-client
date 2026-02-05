@@ -27,7 +27,7 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    let res = match hopr_lib::prepare_tokio_runtime() {
+    let res = match hopr_lib::prepare_tokio_runtime(None, None) {
         Ok(rt) => rt.block_on(main_inner()),
         Err(error) => {
             error!("error preparing tokio runtime: {error}");

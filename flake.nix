@@ -242,7 +242,7 @@
             commonArgs = commonArgsDev;
             cargoArtifacts = cargoArtifacts-dev;
           };
-          
+
           pre-commit-check = pre-commit.lib.${system}.run {
             src = ./.;
             hooks = {
@@ -364,7 +364,6 @@
           packages = {
             gnosis_vpn = gnosis_vpn-release;
             inherit gnosis_vpn-dev;
-            inherit gnosis_vpn-system-tests;
             inherit pre-commit-check;
             default = gnosis_vpn-release;
           };

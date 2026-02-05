@@ -6,6 +6,7 @@ use gnosis_vpn_lib::connection::{
     destination::{Address, Destination},
     destination_health::Health,
 };
+use gnosis_vpn_lib::hopr::hopr_lib::ToHex;
 use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
 use std::{path::PathBuf, time::Duration};
@@ -68,7 +69,7 @@ impl ControlClient {
 
     /// Initiates a VPN connection to the provided destination.
     pub async fn connect(&self, destination: Address) -> anyhow::Result<ConnectResponse> {
-        match self.send(&Command::Connect(destination)).await {
+        match self.send(&Command::Connect(destination.to_hex())).await {
             Ok(Response::Connect(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected connect response {resp:?}")),
             Err(e) => Err(e),

@@ -38,7 +38,7 @@ docker-stop:
 docker-enter:
     docker exec --interactive --tty gnosis_vpn-client bash
 
-system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
+system-tests test_binary="gnosis_vpn-system_tests":
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -48,8 +48,17 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
     
+    worker_user="${SYSTEM_TEST_WORKER_USER:-gnosisvpn}"
+    worker_home="$(getent passwd "${worker_user}" | cut -d: -f6)"
+    if [ -z "${worker_home}" ]; then
+        echo "Failed to resolve home for user ${worker_user}" >&2
+        exit 1
+    fi
+
+    export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${worker_home}/.config}"
     config_dir="${CONFIG_DIR:-/etc/gnosisvpn}"
     cache_dir="${XDG_CONFIG_HOME}/gnosisvpn"
+    worker_dst="${worker_home}/gnosis_vpn-worker"
 
     sudo mkdir -p "${config_dir}"
     sudo mkdir -p "${cache_dir}"
@@ -59,6 +68,13 @@ system-tests test_binary="gnosis_vpn-system-tests" network="rotsee":
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${cache_dir}/gnosisvpn-hopr.safe" > /dev/null
     printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
-    sudo chown gnosisvpn:gnosisvpn "${CARGO_BIN_EXE_GNOSIS_VPN_WORKER}"
-    
+    sudo chown -R "${worker_user}:${worker_user}" "${cache_dir}"
+
+    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_dst}"
+    sudo chown "${worker_user}:${worker_user}" "${worker_dst}"
+    sudo chmod 0755 "${worker_dst}"
+
+    export CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_dst}"
+    export CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${CARGO_BIN_EXE_GNOSIS_VPN_ROOT:-./result/bin/gnosis_vpn-root}"
+
     sudo {{ test_binary }} download
