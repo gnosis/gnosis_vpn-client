@@ -87,8 +87,9 @@ system-tests test_binary="gnosis_vpn-system_tests":
     worker_cache_dir="${worker_home}/.cache"
 
     sudo mkdir -p "${worker_home}" "${worker_config_dir}" "${worker_cache_dir}"
+    sudo mkdir -p "/etc/${worker_user}"
     sudo chown -R "${worker_user}:${worker_group}" "${worker_home}"
-
+    
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
