@@ -310,19 +310,6 @@ impl Routing for Router {
             .take()
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
-        //         // Remove existing default route before restoring it
-        //         let prev_default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-        //             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-        //             .output_interface(vpn_if_index)
-        //             .build();
-        //         let res = self.handle.route().del(prev_default_route).execute().await;
-        //         if let Err(error) = res {
-        //             tracing::error!(%error, "failed to delete default route via vpn interface, continuing anyway");
-        //         } else {
-        //             tracing::debug!("ip route del default dev {vpn_if_index}");
-        //         }
-        //
-
         // Set the default route back to the WAN interface
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
