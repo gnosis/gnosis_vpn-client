@@ -464,14 +464,14 @@ fn post_down_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<S
     // TODO: rewrite via rtnetlink
     match gateway {
         Some(gw) => format!(
-            // wg-quick stops exeuction on error, ignore errors to hit all PostDown commands
+            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
             "PostDown = ip route del {relayer_ip} via {gateway} dev {device} || true",
             relayer_ip = relayer_ip,
             gateway = gw,
             device = device,
         ),
         None => format!(
-            // wg-quick stops exeuction on error, ignore errors to hit all PostDown commands
+            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
             "PostDown = ip route del {relayer_ip} dev {device} || true",
             relayer_ip = relayer_ip,
             device = device,
