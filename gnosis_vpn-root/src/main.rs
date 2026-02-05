@@ -321,7 +321,7 @@ async fn loop_daemon(
                                 let mut new_routing = routing::static_router(wg_data, peer_ips);
 
                                 // ensure we run down before going up to ensure clean slate
-                                teardown_any_routing(maybe_router, false).await;
+                                teardown_any_routing(maybe_router, true).await;
                                 let _ = new_routing.teardown(Logs::Suppress).await;
 
                                 // bring up new static routing
