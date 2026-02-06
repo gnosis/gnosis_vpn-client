@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use crate::command::{Command, Response};
 use crate::config::Config;
-use crate::hopr_params::HoprParams;
 use crate::ping;
 use crate::wireguard::{self, WireGuard};
+use crate::worker_params::WorkerParams;
 
 /// Messages sent from worker to core application logic
 #[derive(Debug)]
@@ -36,7 +36,7 @@ pub enum CoreToWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
     /// Startup parameters for hoprd
-    HoprParams { hopr_params: HoprParams },
+    WorkerParams { worker_params: WorkerParams },
     /// Configuration file
     Config { config: Config },
     /// Socket command received by root

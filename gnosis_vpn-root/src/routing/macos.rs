@@ -8,25 +8,35 @@ use tokio::process::Command;
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::{event, worker};
 
-use crate::wg_tooling;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 
 use super::{Error, Routing};
+use crate::wg_tooling;
 
 /// Dynamic routing not available on macOS.
-pub fn dynamic_router(_worker: worker::Worker, _wg_data: event::WireGuardData) -> Result<DynamicRouter, Error> {
+pub fn dynamic_router(
+    _state_home: PathBuf,
+    _worker: worker::Worker,
+    _wg_data: event::WireGuardData,
+) -> Result<DynamicRouter, Error> {
     Err(Error::NotAvailable)
 }
 
 pub struct DynamicRouter {}
 
 /// Builds a static macOS router without a worker handle.
-pub fn static_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
-    StaticRouter { wg_data, peer_ips }
+pub fn static_router(state_home: PathBuf, wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
+    StaticRouter {
+        state_home,
+        wg_data,
+        peer_ips,
+    }
 }
 
 /// macOS routing implementation that programs host routes via `wg-quick` hooks.
 pub struct StaticRouter {
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 }
@@ -41,13 +51,13 @@ impl Routing for StaticRouter {
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
-        wg_tooling::up(wg_quick_content).await?;
+        wg_tooling::up(self.state_home.clone(), wg_quick_content).await?;
 
         Ok(())
     }
 
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        wg_tooling::down(logs).await?;
+        wg_tooling::down(self.state_home.clone(), logs).await?;
         Ok(())
     }
 }

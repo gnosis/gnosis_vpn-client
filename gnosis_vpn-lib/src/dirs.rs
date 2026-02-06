@@ -7,6 +7,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
+
 #[cfg(target_os = "linux")]
 pub const DEFAULT_STATE_HOME: &str = "/var/lib/gnosisvpn";
 #[cfg(target_os = "macos")]

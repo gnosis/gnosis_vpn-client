@@ -18,9 +18,9 @@ use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::hopr_params::HoprParams;
 use crate::ping;
 use crate::wireguard::{self, WireGuard};
+use crate::worker_params::WorkerParams;
 
 use super::{Error, Event, Progress, Setback};
 
@@ -29,7 +29,7 @@ pub struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
-    hopr_params: HoprParams,
+    worker_params: WorkerParams,
 }
 
 impl Runner {
@@ -38,14 +38,14 @@ impl Runner {
         options: Options,
         wg_config: wireguard::Config,
         hopr: Arc<Hopr>,
-        hopr_params: HoprParams,
+        worker_params: WorkerParams,
     ) -> Self {
         Self {
             destination,
             hopr,
             options,
             wg_config,
-            hopr_params,
+            worker_params,
         }
     }
 
@@ -102,7 +102,7 @@ impl Runner {
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        if self.hopr_params.force_static_routing() {
+        if self.worker_params.force_static_routing() {
             tracing::info!("force static routing enabled - skipping dynamic routing attempt");
             self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                 .await

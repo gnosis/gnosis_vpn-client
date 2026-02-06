@@ -3,8 +3,8 @@ use url::Url;
 
 use std::path::PathBuf;
 
-use gnosis_vpn_lib::worker_params::{self, HoprParams, WorkerParams};
-use gnosis_vpn_lib::{config, hopr, socket};
+use gnosis_vpn_lib::worker_params::{self, WorkerParams};
+use gnosis_vpn_lib::{config, dirs, hopr, socket};
 
 use crate::worker;
 
@@ -77,12 +77,12 @@ pub fn parse() -> Cli {
 impl From<&Cli> for WorkerParams {
     fn from(cli: &Cli) -> Self {
         let config_mode = match cli.hopr_config_path.clone() {
-            Some(path) => hopr_params::ConfigFileMode::Manual(path),
-            None => hopr_params::ConfigFileMode::Generated,
+            Some(path) => worker_params::ConfigFileMode::Manual(path),
+            None => worker_params::ConfigFileMode::Generated,
         };
         let allow_insecure = cli.allow_insecure;
         let force_static_routing = cli.force_static_routing;
-        let state_home = cli.state_home;
+        let state_home = cli.state_home.clone();
 
         WorkerParams::new(
             cli.hopr_identity_file.clone(),

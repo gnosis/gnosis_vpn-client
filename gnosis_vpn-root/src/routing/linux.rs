@@ -1,22 +1,29 @@
 use async_trait::async_trait;
+use futures::TryStreamExt;
+use rtnetlink::IpVersion;
+use rtnetlink::packet_route::link::LinkAttribute;
+use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::{event, wireguard, worker};
 
-use super::{Error, Routing};
-use crate::wg_tooling;
-use futures::TryStreamExt;
-use rtnetlink::IpVersion;
-use rtnetlink::packet_route::link::LinkAttribute;
-use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::str::FromStr;
 
-pub fn dynamic_router(worker: worker::Worker, wg_data: event::WireGuardData) -> Result<Router, Error> {
+use super::{Error, Routing};
+use crate::wg_tooling;
+
+pub fn dynamic_router(
+    state_home: PathBuf,
+    worker: worker::Worker,
+    wg_data: event::WireGuardData,
+) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn); // Task terminates once the Router is dropped
     Ok(Router {
+        state_home,
         worker,
         wg_data,
         handle,
@@ -24,8 +31,16 @@ pub fn dynamic_router(worker: worker::Worker, wg_data: event::WireGuardData) -> 
     })
 }
 
-pub fn static_fallback_router(wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> impl Routing {
-    FallbackRouter { wg_data, peer_ips }
+pub fn static_fallback_router(
+    state_home: PathBuf,
+    wg_data: event::WireGuardData,
+    peer_ips: Vec<Ipv4Addr>,
+) -> impl Routing {
+    FallbackRouter {
+        state_home,
+        wg_data,
+        peer_ips,
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -121,6 +136,7 @@ impl NetworkDeviceInfo {
 }
 
 pub struct Router {
+    state_home: PathBuf,
     worker: worker::Worker,
     wg_data: event::WireGuardData,
     // Once dropped, the spawned rtnetlink task will terminate
@@ -129,6 +145,7 @@ pub struct Router {
 }
 
 pub struct FallbackRouter {
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 }
@@ -219,7 +236,7 @@ impl Routing for Router {
             vec!["Table = off".to_string()],
         );
         // Run wg-quick up
-        wg_tooling::up(wg_quick_content).await?;
+        wg_tooling::up(self.state_home.clone(), wg_quick_content).await?;
         tracing::debug!("wg-quick up");
 
         // Obtain network interface data
@@ -404,7 +421,7 @@ impl Routing for Router {
         tracing::debug!("iptables rules flushed");
 
         // Run wg-quick down
-        wg_tooling::down(logs).await?;
+        wg_tooling::down(self.state_home.clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
         Ok(())
@@ -426,12 +443,12 @@ impl Routing for FallbackRouter {
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
-        wg_tooling::up(wg_quick_content).await?;
+        wg_tooling::up(self.state_home.clone(), wg_quick_content).await?;
         Ok(())
     }
 
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        wg_tooling::down(logs).await?;
+        wg_tooling::down(self.state_home.clone(), logs).await?;
         Ok(())
     }
 }

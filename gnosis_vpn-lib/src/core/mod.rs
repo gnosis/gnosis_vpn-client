@@ -23,8 +23,8 @@ use crate::connection::destination_health::{self, DestinationHealth};
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
-use crate::hopr_params::HoprParams;
 use crate::ticket_stats::TicketStats;
+use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
 
 pub mod runner;
@@ -48,7 +48,7 @@ pub enum Error {
     #[error("URL parse error: {0}")]
     Url(#[from] url::ParseError),
     #[error("Hopr params error: {0}")]
-    HoprParams(#[from] crate::hopr_params::Error),
+    HoprParams(#[from] worker_params::Error),
     #[error("Safeless Interactor creation error: {0}")]
     SafelessInteractorCreation(String),
 }
@@ -58,7 +58,7 @@ pub struct Core {
     config: Config,
 
     // static data
-    hopr_params: HoprParams,
+    worker_params: WorkerParams,
     node_address: Address,
     safeless_interactor: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
@@ -114,14 +114,14 @@ enum Querying<T> {
 impl Core {
     pub async fn init(
         config: Config,
-        hopr_params: HoprParams,
+        worker_params: WorkerParams,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
     ) -> Result<Core, Error> {
         wireguard::available().await?;
         wireguard::executable().await?;
-        let keys = hopr_params.persist_identity_generation().await?;
+        let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let safeless_interactor = edgli::blokli::SafelessInteractor::new(hopr_params.blokli_url(), &keys.chain_key)
+        let safeless_interactor = edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key)
             .await
             .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
         Ok(Core {
@@ -129,7 +129,7 @@ impl Core {
             config,
 
             // static data
-            hopr_params,
+            worker_params,
             node_address,
             outgoing_sender,
 
@@ -846,7 +846,7 @@ impl Core {
     }
 
     async fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
-        let res = hopr_config::read_safe().await;
+        let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
             Ok(safe_module) => {
                 tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
@@ -900,11 +900,11 @@ impl Core {
 
     fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+        let worker_params = self.worker_params.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
-                .run_until_cancelled(async move { runner::funding_tool(hopr_params, secret, results_sender).await })
+                .run_until_cancelled(async move { runner::funding_tool(worker_params, secret, results_sender).await })
                 .await;
         });
     }
@@ -925,12 +925,13 @@ impl Core {
 
     fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_for_shutdown.clone();
+        let state_home = self.worker_params.state_home();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::persist_safe(safe_module, results_sender).await;
+                    runner::persist_safe(state_home, safe_module, results_sender).await;
                 })
                 .await
         });
@@ -939,13 +940,13 @@ impl Core {
     fn spawn_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         self.phase = Phase::Starting(None);
         let cancel = self.cancel_for_shutdown.clone();
-        let hopr_params = self.hopr_params.clone();
+        let worker_params = self.worker_params.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::hopr(hopr_params, &safe_module, results_sender).await;
+                    runner::hopr(worker_params, &safe_module, results_sender).await;
                 })
                 .await
         });
@@ -1044,7 +1045,7 @@ impl Core {
                 config_connection,
                 config_wireguard,
                 hopr,
-                self.hopr_params.clone(),
+                self.worker_params.clone(),
             );
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
@@ -1157,7 +1158,7 @@ impl Core {
         for (address, dest) in self.config.destinations.clone() {
             self.destination_health.insert(
                 address,
-                DestinationHealth::from_destination(&dest, self.hopr_params.allow_insecure()),
+                DestinationHealth::from_destination(&dest, self.worker_params.allow_insecure()),
             );
         }
         if destination_health::needs_peers(&self.destination_health.values().collect::<Vec<_>>()) {

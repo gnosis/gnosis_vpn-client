@@ -69,7 +69,7 @@ impl WorkerParams {
                 tracing::info!(?path, "Using provided HOPR identity file");
                 path.to_path_buf()
             }
-            None => identity::file()?,
+            None => identity::file(self.state_home())?,
         };
 
         let identity_pass = match &self.identity_pass {
@@ -78,7 +78,7 @@ impl WorkerParams {
                 pass.to_string()
             }
             None => {
-                let path = identity::pass_file()?;
+                let path = identity::pass_file(self.state_home())?;
                 match fs::read_to_string(&path).await {
                     Ok(p) => {
                         tracing::debug!(?path, "No HOPR identity pass provided - read from file instead");
@@ -104,13 +104,13 @@ impl WorkerParams {
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
         let identity_file = match &self.identity_file {
             Some(path) => path.to_path_buf(),
-            None => identity::file()?,
+            None => identity::file(self.state_home())?,
         };
 
         let identity_pass = match &self.identity_pass {
             Some(pass) => pass.to_string(),
             None => {
-                let path = identity::pass_file()?;
+                let path = identity::pass_file(self.state_home())?;
                 fs::read_to_string(&path).await?
             }
         };
