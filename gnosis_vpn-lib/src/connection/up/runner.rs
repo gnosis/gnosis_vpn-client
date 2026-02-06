@@ -382,6 +382,7 @@ async fn request_dynamic_wg_tunnel(
     };
     let peer_info = wireguard::PeerInfo {
         public_key: registration.server_public_key(),
+        preshared_key: registration.preshared_key(),
         endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
     };
     let wg_data = event::WireGuardData {
@@ -421,6 +422,7 @@ async fn request_static_wg_tunnel(
     };
     let peer_info = wireguard::PeerInfo {
         public_key: registration.server_public_key(),
+        preshared_key: registration.preshared_key(),
         endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
     };
     let wg_data = event::WireGuardData {

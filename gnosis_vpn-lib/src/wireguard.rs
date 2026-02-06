@@ -43,6 +43,7 @@ pub struct InterfaceInfo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub public_key: String,
+    pub preshared_key: String,
     pub endpoint: String,
 }
 
@@ -173,6 +174,7 @@ impl WireGuard {
         // [Peer] section
         lines.push("[Peer]".to_string());
         lines.push(format!("PublicKey = {}", peer.public_key));
+        lines.push(format!("PresharedKey = {}", peer.preshared_key));
         lines.push(format!("Endpoint = {}", peer.endpoint));
         lines.push(format!("AllowedIPs = {}", allowed_ips));
 

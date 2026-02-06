@@ -141,10 +141,10 @@ impl Display for DestinationHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Slots: {}, Load Avg: {}, Round Trip Time: {:?}, Checked: {}",
+            "{}, {}, RoundTripTime: {:.2} s, {} ago",
             self.slots,
             self.load_avg,
-            self.round_trip_time,
+            self.round_trip_time.as_secs_f64(),
             log_output::elapsed(&self.checked_at)
         )
     }

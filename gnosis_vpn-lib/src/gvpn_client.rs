@@ -16,6 +16,7 @@ pub struct Registration {
     ip: Ipv4Addr,
     newly_registered: bool,
     server_public_key: String,
+    preshared_key: String,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +59,10 @@ impl Registration {
 
     pub fn server_public_key(&self) -> String {
         self.server_public_key.clone()
+    }
+
+    pub fn preshared_key(&self) -> String {
+        self.preshared_key.clone()
     }
 }
 
@@ -174,7 +179,7 @@ impl Display for Registration {
 
 impl Display for Slots {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "connected: {}/{}", self.connected, self.available + self.connected)
+        write!(f, "Clients: {}/{}", self.connected, self.available + self.connected)
     }
 }
 
@@ -182,8 +187,11 @@ impl Display for LoadAvg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "load_avg: {:.2} (1m), {:.2} (5m), {:.2} (15m), nproc: {}",
-            self.one, self.five, self.fifteen, self.nproc
+            "LoadAvg: {:.2}/{nproc} (1m), {:.2}/{nproc} (5m), {:.2}/{nproc} (15m)",
+            self.one,
+            self.five,
+            self.fifteen,
+            nproc = self.nproc
         )
     }
 }
