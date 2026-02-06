@@ -162,7 +162,7 @@ pub async fn persist_safe(safe_module: SafeModule, results_sender: mpsc::Sender<
 }
 
 pub async fn hopr(hopr_params: HoprParams, safe_module: &SafeModule, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params, safe_module).await;
+    let res = run_hopr(hopr_params, safe_module, &results_sender).await;
     let _ = results_sender
         .send(Results::Hopr {
             res,
@@ -344,14 +344,32 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams, safe_module: &SafeModule) -> Result<Hopr, Error> {
+async fn run_hopr(
+    hopr_params: HoprParams,
+    safe_module: &SafeModule,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
     let cfg = hopr_params.to_config(safe_module).await?;
     let keys = hopr_params.calc_keys().await?;
     let blokli_url = hopr_params.blokli_url();
-    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys, blokli_url)
-        .await
-        .map_err(Error::from)
+    let sender = results_sender.clone();
+    let visitor = move |state| {
+        let _ = sender.try_send(Results::HoprConstruction(state)).map_err(|err| {
+            tracing::warn!(?err, "Failed to send HOPR construction state update");
+            err
+        });
+    };
+
+    Hopr::new(
+        cfg,
+        crate::hopr::config::db_file()?.as_path(),
+        keys,
+        blokli_url,
+        visitor,
+    )
+    .await
+    .map_err(Error::from)
 }
 
 async fn run_fund_channel(

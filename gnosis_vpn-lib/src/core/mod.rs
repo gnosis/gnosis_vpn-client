@@ -275,9 +275,9 @@ impl Core {
                                         &self.destination_health.values().collect::<Vec<_>>(),
                                     );
                                     let issues = balances.to_funding_issues(min_channel_count, ticket_value);
-                                    RunMode::running(&Some(issues), &self.hopr.as_ref().map(|h| h.status()))
+                                    RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
                                 } else {
-                                    RunMode::running(&None, &self.hopr.as_ref().map(|h| h.status()))
+                                    RunMode::running(None, self.hopr.as_ref().map(|h| h.status()))
                                 }
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
@@ -439,7 +439,7 @@ impl Core {
         match results {
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
-                    self.phase = Phase::Starting(edgli_state);
+                    self.phase = Phase::Starting(Some(edgli_state));
                 } else {
                     tracing::warn!(?self.phase, "hopr construction result received in unexpected phase");
                 }
@@ -932,7 +932,7 @@ impl Core {
     }
 
     fn spawn_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        self.phase = Phase::Starting(EdgliInitState::ValidatingConfig);
+        self.phase = Phase::Starting(None);
         let cancel = self.cancel_for_shutdown.clone();
         let hopr_params = self.hopr_params.clone();
         let results_sender = results_sender.clone();
