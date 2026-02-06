@@ -355,10 +355,9 @@ async fn run_hopr(
     let blokli_url = hopr_params.blokli_url();
     let sender = results_sender.clone();
     let visitor = move |state| {
-        let _ = sender.try_send(Results::HoprConstruction(state)).map_err(|err| {
+        if let Err(err) = sender.try_send(Results::HoprConstruction(state)) {
             tracing::warn!(?err, "Failed to send HOPR construction state update");
-            err
-        });
+        }
     };
 
     Hopr::new(
