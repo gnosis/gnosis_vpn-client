@@ -97,13 +97,13 @@ struct BufferOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct MaxSurbUpstreamOptions {
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
     bridge: Option<Bandwidth>,
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
     health: Option<Bandwidth>,
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
     ping: Option<Bandwidth>,
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
     main: Option<Bandwidth>,
 }
 
@@ -140,13 +140,13 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "http_timeout" {
                         continue;
                     }
-                    if k == "bridge" || k == "wg" {
+                    if k == "bridge" || k == "wg" || k == "health" {
                         if let Some(prot) = v.as_table() {
-                            for (k, _v) in prot.iter() {
-                                if k == "capabilities" || k == "target" {
+                            for (k2, _v) in prot.iter() {
+                                if k2 == "capabilities" || k2 == "target" {
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.bridge.{k}"));
+                                wrong_keys.push(format!("connection.{k}.{k2}"));
                             }
                         }
                         continue;
@@ -165,7 +165,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "buffer" {
                         if let Some(buffer) = v.as_table() {
                             for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.buffer.{k}"));
@@ -176,7 +176,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "max_surb_upstream" {
                         if let Some(surbs) = v.as_table() {
                             for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
@@ -508,6 +508,10 @@ http_timeout = "60s"
 capabilities = [ "segmentation", "retransmission" ]
 target = "127.0.0.1:8000"
 
+[connection.health]
+capabilities = [ "segmentation", "retransmission" ]
+target = "127.0.0.1:8000"
+
 [connection.wg]
 capabilities = [ "segmentation", "no_delay" ]
 target = "127.0.0.1:51820"
@@ -520,11 +524,13 @@ seq_count = 1
 
 [connection.max_surb_upstream]
 bridge = "512 Kb/s"
+health = "256 Kb/s"
 ping = "1 Mb/s"
 main = "16 Mb/s"
 
 [connection.buffer]
 bridge = "32 kB"
+health = "16 kB"
 ping = "32 kB"
 main = "2 MB"
 
