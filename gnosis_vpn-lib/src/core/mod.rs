@@ -296,7 +296,7 @@ impl Core {
                         };
 
                         let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
-                        vals.sort_by(|a, b| a.address.cmp(&b.address));
+                        vals.sort_by(|a, b| a.id.cmp(&b.id));
                         let destinations = vals
                             .into_iter()
                             .map(|v| {
@@ -324,7 +324,12 @@ impl Core {
                                 command::DestinationState {
                                     destination,
                                     connection_state,
-                                    health: self.connectivity_health.get(&v.id).cloned(),
+                                    connectivity: self
+                                        .connectivity_health
+                                        .get(&v.id)
+                                        .cloned()
+                                        .unwrap_or(Default::default()),
+                                    exit_health: self.destination_health.get(&v.id).cloned(),
                                 }
                             })
                             .collect();
@@ -705,7 +710,7 @@ impl Core {
             Results::HealthCheck { id, res } => match res {
                 Ok(health) => {
                     tracing::info!(%id, "received health check result");
-                    self.destination_health.insert(id, health);
+                    self.destination_health.insert(id.clone(), health);
                     if let Some(dest) = self.config.destinations.get(&id) {
                         // reduce health checks when connected
                         if matches!(self.phase, Phase::Connected(_)) {

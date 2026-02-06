@@ -8,7 +8,7 @@ use std::fmt::{self, Display};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConnectivityHealth {
     pub id: String,
     pub last_error: Option<String>,
@@ -18,17 +18,23 @@ pub struct ConnectivityHealth {
 
 /// Requirements to be able to connect to this destination
 /// This is statically derived at construction time from a destination's routing options.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Need {
     Channel(Address),
     AnyChannel,
     Peering(Address),
     Nothing,
+    // TODO refactor to avoid hashmap lookup failure leading to this default value
+    #[default]
+    DestinationMissing,
 }
 
 /// Potential problems or final health states of a destination
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Health {
+    // TODO refactor to avoid hashmap lookup failure leading to this default value
+    #[default]
+    DestinationMissing,
     ReadyToConnect,
     MissingPeeredFundedChannel,
     MissingPeeredChannel,
@@ -163,6 +169,7 @@ impl ConnectivityHealth {
                 _ => self.health.clone(),
             },
             Need::Nothing => self.health.clone(),
+            Need::DestinationMissing => self.health.clone(),
         };
         Self {
             id: self.id.clone(),
@@ -204,6 +211,7 @@ impl ConnectivityHealth {
             ),
             Need::Peering(_) => matches!(self.health, Health::NotPeered),
             Need::Nothing => false,
+            Need::DestinationMissing => false,
         }
     }
 
@@ -252,6 +260,7 @@ impl Display for Need {
             Need::AnyChannel => write!(f, "needs any peered channel"),
             Need::Peering(addr) => write!(f, "needs peer {}", addr),
             Need::Nothing => write!(f, "unable to connect"),
+            Need::DestinationMissing => write!(f, "destination missing"),
         }
     }
 }
