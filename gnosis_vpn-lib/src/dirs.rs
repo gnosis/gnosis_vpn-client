@@ -16,7 +16,9 @@ const CONFIG_DIRECTORY: &str = ".config";
 const CACHE_DIRECTORY: &str = ".cache";
 
 pub const ENV_VAR_HOME: &str = "GNOSISVPN_HOME";
+#[cfg(not(target_os = "macos"))]
 pub const DEFAULT_STATE_DIR_LINUX: &str = "/var/lib/gnosisvpn";
+#[cfg(target_os = "macos")]
 pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVPN";
 
 pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
@@ -65,7 +67,6 @@ fn home() -> PathBuf {
 
 fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
     let res = DirBuilder::new().mode(0o700).create(path);
-    println!("res: {:?}", res);
     match res {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
