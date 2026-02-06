@@ -13,6 +13,7 @@ use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
 use std::process::{self};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
@@ -35,9 +36,12 @@ use routing::Routing;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+const PIDFILE_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.pid";
+
 async fn ctrlc_channel(
     reload_handle: LogReloadHandle,
     log_path: String,
+    worker_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
@@ -75,6 +79,16 @@ async fn ctrlc_channel(
                     let new_layer = logging::make_file_fmt_layer(&log_path);
                     if let Err(e) = reload_handle.reload(new_layer) {
                         eprintln!("failed to reload logging layer: {e}");
+                    }
+
+                    // Forward SIGHUP to worker process
+                    if let Ok(pid_guard) = worker_pid.lock() {
+                        if let Some(pid) = *pid_guard {
+                            unsafe {
+                                libc::kill(pid as i32, libc::SIGHUP);
+                            }
+                            tracing::debug!("forwarded SIGHUP to worker process {}", pid);
+                        }
                     }
                 },
                 else => {
@@ -140,7 +154,8 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
 
 async fn daemon(args: cli::Cli, reload_handle: LogReloadHandle, log_path: String) -> Result<(), exitcode::ExitCode> {
     // set up signal handler
-    let mut ctrlc_receiver = ctrlc_channel(reload_handle, log_path).await?;
+    let worker_pid = Arc::new(Mutex::new(None));
+    let mut ctrlc_receiver = ctrlc_channel(reload_handle, log_path, worker_pid.clone()).await?;
 
     // ensure worker user exists
     let input = worker::Input::new(
@@ -189,6 +204,7 @@ async fn daemon(args: cli::Cli, reload_handle: LogReloadHandle, log_path: String
         config,
         hopr_params,
         &mut maybe_router,
+        worker_pid,
     )
     .await;
 
@@ -209,6 +225,7 @@ async fn loop_daemon(
     config: Config,
     hopr_params: HoprParams,
     maybe_router: &mut Option<Box<dyn Routing>>,
+    worker_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -235,6 +252,14 @@ async fn loop_daemon(
             tracing::error!(error = ?err, ?worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
+
+    // Store worker PID for signal forwarding
+    if let Some(pid) = worker_child.id() {
+        if let Ok(mut pid_guard) = worker_pid.lock() {
+            *pid_guard = Some(pid);
+            tracing::debug!("worker process started with PID: {}", pid);
+        }
+    }
 
     parent_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
@@ -499,6 +524,10 @@ async fn main() {
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
+
+    // Write pidfile for the newsyslog service to send signals to
+    let pid = process::id().to_string();
+    fs::write(PIDFILE_PATH, pid).await.expect("failed to write pidfile");
 
     match daemon(args, reload_handle, log_path).await {
         Ok(_) => (),
