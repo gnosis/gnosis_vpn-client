@@ -204,6 +204,8 @@ impl Routing for Router {
     ///      Equivalent command: `ip rule add mark $FW_MARK table $TABLE_ID pref 1`
     ///   6. Adjust the default routing table (MAIN) to use the VPN interface for default routing
     ///      Equivalent command: `ip route replace default dev "$IF_VPN"`
+    ///   7. Flush the routing table cache
+    ///      Equivalent command: `ip route flush cache`
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         if self.if_indices.is_some() {
@@ -279,6 +281,9 @@ impl Routing for Router {
         self.handle.route().add(default_route).execute().await?;
         tracing::debug!("ip route add default dev {vpn_if_index}");
 
+        flush_routing_cache().await?;
+        tracing::debug!("flushed routing cache");
+
         tracing::info!("routing is ready");
         Ok(())
     }
@@ -294,8 +299,10 @@ impl Routing for Router {
     ///      Equivalent command: `ip route del $VPN_RANGE dev "$VPN_WAN" table "$TABLE_ID"`
     ///   4. Delete the TABLE_ID routing table
     ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
-    ///   5. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
-    ///   6. Run `wg-quick down`
+    ///   5. Flush the routing table cache
+    ///      Equivalent command: `ip route flush cache`
+    ///   6. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
+    ///   7. Run `wg-quick down`
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
@@ -387,6 +394,9 @@ impl Routing for Router {
             tracing::debug!("ip route del default via {vpn_gw} dev {wan_if_index}");
         }
 
+        flush_routing_cache().await?;
+        tracing::debug!("ip route flush cache");
+
         // Flush the iptables rules
         if let Err(error) = flush_ip_tables().map_err(Error::iptables) {
             tracing::error!(%error, "failed to flush iptables rules, continuing anyway");
@@ -477,6 +487,17 @@ fn post_down_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<S
             device = device,
         ),
     }
+}
+
+/// Flushes the routing table cache - this cannot be done via rtnetlink crate.
+async fn flush_routing_cache() -> Result<(), Error> {
+    Command::new("ip")
+        .arg("route")
+        .arg("flush")
+        .arg("cache")
+        .run_stdout(Logs::Print)
+        .await?;
+    Ok(())
 }
 
 async fn interface() -> Result<(String, Option<String>), Error> {
