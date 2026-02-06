@@ -1,3 +1,4 @@
+use edgli::EdgliInitState;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
@@ -54,11 +55,14 @@ pub enum RunMode {
         funding_tool: balance::FundingTool,
     },
     /// Hopr started, determining ticket value for strategies
-    Warmup { hopr_status: HoprStatus },
+    Warmup {
+        hopr_init_status: Option<HoprInitStatus>,
+        hopr_status: Option<HoprStatus>,
+    },
     /// Normal operation where connections can be made
     Running {
         funding: FundingState,
-        hopr_status: HoprStatus,
+        hopr_status: Option<HoprStatus>,
     },
     /// Shutting down service
     Shutdown,
@@ -77,6 +81,17 @@ pub enum HoprStatus {
     InitializingServices,
     Running,
     Terminated,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum HoprInitStatus {
+    ValidatingConfig,
+    IdentifyingNode,
+    InitializingDatabase,
+    ConnectingBlockchain,
+    CreatingNode,
+    StartingNode,
+    Ready,
 }
 
 // in order of priority
@@ -139,16 +154,17 @@ impl RunMode {
         }
     }
 
-    pub fn warmup(hopr_state: &Option<HoprState>) -> Self {
+    pub fn warmup(edgli_init_state: Option<EdgliInitState>, hopr_state: Option<HoprState>) -> Self {
         RunMode::Warmup {
-            hopr_status: hopr_state.into(),
+            hopr_init_status: edgli_init_state.map(|s| s.into()),
+            hopr_status: hopr_state.map(|s| s.into()),
         }
     }
 
-    pub fn running(issues: &Option<Vec<FundingIssue>>, hopr_state: &Option<HoprState>) -> Self {
+    pub fn running(issues: Option<Vec<FundingIssue>>, hopr_state: Option<HoprState>) -> Self {
         RunMode::Running {
-            funding: issues.into(),
-            hopr_status: hopr_state.into(),
+            funding: issues.map(|i| i.into()).unwrap_or(FundingState::Querying),
+            hopr_status: hopr_state.map(|s| s.into()),
         }
     }
 }
@@ -231,36 +247,44 @@ impl FromStr for Command {
     }
 }
 
-impl From<&Option<Vec<FundingIssue>>> for FundingState {
-    fn from(issues: &Option<Vec<FundingIssue>>) -> Self {
-        match issues {
-            Some(issues) => {
-                if issues.is_empty() {
-                    FundingState::WellFunded
-                } else {
-                    FundingState::TopIssue(issues[0].clone())
-                }
-            }
-            None => FundingState::Querying,
+impl From<Vec<FundingIssue>> for FundingState {
+    fn from(issues: Vec<FundingIssue>) -> Self {
+        if issues.is_empty() {
+            FundingState::WellFunded
+        } else {
+            FundingState::TopIssue(issues[0].clone())
         }
     }
 }
 
-impl From<&Option<HoprState>> for HoprStatus {
-    fn from(state: &Option<HoprState>) -> Self {
+impl From<HoprState> for HoprStatus {
+    fn from(state: HoprState) -> Self {
         match state {
-            Some(HoprState::Uninitialized) => HoprStatus::Uninitialized,
-            Some(HoprState::WaitingForFunds) => HoprStatus::WaitingForFunds,
-            Some(HoprState::CheckingBalance) => HoprStatus::CheckingBalance,
-            Some(HoprState::ValidatingNetworkConfig) => HoprStatus::ValidatingNetworkConfig,
-            Some(HoprState::SubscribingToAnnouncements) => HoprStatus::SubscribingToAnnouncements,
-            Some(HoprState::RegisteringSafe) => HoprStatus::RegisteringSafe,
-            Some(HoprState::AnnouncingNode) => HoprStatus::AnnouncingNode,
-            Some(HoprState::AwaitingKeyBinding) => HoprStatus::AwaitingKeyBinding,
-            Some(HoprState::InitializingServices) => HoprStatus::InitializingServices,
-            Some(HoprState::Running) => HoprStatus::Running,
-            Some(HoprState::Terminated) => HoprStatus::Terminated,
-            None => HoprStatus::Uninitialized,
+            HoprState::Uninitialized => HoprStatus::Uninitialized,
+            HoprState::WaitingForFunds => HoprStatus::WaitingForFunds,
+            HoprState::CheckingBalance => HoprStatus::CheckingBalance,
+            HoprState::ValidatingNetworkConfig => HoprStatus::ValidatingNetworkConfig,
+            HoprState::SubscribingToAnnouncements => HoprStatus::SubscribingToAnnouncements,
+            HoprState::RegisteringSafe => HoprStatus::RegisteringSafe,
+            HoprState::AnnouncingNode => HoprStatus::AnnouncingNode,
+            HoprState::AwaitingKeyBinding => HoprStatus::AwaitingKeyBinding,
+            HoprState::InitializingServices => HoprStatus::InitializingServices,
+            HoprState::Running => HoprStatus::Running,
+            HoprState::Terminated => HoprStatus::Terminated,
+        }
+    }
+}
+
+impl From<EdgliInitState> for HoprInitStatus {
+    fn from(state: EdgliInitState) -> Self {
+        match state {
+            EdgliInitState::ValidatingConfig => HoprInitStatus::ValidatingConfig,
+            EdgliInitState::IdentifyingNode => HoprInitStatus::IdentifyingNode,
+            EdgliInitState::InitializingDatabase => HoprInitStatus::InitializingDatabase,
+            EdgliInitState::ConnectingBlockchain => HoprInitStatus::ConnectingBlockchain,
+            EdgliInitState::CreatingNode => HoprInitStatus::CreatingNode,
+            EdgliInitState::StartingNode => HoprInitStatus::StartingNode,
+            EdgliInitState::Ready => HoprInitStatus::Ready,
         }
     }
 }
@@ -280,12 +304,18 @@ impl Display for RunMode {
                     "Waiting for funding on {node_address}({node_xdai}, {node_wxhopr}) - {funding_tool}"
                 )
             }
-            RunMode::Warmup { hopr_status } => {
-                write!(f, "Warmup (Hopr {})", hopr_status)
-            }
-            RunMode::Running { funding, hopr_status } => {
-                write!(f, "Ready (Hopr {hopr_status}), {funding}")
-            }
+            RunMode::Warmup {
+                hopr_init_status,
+                hopr_status,
+            } => match (hopr_init_status, hopr_status) {
+                (None, None) => write!(f, "Warmup"),
+                (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
+                (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
+            },
+            RunMode::Running { funding, hopr_status } => match hopr_status {
+                Some(hopr_status) => write!(f, "Ready ({hopr_status}), {funding}"),
+                None => write!(f, "Ready, {funding}"),
+            },
             RunMode::Shutdown => write!(f, "Shutting down"),
         }
     }
@@ -336,6 +366,20 @@ impl Display for HoprStatus {
     }
 }
 
+impl Display for HoprInitStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HoprInitStatus::ValidatingConfig => write!(f, "Validating configuration"),
+            HoprInitStatus::IdentifyingNode => write!(f, "Identifying node"),
+            HoprInitStatus::InitializingDatabase => write!(f, "Initializing database"),
+            HoprInitStatus::ConnectingBlockchain => write!(f, "Connecting blockchain"),
+            HoprInitStatus::CreatingNode => write!(f, "Creating node"),
+            HoprInitStatus::StartingNode => write!(f, "Starting node"),
+            HoprInitStatus::Ready => write!(f, "Ready"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,10 +423,10 @@ mod tests {
         let issues = Some(vec![FundingIssue::NodeLowOnFunds]);
         let hopr_state = Some(HoprState::Running);
 
-        match RunMode::running(&issues, &hopr_state) {
+        match RunMode::running(issues, hopr_state) {
             RunMode::Running { funding, hopr_status } => {
                 assert_eq!(funding, FundingState::TopIssue(FundingIssue::NodeLowOnFunds));
-                assert_eq!(hopr_status, HoprStatus::Running);
+                assert_eq!(hopr_status, Some(HoprStatus::Running));
             }
             other => panic!("unexpected run mode {other:?}"),
         }
@@ -391,14 +435,12 @@ mod tests {
 
     #[test]
     fn funding_state_from_option_applies_priority_rules() -> anyhow::Result<()> {
-        assert_eq!(FundingState::from(&None), FundingState::Querying);
+        let empty: Vec<FundingIssue> = vec![];
+        assert_eq!(FundingState::from(empty), FundingState::WellFunded);
 
-        let empty: Option<Vec<FundingIssue>> = Some(vec![]);
-        assert_eq!(FundingState::from(&empty), FundingState::WellFunded);
-
-        let top = Some(vec![FundingIssue::SafeLowOnFunds]);
+        let top = vec![FundingIssue::SafeLowOnFunds];
         assert_eq!(
-            FundingState::from(&top),
+            FundingState::from(top),
             FundingState::TopIssue(FundingIssue::SafeLowOnFunds)
         );
         Ok(())

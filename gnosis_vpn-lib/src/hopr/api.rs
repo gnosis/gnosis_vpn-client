@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use edgli::EdgliInitState;
 use edgli::{
     Edgli,
     hopr_lib::{
@@ -55,17 +56,12 @@ impl Hopr {
         db_data_dir: &std::path::Path,
         keys: edgli::hopr_lib::HoprKeys,
         blokli_url: Option<url::Url>,
+        init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
-        let edge_node = Edgli::new(
-            cfg,
-            db_data_dir,
-            keys,
-            blokli_url.map(|u| u.to_string()),
-            None::<fn(edgli::EdgliInitState)>,
-        )
-        .await
-        .map_err(|e| HoprError::Construction(e.to_string()))?;
+        let edge_node = Edgli::new(cfg, db_data_dir, keys, blokli_url.map(|u| u.to_string()), init_visitor)
+            .await
+            .map_err(|e| HoprError::Construction(e.to_string()))?;
 
         tracing::debug!("hopr edge node finished setup");
         Ok(Self {

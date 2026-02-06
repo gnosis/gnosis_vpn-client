@@ -37,10 +37,28 @@ connections.
 4. Run the root binary with sudo and provide the path to the worker binary:
 
 ```bash
-> sudo RUST_LOG="debug" ./target/debug/gnosis_vpn-root -c <config.toml> --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+> sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./target/debug/gnosis_vpn-root -c <config.toml> \
+    --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
 # or from nix build:
-> sudo RUST_LOG="debug" ./result/bin/gnosis_vpn-root -c <config.toml> --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+> sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./result/bin/gnosis_vpn-root -c <config.toml> \
+    --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
 ```
+
+### Worker user configuration
+
+There are three environment variables that control the worker process setup:
+
+- `GNOSISVPN_HOME`: The home directory for the service. This is where state and
+  caching data will be stored. Defaults to `/var/lib/gnosisvpn` on Linux and
+  `/Libary/Application Support/gnosisvpn` on macOS.
+
+- `GNOSISVPN_WORKER_USER`: The user with limited privileges that will run the
+  worker process. This user needs to have read and execute permissions for the
+  worker binary and write permissions for the `GNOSISVPN_HOME` directory.
+  Defaults to `gnosisvpn`.
+
+- `GNOSISVPN_WORKER_BINARY`: The path to the worker binary. The worker process
+  will be spawned with this binary.
 
 ## Installation
 
