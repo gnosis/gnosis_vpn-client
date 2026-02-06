@@ -39,7 +39,7 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 0. disconnect wg tunnel done from root
+        // 0. disconnect wg tunnel done from root - already happens in spawning process
 
         // 1. open bridge session
         let _ = results_sender

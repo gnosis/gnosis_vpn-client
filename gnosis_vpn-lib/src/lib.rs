@@ -7,13 +7,13 @@ pub mod core;
 pub mod dirs;
 pub mod event;
 pub mod hopr;
-pub mod hopr_params;
 pub mod info;
 pub mod ping;
 pub mod shell_command_ext;
 pub mod socket;
 pub mod wireguard;
 pub mod worker;
+pub mod worker_params;
 
 mod gvpn_client;
 mod log_output;

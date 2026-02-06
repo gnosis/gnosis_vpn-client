@@ -3,8 +3,8 @@ use url::Url;
 
 use std::path::PathBuf;
 
-use gnosis_vpn_lib::hopr_params::{self, HoprParams};
-use gnosis_vpn_lib::{config, hopr, socket};
+use gnosis_vpn_lib::worker_params::{self, WorkerParams};
+use gnosis_vpn_lib::{config, dirs, hopr, socket};
 
 use crate::worker;
 
@@ -29,6 +29,13 @@ pub struct Cli {
         default_value = config::DEFAULT_PATH,
         )]
     pub config_path: PathBuf,
+
+    #[arg(
+        long,
+        env = dirs::ENV_VAR_STATE_HOME,
+        default_value = dirs::DEFAULT_STATE_HOME,
+    )]
+    pub state_home: PathBuf,
 
     /// Username of the worker user (needs a home folder for caching and configurations)
     #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
@@ -57,26 +64,34 @@ pub struct Cli {
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
     pub allow_insecure: bool,
+
+    /// Avoid dynamic peer discovery while connected to the VPN
+    #[arg(long)]
+    pub force_static_routing: bool,
 }
 
 pub fn parse() -> Cli {
     Cli::parse()
 }
 
-impl From<&Cli> for HoprParams {
+impl From<&Cli> for WorkerParams {
     fn from(cli: &Cli) -> Self {
         let config_mode = match cli.hopr_config_path.clone() {
-            Some(path) => hopr_params::ConfigFileMode::Manual(path),
-            None => hopr_params::ConfigFileMode::Generated,
+            Some(path) => worker_params::ConfigFileMode::Manual(path),
+            None => worker_params::ConfigFileMode::Generated,
         };
         let allow_insecure = cli.allow_insecure;
+        let force_static_routing = cli.force_static_routing;
+        let state_home = cli.state_home.clone();
 
-        HoprParams::new(
+        WorkerParams::new(
             cli.hopr_identity_file.clone(),
             cli.hopr_identity_pass.clone(),
             config_mode,
             allow_insecure,
             cli.hopr_blokli_url.clone(),
+            force_static_routing,
+            state_home,
         )
     }
 }

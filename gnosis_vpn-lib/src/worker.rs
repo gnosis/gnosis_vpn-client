@@ -33,6 +33,7 @@ pub struct Input {
     user: String,
     binary: PathBuf,
     version: String,
+    state_home: PathBuf,
 }
 
 pub const USERNAME: &str = "gnosisvpn";
@@ -53,11 +54,12 @@ pub struct Worker {
 }
 
 impl Input {
-    pub fn new(user: String, binary: PathBuf, version: &str) -> Self {
+    pub fn new(user: String, binary: PathBuf, version: &str, state_home: PathBuf) -> Self {
         Self {
             user,
             binary,
             version: version.to_string(),
+            state_home,
         }
     }
 }
@@ -98,7 +100,7 @@ impl Worker {
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
             // set up application state directory
-            let home = dirs::setup(uid, gid).map_err(|err| {
+            let home = dirs::setup(input.state_home, uid, gid).map_err(|err| {
                 tracing::error!(error = ?err, "error setting up home directory");
                 Error::IO(io::Error::other(err.to_string()))
             })?;

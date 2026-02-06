@@ -26,12 +26,14 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HoprParams {
+pub struct WorkerParams {
     identity_file: Option<PathBuf>,
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     blokli_url: Option<Url>,
+    force_static_routing: bool,
+    state_home: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,13 +42,15 @@ pub enum ConfigFileMode {
     Generated,
 }
 
-impl HoprParams {
+impl WorkerParams {
     pub fn new(
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
         allow_insecure: bool,
         blokli_url: Option<Url>,
+        force_static_routing: bool,
+        state_home: PathBuf,
     ) -> Self {
         Self {
             identity_file,
@@ -54,6 +58,8 @@ impl HoprParams {
             config_mode,
             allow_insecure,
             blokli_url,
+            force_static_routing,
+            state_home,
         }
     }
 
@@ -63,7 +69,7 @@ impl HoprParams {
                 tracing::info!(?path, "Using provided HOPR identity file");
                 path.to_path_buf()
             }
-            None => identity::file()?,
+            None => identity::file(self.state_home())?,
         };
 
         let identity_pass = match &self.identity_pass {
@@ -72,7 +78,7 @@ impl HoprParams {
                 pass.to_string()
             }
             None => {
-                let path = identity::pass_file()?;
+                let path = identity::pass_file(self.state_home())?;
                 match fs::read_to_string(&path).await {
                     Ok(p) => {
                         tracing::debug!(?path, "No HOPR identity pass provided - read from file instead");
@@ -98,13 +104,13 @@ impl HoprParams {
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
         let identity_file = match &self.identity_file {
             Some(path) => path.to_path_buf(),
-            None => identity::file()?,
+            None => identity::file(self.state_home())?,
         };
 
         let identity_pass = match &self.identity_pass {
             Some(pass) => pass.to_string(),
             None => {
-                let path = identity::pass_file()?;
+                let path = identity::pass_file(self.state_home())?;
                 fs::read_to_string(&path).await?
             }
         };
@@ -135,7 +141,15 @@ impl HoprParams {
         self.allow_insecure
     }
 
+    pub fn force_static_routing(&self) -> bool {
+        self.force_static_routing
+    }
+
     pub fn blokli_url(&self) -> Option<Url> {
         self.blokli_url.clone()
+    }
+
+    pub fn state_home(&self) -> PathBuf {
+        self.state_home.clone()
     }
 }

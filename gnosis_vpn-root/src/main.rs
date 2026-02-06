@@ -18,9 +18,9 @@ use std::time::Duration;
 use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
-use gnosis_vpn_lib::hopr_params::HoprParams;
 use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::{dirs, ping, socket, worker};
+use gnosis_vpn_lib::worker_params::WorkerParams;
+use gnosis_vpn_lib::{ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -124,6 +124,8 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
 }
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    let worker_params = WorkerParams::from(&args);
+
     // set up signal handler
     let mut ctrlc_receiver = ctrlc_channel().await?;
 
@@ -132,6 +134,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         args.worker_user.clone(),
         args.worker_binary.clone(),
         env!("CARGO_PKG_VERSION"),
+        worker_params.state_home(),
     );
     let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
         tracing::error!(error = ?err, "error determining worker user");
@@ -160,8 +163,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         exitcode::NOINPUT
     })?;
 
-    let hopr_params = HoprParams::from(&args);
-
     // set up system socket
     let socket_path = args.socket_path.clone();
     let socket = socket_listener(&args.socket_path).await?;
@@ -172,7 +173,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         socket,
         &worker_user,
         config,
-        hopr_params,
+        worker_params,
         &mut maybe_router,
     )
     .await;
@@ -192,7 +193,7 @@ async fn loop_daemon(
     socket: UnixListener,
     worker_user: &worker::Worker,
     config: Config,
-    hopr_params: HoprParams,
+    worker_params: WorkerParams,
     maybe_router: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
@@ -210,7 +211,6 @@ async fn loop_daemon(
     let mut worker_child = Command::new(worker_user.binary.clone())
         .current_dir(&worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-        .env(dirs::ENV_VAR_HOME, &worker_user.home)
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
         .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
         .uid(worker_user.uid)
@@ -238,8 +238,11 @@ async fn loop_daemon(
     let mut lines_reader = reader.lines();
     let mut writer = BufWriter::new(writer_half);
 
+    // safe state_home for usage later
+    let state_home = worker_params.state_home();
+
     // provide initial resources to worker
-    send_to_worker(RootToWorker::HoprParams { hopr_params }, &mut writer).await?;
+    send_to_worker(RootToWorker::WorkerParams { worker_params }, &mut writer).await?;
     send_to_worker(RootToWorker::Config { config }, &mut writer).await?;
 
     // enter main loop
@@ -298,7 +301,7 @@ async fn loop_daemon(
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                let router_result = routing::dynamic_router(worker_user.clone(), wg_data);
+                                let router_result = routing::dynamic_router(state_home.clone(), worker_user.clone(), wg_data);
 
                                 match router_result {
                                     Ok(mut router) => {
@@ -318,10 +321,10 @@ async fn loop_daemon(
                                 }
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                                let mut new_routing = routing::static_router(wg_data, peer_ips);
+                                let mut new_routing = routing::static_router(state_home.clone(), wg_data, peer_ips);
 
                                 // ensure we run down before going up to ensure clean slate
-                                teardown_any_routing(maybe_router, false).await;
+                                teardown_any_routing(maybe_router, true).await;
                                 let _ = new_routing.teardown(Logs::Suppress).await;
 
                                 // bring up new static routing

@@ -32,12 +32,12 @@ pub fn from_path(file: &Path, pass: String) -> Result<HoprKeys, Error> {
     HoprKeys::try_from(retrieval_mode).map_err(Error::KeyPair)
 }
 
-pub fn file() -> Result<PathBuf, Error> {
-    dirs::config_dir(ID_FILE).map_err(Error::Dirs)
+pub fn file(state_home: PathBuf) -> Result<PathBuf, Error> {
+    dirs::config_dir(state_home, ID_FILE).map_err(Error::Dirs)
 }
 
-pub fn pass_file() -> Result<PathBuf, Error> {
-    dirs::config_dir(ID_PASS).map_err(Error::Dirs)
+pub fn pass_file(state_home: PathBuf) -> Result<PathBuf, Error> {
+    dirs::config_dir(state_home, ID_PASS).map_err(Error::Dirs)
 }
 
 pub fn generate_pass() -> String {
