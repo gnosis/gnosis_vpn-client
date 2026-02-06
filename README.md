@@ -52,12 +52,12 @@ There are three environment variables that control the worker process setup:
   caching data will be stored. Defaults to `/var/lib/gnosisvpn` on Linux and
   `/Libary/Application Support/gnosisvpn` on macOS.
 
-- `WORKER_USER`: The user with limited privileges that will run the worker
+- `GNOSISVPN_WORKER_USER`: The user with limited privileges that will run the worker
   process. This user needs to have read and execute permissions for the worker
   binary and write permissions for the `GNOSISVPN_HOME` directory. Defaults to
   `gnosisvpn`.
 
-- `WORKER_BINARY`: The path to the worker binary. The worker process will be
+- `GNOSISVPN_WORKER_BINARY`: The path to the worker binary. The worker process will be
   spawned with this binary.
 
 ## Installation
