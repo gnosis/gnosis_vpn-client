@@ -65,13 +65,23 @@ fn pretty_print(resp: &Response) {
             eprintln!("Currently not connected to any destination");
         }
         Response::Status(command::StatusResponse { run_mode, destinations }) => {
-            let mut str_resp = format!("Status: {run_mode}\n");
-            str_resp.push_str("Destinations:\n");
+            let mut str_resp = format!("{run_mode}\n");
+            str_resp.push_str("---\n");
             for dest_state in destinations {
-                str_resp.push_str(&format!("- {dest}\n", dest = dest_state.destination));
-                str_resp.push_str(&format!("  {conn}\n", conn = dest_state.connection_state));
-                if let Some(health) = dest_state.health.as_ref() {
-                    str_resp.push_str(&format!("  {health}\n"));
+                let dest = dest_state.destination.clone();
+                str_resp.push_str(&format!("{dest}\n"));
+                str_resp.push_str(&format!(
+                    "{id} {conn}\n",
+                    id = dest.id,
+                    conn = dest_state.connection_state
+                ));
+                str_resp.push_str(&format!(
+                    "{id} {connectivity}\n",
+                    id = dest.id,
+                    connectivity = dest_state.connectivity
+                ));
+                if let Some(health) = dest_state.exit_health.as_ref() {
+                    str_resp.push_str(&format!("{id} {health}\n", id = dest.id));
                 }
             }
             println!("{str_resp}");
