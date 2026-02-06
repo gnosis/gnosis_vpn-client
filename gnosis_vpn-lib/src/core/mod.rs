@@ -1,3 +1,4 @@
+use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
@@ -93,7 +94,7 @@ enum Phase {
         query_safe: Querying<Option<SafeModule>>,
         deploy_safe: Querying<SafeModule>,
     },
-    Starting,
+    Starting(Option<EdgliInitState>),
     HoprSyncing,
     HoprRunning,
     Connecting(connection::up::Up),
@@ -252,7 +253,6 @@ impl Core {
             WorkerToCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
-                    // General TODO: improve status command
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
@@ -267,17 +267,17 @@ impl Core {
                                 };
                                 RunMode::preparing_safe(self.node_address, &balance, self.funding_tool.clone())
                             }
-                            Phase::Starting => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
-                            Phase::HoprSyncing => RunMode::warmup(&self.hopr.as_ref().map(|h| h.status())),
+                            Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
+                            Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                                 if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
                                     let min_channel_count = destination_health::count_distinct_channels(
                                         &self.destination_health.values().collect::<Vec<_>>(),
                                     );
                                     let issues = balances.to_funding_issues(min_channel_count, ticket_value);
-                                    RunMode::running(&Some(issues), &self.hopr.as_ref().map(|h| h.status()))
+                                    RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
                                 } else {
-                                    RunMode::running(&None, &self.hopr.as_ref().map(|h| h.status()))
+                                    RunMode::running(None, self.hopr.as_ref().map(|h| h.status()))
                                 }
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
@@ -437,6 +437,13 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
+            Results::HoprConstruction(edgli_state) => {
+                if matches!(self.phase, Phase::Starting(_)) {
+                    self.phase = Phase::Starting(Some(edgli_state));
+                } else {
+                    tracing::warn!(?self.phase, "hopr construction result received in unexpected phase");
+                }
+            }
             Results::TicketStats { res } => match res {
                 Ok(stats) => self.on_ticket_stats(stats, results_sender),
                 Err(err) => {
@@ -737,7 +744,6 @@ impl Core {
                 // we got our safe module - cancel presafe balance checks
                 self.cancel_presafe_queries.cancel();
                 // start edge client with queried safe module
-                self.phase = Phase::Starting;
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
                 self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
@@ -791,7 +797,6 @@ impl Core {
             (Ok(safe_module), Phase::CreatingSafe { .. }) => {
                 tracing::info!(?safe_module, "deployed safe module");
                 // start edge client with new safe module
-                self.phase = Phase::Starting;
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
                 self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
@@ -841,7 +846,6 @@ impl Core {
             Ok(safe_module) => {
                 tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
                 // start edge client with existing safe module
-                self.phase = Phase::Starting;
                 self.spawn_hopr_runner(safe_module, results_sender, Duration::ZERO);
             }
             Err(err) => {
@@ -927,7 +931,8 @@ impl Core {
         });
     }
 
-    fn spawn_hopr_runner(&self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        self.phase = Phase::Starting(None);
         let cancel = self.cancel_for_shutdown.clone();
         let hopr_params = self.hopr_params.clone();
         let results_sender = results_sender.clone();
