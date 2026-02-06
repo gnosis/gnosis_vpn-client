@@ -26,13 +26,14 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HoprParams {
+pub struct WorkerParams {
     identity_file: Option<PathBuf>,
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     blokli_url: Option<Url>,
     force_static_routing: bool,
+    state_home: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,7 +42,7 @@ pub enum ConfigFileMode {
     Generated,
 }
 
-impl HoprParams {
+impl WorkerParams {
     pub fn new(
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
@@ -49,6 +50,7 @@ impl HoprParams {
         allow_insecure: bool,
         blokli_url: Option<Url>,
         force_static_routing: bool,
+        state_home: PathBuf,
     ) -> Self {
         Self {
             identity_file,
@@ -57,6 +59,7 @@ impl HoprParams {
             allow_insecure,
             blokli_url,
             force_static_routing,
+            state_home,
         }
     }
 
@@ -144,5 +147,9 @@ impl HoprParams {
 
     pub fn blokli_url(&self) -> Option<Url> {
         self.blokli_url.clone()
+    }
+
+    pub fn state_home(&self) -> PathBuf {
+        self.state_home.clone()
     }
 }

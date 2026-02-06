@@ -7,7 +7,6 @@ pub mod core;
 pub mod dirs;
 pub mod event;
 pub mod hopr;
-pub mod hopr_params;
 pub mod info;
 pub mod ping;
 pub mod shell_command_ext;
@@ -20,6 +19,7 @@ mod log_output;
 mod peer;
 mod remote_data;
 mod ticket_stats;
+mod worker_params;
 
 pub mod prelude {
     pub use edgli::hopr_lib::Address;
