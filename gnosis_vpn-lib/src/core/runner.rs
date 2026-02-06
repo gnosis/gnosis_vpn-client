@@ -3,6 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
+use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
@@ -67,6 +68,7 @@ pub enum Results {
     ConnectedPeers {
         res: Result<Vec<Address>, Error>,
     },
+    HoprConstruction(EdgliInitState),
     HoprRunning,
     ConnectionEvent(connection::up::Event),
     ConnectionRequestToRoot(event::RespondableRequestToRoot),
@@ -398,6 +400,7 @@ impl Display for Results {
                     err
                 ),
             },
+            Results::HoprConstruction(state) => write!(f, "HoprConstruction: {:?}", state),
             Results::NodeBalance { res } => match res {
                 Ok(presafe) => write!(f, "NodeBalance: {}", presafe),
                 Err(err) => write!(f, "NodeBalance: Error({})", err),
