@@ -86,7 +86,8 @@ pub enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
-    HealthResult {
+    HealthCheck {
+        id: String,
         res: Result<Health, health::Error>,
     },
 }

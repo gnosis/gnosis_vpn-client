@@ -126,6 +126,15 @@ impl Core {
         let safeless_interactor = edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key)
             .await
             .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
+
+        let mut connectivity_health = HashMap::new();
+        for (id, dest) in config.destinations.clone() {
+            connectivity_health.insert(
+                id,
+                ConnectivityHealth::from_destination(&dest, worker_params.allow_insecure()),
+            );
+        }
+
         Ok(Core {
             // config data
             config,
@@ -154,8 +163,8 @@ impl Core {
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             ongoing_channel_fundings: Vec::new(),
+            connectivity_health,
             destination_health: HashMap::new(),
-            connectivity_health: HashMap::new(),
             responder_unit: None,
             responder_duration: None,
         })
@@ -692,6 +701,28 @@ impl Core {
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
             },
+
+            Results::HealthCheck { id, res } => match res {
+                Ok(health) => {
+                    tracing::info!(%id, "received health check result");
+                    self.destination_health.insert(id, health);
+                    if let Some(dest) = self.config.destinations.get(&id) {
+                        // reduce health checks when connected
+                        if matches!(self.phase, Phase::Connected(_)) {
+                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(45));
+                        } else {
+                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(15));
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(%err, "health check failed");
+                    self.destination_health.remove(&id);
+                    if let Some(dest) = self.config.destinations.get(&id) {
+                        self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(15));
+                    }
+                }
+            },
         }
     }
 
@@ -1036,6 +1067,29 @@ impl Core {
         }
     }
 
+    fn spawn_health_check_runner(
+        &self,
+        destination: Destination,
+        results_sender: &mpsc::Sender<Results>,
+        delay: Duration,
+    ) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_for_shutdown.clone();
+            let results_sender = results_sender.clone();
+            let config_connection = self.config.connection.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        let runner =
+                            destination_health::Runner::new(destination.clone(), config_connection, hopr.clone());
+                        runner.start(results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
     fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
@@ -1158,18 +1212,14 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
-        for (address, dest) in self.config.destinations.clone() {
-            self.connectivity_health.insert(
-                address,
-<<<<<<< HEAD
-                DestinationHealth::from_destination(&dest, self.worker_params.allow_insecure()),
-=======
-                ConnectivityHealth::from_destination(&dest, self.hopr_params.allow_insecure()),
->>>>>>> a40e3cff (preparing for destination health tracking)
-            );
-        }
         if connectivity_health::needs_peers(&self.connectivity_health.values().collect::<Vec<_>>()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
+        }
+        let mut delay = Duration::from_millis(133);
+        for (_id, destination) in self.config.destinations.clone() {
+            // delay initial health checks a bit
+            self.spawn_health_check_runner(destination.clone(), results_sender, delay);
+            delay += Duration::from_millis(133);
         }
         self.act_on_target(results_sender);
     }
