@@ -96,13 +96,11 @@ impl Runner {
         )
         .await?;
 
-        // 5a. request dynamic wg tunnel from root
-        let _ = results_sender
-            .send(progress(Progress::DynamicWgTunnel(session.clone())))
-            .await;
         // dynamic routing might block all outgoing communication
         // this leads to loosing peers and thus falling back to static routing might break because of that
         // gather peers before we start any routing attempt to ensure static routing might still work
+        // 5. gather ips of all announced peers
+        let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
         if self.hopr_params.force_static_routing() {
             tracing::info!("force static routing enabled - skipping dynamic routing attempt");
@@ -128,19 +126,41 @@ impl Runner {
         &self,
         wg: &WireGuard,
         registration: &Registration,
-        session: &SessionClientMetadata,
+        old_session: &SessionClientMetadata,
         peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 5b. gather ips of all announced peers
-        let _ = results_sender.send(progress(Progress::PeerIps)).await;
-
-        // 5c. request static wg tunnel from root
+        // 6b. request static wg tunnel from root
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
-        request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
-        self.run_check_static_routing(session, results_sender).await
+
+        // static routing needs to first close the session already used for dynamic routing
+        if let Err(err) = self
+            .hopr
+            .close_session(old_session.bound_host, old_session.protocol)
+            .await
+        {
+            tracing::warn!(error = ?err, "failed to close ping session used for dynamic routing - attempting to continue with static routing setup");
+        }
+
+        // open a new ping session
+        let ping_config =
+            runner::to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping)?;
+        let session = open_ping_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            ping_config,
+            results_sender,
+        )
+        .await?;
+
+        // setup static routing
+        request_static_wg_tunnel(wg, registration, &session, peer_ips, results_sender).await?;
+
+        // and verify it works
+        self.run_check_static_routing(&session, results_sender).await
     }
 
     async fn run_check_dynamic_routing(
@@ -151,7 +171,7 @@ impl Runner {
         peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 6a. request ping from root to check if dynamic routing works
+        // 7a. request ping from root to check if dynamic routing works
         let _ = results_sender.send(progress(Progress::Ping)).await;
         // only one retry to avoid long fallback time in case dynamic routing doesn't work
         let res = request_ping(&self.options.ping_options, 1, results_sender).await;
@@ -173,7 +193,7 @@ impl Runner {
         session: &SessionClientMetadata,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 6b. request ping from root to check if static routing works
+        // 7b. request ping from root to check if static routing works
         let _ = results_sender.send(progress(Progress::Ping)).await;
         // this is our last chance - give it some leeway with 5 retries
         let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
@@ -187,7 +207,7 @@ impl Runner {
         session: &SessionClientMetadata,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 7. adjust to main session
+        // 8. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
@@ -347,6 +367,10 @@ async fn request_dynamic_wg_tunnel(
     session: &SessionClientMetadata,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<(), Error> {
+    // 6a. request dynamic wg tunnel from root
+    let _ = results_sender
+        .send(progress(Progress::DynamicWgTunnel(session.clone())))
+        .await;
     let (tx, rx) = oneshot::channel();
     let interface_info = wireguard::InterfaceInfo {
         address: registration.address(),
