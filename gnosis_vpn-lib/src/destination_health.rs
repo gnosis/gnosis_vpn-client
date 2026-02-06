@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
+use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -12,9 +13,9 @@ use crate::connection::destination::Destination;
 use crate::connection::options::Options;
 use crate::core::runner::SurbConfigError;
 use crate::core::runner::{self, Results};
-use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::{gvpn_client, log_output};
 
 /// Health status of the exit and routing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +53,12 @@ impl Runner {
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run().await;
-        let _ = results_sender.send(Results::HealthResult { res }).await;
+        let _ = results_sender
+            .send(Results::HealthCheck {
+                id: self.destination.id.clone(),
+                res,
+            })
+            .await;
     }
 
     async fn run(&self) -> Result<DestinationHealth, Error> {
@@ -129,4 +135,17 @@ async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClie
             tracing::warn!(error = ?err, "failed to close health session after health check");
             err
         });
+}
+
+impl Display for DestinationHealth {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Slots: {}, Load Avg: {}, Round Trip Time: {:?}, Checked: {}",
+            self.slots,
+            self.load_avg,
+            self.round_trip_time,
+            log_output::elapsed(&self.checked_at)
+        )
+    }
 }

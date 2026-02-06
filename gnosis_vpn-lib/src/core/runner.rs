@@ -26,7 +26,7 @@ use std::time::Duration;
 use crate::balance;
 use crate::compat::SafeModule;
 use crate::connection;
-use crate::health::{self, Health};
+use crate::destination_health::{self, DestinationHealth};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
@@ -88,7 +88,7 @@ pub enum Results {
     SessionMonitorFailed,
     HealthCheck {
         id: String,
-        res: Result<Health, health::Error>,
+        res: Result<DestinationHealth, destination_health::Error>,
     },
 }
 
@@ -480,6 +480,10 @@ impl Display for Results {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
+            },
+            Results::HealthCheck { id, res } => match res {
+                Ok(health) => write!(f, "HealthCheck ({}): {}", id, health),
+                Err(err) => write!(f, "HealthCheck ({}): Error({})", id, err),
             },
         }
     }

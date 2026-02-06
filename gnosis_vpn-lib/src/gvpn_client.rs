@@ -171,3 +171,19 @@ impl Display for Registration {
         write!(f, "WgRegistration {{ ip: {} }}", self.ip)
     }
 }
+
+impl Display for Slots {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "connected: {}/{}", self.connected, self.available + self.connected)
+    }
+}
+
+impl Display for LoadAvg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "load_avg: {:.2} (1m), {:.2} (5m), {:.2} (15m), nproc: {}",
+            self.one, self.five, self.fifteen, self.nproc
+        )
+    }
+}

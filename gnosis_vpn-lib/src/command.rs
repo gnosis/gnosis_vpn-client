@@ -10,7 +10,8 @@ use std::time::SystemTime;
 use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::connection::destination_health::DestinationHealth;
+use crate::connectivity_health::ConnectivityHealth;
+use crate::destination_health::DestinationHealth;
 use crate::info::Info;
 use crate::log_output;
 
@@ -105,8 +106,8 @@ pub enum FundingState {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    WaitingToConnect(Destination, Option<DestinationHealth>),
-    UnableToConnect(Destination, DestinationHealth),
+    WaitingToConnect(Destination, Option<ConnectivityHealth>),
+    UnableToConnect(Destination, ConnectivityHealth),
     DestinationNotFound,
 }
 
@@ -116,11 +117,12 @@ pub enum DisconnectResponse {
     NotConnected,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
-    pub health: Option<DestinationHealth>,
+    pub connectivity: ConnectivityHealth,
+    pub exit_health: Option<DestinationHealth>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -173,10 +175,10 @@ impl ConnectResponse {
     pub fn connecting(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
     }
-    pub fn waiting(destination: Destination, health: Option<DestinationHealth>) -> Self {
+    pub fn waiting(destination: Destination, health: Option<ConnectivityHealth>) -> Self {
         ConnectResponse::WaitingToConnect(destination, health)
     }
-    pub fn unable(destination: Destination, health: DestinationHealth) -> Self {
+    pub fn unable(destination: Destination, health: ConnectivityHealth) -> Self {
         ConnectResponse::UnableToConnect(destination, health)
     }
     pub fn destination_not_found() -> Self {
@@ -384,7 +386,7 @@ impl Display for HoprInitStatus {
 mod tests {
     use super::*;
     use crate::connection::destination::RoutingOptions;
-    use crate::connection::destination_health::{DestinationHealth, Health, Need};
+    use crate::connectivity_health::{ConnectivityHealth, Health, Need};
     use std::collections::HashMap;
 
     fn address(byte: u8) -> Address {
@@ -400,8 +402,8 @@ mod tests {
         )
     }
 
-    fn health() -> DestinationHealth {
-        DestinationHealth {
+    fn health() -> ConnectivityHealth {
+        ConnectivityHealth {
             id: "test-destination".to_string(),
             last_error: None,
             health: Health::ReadyToConnect,
