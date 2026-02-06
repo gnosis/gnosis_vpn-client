@@ -58,9 +58,9 @@ pub enum WorkerToRoot {
     OutOfSync,
 }
 
-/// Runner requesting root command and waiting for response
+/// Runner requesting root command and usually waiting for response
 #[derive(Debug)]
-pub enum RespondableRequestToRoot {
+pub enum RunnerToRoot {
     DynamicWgRouting {
         wg_data: WireGuardData,
         resp: oneshot::Sender<Result<(), String>>,
@@ -70,6 +70,7 @@ pub enum RespondableRequestToRoot {
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<(), String>>,
     },
+    TearDownWg,
     Ping {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,

@@ -14,7 +14,7 @@ use std::time::Duration;
 use crate::connection::destination::Destination;
 use crate::connection::options::Options;
 use crate::core::runner::{self, Results};
-use crate::event::{self, RespondableRequestToRoot};
+use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
@@ -130,9 +130,14 @@ impl Runner {
         peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 6b. request static wg tunnel from root
+        // 6b. dismantle dynamic routing and request static wg tunnel from root
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
+            .await;
+
+        // teardown any existing dynamic routing
+        let _ = results_sender
+            .send(Results::ConnectionRequestToRoot(RunnerToRoot::TearDownWg))
             .await;
 
         // static routing needs to first close the session already used for dynamic routing
@@ -385,9 +390,10 @@ async fn request_dynamic_wg_tunnel(
         interface_info,
     };
     let _ = results_sender
-        .send(Results::ConnectionRequestToRoot(
-            RespondableRequestToRoot::DynamicWgRouting { wg_data, resp: tx },
-        ))
+        .send(Results::ConnectionRequestToRoot(RunnerToRoot::DynamicWgRouting {
+            wg_data,
+            resp: tx,
+        }))
         .await;
 
     tokio::select!(
@@ -423,13 +429,11 @@ async fn request_static_wg_tunnel(
         interface_info,
     };
     let _ = results_sender
-        .send(Results::ConnectionRequestToRoot(
-            RespondableRequestToRoot::StaticWgRouting {
-                wg_data,
-                peer_ips,
-                resp: tx,
-            },
-        ))
+        .send(Results::ConnectionRequestToRoot(RunnerToRoot::StaticWgRouting {
+            wg_data,
+            peer_ips,
+            resp: tx,
+        }))
         .await;
 
     tokio::select!(
@@ -458,7 +462,7 @@ async fn request_ping(
     (|| async {
         let (tx, rx) = oneshot::channel();
         let _ = results_sender
-            .send(Results::ConnectionRequestToRoot(RespondableRequestToRoot::Ping {
+            .send(Results::ConnectionRequestToRoot(RunnerToRoot::Ping {
                 options: options.clone(),
                 resp: tx,
             }))

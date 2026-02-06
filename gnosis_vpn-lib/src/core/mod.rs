@@ -20,7 +20,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
 use crate::connection::destination_health::{self, DestinationHealth};
-use crate::event::{CoreToWorker, RequestToRoot, RespondableRequestToRoot, ResponseFromRoot, WorkerToCore};
+use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
 use crate::hopr_params::HoprParams;
@@ -662,13 +662,13 @@ impl Core {
             },
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RespondableRequestToRoot::DynamicWgRouting { wg_data, resp } => {
+                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
                     self.responder_unit = Some(resp);
                     let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
-                RespondableRequestToRoot::StaticWgRouting {
+                RunnerToRoot::StaticWgRouting {
                     wg_data,
                     peer_ips,
                     resp,
@@ -678,9 +678,14 @@ impl Core {
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
-                RespondableRequestToRoot::Ping { options, resp } => {
+                RunnerToRoot::Ping { options, resp } => {
                     self.responder_duration = Some(resp);
                     let request = RequestToRoot::Ping { options };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+
+                RunnerToRoot::TearDownWg => {
+                    let request = RequestToRoot::TearDownWg;
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
             },

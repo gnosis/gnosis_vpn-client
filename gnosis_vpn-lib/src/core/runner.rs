@@ -71,7 +71,7 @@ pub enum Results {
     HoprConstruction(EdgliInitState),
     HoprRunning,
     ConnectionEvent(connection::up::Event),
-    ConnectionRequestToRoot(event::RespondableRequestToRoot),
+    ConnectionRequestToRoot(event::RunnerToRoot),
     ConnectionResult {
         res: Result<SessionClientMetadata, connection::up::Error>,
     },
