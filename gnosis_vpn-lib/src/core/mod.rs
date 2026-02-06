@@ -714,9 +714,9 @@ impl Core {
                     if let Some(dest) = self.config.destinations.get(&id) {
                         // reduce health checks when connected
                         if matches!(self.phase, Phase::Connected(_)) {
-                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(45));
+                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(90));
                         } else {
-                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(15));
+                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(25));
                         }
                     }
                 }
@@ -724,7 +724,7 @@ impl Core {
                     tracing::error!(%err, "health check failed");
                     self.destination_health.remove(&id);
                     if let Some(dest) = self.config.destinations.get(&id) {
-                        self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(15));
+                        self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(45));
                     }
                 }
             },

@@ -66,22 +66,22 @@ fn pretty_print(resp: &Response) {
         }
         Response::Status(command::StatusResponse { run_mode, destinations }) => {
             let mut str_resp = format!("{run_mode}\n");
-            str_resp.push_str("---\n");
             for dest_state in destinations {
+                str_resp.push_str("---\n");
                 let dest = dest_state.destination.clone();
                 str_resp.push_str(&format!("{dest}\n"));
                 str_resp.push_str(&format!(
-                    "{id} {conn}\n",
+                    "{id} Connection: {conn}\n",
                     id = dest.id,
                     conn = dest_state.connection_state
                 ));
                 str_resp.push_str(&format!(
-                    "{id} {connectivity}\n",
+                    "{id} Connectivity state: {connectivity}\n",
                     id = dest.id,
                     connectivity = dest_state.connectivity
                 ));
                 if let Some(health) = dest_state.exit_health.as_ref() {
-                    str_resp.push_str(&format!("{id} {health}\n", id = dest.id));
+                    str_resp.push_str(&format!("{id} Exit health: {health}\n", id = dest.id));
                 }
             }
             println!("{str_resp}");
