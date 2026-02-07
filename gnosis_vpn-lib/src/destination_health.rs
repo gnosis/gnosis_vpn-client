@@ -1,4 +1,4 @@
-/// This module helps identifiying the health of a destination's exit.
+/// This module helps identifying the health of a destination's exit.
 use edgli::hopr_lib::SessionClientConfig;
 use edgli::hopr_lib::SurbBalancerConfig;
 use serde::{Deserialize, Serialize};
