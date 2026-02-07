@@ -709,10 +709,10 @@ impl Core {
 
             Results::HealthCheck { id, health } => {
                 tracing::info!(%id, %health, "received health check");
-                let next_interval = health.next_interval(matches!(self.phase, Phase::Connected(_)).into());
+                let res_next_interval = health.next_interval(matches!(self.phase, Phase::Connected(_)).into());
                 self.destination_healths.insert(id.clone(), health);
-                if let Some(dest) = self.config.destinations.get(&id) {
-                    self.spawn_health_check_runner(dest.clone(), results_sender, next_interval);
+                if let (Some(int), Some(dest)) = (res_next_interval, self.config.destinations.get(&id)) {
+                    self.spawn_health_check_runner(dest.clone(), results_sender, int);
                 }
             }
         }

@@ -26,7 +26,6 @@ pub enum DestinationHealth {
     Init,
     Running {
         since: SystemTime,
-        previous_failures: u32,
     },
     Failure {
         checked_at: SystemTime,
@@ -70,6 +69,14 @@ impl Runner {
     }
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
+        let _ = results_sender
+            .send(Results::HealthCheck {
+                id: self.destination.id.clone(),
+                health: DestinationHealth::Running {
+                    since: SystemTime::now(),
+                },
+            })
+            .await;
         let new_health = self.run().await;
         let health = match (self.old_health.clone(), new_health) {
             // increment failure count if the health check failed again
@@ -195,15 +202,19 @@ async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClie
 }
 
 impl DestinationHealth {
-    pub fn next_interval(&self, connected: Connected) -> Duration {
+    pub fn next_interval(&self, connected: Connected) -> Option<Duration> {
         match self {
             DestinationHealth::Failure { previous_failures, .. } => {
                 // increment by failure amount up to max interval
-                (FAILURE_INTERVAL + (FAILURE_INTERVAL * (*previous_failures))).min(MAX_INTERVAL_BETWEEN_FAILURES)
+                let i =
+                    (FAILURE_INTERVAL + (FAILURE_INTERVAL * (*previous_failures))).min(MAX_INTERVAL_BETWEEN_FAILURES);
+                Some(i)
             }
-            _ => match connected {
-                Connected::Yes => CONNECTED_INTERVAL,
-                Connected::No => DISCONNECTED_INTERVAL,
+            DestinationHealth::Running { .. } => None,
+            DestinationHealth::Init => None,
+            DestinationHealth::Success { .. } => match connected {
+                Connected::Yes => Some(CONNECTED_INTERVAL),
+                Connected::No => Some(DISCONNECTED_INTERVAL),
             },
         }
     }
@@ -219,10 +230,7 @@ impl Display for DestinationHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DestinationHealth::Init => write!(f, "waiting for connection"),
-            DestinationHealth::Running {
-                since,
-                previous_failures: _,
-            } => write!(f, "running since {}", log_output::elapsed(since)),
+            DestinationHealth::Running { since } => write!(f, "running since {}", log_output::elapsed(since)),
             DestinationHealth::Failure {
                 checked_at,
                 error,
