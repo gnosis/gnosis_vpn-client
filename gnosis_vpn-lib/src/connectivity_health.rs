@@ -1,4 +1,4 @@
-/// This module keeps track of a destination's connectivity health indicating wether a connection can be successful.
+/// This module keeps track of a destination's connectivity health indicating whether a connection can be successful.
 /// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted connections.
 /// The **need** field indicates what is required to make the destination healthy in general.
 use serde::{Deserialize, Serialize};
