@@ -33,6 +33,7 @@ let
     fileset = lib.fileset.unions [
       ../Cargo.toml
       ../Cargo.lock
+      (craneLib.fileset.commonCargoSources ../gnosis_vpn-system_tests)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-lib)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-ctl)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-root)
@@ -78,7 +79,7 @@ let
     // {
       inherit pname;
       inherit postInstall;
-      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl";
+      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl --bin gnosis_vpn-system_tests";
       src = srcFiles;
     };
 in
