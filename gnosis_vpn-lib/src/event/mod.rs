@@ -33,6 +33,8 @@ pub enum CoreToWorker {
 }
 
 /// Messages sent from root to worker
+/// Allowing large variant as this is sent between processes
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
     /// Startup parameters for hoprd
