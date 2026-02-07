@@ -8,6 +8,7 @@ pub mod core;
 pub mod destination_health;
 pub mod dirs;
 pub mod event;
+pub mod gvpn_client;
 pub mod hopr;
 pub mod info;
 pub mod ping;
@@ -17,7 +18,6 @@ pub mod wireguard;
 pub mod worker;
 pub mod worker_params;
 
-mod gvpn_client;
 mod log_output;
 mod peer;
 mod remote_data;
