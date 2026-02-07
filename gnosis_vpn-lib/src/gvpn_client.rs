@@ -22,7 +22,7 @@ pub struct Registration {
 #[derive(Clone, Debug)]
 pub struct Input {
     public_key: String,
-    port: u16,
+    socket_addr: SocketAddr,
     timeout: Duration,
 }
 
@@ -43,10 +43,10 @@ pub enum Error {
 }
 
 impl Input {
-    pub fn new(public_key: String, port: u16, timeout: Duration) -> Self {
+    pub fn new(public_key: String, socket_addr: SocketAddr, timeout: Duration) -> Self {
         Input {
             public_key,
-            port,
+            socket_addr,
             timeout,
         }
     }
@@ -90,8 +90,8 @@ pub async fn health(client: &Client, socket_addr: SocketAddr, timeout: Duration)
     let headers = remote_data::json_headers();
     let url = Url::parse(
         format!(
-            "http://{ip}:{port}/api/v1/status",
-            ip = socket_addr.ip(),
+            "http://{host}:{port}/api/v1/status",
+            host = socket_addr.ip(),
             port = socket_addr.port()
         )
         .as_str(),
@@ -114,8 +114,14 @@ pub async fn health(client: &Client, socket_addr: SocketAddr, timeout: Duration)
 
 pub async fn register(client: &Client, input: &Input) -> Result<Registration, Error> {
     let headers = remote_data::json_headers();
-    let mut url = Url::parse("http://localhost/api/v1/clients/register")?;
-    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/api/v1/clients/register",
+            host = input.socket_addr.ip(),
+            port = input.socket_addr.port()
+        )
+        .as_str(),
+    )?;
     let json = json!({
         "public_key": input.public_key,
     });
@@ -138,8 +144,14 @@ pub async fn register(client: &Client, input: &Input) -> Result<Registration, Er
 
 pub async fn unregister(client: &Client, input: &Input) -> Result<(), Error> {
     let headers = remote_data::json_headers();
-    let mut url = Url::parse("http://localhost/api/v1/clients/unregister")?;
-    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/api/v1/clients/unregister",
+            host = input.socket_addr.ip(),
+            port = input.socket_addr.port()
+        )
+        .as_str(),
+    )?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post unregister client");

@@ -289,11 +289,7 @@ async fn register(
     public_key: String,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Registration, gvpn_client::Error> {
-    let input = gvpn_client::Input::new(
-        public_key,
-        session_client_metadata.bound_host.port(),
-        options.timeouts.http,
-    );
+    let input = gvpn_client::Input::new(public_key, session_client_metadata.bound_host, options.timeouts.http);
     (|| async {
         tracing::debug!(?input, "attempting to register gvpn client public key");
         let client = reqwest::Client::new();
@@ -383,7 +379,11 @@ async fn request_dynamic_wg_tunnel(
     let peer_info = wireguard::PeerInfo {
         public_key: registration.server_public_key(),
         preshared_key: registration.preshared_key(),
-        endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+        endpoint: format!(
+            "{host}:{port}",
+            host = session.bound_host.ip(),
+            port = session.bound_host.port()
+        ),
     };
     let wg_data = event::WireGuardData {
         wg: wg.clone(),
@@ -423,7 +423,11 @@ async fn request_static_wg_tunnel(
     let peer_info = wireguard::PeerInfo {
         public_key: registration.server_public_key(),
         preshared_key: registration.preshared_key(),
-        endpoint: format!("127.0.0.1:{}", session.bound_host.port()),
+        endpoint: format!(
+            "{host}:{port}",
+            host = session.bound_host.ip(),
+            port = session.bound_host.port()
+        ),
     };
     let wg_data = event::WireGuardData {
         wg: wg.clone(),
