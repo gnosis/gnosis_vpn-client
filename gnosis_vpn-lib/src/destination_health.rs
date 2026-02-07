@@ -176,12 +176,11 @@ async fn request_health(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
 ) -> Result<gvpn_client::Health, gvpn_client::Error> {
-    let port = session_client_metadata.bound_host.port();
-    let timeout = options.timeouts.http;
-
-    tracing::debug!(%port, ?timeout, "requesting health status from exit");
     let client = reqwest::Client::new();
-    gvpn_client::health(&client, port, timeout).await
+    let socket_addr = session_client_metadata.bound_host;
+    let timeout = options.timeouts.http;
+    tracing::debug!(?socket_addr, ?timeout, "requesting health status from exit");
+    gvpn_client::health(&client, socket_addr, timeout).await
 }
 
 async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) {

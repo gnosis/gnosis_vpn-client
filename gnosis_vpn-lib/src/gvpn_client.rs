@@ -5,7 +5,7 @@ use thiserror::Error;
 use url::Url;
 
 use std::fmt::{self, Display};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use crate::remote_data;
@@ -86,10 +86,16 @@ pub struct LoadAvg {
     pub nproc: u16,
 }
 
-pub async fn health(client: &Client, port: u16, timeout: Duration) -> Result<Health, Error> {
+pub async fn health(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<Health, Error> {
     let headers = remote_data::json_headers();
-    let mut url = Url::parse("http://localhost/api/v1/status")?;
-    url.set_port(Some(port)).map_err(|_| Error::InvalidPort)?;
+    let url = Url::parse(
+        format!(
+            "http://{ip}:{port}/api/v1/status",
+            ip = socket_addr.ip(),
+            port = socket_addr.port()
+        )
+        .as_str(),
+    )?;
     tracing::debug!(?headers, ?url, "get server health");
     let resp = client
         .get(url)
