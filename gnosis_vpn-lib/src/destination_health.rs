@@ -15,10 +15,10 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::{gvpn_client, log_output};
 
-pub const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
-pub const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
-pub const CONNECTED_INTERVAL: Duration = Duration::from_mins(3);
-pub const DISCONNECTED_INTERVAL: Duration = Duration::from_secs(90);
+const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
+const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+const CONNECTED_INTERVAL: Duration = Duration::from_mins(3);
+const DISCONNECTED_INTERVAL: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub enum DestinationHealth {
@@ -26,12 +26,12 @@ pub enum DestinationHealth {
     Init,
     Running {
         since: SystemTime,
-        amount_of_failures: u32,
+        previous_failures: u32,
     },
     Failure {
         checked_at: SystemTime,
-        last_error: String,
-        amount_of_failures: u32,
+        error: String,
+        previous_failures: u32,
     },
     Success {
         checked_at: SystemTime,
@@ -41,10 +41,16 @@ pub enum DestinationHealth {
     },
 }
 
+pub enum Connected {
+    Yes,
+    No,
+}
+
 pub struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
     options: Options,
+    old_health: DestinationHealth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,62 +60,91 @@ pub struct Error {
 }
 
 impl Runner {
-    pub fn new(destination: Destination, options: Options, hopr: Arc<Hopr>) -> Self {
+    pub fn new(destination: Destination, options: Options, old_health: DestinationHealth, hopr: Arc<Hopr>) -> Self {
         Self {
             destination,
             hopr,
             options,
+            old_health,
         }
     }
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
-        let res = self.run().await;
+        let new_health = self.run().await;
+        // increment failure count if the health check failed again
+        let health = match new_health {
+            DestinationHealth::Failure {
+                checked_at,
+                error,
+                previous_failures,
+            } => DestinationHealth::Failure {
+                checked_at,
+                error,
+                previous_failures: previous_failures + 1,
+            },
+            h => h,
+        };
         let _ = results_sender
             .send(Results::HealthCheck {
                 id: self.destination.id.clone(),
-                res,
+                health,
             })
             .await;
     }
 
-    async fn run(&self) -> Result<DestinationHealth, Error> {
+    async fn run(&self) -> DestinationHealth {
         let checked_at = SystemTime::now();
 
-        // 1. open health session
+        // 1. calc health session config
         let measure_total = Instant::now();
-        let health_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.health, self.options.max_surb_upstream.health)
-                .map_err(|err| Error {
-                    message: format!("Surb balancer config error: {err}"),
+        let res_config =
+            runner::to_surb_balancer_config(self.options.buffer_sizes.health, self.options.max_surb_upstream.health);
+        let config = match res_config {
+            Ok(config) => config,
+            Err(err) => {
+                return DestinationHealth::Failure {
                     checked_at,
-                })?;
-        let health_session = open_health_session(&self.hopr, &self.destination, &self.options, health_config)
-            .await
-            .map_err(|err| Error {
-                message: format!("Session creation error: {err}"),
-                checked_at,
-            })?;
+                    error: format!("Surb balancer config error: {err}"),
+                    previous_failures: 0,
+                };
+            }
+        };
 
-        // 2. request health
+        // 2. open health session
+        let res_session = open_health_session(&self.hopr, &self.destination, &self.options, config).await;
+        let session = match res_session {
+            Ok(session) => session,
+            Err(err) => {
+                return DestinationHealth::Failure {
+                    checked_at,
+                    error: format!("Session creation error: {err}"),
+                    previous_failures: 0,
+                };
+            }
+        };
+
+        // 3. request health
         let measure_rtt = Instant::now();
-        let health_res = request_health(&self.options, &health_session).await;
+        let res_health = request_health(&self.options, &session).await;
         let rtt = measure_rtt.elapsed();
 
-        // 3. close bridge session
-        close_health_session(&self.hopr, &health_session).await;
+        // 4. close health session
+        close_health_session(&self.hopr, &session).await;
 
         let measure_total = measure_total.elapsed();
-        health_res
-            .map(|health| DestinationHealth::Success {
+        match res_health {
+            Ok(health) => DestinationHealth::Success {
                 checked_at,
                 health,
                 total_time: measure_total,
                 round_trip_time: rtt,
-            })
-            .map_err(|err| Error {
-                message: format!("Health request error: {err}"),
+            },
+            Err(err) => DestinationHealth::Failure {
                 checked_at,
-            })
+                error: format!("Health request error: {err}"),
+                previous_failures: 0,
+            },
+        }
     }
 }
 
@@ -160,30 +195,51 @@ async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClie
         });
 }
 
+impl DestinationHealth {
+    pub fn next_interval(&self, connected: Connected) -> Duration {
+        match self {
+            DestinationHealth::Failure { previous_failures, .. } => {
+                // increment by failure amount up to max interval
+                (FAILURE_INTERVAL + (FAILURE_INTERVAL * (*previous_failures))).min(MAX_INTERVAL_BETWEEN_FAILURES)
+            }
+            _ => match connected {
+                Connected::Yes => CONNECTED_INTERVAL,
+                Connected::No => DISCONNECTED_INTERVAL,
+            },
+        }
+    }
+}
+
+impl From<bool> for Connected {
+    fn from(value: bool) -> Self {
+        if value { Connected::Yes } else { Connected::No }
+    }
+}
+
 impl Display for DestinationHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DestinationHealth::Init => write!(f, "waiting for connection"),
             DestinationHealth::Running {
                 since,
-                amount_of_failures: _,
+                previous_failures: _,
             } => write!(f, "running since {}", log_output::elapsed(since)),
             DestinationHealth::Failure {
                 checked_at,
-                last_error,
-                amount_of_failures,
-            } if *amount_of_failures > 1 => write!(
+                error,
+                previous_failures,
+            } if *previous_failures > 0 => write!(
                 f,
                 "failed {} times in a row {} ago: {}",
-                amount_of_failures,
+                previous_failures + 1,
                 log_output::elapsed(checked_at),
-                last_error
+                error,
             ),
             DestinationHealth::Failure {
                 checked_at,
-                last_error,
-                amount_of_failures: _,
-            } => write!(f, "failed {} ago: {}", log_output::elapsed(checked_at), last_error),
+                error,
+                previous_failures: _,
+            } => write!(f, "failed {} ago: {}", log_output::elapsed(checked_at), error),
             DestinationHealth::Success {
                 checked_at,
                 health,

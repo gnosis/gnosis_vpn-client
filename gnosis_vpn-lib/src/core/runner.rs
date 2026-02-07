@@ -89,7 +89,6 @@ pub enum Results {
     HealthCheck {
         id: String,
         health: DestinationHealth,
-        next_interval: Duration,
     },
 }
 
@@ -482,17 +481,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheck {
-                id,
-                health,
-                next_interval,
-            } => write!(
-                f,
-                "HealthCheck ({}): {}, next check in {}s",
-                id,
-                health,
-                next_interval.as_secs()
-            ),
+            Results::HealthCheck { id, health } => write!(f, "HealthCheck ({}): {}", id, health),
         }
     }
 }

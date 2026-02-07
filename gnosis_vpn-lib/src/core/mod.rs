@@ -340,28 +340,27 @@ impl Core {
 
                     Command::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
-                            if let Some(health) = self.connectivity_health.get(&dest.id) {
-                                if health.is_ready_to_connect() {
+                            let connectivity = self.connectivity_health.get(&dest.id).unwrap_or_default();
+                                if connectivity.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
                                     self.target_destination = Some(dest.clone());
                                     self.act_on_target(results_sender);
-                                } else if health.is_unrecoverable() {
+                                } else if connectivity.is_unrecoverable() {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::unable(
                                         dest.clone(),
-                                        health.clone(),
+                                        connectivity.clone(),
                                     )));
                                 } else {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::waiting(
                                         dest.clone(),
-                                        Some(health.clone()),
+                                        connectivity.clone(),
                                     )));
                                     self.target_destination = Some(dest.clone());
                                 }
                             } else {
-                                let _ =
-                                    resp.send(Response::connect(command::ConnectResponse::waiting(dest.clone(), None)));
-                                self.target_destination = Some(dest.clone());
+                                tracing::warn!(%id, "no connectivity health found for destination - this should not happen");
+                                let _ = resp.send(Response::connect(command::ConnectResponse::destination_not_found()));
                             }
                         }
                         None => {
@@ -708,35 +707,14 @@ impl Core {
                 }
             },
 
-            Results::HealthCheck { id, res } => match res {
-                Ok(health) => {
-                    tracing::info!(%id, "received health check result");
-                    self.destination_healths.insert(id.clone(), health);
-                    if let Some(dest) = self.config.destinations.get(&id) {
-                        // reduce health checks when connected
-                        if matches!(self.phase, Phase::Connected(_)) {
-                            self.spawn_health_check_runner(
-                                dest.clone(),
-                                results_sender,
-                                destination_health::CONNECTED_INTERVAL,
-                            );
-                        } else {
-                            self.spawn_health_check_runner(
-                                dest.clone(),
-                                results_sender,
-                                destination_health::DISCONNECTED_INTERVAL,
-                            );
-                        }
-                    }
+            Results::HealthCheck { id, health } => {
+                tracing::info!(%id, %health, "received health check");
+                let next_interval = health.next_interval(matches!(self.phase, Phase::Connected(_)).into());
+                self.destination_healths.insert(id.clone(), health);
+                if let Some(dest) = self.config.destinations.get(&id) {
+                    self.spawn_health_check_runner(dest.clone(), results_sender, next_interval);
                 }
-                Err(err) => {
-                    tracing::error!(?err, "health check failed");
-                    self.destination_health.remove(&id);
-                    if let Some(dest) = self.config.destinations.get(&id) {
-                        self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(45));
-                    }
-                }
-            },
+            }
         }
     }
 
@@ -1094,12 +1072,21 @@ impl Core {
             let cancel = self.cancel_for_shutdown.clone();
             let results_sender = results_sender.clone();
             let config_connection = self.config.connection.clone();
+            let old_health = self
+                .destination_healths
+                .get(&destination.id)
+                .cloned()
+                .unwrap_or_default();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        let runner =
-                            destination_health::Runner::new(destination.clone(), config_connection, hopr.clone());
+                        let runner = destination_health::Runner::new(
+                            destination.clone(),
+                            config_connection,
+                            old_health,
+                            hopr.clone(),
+                        );
                         runner.start(results_sender).await;
                     })
                     .await
