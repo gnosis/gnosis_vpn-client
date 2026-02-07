@@ -106,7 +106,7 @@ pub enum FundingState {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    WaitingToConnect(Destination, Option<ConnectivityHealth>),
+    WaitingToConnect(Destination, ConnectivityHealth),
     UnableToConnect(Destination, ConnectivityHealth),
     DestinationNotFound,
 }
@@ -122,7 +122,7 @@ pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
     pub connectivity: ConnectivityHealth,
-    pub exit_health: Option<DestinationHealth>,
+    pub exit_health: DestinationHealth,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -175,7 +175,7 @@ impl ConnectResponse {
     pub fn connecting(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
     }
-    pub fn waiting(destination: Destination, health: Option<ConnectivityHealth>) -> Self {
+    pub fn waiting(destination: Destination, health: ConnectivityHealth) -> Self {
         ConnectResponse::WaitingToConnect(destination, health)
     }
     pub fn unable(destination: Destination, health: ConnectivityHealth) -> Self {
@@ -454,8 +454,8 @@ mod tests {
         let resp = ConnectResponse::connecting(dest.clone());
         assert!(matches!(resp, ConnectResponse::Connecting(_)));
 
-        let waiting = ConnectResponse::waiting(dest.clone(), Some(health()));
-        assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, Some(_))));
+        let waiting = ConnectResponse::waiting(dest.clone(), health());
+        assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, _)));
 
         let unable = ConnectResponse::unable(dest.clone(), health());
         assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));

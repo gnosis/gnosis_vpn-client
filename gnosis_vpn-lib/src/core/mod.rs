@@ -80,7 +80,7 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
-    destination_health: HashMap<String, DestinationHealth>,
+    destination_healths: HashMap<String, DestinationHealth>,
     connectivity_health: HashMap<String, ConnectivityHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
@@ -135,6 +135,11 @@ impl Core {
             );
         }
 
+        let mut destination_healths = HashMap::new();
+        for id in config.destinations.keys().cloned() {
+            destination_healths.insert(id, DestinationHealth::Init);
+        }
+
         Ok(Core {
             // config data
             config,
@@ -164,7 +169,7 @@ impl Core {
             ongoing_disconnections: Vec::new(),
             ongoing_channel_fundings: Vec::new(),
             connectivity_health,
-            destination_health: HashMap::new(),
+            destination_healths,
             responder_unit: None,
             responder_duration: None,
         })
@@ -324,12 +329,8 @@ impl Core {
                                 command::DestinationState {
                                     destination,
                                     connection_state,
-                                    connectivity: self
-                                        .connectivity_health
-                                        .get(&v.id)
-                                        .cloned()
-                                        .unwrap_or(Default::default()),
-                                    exit_health: self.destination_health.get(&v.id).cloned(),
+                                    connectivity: self.connectivity_health.get(&v.id).cloned().unwrap_or_default(),
+                                    exit_health: self.destination_healths.get(&v.id).cloned().unwrap_or_default(),
                                 }
                             })
                             .collect();
@@ -710,13 +711,21 @@ impl Core {
             Results::HealthCheck { id, res } => match res {
                 Ok(health) => {
                     tracing::info!(%id, "received health check result");
-                    self.destination_health.insert(id.clone(), health);
+                    self.destination_healths.insert(id.clone(), health);
                     if let Some(dest) = self.config.destinations.get(&id) {
                         // reduce health checks when connected
                         if matches!(self.phase, Phase::Connected(_)) {
-                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(90));
+                            self.spawn_health_check_runner(
+                                dest.clone(),
+                                results_sender,
+                                destination_health::CONNECTED_INTERVAL,
+                            );
                         } else {
-                            self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(25));
+                            self.spawn_health_check_runner(
+                                dest.clone(),
+                                results_sender,
+                                destination_health::DISCONNECTED_INTERVAL,
+                            );
                         }
                     }
                 }

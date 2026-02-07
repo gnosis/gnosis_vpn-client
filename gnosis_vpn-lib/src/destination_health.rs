@@ -2,7 +2,6 @@
 use edgli::hopr_lib::SessionClientConfig;
 use edgli::hopr_lib::SurbBalancerConfig;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -11,19 +10,35 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::Destination;
 use crate::connection::options::Options;
-use crate::core::runner::SurbConfigError;
 use crate::core::runner::{self, Results};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::{gvpn_client, log_output};
 
-/// Health status of the exit and routing
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DestinationHealth {
-    pub slots: gvpn_client::Slots,
-    pub load_avg: gvpn_client::LoadAvg,
-    pub round_trip_time: Duration,
-    pub checked_at: SystemTime,
+pub const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
+pub const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+pub const CONNECTED_INTERVAL: Duration = Duration::from_mins(3);
+pub const DISCONNECTED_INTERVAL: Duration = Duration::from_secs(90);
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub enum DestinationHealth {
+    #[default]
+    Init,
+    Running {
+        since: SystemTime,
+        amount_of_failures: u32,
+    },
+    Failure {
+        checked_at: SystemTime,
+        last_error: String,
+        amount_of_failures: u32,
+    },
+    Success {
+        checked_at: SystemTime,
+        health: gvpn_client::Health,
+        total_time: Duration,
+        round_trip_time: Duration,
+    },
 }
 
 pub struct Runner {
@@ -32,14 +47,10 @@ pub struct Runner {
     options: Options,
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("Health error: {0}")]
-    Health(String),
-    #[error("Surb config error: {0}")]
-    SurbConfig(#[from] SurbConfigError),
-    #[error("Hopr error: {0}")]
-    Hopr(#[from] HoprError),
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Error {
+    pub message: String,
+    pub checked_at: SystemTime,
 }
 
 impl Runner {
@@ -63,30 +74,42 @@ impl Runner {
 
     async fn run(&self) -> Result<DestinationHealth, Error> {
         let checked_at = SystemTime::now();
-        let measure = Instant::now();
 
         // 1. open health session
+        let measure_total = Instant::now();
         let health_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.health, self.options.max_surb_upstream.health)?;
-        let health_session = open_health_session(&self.hopr, &self.destination, &self.options, health_config).await?;
+            runner::to_surb_balancer_config(self.options.buffer_sizes.health, self.options.max_surb_upstream.health)
+                .map_err(|err| Error {
+                    message: format!("Surb balancer config error: {err}"),
+                    checked_at,
+                })?;
+        let health_session = open_health_session(&self.hopr, &self.destination, &self.options, health_config)
+            .await
+            .map_err(|err| Error {
+                message: format!("Session creation error: {err}"),
+                checked_at,
+            })?;
 
         // 2. request health
+        let measure_rtt = Instant::now();
         let health_res = request_health(&self.options, &health_session).await;
+        let rtt = measure_rtt.elapsed();
 
         // 3. close bridge session
         close_health_session(&self.hopr, &health_session).await;
 
-        // 4. record stats
-        let round_trip_time = measure.elapsed();
-
+        let measure_total = measure_total.elapsed();
         health_res
-            .map(|health| DestinationHealth {
-                slots: health.slots,
-                load_avg: health.load_avg,
-                round_trip_time,
+            .map(|health| DestinationHealth::Success {
+                checked_at,
+                health,
+                total_time: measure_total,
+                round_trip_time: rtt,
+            })
+            .map_err(|err| Error {
+                message: format!("Health request error: {err}"),
                 checked_at,
             })
-            .map_err(|err| Error::Health(format!("Failed to request health status: {err}")))
     }
 }
 
@@ -139,13 +162,41 @@ async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClie
 
 impl Display for DestinationHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}, {}, RoundTripTime: {:.2} s, {} ago",
-            self.slots,
-            self.load_avg,
-            self.round_trip_time.as_secs_f64(),
-            log_output::elapsed(&self.checked_at)
-        )
+        match self {
+            DestinationHealth::Init => write!(f, "waiting for connection"),
+            DestinationHealth::Running {
+                since,
+                amount_of_failures: _,
+            } => write!(f, "running since {}", log_output::elapsed(since)),
+            DestinationHealth::Failure {
+                checked_at,
+                last_error,
+                amount_of_failures,
+            } if *amount_of_failures > 1 => write!(
+                f,
+                "failed {} times in a row {} ago: {}",
+                amount_of_failures,
+                log_output::elapsed(checked_at),
+                last_error
+            ),
+            DestinationHealth::Failure {
+                checked_at,
+                last_error,
+                amount_of_failures: _,
+            } => write!(f, "failed {} ago: {}", log_output::elapsed(checked_at), last_error),
+            DestinationHealth::Success {
+                checked_at,
+                health,
+                total_time,
+                round_trip_time,
+            } => write!(
+                f,
+                "{} ago: total time {:.2} s, round trip: {:.2} s, {}",
+                log_output::elapsed(checked_at),
+                total_time.as_secs_f32(),
+                round_trip_time.as_secs_f32(),
+                health,
+            ),
+        }
     }
 }

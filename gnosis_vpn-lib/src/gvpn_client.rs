@@ -179,7 +179,12 @@ impl Display for Registration {
 
 impl Display for Slots {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Clients: {}/{}", self.connected, self.available + self.connected)
+        write!(
+            f,
+            "connected {}/{} total",
+            self.connected,
+            self.available + self.connected
+        )
     }
 }
 
@@ -187,11 +192,17 @@ impl Display for LoadAvg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "LoadAvg: {:.2}/{nproc} (1m), {:.2}/{nproc} (5m), {:.2}/{nproc} (15m)",
+            "{:.2}/{n} (1 min), {:.2}/{n} (5 min), {:.2}/{n} (15 min)",
             self.one,
             self.five,
             self.fifteen,
-            nproc = self.nproc
+            n = self.nproc
         )
+    }
+}
+
+impl Display for Health {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}, {}", self.load_avg, self.slots)
     }
 }
