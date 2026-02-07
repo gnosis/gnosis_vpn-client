@@ -40,13 +40,22 @@ pub struct InterfaceInfo {
     pub address: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub public_key: String,
     pub preshared_key: String,
     pub endpoint: String,
 }
 
+impl fmt::Debug for PeerInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerInfo")
+            .field("public_key", &self.public_key)
+            .field("preshared_key", &"****")
+            .field("endpoint", &self.endpoint)
+            .finish()
+    }
+}
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct KeyPair {
     pub priv_key: String,
