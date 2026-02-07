@@ -340,7 +340,7 @@ impl Core {
 
                     Command::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
-                            let connectivity = self.connectivity_health.get(&dest.id).unwrap_or_default();
+                            if let Some(connectivity) = self.connectivity_health.get(&dest.id) {
                                 if connectivity.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));

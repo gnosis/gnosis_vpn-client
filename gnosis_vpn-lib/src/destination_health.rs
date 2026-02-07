@@ -71,19 +71,19 @@ impl Runner {
 
     pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let new_health = self.run().await;
-        // increment failure count if the health check failed again
-        let health = match new_health {
-            DestinationHealth::Failure {
-                checked_at,
-                error,
-                previous_failures,
-            } => DestinationHealth::Failure {
+        let health = match (self.old_health.clone(), new_health) {
+            // increment failure count if the health check failed again
+            (
+                DestinationHealth::Failure { previous_failures, .. },
+                DestinationHealth::Failure { error, checked_at, .. },
+            ) => DestinationHealth::Failure {
                 checked_at,
                 error,
                 previous_failures: previous_failures + 1,
             },
-            h => h,
+            (_, h) => h,
         };
+
         let _ = results_sender
             .send(Results::HealthCheck {
                 id: self.destination.id.clone(),
