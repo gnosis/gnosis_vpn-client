@@ -48,10 +48,9 @@ fn pretty_print(resp: &Response) {
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
             println!("Connecting to {dest}");
         }
-        Response::Connect(command::ConnectResponse::WaitingToConnect(dest, health)) => match health {
-            Some(h) => println!("Waiting to connect to {dest} once possible: {h}"),
-            None => println!("Waiting to connect to {dest}"),
-        },
+        Response::Connect(command::ConnectResponse::WaitingToConnect(dest, health)) => {
+            println!("Waiting to connect to {dest} once possible: {health}")
+        }
         Response::Connect(command::ConnectResponse::UnableToConnect(dest, health)) => {
             eprintln!("Unable to connect to {dest}: {health}");
         }
@@ -80,9 +79,8 @@ fn pretty_print(resp: &Response) {
                     id = dest.id,
                     connectivity = dest_state.connectivity
                 ));
-                if let Some(health) = dest_state.exit_health.as_ref() {
-                    str_resp.push_str(&format!("{id} Exit health: {health}\n", id = dest.id));
-                }
+                let health = dest_state.exit_health.clone();
+                str_resp.push_str(&format!("{id} Exit health: {health}\n", id = dest.id));
             }
             println!("{str_resp}");
         }
