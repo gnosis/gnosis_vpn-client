@@ -437,7 +437,7 @@ impl Core {
                         let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
                             Ok(m) => m,
                             Err(err) => {
-                                tracing::error!(%err, "failed to collect hopr metrics");
+                                tracing::error!(?err, "failed to collect hopr metrics");
                                 String::new()
                             }
                         };
@@ -464,7 +464,7 @@ impl Core {
             Results::TicketStats { res } => match res {
                 Ok(stats) => self.on_ticket_stats(stats, results_sender),
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch ticket stats - retrying");
+                    tracing::error!(?err, "failed to fetch ticket stats - retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                 }
             },
@@ -478,7 +478,7 @@ impl Core {
                     tracing::info!("safe module persisted");
                 }
                 Err(err) => {
-                    tracing::error!(%err, "failed to persist safe module - retrying");
+                    tracing::error!(?err, "failed to persist safe module - retrying");
                     self.spawn_store_safe(safe_module, results_sender, Duration::from_secs(10));
                 }
             },
@@ -494,7 +494,7 @@ impl Core {
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
-                    tracing::error!(%err, "hopr runner failed to start - trying again in 10 seconds");
+                    tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
                     self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
                 }
             },
@@ -503,7 +503,7 @@ impl Core {
                 Ok(None) => self.funding_tool = balance::FundingTool::CompletedSuccess,
                 Ok(Some(reason)) => self.funding_tool = balance::FundingTool::CompletedError(reason),
                 Err(err) => {
-                    tracing::error!(%err, "funding runner exited with error");
+                    tracing::error!(?err, "funding runner exited with error");
                     self.funding_tool = balance::FundingTool::CompletedError(err.to_string());
                 }
             },
@@ -515,7 +515,7 @@ impl Core {
                     self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch balances from hopr");
+                    tracing::error!(?err, "failed to fetch balances from hopr");
                     self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
@@ -549,7 +549,7 @@ impl Core {
                     self.act_on_target(results_sender);
                 }
                 Err(err) => {
-                    tracing::error!(%err, "failed to fetch connected peers");
+                    tracing::error!(?err, "failed to fetch connected peers");
                     self.spawn_connected_peers(results_sender, Duration::from_secs(10));
                 }
             },
@@ -577,7 +577,7 @@ impl Core {
                         self.act_on_target(results_sender);
                     }
                     Err(err) => {
-                        tracing::error!(%err, %address, "failed to ensure channel funding");
+                        tracing::error!(?err, %address, "failed to ensure channel funding");
                         for d in destinations.iter() {
                             self.update_health(d.id.clone(), |h| h.with_error(err.to_string()));
                         }
@@ -640,7 +640,7 @@ impl Core {
                     tracing::warn!(?phase, "unawaited connection established successfully");
                 }
                 (Err(err), Phase::Connecting(conn)) => {
-                    tracing::error!(%conn, %err, "connection failed");
+                    tracing::error!(%conn, ?err, "connection failed");
                     self.update_health(conn.destination.id.clone(), |h| h.with_error(err.to_string()));
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
@@ -661,7 +661,7 @@ impl Core {
                         tracing::info!(%wg_public_key, "disconnected successful");
                     }
                     Err(err) => {
-                        tracing::error!(%wg_public_key, %err, "disconnection failed");
+                        tracing::error!(%wg_public_key, ?err, "disconnection failed");
                     }
                 }
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
@@ -721,7 +721,7 @@ impl Core {
                     }
                 }
                 Err(err) => {
-                    tracing::error!(%err, "health check failed");
+                    tracing::error!(?err, "health check failed");
                     self.destination_health.remove(&id);
                     if let Some(dest) = self.config.destinations.get(&id) {
                         self.spawn_health_check_runner(dest.clone(), results_sender, Duration::from_secs(45));
@@ -763,7 +763,7 @@ impl Core {
                     deploy_safe,
                 },
             ) => {
-                tracing::error!(%err, "failed to fetch presafe node balance - retrying");
+                tracing::error!(?err, "failed to fetch presafe node balance - retrying");
                 self.phase = Phase::CreatingSafe {
                     node_balance: Querying::Error(err.to_string()),
                     query_safe,
@@ -818,7 +818,7 @@ impl Core {
                     deploy_safe,
                 },
             ) => {
-                tracing::error!(%err, "failed to query safe module - retrying");
+                tracing::error!(?err, "failed to query safe module - retrying");
                 self.phase = Phase::CreatingSafe {
                     node_balance,
                     query_safe: Querying::Error(err.to_string()),
@@ -853,7 +853,7 @@ impl Core {
                     deploy_safe: _,
                 },
             ) => {
-                tracing::error!(%err, "failed to deploy safe module - retrying from balance check");
+                tracing::error!(?err, "failed to deploy safe module - retrying from balance check");
                 self.phase = Phase::CreatingSafe {
                     node_balance,
                     query_safe,
@@ -896,7 +896,10 @@ impl Core {
                 if matches!(err, hopr_config::Error::NoFile) {
                     tracing::info!("no persisted safe module found - querying safeless interactor");
                 } else {
-                    tracing::warn!(%err, "error deserializing existing safe module - querying safeless interactor");
+                    tracing::warn!(
+                        ?err,
+                        "error deserializing existing safe module - querying safeless interactor"
+                    );
                 }
                 self.phase = Phase::CreatingSafe {
                     node_balance: Querying::Init,
@@ -1241,7 +1244,10 @@ impl Core {
                         self.strategy_handle = Some(strategy_process);
                     }
                     Err(err) => {
-                        tracing::error!(%err, "failed to start edge node telemetry reactor - retrying ticket stats");
+                        tracing::error!(
+                            ?err,
+                            "failed to start edge node telemetry reactor - retrying ticket stats"
+                        );
                         self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                     }
                 }
@@ -1250,7 +1256,7 @@ impl Core {
                 tracing::error!("edgeclient not available when starting telemetry reactor");
             }
             (Err(err), _) => {
-                tracing::error!(%stats, %err, "failed to determine ticket value from stats - retrying");
+                tracing::error!(%stats, ?err, "failed to determine ticket value from stats - retrying");
                 self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
             }
         }
