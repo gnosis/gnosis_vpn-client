@@ -23,6 +23,7 @@ on:
         type: choice
         options:
           - ubuntu-22.04
+          - ubuntu-22.04-arm
           - macos-15-xlarge
           - macos-15-intel
         required: true
@@ -31,6 +32,7 @@ on:
         type: choice
         options:
           - x86_64-linux
+          - aarch64-linux
           - aarch64-darwin
           - x86_64-darwin
         required: true
