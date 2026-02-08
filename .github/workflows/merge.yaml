@@ -16,6 +16,8 @@ jobs:
         binary:
           - architecture: x86_64-linux
             runner: ubuntu-22.04
+          - architecture: aarch64-linux
+            runner: ubuntu-22.04-arm
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
@@ -54,6 +56,10 @@ jobs:
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-worker-x86_64-linux --destination=./binaries --local-filename=gnosis_vpn-worker-x86_64-linux
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-root-x86_64-linux --destination=./binaries --local-filename=gnosis_vpn-root-x86_64-linux
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-x86_64-linux --destination=./binaries --local-filename=gnosis_vpn-ctl-x86_64-linux
+
+            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-worker-aarch64-linux --destination=./binaries --local-filename=gnosis_vpn-worker-aarch64-linux
+            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-root-aarch64-linux --destination=./binaries --local-filename=gnosis_vpn-root-aarch64-linux
+            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-aarch64-linux --destination=./binaries --local-filename=gnosis_vpn-ctl-aarch64-linux
 
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-worker-aarch64-darwin --destination=./binaries --local-filename=gnosis_vpn-worker-aarch64-darwin
             gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-root-aarch64-darwin --destination=./binaries --local-filename=gnosis_vpn-root-aarch64-darwin
