@@ -142,9 +142,9 @@ async fn daemon(reload_handle: LogReloadHandle, log_path: String) -> Result<(), 
                 if let Some(init) = init_opt.take() {
                     let next = init.incoming_cmd(wcmd);
                     send_outgoing(WorkerToRoot::Ack, &mut writer).await?;
-                    if let Some((config, hopr_params)) = next.ready() {
+                    if let Some((config, worker_params)) = next.ready() {
                         if let (Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
-                            let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
+                            let core = Core::init(config, worker_params, outgoing_event_sender).await.map_err(|err| {
                                 tracing::error!(error = ?err, "failed to initialize core logic");
                                 exitcode::OSERR
                             })?;
@@ -238,7 +238,7 @@ async fn incoming_cmd(
             })?;
             Ok(WorkerToRoot::Response(resp))
         }
-        RootToWorker::HoprParams { .. } => {
+        RootToWorker::WorkerParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
             Ok(WorkerToRoot::OutOfSync)
         }

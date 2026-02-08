@@ -5,7 +5,7 @@ use thiserror::Error;
 use url::Url;
 
 use std::fmt::{self, Display};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use crate::remote_data;
@@ -16,12 +16,13 @@ pub struct Registration {
     ip: Ipv4Addr,
     newly_registered: bool,
     server_public_key: String,
+    preshared_key: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct Input {
     public_key: String,
-    port: u16,
+    socket_addr: SocketAddr,
     timeout: Duration,
 }
 
@@ -42,10 +43,10 @@ pub enum Error {
 }
 
 impl Input {
-    pub fn new(public_key: String, port: u16, timeout: Duration) -> Self {
+    pub fn new(public_key: String, socket_addr: SocketAddr, timeout: Duration) -> Self {
         Input {
             public_key,
-            port,
+            socket_addr,
             timeout,
         }
     }
@@ -59,12 +60,68 @@ impl Registration {
     pub fn server_public_key(&self) -> String {
         self.server_public_key.clone()
     }
+
+    pub fn preshared_key(&self) -> String {
+        self.preshared_key.clone()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Health {
+    pub slots: Slots,
+    pub load_avg: LoadAvg,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Slots {
+    pub available: u32,
+    pub connected: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LoadAvg {
+    pub one: f32,
+    pub five: f32,
+    pub fifteen: f32,
+    pub nproc: u16,
+}
+
+pub async fn health(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<Health, Error> {
+    let headers = remote_data::json_headers();
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/api/v1/status",
+            host = socket_addr.ip(),
+            port = socket_addr.port()
+        )
+        .as_str(),
+    )?;
+    tracing::debug!(?headers, ?url, "get server health");
+    let resp = client
+        .get(url)
+        .timeout(timeout)
+        .headers(headers)
+        .send()
+        .await
+        // connection error checks happen before response
+        .map_err(connect_errors)?
+        .error_for_status()?
+        .json::<Health>()
+        .await?;
+
+    Ok(resp)
 }
 
 pub async fn register(client: &Client, input: &Input) -> Result<Registration, Error> {
     let headers = remote_data::json_headers();
-    let mut url = Url::parse("http://localhost/api/v1/clients/register")?;
-    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/api/v1/clients/register",
+            host = input.socket_addr.ip(),
+            port = input.socket_addr.port()
+        )
+        .as_str(),
+    )?;
     let json = json!({
         "public_key": input.public_key,
     });
@@ -87,8 +144,14 @@ pub async fn register(client: &Client, input: &Input) -> Result<Registration, Er
 
 pub async fn unregister(client: &Client, input: &Input) -> Result<(), Error> {
     let headers = remote_data::json_headers();
-    let mut url = Url::parse("http://localhost/api/v1/clients/unregister")?;
-    url.set_port(Some(input.port)).map_err(|_| Error::InvalidPort)?;
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/api/v1/clients/unregister",
+            host = input.socket_addr.ip(),
+            port = input.socket_addr.port()
+        )
+        .as_str(),
+    )?;
     let mut json = serde_json::Map::new();
     json.insert("public_key".to_string(), json!(input.public_key));
     tracing::debug!(?headers, body = ?json, ?url, "post unregister client");
@@ -129,5 +192,35 @@ fn response_errors(err: reqwest::Error) -> Error {
 impl Display for Registration {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "WgRegistration {{ ip: {} }}", self.ip)
+    }
+}
+
+impl Display for Slots {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "connected {}/{} total",
+            self.connected,
+            self.available + self.connected
+        )
+    }
+}
+
+impl Display for LoadAvg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:.2}/{n} (1 min), {:.2}/{n} (5 min), {:.2}/{n} (15 min)",
+            self.one,
+            self.five,
+            self.fifteen,
+            n = self.nproc
+        )
+    }
+}
+
+impl Display for Health {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}, {}", self.load_avg, self.slots)
     }
 }

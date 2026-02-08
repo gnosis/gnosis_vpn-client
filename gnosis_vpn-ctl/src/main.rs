@@ -48,10 +48,9 @@ fn pretty_print(resp: &Response) {
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
             println!("Connecting to {dest}");
         }
-        Response::Connect(command::ConnectResponse::WaitingToConnect(dest, health)) => match health {
-            Some(h) => println!("Waiting to connect to {dest} once possible: {h}"),
-            None => println!("Waiting to connect to {dest}"),
-        },
+        Response::Connect(command::ConnectResponse::WaitingToConnect(dest, health)) => {
+            println!("Waiting to connect to {dest} once possible: {health}")
+        }
         Response::Connect(command::ConnectResponse::UnableToConnect(dest, health)) => {
             eprintln!("Unable to connect to {dest}: {health}");
         }
@@ -65,14 +64,23 @@ fn pretty_print(resp: &Response) {
             eprintln!("Currently not connected to any destination");
         }
         Response::Status(command::StatusResponse { run_mode, destinations }) => {
-            let mut str_resp = format!("Status: {run_mode}\n");
-            str_resp.push_str("Destinations:\n");
+            let mut str_resp = format!("{run_mode}\n");
             for dest_state in destinations {
-                str_resp.push_str(&format!("- {dest}\n", dest = dest_state.destination));
-                str_resp.push_str(&format!("  {conn}\n", conn = dest_state.connection_state));
-                if let Some(health) = dest_state.health.as_ref() {
-                    str_resp.push_str(&format!("  {health}\n"));
-                }
+                str_resp.push_str("---\n");
+                let dest = dest_state.destination.clone();
+                str_resp.push_str(&format!("{dest}\n"));
+                str_resp.push_str(&format!(
+                    "{id} Connection: {conn}\n",
+                    id = dest.id,
+                    conn = dest_state.connection_state
+                ));
+                str_resp.push_str(&format!(
+                    "{id} Connectivity state: {connectivity}\n",
+                    id = dest.id,
+                    connectivity = dest_state.connectivity
+                ));
+                let health = dest_state.exit_health.clone();
+                str_resp.push_str(&format!("{id} Exit health: {health}\n", id = dest.id));
             }
             println!("{str_resp}");
         }

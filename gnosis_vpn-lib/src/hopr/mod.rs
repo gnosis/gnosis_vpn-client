@@ -1,6 +1,7 @@
 pub mod api;
 pub mod errors;
 pub mod types;
+pub use edgli::EdgliInitState;
 pub use edgli::hopr_lib;
 pub use edgli::hopr_lib::state::HoprState;
 pub use {api::Hopr, errors::HoprError};

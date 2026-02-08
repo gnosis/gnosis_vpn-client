@@ -3,6 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
+use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
@@ -18,17 +19,19 @@ use tokio::time;
 use url::Url;
 
 use std::fmt::{self, Display};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::balance;
 use crate::compat::SafeModule;
 use crate::connection;
+use crate::destination_health::DestinationHealth;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
-use crate::hopr_params::{self, HoprParams};
+use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
 use crate::ticket_stats::{self, TicketStats};
+use crate::worker_params::{self, WorkerParams};
 use crate::{event, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
@@ -67,9 +70,10 @@ pub enum Results {
     ConnectedPeers {
         res: Result<Vec<Address>, Error>,
     },
+    HoprConstruction(EdgliInitState),
     HoprRunning,
     ConnectionEvent(connection::up::Event),
-    ConnectionRequestToRoot(event::RespondableRequestToRoot),
+    ConnectionRequestToRoot(event::RunnerToRoot),
     ConnectionResult {
         res: Result<SessionClientMetadata, connection::up::Error>,
     },
@@ -82,12 +86,16 @@ pub enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
+    HealthCheck {
+        id: String,
+        health: DestinationHealth,
+    },
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    HoprParams(#[from] hopr_params::Error),
+    WorkerParams(#[from] worker_params::Error),
     #[error(transparent)]
     TicketStats(#[from] ticket_stats::Error),
     #[error("chain error: {0}")]
@@ -134,8 +142,8 @@ pub async fn query_safe(safeless_interactor: Arc<SafelessInteractor>, results_se
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
-pub async fn funding_tool(hopr_params: HoprParams, code: String, results_sender: mpsc::Sender<Results>) {
-    let res = run_funding_tool(hopr_params, code).await;
+pub async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
+    let res = run_funding_tool(worker_params, code).await;
     let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
@@ -148,9 +156,9 @@ pub async fn safe_deployment(
     let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
-pub async fn persist_safe(safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
+pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
-    let res = hopr_config::store_safe(&safe_module).await;
+    let res = hopr_config::store_safe(state_home, &safe_module).await;
     let _ = results_sender
         .send(Results::PersistSafe {
             res,
@@ -159,8 +167,8 @@ pub async fn persist_safe(safe_module: SafeModule, results_sender: mpsc::Sender<
         .await;
 }
 
-pub async fn hopr(hopr_params: HoprParams, safe_module: &SafeModule, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(hopr_params, safe_module).await;
+pub async fn hopr(worker_params: WorkerParams, safe_module: &SafeModule, results_sender: mpsc::Sender<Results>) {
+    let res = run_hopr(worker_params, safe_module, &results_sender).await;
     let _ = results_sender
         .send(Results::Hopr {
             res,
@@ -285,8 +293,8 @@ async fn run_safe_deployment(
 
 // Posts to the HOPR funding tool API to request an airdrop using the provided code.
 // Returns final errors in ok branch to break exponential backoff retries.
-async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Option<String>, Error> {
-    let keys = hopr_params.calc_keys().await?;
+async fn run_funding_tool(worker_params: WorkerParams, code: String) -> Result<Option<String>, Error> {
+    let keys = worker_params.calc_keys().await?;
     let node_address = keys.chain_key.public().to_address();
     let url = Url::parse("https://cfp-funding-api-656686060169.europe-west1.run.app/api/cfp-funding-tool/airdrop")?;
     let client = reqwest::Client::new();
@@ -342,14 +350,31 @@ async fn run_funding_tool(hopr_params: HoprParams, code: String) -> Result<Optio
     .await
 }
 
-async fn run_hopr(hopr_params: HoprParams, safe_module: &SafeModule) -> Result<Hopr, Error> {
+async fn run_hopr(
+    worker_params: WorkerParams,
+    safe_module: &SafeModule,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = hopr_params.to_config(safe_module).await?;
-    let keys = hopr_params.calc_keys().await?;
-    let blokli_url = hopr_params.blokli_url();
-    Hopr::new(cfg, crate::hopr::config::db_file()?.as_path(), keys, blokli_url)
-        .await
-        .map_err(Error::from)
+    let cfg = worker_params.to_config(safe_module).await?;
+    let keys = worker_params.calc_keys().await?;
+    let blokli_url = worker_params.blokli_url();
+    let sender = results_sender.clone();
+    let visitor = move |state| {
+        if let Err(err) = sender.try_send(Results::HoprConstruction(state)) {
+            tracing::warn!(?err, "Failed to send HOPR construction state update");
+        }
+    };
+
+    Hopr::new(
+        cfg,
+        hopr::config::db_file(worker_params.state_home())?.as_path(),
+        keys,
+        blokli_url,
+        visitor,
+    )
+    .await
+    .map_err(Error::from)
 }
 
 async fn run_fund_channel(
@@ -398,6 +423,7 @@ impl Display for Results {
                     err
                 ),
             },
+            Results::HoprConstruction(state) => write!(f, "HoprConstruction: {:?}", state),
             Results::NodeBalance { res } => match res {
                 Ok(presafe) => write!(f, "NodeBalance: {}", presafe),
                 Err(err) => write!(f, "NodeBalance: Error({})", err),
@@ -455,6 +481,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
+            Results::HealthCheck { id, health } => write!(f, "HealthCheck ({}): {}", id, health),
         }
     }
 }
