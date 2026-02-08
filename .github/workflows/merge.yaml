@@ -17,7 +17,7 @@ jobs:
           - architecture: x86_64-linux
             runner: ubuntu-22.04
           - architecture: aarch64-linux
-            runner: ubuntu-22.04
+            runner: ubuntu-22.04-arm
           - architecture: aarch64-darwin
             runner: macos-15
           - architecture: x86_64-darwin
