@@ -76,16 +76,24 @@ steps:
    gpg --import gpg-publickey.asc
    ```
 
-2. Verify the binary signature:
+2. Verify the binary signature (examples for x86_64 and ARM64):
 
    ```bash
+   # For x86_64 (AMD64)
    gpg --verify gnosis_vpn-root-x86_64-linux.asc gnosis_vpn-root-x86_64-linux
+   
+   # For ARM64
+   gpg --verify gnosis_vpn-root-aarch64-linux.asc gnosis_vpn-root-aarch64-linux
    ```
 
 3. Compare the checksum with the actual checksum:
 
    ```bash
+   # For x86_64 (AMD64)
    diff -u <(cat gnosis_vpn-root-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-x86_64-linux)
+   
+   # For ARM64
+   diff -u <(cat gnosis_vpn-root-aarch64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-aarch64-linux)
    ```
 
 ## General usage
@@ -100,9 +108,15 @@ Show potential deployment targets:
 
 `nix flake show`
 
-Build for a target, e.g. `x86_64-linux`:
+Build for a target, e.g. `x86_64-linux` or `aarch64-linux`:
 
-`nix build .#gnosisvpn-x86_64-linux`
+```bash
+# For x86_64 (AMD64)
+nix build .#packages.x86_64-linux.gnosis_vpn
+
+# For ARM64
+nix build .#packages.aarch64-linux.gnosis_vpn
+```
 
 The resulting binaries are in `result/bin/`:
 
