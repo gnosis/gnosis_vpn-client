@@ -11,6 +11,7 @@ pub mod event;
 pub mod gvpn_client;
 pub mod hopr;
 pub mod info;
+pub mod logging;
 pub mod ping;
 pub mod shell_command_ext;
 pub mod socket;

@@ -12,6 +12,7 @@ use std::process;
 use gnosis_vpn_lib::core::Core;
 use gnosis_vpn_lib::event::{CoreToWorker, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
+use gnosis_vpn_lib::logging::{self, LogReloadHandle};
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -22,7 +23,10 @@ mod init;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
+async fn ctrlc_channel(
+    reload_handle: LogReloadHandle,
+    log_path: String,
+) -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
         tracing::error!(error = ?e, "error setting up SIGINT handler");
@@ -30,6 +34,10 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     })?;
     let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
         tracing::error!(error = ?e, "error setting up SIGTERM handler");
+        exitcode::IOERR
+    })?;
+    let mut sighup = signal(SignalKind::hangup()).map_err(|e| {
+        tracing::error!(error = ?e, "error setting up SIGHUP handler");
         exitcode::IOERR
     })?;
 
@@ -50,8 +58,15 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
                         break;
                     }
                 },
+                Some(_) = sighup.recv() => {
+                    tracing::info!("received SIGHUP: reopening log file");
+                    let new_layer = logging::make_file_fmt_layer(&log_path);
+                    if let Err(e) = reload_handle.reload(new_layer) {
+                        eprintln!("failed to reload logging layer: {e}");
+                    }
+                },
                 else => {
-                    tracing::warn!("sigint and sigterm streams closed");
+                    tracing::warn!("signal streams closed");
                     break;
                 }
             }
@@ -61,9 +76,9 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     Ok(receiver)
 }
 
-async fn daemon() -> Result<(), exitcode::ExitCode> {
+async fn daemon(reload_handle: LogReloadHandle, log_path: String) -> Result<(), exitcode::ExitCode> {
     // set up signal handler
-    let mut ctrlc_receiver = ctrlc_channel().await?;
+    let mut ctrlc_receiver = ctrlc_channel(reload_handle, log_path).await?;
 
     tracing::debug!("accessing unix socket from fd");
     let fd: i32 = env::var(socket::worker::ENV_VAR)
@@ -259,15 +274,15 @@ fn main() {
 async fn main_inner() {
     let _args = cli::parse();
 
-    // install global collector configured based on RUST_LOG env var.
-    tracing_subscriber::fmt::init();
+    // Set up logging
+    let (reload_handle, log_path) = logging::init();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
 
-    match daemon().await {
+    match daemon(reload_handle, log_path).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {

@@ -52,7 +52,6 @@ pub fn config_dir(home: PathBuf, file: &str) -> Result<PathBuf, Error> {
 
 fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
     let res = DirBuilder::new().mode(0o700).create(path);
-    println!("res: {:?}", res);
     match res {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
