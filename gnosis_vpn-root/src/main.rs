@@ -82,13 +82,11 @@ async fn ctrlc_channel(
                     }
 
                     // Forward SIGHUP to worker process
-                    if let Ok(pid_guard) = worker_pid.lock() {
-                        if let Some(pid) = *pid_guard {
-                            unsafe {
-                                libc::kill(pid as i32, libc::SIGHUP);
-                            }
-                            tracing::debug!("forwarded SIGHUP to worker process {}", pid);
+                    if let Ok(pid_guard) = worker_pid.lock() && let Some(pid) = *pid_guard {
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGHUP);
                         }
+                        tracing::debug!("forwarded SIGHUP to worker process {}", pid);
                     }
                 },
                 else => {
@@ -254,11 +252,11 @@ async fn loop_daemon(
         })?;
 
     // Store worker PID for signal forwarding
-    if let Some(pid) = worker_child.id() {
-        if let Ok(mut pid_guard) = worker_pid.lock() {
-            *pid_guard = Some(pid);
-            tracing::debug!("worker process started with PID: {}", pid);
-        }
+    if let Some(pid) = worker_child.id()
+        && let Ok(mut pid_guard) = worker_pid.lock()
+    {
+        *pid_guard = Some(pid);
+        tracing::debug!("worker process started with PID: {}", pid);
     }
 
     parent_socket.set_nonblocking(true).map_err(|err| {
