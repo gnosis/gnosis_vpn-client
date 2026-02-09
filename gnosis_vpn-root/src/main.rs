@@ -38,6 +38,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const PIDFILE_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.pid";
 
+// Useful struct to bundle up various parameters and resources determined during daemon setup and needed in the main loop without having to pass them around individually
+struct DaemonSetup {
+    args: cli::Cli,
+    worker_user: worker::Worker,
+    config: Config,
+    worker_params: WorkerParams,
+}
+
 async fn ctrlc_channel(
     reload_handle: LogReloadHandle,
     log_path: String,
@@ -210,17 +218,13 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket = socket_listener(&args.socket_path).await?;
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
-    let res = loop_daemon(
+    let setup = DaemonSetup {
         args,
-        &mut ctrlc_receiver,
-        socket,
-        &worker_user,
+        worker_user,
         config,
         worker_params,
-        &mut maybe_router,
-        worker_pid,
-    )
-    .await;
+    };
+    let res = loop_daemon(setup, &mut ctrlc_receiver, socket, &mut maybe_router, worker_pid).await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
@@ -233,12 +237,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 }
 
 async fn loop_daemon(
-    args: cli::Cli,
+    setup: DaemonSetup,
     ctrlc_receiver: &mut mpsc::Receiver<()>,
     socket: UnixListener,
-    worker_user: &worker::Worker,
-    config: Config,
-    worker_params: WorkerParams,
     maybe_router: &mut Option<Box<dyn Routing>>,
     worker_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), exitcode::ExitCode> {
@@ -254,15 +255,15 @@ async fn loop_daemon(
         libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
     }
 
-    let mut worker_child = Command::new(worker_user.binary.clone())
+    let mut worker_child = Command::new(setup.worker_user.binary.clone())
         .arg("--log-file")
-        .arg(args.log_file.to_string_lossy().to_string())
-        .current_dir(&worker_user.home)
+        .arg(setup.args.log_file.to_string_lossy().to_string())
+        .current_dir(&setup.worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
         .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-        .uid(worker_user.uid)
-        .gid(worker_user.gid)
+        .uid(setup.worker_user.uid)
+        .gid(setup.worker_user.gid)
         .spawn()
         .map_err(|err| {
             tracing::error!(error = ?err, ?worker_user, "unable to spawn worker process");
@@ -295,11 +296,17 @@ async fn loop_daemon(
     let mut writer = BufWriter::new(writer_half);
 
     // safe state_home for usage later
-    let state_home = worker_params.state_home();
+    let state_home = setup.worker_params.state_home();
 
     // provide initial resources to worker
-    send_to_worker(RootToWorker::WorkerParams { worker_params }, &mut writer).await?;
-    send_to_worker(RootToWorker::Config { config }, &mut writer).await?;
+    send_to_worker(
+        RootToWorker::WorkerParams {
+            worker_params: setup.worker_params,
+        },
+        &mut writer,
+    )
+    .await?;
+    send_to_worker(RootToWorker::Config { config: setup.config }, &mut writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
@@ -357,7 +364,7 @@ async fn loop_daemon(
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                let router_result = routing::dynamic_router(state_home.clone(), worker_user.clone(), wg_data);
+                                let router_result = routing::dynamic_router(state_home.clone(), setup.worker_user.clone(), wg_data);
 
                                 match router_result {
                                     Ok(mut router) => {
