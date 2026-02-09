@@ -141,6 +141,8 @@ jobs:
           add: '["Cargo.*", "LATEST" ]'
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
+          default_author: github_actions
+          github_token: ${{ secrets.BOT_TOKEN }}
       - name: Notify release
         uses: zulip/github-actions-zulip/send-message@e4c8f27c732ba9bd98ac6be0583096dea82feea5 # v1.0.2
         with:
