@@ -371,6 +371,7 @@ async fn run_hopr(
         hopr::config::db_file(worker_params.state_home())?.as_path(),
         keys,
         blokli_url,
+        Some(worker_params.blokli_config().into()),
         visitor,
     )
     .await

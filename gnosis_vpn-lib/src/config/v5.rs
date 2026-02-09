@@ -120,7 +120,7 @@ pub(super) struct WireGuard {
 pub(super) struct BlokliConfig {
     pub(super) tx_confirm_timeout: Option<Duration>,
     pub(super) connection_timeout: Option<Duration>,
-    pub(super) sync_tolerance: Option<u8>,
+    pub(super) sync_tolerance: Option<usize>,
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {

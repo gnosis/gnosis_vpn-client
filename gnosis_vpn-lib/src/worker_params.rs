@@ -9,6 +9,7 @@ use url::Url;
 use std::path::PathBuf;
 
 use crate::compat::SafeModule;
+use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::{config, identity};
 
 #[derive(Debug, Error)]
@@ -34,6 +35,7 @@ pub struct WorkerParams {
     blokli_url: Option<Url>,
     force_static_routing: bool,
     state_home: PathBuf,
+    blokli_config: BlokliConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +51,7 @@ impl WorkerParams {
         config_mode: ConfigFileMode,
         allow_insecure: bool,
         blokli_url: Option<Url>,
+        blokli_config: BlokliConfig,
         force_static_routing: bool,
         state_home: PathBuf,
     ) -> Self {
@@ -58,6 +61,7 @@ impl WorkerParams {
             config_mode,
             allow_insecure,
             blokli_url,
+            blokli_config,
             force_static_routing,
             state_home,
         }
@@ -132,7 +136,7 @@ impl WorkerParams {
         let keys = self.calc_keys().await?;
         let private_key = keys.chain_key;
         let url = self.blokli_url();
-        edgli::blokli::SafelessInteractor::new(url, &private_key)
+        edgli::blokli::SafelessInteractor::new(url, &private_key, Some(self.blokli_config().into()))
             .await
             .map_err(|e| Error::BlokliCreation(e.to_string()))
     }
@@ -151,5 +155,9 @@ impl WorkerParams {
 
     pub fn state_home(&self) -> PathBuf {
         self.state_home.clone()
+    }
+
+    pub fn blokli_config(&self) -> BlokliConfig {
+        self.blokli_config.clone()
     }
 }
