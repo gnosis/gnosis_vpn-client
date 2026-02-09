@@ -3,7 +3,7 @@ members = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.67.3"
+version = "0.69.0"
 edition = "2024"
 license = "LGPL-3.0"
 
@@ -43,7 +43,7 @@ tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "0.3.22"
 tokio = { version = "1.48.0", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "8eef3a873d9f52d1cd2422da33cf599f9736cfb0", version = "1.0.7", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "4e41d3b5da3f40376f4d6a35c35ad176ce143fa3", version = "2.0.0", features = [
   "prometheus",
 ] }
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "5f719c4642f0babafd29044e36b741097fcf82f4", features = [
