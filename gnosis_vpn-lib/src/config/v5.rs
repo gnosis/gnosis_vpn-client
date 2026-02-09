@@ -26,7 +26,7 @@ pub struct Config {
     pub(super) destinations: Option<HashMap<String, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
-    pub(super) blokli: Option<Blokli>,
+    pub(super) blokli: Option<BlokliConfig>,
 }
 
 #[serde_as]
@@ -117,7 +117,7 @@ pub(super) struct WireGuard {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct BloklConfig {
+pub(super) struct BlokliConfig {
     pub(super) tx_confirm_timeout: Option<Duration>,
     pub(super) connection_timeout: Option<Duration>,
     pub(super) sync_tolerance: Option<u8>,
@@ -431,8 +431,8 @@ impl From<Option<WireGuard>> for WireGuardConfig {
     }
 }
 
-impl From<Option<BloklConfig>> for HoprBlokliConfig {
-    fn from(value: Option<BloklConfig>) -> Self {
+impl From<Option<BlokliConfig>> for HoprBlokliConfig {
+    fn from(value: Option<BlokliConfig>) -> Self {
         let tx_confirm_timeout = value
             .as_ref()
             .and_then(|b| b.tx_confirm_timeout)
@@ -442,7 +442,11 @@ impl From<Option<BloklConfig>> for HoprBlokliConfig {
             .and_then(|b| b.connection_timeout)
             .unwrap_or_else(|| Duration::from_secs(30));
         let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
-        HoprBlokliConfig::new(tx_confirm_timeout, connection_timeout, sync_tolerance)
+        HoprBlokliConfig {
+            tx_confirm_timeout,
+            connection_timeout,
+            sync_tolerance,
+        }
     }
 }
 
