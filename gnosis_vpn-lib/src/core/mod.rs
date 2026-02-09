@@ -123,9 +123,13 @@ impl Core {
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let safeless_interactor = edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key)
-            .await
-            .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
+        let safeless_interactor = edgli::blokli::SafelessInteractor::new(
+            worker_params.blokli_url(),
+            &keys.chain_key,
+            Some(worker_params.blokli_config().into()),
+        )
+        .await
+        .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
 
         let mut connectivity_health = HashMap::new();
         for (id, dest) in config.destinations.clone() {
