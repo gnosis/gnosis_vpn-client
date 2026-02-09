@@ -584,10 +584,10 @@ allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 
-# [blokli]
-# tx_confirm_timeout: "90s"
-# connection_timeout: "30s"
-# sync_tolerance: 50
+[blokli]
+tx_confirm_timeout = "90s"
+connection_timeout = "30s"
+sync_tolerance = 50
 "#####;
         toml::from_str::<Config>(config)?;
 
