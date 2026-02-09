@@ -27,6 +27,7 @@ use crate::balance;
 use crate::compat::SafeModule;
 use crate::connection;
 use crate::destination_health::DestinationHealth;
+use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
@@ -167,8 +168,13 @@ pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_
         .await;
 }
 
-pub async fn hopr(worker_params: WorkerParams, safe_module: &SafeModule, results_sender: mpsc::Sender<Results>) {
-    let res = run_hopr(worker_params, safe_module, &results_sender).await;
+pub async fn hopr(
+    worker_params: WorkerParams,
+    blokli_config: BlokliConfig,
+    safe_module: &SafeModule,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_hopr(worker_params, blokli_config, safe_module, &results_sender).await;
     let _ = results_sender
         .send(Results::Hopr {
             res,
@@ -352,6 +358,7 @@ async fn run_funding_tool(worker_params: WorkerParams, code: String) -> Result<O
 
 async fn run_hopr(
     worker_params: WorkerParams,
+    blokli_config: BlokliConfig,
     safe_module: &SafeModule,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Hopr, Error> {
@@ -371,7 +378,7 @@ async fn run_hopr(
         hopr::config::db_file(worker_params.state_home())?.as_path(),
         keys,
         blokli_url,
-        worker_params.blokli_config().into(),
+        blokli_config.into(),
         visitor,
     )
     .await
