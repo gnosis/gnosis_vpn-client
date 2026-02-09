@@ -6,6 +6,7 @@ pub use edgli::hopr_lib;
 pub use edgli::hopr_lib::state::HoprState;
 pub use {api::Hopr, errors::HoprError};
 
+pub mod blokli_config;
 pub mod config;
 pub mod identity;
 
