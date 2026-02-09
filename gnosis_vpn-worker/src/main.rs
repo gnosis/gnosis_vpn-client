@@ -60,6 +60,8 @@ async fn ctrlc_channel(
                 },
                 Some(_) = sighup.recv() => {
                     tracing::info!("received SIGHUP: reopening log file");
+                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
+                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     let new_layer = logging::make_file_fmt_layer(&log_path);
                     if let Err(e) = reload_handle.reload(new_layer) {
                         eprintln!("failed to reload logging layer: {e}");
@@ -76,9 +78,21 @@ async fn ctrlc_channel(
     Ok(receiver)
 }
 
-async fn daemon(reload_handle: LogReloadHandle, log_path: String) -> Result<(), exitcode::ExitCode> {
+async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    // Set up logging
+    let reload_handle = logging::setup(args.log_file.clone());
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
+
     // set up signal handler
-    let mut ctrlc_receiver = ctrlc_channel(reload_handle, log_path).await?;
+    let mut ctrlc_receiver = ctrlc_channel(
+        reload_handle.clone(),
+        args.log_file.clone().to_string_lossy().to_string(),
+    )
+    .await?;
 
     tracing::debug!("accessing unix socket from fd");
     let fd: i32 = env::var(socket::worker::ENV_VAR)
@@ -272,17 +286,9 @@ fn main() {
 }
 
 async fn main_inner() {
-    let _args = cli::parse();
+    let args = cli::parse();
 
-    // Set up logging
-    let (reload_handle, log_path) = logging::init();
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "starting {}",
-        env!("CARGO_PKG_NAME")
-    );
-
-    match daemon(reload_handle, log_path).await {
+    match daemon(args).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {

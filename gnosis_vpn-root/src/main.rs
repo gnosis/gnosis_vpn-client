@@ -76,6 +76,8 @@ async fn ctrlc_channel(
                 },
                 Some(_) = sighup.recv() => {
                     tracing::info!("received SIGHUP: reopening log file");
+                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
+                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     let new_layer = logging::make_file_fmt_layer(&log_path);
                     if let Err(e) = reload_handle.reload(new_layer) {
                         eprintln!("failed to reload logging layer: {e}");
@@ -150,12 +152,24 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
     Ok(listener)
 }
 
-async fn daemon(args: cli::Cli, reload_handle: LogReloadHandle, log_path: String) -> Result<(), exitcode::ExitCode> {
+async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let worker_params = WorkerParams::from(&args);
+    let reload_handle = logging::setup(args.log_file.clone());
+
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
 
     // set up signal handler
     let worker_pid = Arc::new(Mutex::new(None));
-    let mut ctrlc_receiver = ctrlc_channel(reload_handle, log_path, worker_pid.clone()).await?;
+    let mut ctrlc_receiver = ctrlc_channel(
+        reload_handle,
+        args.log_file.to_string_lossy().to_string(),
+        worker_pid.clone(),
+    )
+    .await?;
 
     // ensure worker user exists
     let input = worker::Input::new(
@@ -197,6 +211,7 @@ async fn daemon(args: cli::Cli, reload_handle: LogReloadHandle, log_path: String
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
     let res = loop_daemon(
+        args,
         &mut ctrlc_receiver,
         socket,
         &worker_user,
@@ -218,6 +233,7 @@ async fn daemon(args: cli::Cli, reload_handle: LogReloadHandle, log_path: String
 }
 
 async fn loop_daemon(
+    args: cli::Cli,
     ctrlc_receiver: &mut mpsc::Receiver<()>,
     socket: UnixListener,
     worker_user: &worker::Worker,
@@ -239,6 +255,8 @@ async fn loop_daemon(
     }
 
     let mut worker_child = Command::new(worker_user.binary.clone())
+        .arg("--log-file")
+        .arg(args.log_file.to_string_lossy().to_string())
         .current_dir(&worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
@@ -517,20 +535,11 @@ fn spawn_ping(
 async fn main() {
     let args = cli::parse();
 
-    // Set up logging
-    let (reload_handle, log_path) = logging::init();
-
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "starting {}",
-        env!("CARGO_PKG_NAME")
-    );
-
     // Write pidfile for the newsyslog service to send signals to
     let pid = process::id().to_string();
     fs::write(PIDFILE_PATH, pid).await.expect("failed to write pidfile");
 
-    match daemon(args, reload_handle, log_path).await {
+    match daemon(args).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {

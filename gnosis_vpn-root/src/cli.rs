@@ -4,7 +4,7 @@ use url::Url;
 use std::path::PathBuf;
 
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
-use gnosis_vpn_lib::{config, dirs, hopr, socket};
+use gnosis_vpn_lib::{config, dirs, hopr, logging, socket};
 
 use crate::worker;
 
@@ -36,6 +36,13 @@ pub struct Cli {
         default_value = dirs::DEFAULT_STATE_HOME,
     )]
     pub state_home: PathBuf,
+
+    #[arg(
+        long,
+        env = logging::ENV_VAR_LOG_FILE,
+        default_value = logging::DEFAULT_LOG_FILE,
+    )]
+    pub log_file: PathBuf,
 
     /// Username of the worker user (needs a home folder for caching and configurations)
     #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
