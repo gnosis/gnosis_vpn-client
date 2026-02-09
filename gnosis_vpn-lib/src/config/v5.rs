@@ -118,7 +118,9 @@ pub(super) struct WireGuard {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct BlokliConfig {
+    #[serde(default, with = "humantime_serde::option")]
     pub(super) tx_confirm_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
     pub(super) connection_timeout: Option<Duration>,
     pub(super) sync_tolerance: Option<usize>,
 }
