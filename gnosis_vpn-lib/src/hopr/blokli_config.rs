@@ -10,12 +10,12 @@ pub struct BlokliConfig {
     pub sync_tolerance: usize,
 }
 
-impl Into<BlockchainConnectorConfig> for BlokliConfig {
-    fn into(self) -> BlockchainConnectorConfig {
+impl From<BlokliConfig> for BlockchainConnectorConfig {
+    fn from(config: BlokliConfig) -> Self {
         BlockchainConnectorConfig {
-            tx_confirm_timeout: self.tx_confirm_timeout,
-            connection_timeout: self.connection_timeout,
-            sync_tolerance: self.sync_tolerance,
+            tx_confirm_timeout: config.tx_confirm_timeout,
+            connection_timeout: config.connection_timeout,
+            sync_tolerance: config.sync_tolerance,
         }
     }
 }
