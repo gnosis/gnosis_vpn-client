@@ -42,8 +42,8 @@ pub enum Health {
     NotPeered,
     // final - not allowed to connect to this destination
     NotAllowed,
-    // final - destination address is invalid - should be impossible due to config deserialization
-    InvalidAddress,
+    // final - destination id is invalid - should be impossible due to config deserialization
+    InvalidId,
     // final - destination path is invalid - should be impossible due to config deserialization
     InvalidPath,
 }
@@ -106,7 +106,7 @@ impl ConnectivityHealth {
                     NodeId::Offchain(_) => Self {
                         id: dest.id.clone(),
                         last_error: None,
-                        health: Health::InvalidAddress,
+                        health: Health::InvalidId,
                         need: Need::Nothing,
                     },
                 },
@@ -232,7 +232,7 @@ impl ConnectivityHealth {
     pub fn is_unrecoverable(&self) -> bool {
         matches!(
             self.health,
-            Health::NotAllowed | Health::InvalidAddress | Health::InvalidPath
+            Health::NotAllowed | Health::InvalidId | Health::InvalidPath
         )
     }
 }
