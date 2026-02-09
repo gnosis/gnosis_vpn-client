@@ -1,15 +1,28 @@
-# build static linux binary
+# build static linux binary (x86_64)
 build:
-    nix build .#packages.x86_64-linux.gvpn
+    nix build .#packages.x86_64-linux.gnosis_vpn
 
-# build docker image
+# build static linux binary (ARM64)
+build-arm64:
+    nix build .#packages.aarch64-linux.gnosis_vpn
+
+# build docker image (x86_64)
 docker-build: build
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
     cp result/bin/* docker/
-    chmod 775 docker/gnosis_vpn docker/gnosis_vpn-ctl
+    chmod 775 docker/gnosis_vpn-worker docker/gnosis_vpn-root docker/gnosis_vpn-ctl
     docker build --platform linux/x86_64 -t gnosis_vpn-client docker/
+
+# build docker image (ARM64)
+docker-build-arm64: build-arm64
+    #!/usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+
+    cp result/bin/* docker/
+    chmod 775 docker/gnosis_vpn-worker docker/gnosis_vpn-root docker/gnosis_vpn-ctl
+    docker build --platform linux/arm64 -t gnosis_vpn-client:arm64 docker/
 
 # run docker container detached
 docker-run:
