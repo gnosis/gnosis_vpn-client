@@ -94,7 +94,7 @@ impl Default for BufferSizes {
             bridge: ByteSize::kb(32),
             health: ByteSize::kb(16),
             ping: ByteSize::mb(1),
-            // using maximum allowed session buffer size
+            // maximum allowed buffer size is 10 MB
             main: ByteSize::mb(6),
         }
     }
