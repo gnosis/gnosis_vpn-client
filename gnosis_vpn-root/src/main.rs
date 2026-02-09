@@ -266,7 +266,7 @@ async fn loop_daemon(
         .gid(setup.worker_user.gid)
         .spawn()
         .map_err(|err| {
-            tracing::error!(error = ?err, ?worker_user, "unable to spawn worker process");
+            tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
