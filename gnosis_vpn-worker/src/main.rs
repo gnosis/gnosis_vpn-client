@@ -23,7 +23,7 @@ mod init;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn ctrlc_channel(
+async fn signal_channel(
     reload_handle: Option<LogReloadHandle>,
     log_path: Option<String>,
 ) -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
@@ -99,7 +99,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     );
 
     // set up signal handler
-    let mut ctrlc_receiver = ctrlc_channel(
+    let mut signal_receiver = signal_channel(
         reload_handle,
         args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
     )
@@ -145,7 +145,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
-            Some(_) = ctrlc_receiver.recv() => {
+            Some(_) = signal_receiver.recv() => {
                 if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
                     return Ok(());

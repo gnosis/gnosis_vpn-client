@@ -22,7 +22,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{logging, ping, socket, worker};
+use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -37,7 +37,6 @@ use routing::Routing;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
-pub const PIDFILE_PATH: &str = "/var/run/gnosisvpn/gnosisvpn.pid";
 
 // Useful struct to bundle up various parameters and resources determined during daemon setup and needed in the main loop without having to pass them around individually
 struct DaemonSetup {
@@ -47,7 +46,7 @@ struct DaemonSetup {
     worker_params: WorkerParams,
 }
 
-async fn ctrlc_channel(
+async fn signal_channel(
     reload_handle: Option<LogReloadHandle>,
     log_path: Option<String>,
     worker_pid: Arc<Mutex<Option<u32>>>,
@@ -183,15 +182,19 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     );
 
     // Write root pidfile for the newsyslog service to send signals to
+    dirs::setup_root(args.socket_path.clone(), args.pid_file.clone()).map_err(|err| {
+        tracing::error!(error = ?err, "failed to setup root directories");
+        exitcode::IOERR
+    })?;
     if let Some(ref pid_file) = args.pid_file {
         tracing::debug!(path = ?pid_file, "writing pidfile");
         let pid = process::id().to_string();
-        fs::write(PIDFILE_PATH, pid).await.expect("failed to write pidfile");
+        fs::write(pid_file, pid).await.expect("failed to write pidfile");
     }
 
     // set up signal handler
     let worker_pid = Arc::new(Mutex::new(None));
-    let mut ctrlc_receiver = ctrlc_channel(
+    let mut signal_receiver = signal_channel(
         reload_handle,
         args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
         worker_pid.clone(),
@@ -243,7 +246,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         config,
         worker_params,
     };
-    let res = loop_daemon(setup, &mut ctrlc_receiver, socket, &mut maybe_router, worker_pid).await;
+    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router, worker_pid).await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
@@ -257,7 +260,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
 async fn loop_daemon(
     setup: DaemonSetup,
-    ctrlc_receiver: &mut mpsc::Receiver<()>,
+    signal_receiver: &mut mpsc::Receiver<()>,
     socket: UnixListener,
     maybe_router: &mut Option<Box<dyn Routing>>,
     worker_pid: Arc<Mutex<Option<u32>>>,
@@ -343,7 +346,7 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-            Some(_) = ctrlc_receiver.recv() => {
+            Some(_) = signal_receiver.recv() => {
                 if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
                     return Ok(());
