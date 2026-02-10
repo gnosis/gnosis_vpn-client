@@ -123,9 +123,11 @@ impl Core {
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let safeless_interactor = edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key)
-            .await
-            .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
+        let blokli_config = config.blokli.clone().into();
+        let safeless_interactor =
+            edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key, Some(blokli_config))
+                .await
+                .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
 
         let mut connectivity_health = HashMap::new();
         for (id, dest) in config.destinations.clone() {
@@ -970,12 +972,13 @@ impl Core {
         self.phase = Phase::Starting(None);
         let cancel = self.cancel_for_shutdown.clone();
         let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::hopr(worker_params, &safe_module, results_sender).await;
+                    runner::hopr(worker_params, blokli_config, &safe_module, results_sender).await;
                 })
                 .await
         });

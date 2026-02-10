@@ -7,6 +7,7 @@ use std::path::Path;
 use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
+use crate::hopr::blokli_config::BlokliConfig;
 use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
@@ -21,6 +22,7 @@ pub struct Config {
     pub connection: ConnectionOptions,
     pub destinations: HashMap<String, Destination>,
     pub wireguard: WireGuardConfig,
+    pub blokli: BlokliConfig,
 }
 
 #[derive(Debug, Error)]

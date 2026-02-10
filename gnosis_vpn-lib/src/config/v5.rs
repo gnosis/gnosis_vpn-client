@@ -14,6 +14,7 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
+use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
 
@@ -25,6 +26,7 @@ pub struct Config {
     pub(super) destinations: Option<HashMap<String, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
+    pub(super) blokli: Option<BlokliConfig>,
 }
 
 #[serde_as]
@@ -114,6 +116,15 @@ pub(super) struct WireGuard {
     pub(super) force_private_key: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct BlokliConfig {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) tx_confirm_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) connection_timeout: Option<Duration>,
+    pub(super) sync_tolerance: Option<usize>,
+}
+
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong_keys = Vec::new();
     for (key, value) in table.iter() {
@@ -133,6 +144,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+
+        // blokli nested struct
+        if key == "blokli" {
+            if let Some(blokli) = value.as_table() {
+                for (k, _v) in blokli.iter() {
+                    if k == "tx_confirm_timeout" || k == "connection_timeout" || k == "sync_tolerance" {
+                        continue;
+                    }
+                    wrong_keys.push(format!("blokli.{k}"));
+                }
+            }
+            continue;
+        }
+
         // connection nested struct
         if key == "connection" {
             if let Some(connection) = value.as_table() {
@@ -408,6 +433,25 @@ impl From<Option<WireGuard>> for WireGuardConfig {
     }
 }
 
+impl From<Option<BlokliConfig>> for HoprBlokliConfig {
+    fn from(value: Option<BlokliConfig>) -> Self {
+        let tx_confirm_timeout = value
+            .as_ref()
+            .and_then(|b| b.tx_confirm_timeout)
+            .unwrap_or_else(|| Duration::from_secs(90));
+        let connection_timeout = value
+            .as_ref()
+            .and_then(|b| b.connection_timeout)
+            .unwrap_or_else(|| Duration::from_secs(30));
+        let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
+        HoprBlokliConfig {
+            tx_confirm_timeout,
+            connection_timeout,
+            sync_tolerance,
+        }
+    }
+}
+
 impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
@@ -415,10 +459,12 @@ impl TryFrom<Config> for config::Config {
         let connection = value.connection.into();
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
+        let blokli = value.blokli.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
+            blokli,
         })
     }
 }
@@ -539,6 +585,11 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
+
+[blokli]
+tx_confirm_timeout = "90s"
+connection_timeout = "30s"
+sync_tolerance = 50
 "#####;
         toml::from_str::<Config>(config)?;
 

@@ -9,6 +9,7 @@ use url::Url;
 use std::path::PathBuf;
 
 use crate::compat::SafeModule;
+use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::{config, identity};
 
 #[derive(Debug, Error)]
@@ -128,11 +129,11 @@ impl WorkerParams {
     }
 
     /// Create safeless blokli instance
-    pub async fn create_safeless_interactor(&self) -> Result<SafelessInteractor, Error> {
+    pub async fn create_safeless_interactor(&self, config: BlokliConfig) -> Result<SafelessInteractor, Error> {
         let keys = self.calc_keys().await?;
         let private_key = keys.chain_key;
         let url = self.blokli_url();
-        edgli::blokli::SafelessInteractor::new(url, &private_key)
+        edgli::blokli::SafelessInteractor::new(url, &private_key, Some(config.into()))
             .await
             .map_err(|e| Error::BlokliCreation(e.to_string()))
     }
