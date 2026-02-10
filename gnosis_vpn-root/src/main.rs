@@ -37,7 +37,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
-// Useful struct to bundle up various parameters and resources determined during daemon setup and needed in the main loop without having to pass them around individually
 struct DaemonSetup {
     args: cli::Cli,
     worker_user: worker::Worker,
@@ -49,7 +48,7 @@ struct DaemonSetup {
 
 enum SignalMessage {
     Shutdown,
-    ReloadLogs,
+    RotateLogs,
 }
 
 async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
@@ -86,7 +85,7 @@ async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::Exi
                 },
                 Some(_) = sighup.recv() => {
                     tracing::debug!("received SIGHUP");
-                    if sender.send(SignalMessage::ReloadLogs).await.is_err() {
+                    if sender.send(SignalMessage::RotateLogs).await.is_err() {
                         tracing::warn!("SIGHUP: receiver closed");
                         break;
                     }
@@ -178,11 +177,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         fs::write(pid_file, pid).await.expect("failed to write pidfile");
     }
 
-    let mut signal_receiver = signal_channel(
-        // reload_handle,
-        // args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
-    )
-    .await?;
+    let mut signal_receiver = signal_channel().await?;
 
     // ensure worker user exists
     let input = worker::Input::new(
@@ -339,17 +334,17 @@ async fn loop_daemon(
                     cancel_token.cancel();
                     teardown_any_routing(maybe_router, true).await;
                 }
-                SignalMessage::ReloadLogs => {
+                SignalMessage::RotateLogs => {
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    if let (Some(handle), Some(path)) = (setup.reload_handle.clone(), setup.log_path.clone()) {
+                    if let (Some(handle), Some(path)) = (&setup.reload_handle, &setup.log_path) {
                         let res = logging::make_file_fmt_layer(&path.to_string_lossy())
                             .map(|new_layer| handle.reload(new_layer));
                         match res {
-                             Ok(_) => {
-                                 tracing::info!("successfully reloaded logging layer with new log file");
+                            Ok(_) => {
+                                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
                             },
-                             Err(e) => {
+                            Err(e) => {
                                 eprintln!("failed to reopen log file {:?}: {}", path, e);
                                 return Err(exitcode::IOERR);
                             }
