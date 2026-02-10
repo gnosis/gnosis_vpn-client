@@ -22,7 +22,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
+use gnosis_vpn_lib::{logging, ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -88,9 +88,15 @@ async fn signal_channel(
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
                         tracing::info!("reopening log file");
-                        let new_layer = logging::make_file_fmt_layer(path);
-                        if let Err(e) = handle.reload(new_layer) {
-                            eprintln!("failed to reload logging layer: {e}");
+                        match logging::make_file_fmt_layer(path) {
+                            Ok(new_layer) => {
+                                if let Err(e) = handle.reload(new_layer) {
+                                    eprintln!("failed to reload logging layer: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("failed to reopen log file {}: {}", path, e);
+                            }
                         }
                     } else {
                         tracing::debug!("no log file configured, skipping log reload on SIGHUP");
@@ -168,7 +174,10 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let worker_params = WorkerParams::from(&args);
     let reload_handle = match &args.log_file {
-        Some(log_path) => Some(logging::setup_log_file(log_path.clone())),
+        Some(path) => Some(logging::setup_log_file(path.clone()).map_err(|err| {
+            eprintln!("Failed to open log file {}: {}", path.display(), err);
+            exitcode::IOERR
+        })?),
         None => {
             logging::setup_stdout();
             None

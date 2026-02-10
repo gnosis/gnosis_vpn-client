@@ -3,7 +3,7 @@ use thiserror::Error;
 use std::fs::DirBuilder;
 use std::io::{self, ErrorKind};
 use std::os::unix::fs::DirBuilderExt;
-use std::os::unix::fs::{self as unix_fs, PermissionsExt};
+use std::os::unix::fs::{self as unix_fs};
 use std::path::PathBuf;
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";

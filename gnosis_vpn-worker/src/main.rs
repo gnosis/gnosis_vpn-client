@@ -64,9 +64,15 @@ async fn signal_channel(
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
                         tracing::info!("reopening log file");
-                        let new_layer = logging::make_file_fmt_layer(path);
-                        if let Err(e) = handle.reload(new_layer) {
-                            eprintln!("failed to reload logging layer: {e}");
+                        match logging::make_file_fmt_layer(path) {
+                            Ok(new_layer) => {
+                                if let Err(e) = handle.reload(new_layer) {
+                                    eprintln!("failed to reload logging layer: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("failed to reopen log file {}: {}", path, e);
+                            }
                         }
                     } else {
                         tracing::debug!("no log file configured, skipping log reload on SIGHUP");
@@ -86,7 +92,10 @@ async fn signal_channel(
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
     let reload_handle = match &args.log_file {
-        Some(log_path) => Some(logging::setup_log_file(log_path.clone())),
+        Some(log_path) => Some(logging::setup_log_file(log_path.clone()).map_err(|err| {
+            eprintln!("Failed to open log file {}: {}", log_path.display(), err);
+            exitcode::IOERR
+        })?),
         None => {
             logging::setup_stdout();
             None
