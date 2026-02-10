@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use std::fs::DirBuilder;
 use std::io::{self, ErrorKind};
-use std::os::unix::fs as unix_fs;
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{self as unix_fs};
 use std::path::PathBuf;
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
@@ -22,7 +22,8 @@ pub enum Error {
     IO(#[from] io::Error),
 }
 
-pub fn setup(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
+// Sets up the required directories for the worker, ensuring they are owned by the worker user
+pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
     tracing::debug!("Using gnosisvpn home directory: {}", home.display());
     // home folder will be created by installer
     let cache_path = home.join(CACHE_DIRECTORY);
@@ -52,7 +53,6 @@ pub fn config_dir(home: PathBuf, file: &str) -> Result<PathBuf, Error> {
 
 fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
     let res = DirBuilder::new().mode(0o700).create(path);
-    println!("res: {:?}", res);
     match res {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),

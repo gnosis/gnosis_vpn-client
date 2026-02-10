@@ -1,3 +1,4 @@
+use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -11,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{ping, socket, worker};
+use gnosis_vpn_lib::{logging, ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -34,7 +35,23 @@ use routing::Routing;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
+pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
+
+struct DaemonSetup {
+    args: cli::Cli,
+    worker_user: worker::Worker,
+    config: Config,
+    worker_params: WorkerParams,
+    reload_handle: Option<LogReloadHandle>,
+    log_path: Option<PathBuf>,
+}
+
+enum SignalMessage {
+    Shutdown,
+    RotateLogs,
+}
+
+async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
         tracing::error!(?error, "error setting up SIGINT handler");
@@ -44,26 +61,37 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
         tracing::error!(?error, "error setting up SIGTERM handler");
         exitcode::IOERR
     })?;
+    let mut sighup = signal(SignalKind::hangup()).map_err(|error| {
+        tracing::error!(?error, "error setting up SIGHUP handler");
+        exitcode::IOERR
+    })?;
 
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
                     tracing::debug!("received SIGINT");
-                    if sender.send(()).await.is_err() {
-                        tracing::warn!("sigint: receiver closed");
+                    if sender.send(SignalMessage::Shutdown).await.is_err() {
+                        tracing::warn!("SIGINT: receiver closed");
                         break;
                     }
                 },
                 Some(_) = sigterm.recv() => {
                     tracing::debug!("received SIGTERM");
-                    if sender.send(()).await.is_err() {
-                        tracing::warn!("sigterm: receiver closed");
+                    if sender.send(SignalMessage::Shutdown).await.is_err() {
+                        tracing::warn!("SIGTERM: receiver closed");
                         break;
                     }
                 },
+                Some(_) = sighup.recv() => {
+                    tracing::debug!("received SIGHUP");
+                    if sender.send(SignalMessage::RotateLogs).await.is_err() {
+                        tracing::warn!("SIGHUP: receiver closed");
+                        break;
+                    }
+                }
                 else => {
-                    tracing::warn!("sigint and sigterm streams closed");
+                    tracing::warn!("signal streams closed");
                     break;
                 }
             }
@@ -125,9 +153,31 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let worker_params = WorkerParams::from(&args);
+    let reload_handle = match &args.log_file {
+        Some(path) => Some(logging::setup_log_file(path.clone()).map_err(|err| {
+            eprintln!("Failed to open log file {}: {}", path.display(), err);
+            exitcode::IOERR
+        })?),
+        None => {
+            logging::setup_stdout();
+            None
+        }
+    };
 
-    // set up signal handler
-    let mut ctrlc_receiver = ctrlc_channel().await?;
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
+
+    // Write root pidfile for the newsyslog service to send signals to
+    if let Some(ref pid_file) = args.pid_file {
+        tracing::debug!(path = ?pid_file, "writing pidfile");
+        let pid = process::id().to_string();
+        fs::write(pid_file, pid).await.expect("failed to write pidfile");
+    }
+
+    let mut signal_receiver = signal_channel().await?;
 
     // ensure worker user exists
     let input = worker::Input::new(
@@ -168,15 +218,16 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket = socket_listener(&args.socket_path).await?;
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
-    let res = loop_daemon(
-        &mut ctrlc_receiver,
-        socket,
-        &worker_user,
+    let log_path = args.log_file.clone();
+    let setup = DaemonSetup {
+        args,
+        worker_user,
         config,
         worker_params,
-        &mut maybe_router,
-    )
-    .await;
+        reload_handle,
+        log_path,
+    };
+    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
@@ -189,11 +240,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 }
 
 async fn loop_daemon(
-    ctrlc_receiver: &mut mpsc::Receiver<()>,
+    setup: DaemonSetup,
+    signal_receiver: &mut mpsc::Receiver<SignalMessage>,
     socket: UnixListener,
-    worker_user: &worker::Worker,
-    config: Config,
-    worker_params: WorkerParams,
     maybe_router: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
@@ -208,18 +257,29 @@ async fn loop_daemon(
         libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
     }
 
-    let mut worker_child = Command::new(worker_user.binary.clone())
-        .current_dir(&worker_user.home)
+    let mut worker_command = Command::new(setup.worker_user.binary.clone());
+    if let Some(log_file) = &setup.args.log_file {
+        worker_command
+            .arg("--log-file")
+            .arg(log_file.to_string_lossy().to_string());
+    }
+    let mut worker_child = worker_command
+        .current_dir(&setup.worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
         .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-        .uid(worker_user.uid)
-        .gid(worker_user.gid)
+        .uid(setup.worker_user.uid)
+        .gid(setup.worker_user.gid)
         .spawn()
         .map_err(|err| {
-            tracing::error!(error = ?err, ?worker_user, "unable to spawn worker process");
+            tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
+
+    let worker_pid: i32 = worker_child.id().map(|id| id as i32).ok_or_else(|| {
+        tracing::error!("unable to get worker PID");
+        exitcode::IOERR
+    })?;
 
     parent_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
@@ -239,11 +299,17 @@ async fn loop_daemon(
     let mut writer = BufWriter::new(writer_half);
 
     // safe state_home for usage later
-    let state_home = worker_params.state_home();
+    let state_home = setup.worker_params.state_home();
 
     // provide initial resources to worker
-    send_to_worker(RootToWorker::WorkerParams { worker_params }, &mut writer).await?;
-    send_to_worker(RootToWorker::Config { config }, &mut writer).await?;
+    send_to_worker(
+        RootToWorker::WorkerParams {
+            worker_params: setup.worker_params,
+        },
+        &mut writer,
+    )
+    .await?;
+    send_to_worker(RootToWorker::Config { config: setup.config }, &mut writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
@@ -257,16 +323,42 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-            Some(_) = ctrlc_receiver.recv() => {
-                if shutdown_ongoing {
-                    tracing::info!("force shutdown immediately");
-                    return Ok(());
+            Some(signal) = signal_receiver.recv() => match signal {
+                SignalMessage::Shutdown => {
+                    if shutdown_ongoing {
+                        tracing::warn!("force shutdown immediately");
+                        return Ok(());
+                    }
+                    tracing::info!("initiate shutdown");
+                    shutdown_ongoing = true;
+                    cancel_token.cancel();
+                    teardown_any_routing(maybe_router, true).await;
                 }
-                tracing::info!("initiate shutdown");
-                shutdown_ongoing = true;
-                cancel_token.cancel();
-                teardown_any_routing(maybe_router, true).await;
+                SignalMessage::RotateLogs => {
+                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
+                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
+                    if let (Some(handle), Some(path)) = (&setup.reload_handle, &setup.log_path) {
+                        let res = logging::make_file_fmt_layer(&path.to_string_lossy())
+                            .map(|new_layer| handle.reload(new_layer));
+                        match res {
+                            Ok(_) => {
+                                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                            },
+                            Err(e) => {
+                                eprintln!("failed to reopen log file {:?}: {}", path, e);
+                                return Err(exitcode::IOERR);
+                            }
+                        };
+                        tracing::debug!("forwarding SIGHUP to worker process {}", worker_pid);
+                        unsafe {
+                            libc::kill(worker_pid, libc::SIGHUP);
+                        }
+                    } else {
+                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
+                    }
+                }
             },
+
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
                 let socket_reader = BufReader::new(socket_reader_half);
@@ -301,7 +393,7 @@ async fn loop_daemon(
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                let router_result = routing::dynamic_router(state_home.clone(), worker_user.clone(), wg_data);
+                                let router_result = routing::dynamic_router(state_home.clone(), setup.worker_user.clone(), wg_data);
 
                                 match router_result {
                                     Ok(mut router) => {
@@ -478,14 +570,6 @@ fn spawn_ping(
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let args = cli::parse();
-
-    // install global collector configured based on RUST_LOG env var.
-    tracing_subscriber::fmt::init();
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "starting {}",
-        env!("CARGO_PKG_NAME")
-    );
 
     match daemon(args).await {
         Ok(_) => (),

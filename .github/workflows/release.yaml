@@ -24,9 +24,9 @@ jobs:
           - architecture: aarch64-linux
             runner: ubuntu-22.04-arm
           - architecture: aarch64-darwin
-            runner: macos-15
+            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU, 14GB RAM and 14GB SSD. 8-core GPU
           - architecture: x86_64-darwin
-            runner: macos-15
+            runner: macos-15-intel # Uses Intel hardware 4vCPU, 14GB RAM and 14GB SSD
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
@@ -141,6 +141,8 @@ jobs:
           add: '["Cargo.*", "LATEST" ]'
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
+          default_author: github_actions
+          github_token: ${{ secrets.BOT_TOKEN }}
       - name: Notify release
         uses: zulip/github-actions-zulip/send-message@e4c8f27c732ba9bd98ac6be0583096dea82feea5 # v1.0.2
         with:

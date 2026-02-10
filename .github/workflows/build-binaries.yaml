@@ -24,7 +24,8 @@ on:
         options:
           - ubuntu-22.04
           - ubuntu-22.04-arm
-          - macos-15
+          - macos-15-xlarge
+          - macos-15-intel
         required: true
         description: "GH Runner to use"
       architecture:

@@ -73,7 +73,7 @@ jobs:
         env:
           USER: runner
       - name: Run flake checks
-        run: nix flake check
+        run: nix flake check -L --show-trace
   build-binaries:
     strategy:
       matrix:
