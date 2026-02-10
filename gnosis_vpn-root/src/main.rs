@@ -12,9 +12,8 @@ use tokio_util::sync::CancellationToken;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{self};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
@@ -44,13 +43,16 @@ struct DaemonSetup {
     worker_user: worker::Worker,
     config: Config,
     worker_params: WorkerParams,
+    reload_handle: Option<LogReloadHandle>,
+    log_path: Option<PathBuf>,
 }
 
-async fn signal_channel(
-    reload_handle: Option<LogReloadHandle>,
-    log_path: Option<String>,
-    worker_pid: Arc<Mutex<Option<u32>>>,
-) -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
+enum SignalMessage {
+    Shutdown,
+    ReloadLogs,
+}
+
+async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
         tracing::error!(?error, "error setting up SIGINT handler");
@@ -70,46 +72,25 @@ async fn signal_channel(
             tokio::select! {
                 Some(_) = sigint.recv() => {
                     tracing::debug!("received SIGINT");
-                    if sender.send(()).await.is_err() {
-                        tracing::warn!("sigint: receiver closed");
+                    if sender.send(SignalMessage::Shutdown).await.is_err() {
+                        tracing::warn!("SIGINT: receiver closed");
                         break;
                     }
                 },
                 Some(_) = sigterm.recv() => {
                     tracing::debug!("received SIGTERM");
-                    if sender.send(()).await.is_err() {
-                        tracing::warn!("sigterm: receiver closed");
+                    if sender.send(SignalMessage::Shutdown).await.is_err() {
+                        tracing::warn!("SIGTERM: receiver closed");
                         break;
                     }
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::info!("received SIGHUP");
-                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
-                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
-                        tracing::info!("reopening log file");
-                        match logging::make_file_fmt_layer(path) {
-                            Ok(new_layer) => {
-                                if let Err(e) = handle.reload(new_layer) {
-                                    eprintln!("failed to reload logging layer: {e}");
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("failed to reopen log file {}: {}", path, e);
-                            }
-                        }
-                    } else {
-                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
+                    tracing::debug!("received SIGHUP");
+                    if sender.send(SignalMessage::ReloadLogs).await.is_err() {
+                        tracing::warn!("SIGHUP: receiver closed");
+                        break;
                     }
-
-                    // Forward SIGHUP to worker process
-                    if let Ok(pid_guard) = worker_pid.lock() && let Some(pid) = *pid_guard {
-                        unsafe {
-                            libc::kill(pid as i32, libc::SIGHUP);
-                        }
-                        tracing::debug!("forwarded SIGHUP to worker process {}", pid);
-                    }
-                },
+                }
                 else => {
                     tracing::warn!("signal streams closed");
                     break;
@@ -197,12 +178,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         fs::write(pid_file, pid).await.expect("failed to write pidfile");
     }
 
-    // set up signal handler
-    let worker_pid = Arc::new(Mutex::new(None));
     let mut signal_receiver = signal_channel(
-        reload_handle,
-        args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
-        worker_pid.clone(),
+        // reload_handle,
+        // args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
     )
     .await?;
 
@@ -245,13 +223,16 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket = socket_listener(&args.socket_path).await?;
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
+    let log_path = args.log_file.clone();
     let setup = DaemonSetup {
         args,
         worker_user,
         config,
         worker_params,
+        reload_handle,
+        log_path,
     };
-    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router, worker_pid).await;
+    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
@@ -265,10 +246,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
 async fn loop_daemon(
     setup: DaemonSetup,
-    signal_receiver: &mut mpsc::Receiver<()>,
+    signal_receiver: &mut mpsc::Receiver<SignalMessage>,
     socket: UnixListener,
     maybe_router: &mut Option<Box<dyn Routing>>,
-    worker_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -301,13 +281,10 @@ async fn loop_daemon(
             exitcode::IOERR
         })?;
 
-    // Store worker PID for signal forwarding
-    if let Some(pid) = worker_child.id()
-        && let Ok(mut pid_guard) = worker_pid.lock()
-    {
-        *pid_guard = Some(pid);
-        tracing::debug!("worker process started with PID: {}", pid);
-    }
+    let worker_pid: i32 = worker_child.id().map(|id| id as i32).ok_or_else(|| {
+        tracing::error!("unable to get worker PID");
+        exitcode::IOERR
+    })?;
 
     parent_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
@@ -351,16 +328,42 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-            Some(_) = signal_receiver.recv() => {
-                if shutdown_ongoing {
-                    tracing::info!("force shutdown immediately");
-                    return Ok(());
+            Some(signal) = signal_receiver.recv() => match signal {
+                SignalMessage::Shutdown => {
+                    if shutdown_ongoing {
+                        tracing::warn!("force shutdown immediately");
+                        return Ok(());
+                    }
+                    tracing::info!("initiate shutdown");
+                    shutdown_ongoing = true;
+                    cancel_token.cancel();
+                    teardown_any_routing(maybe_router, true).await;
                 }
-                tracing::info!("initiate shutdown");
-                shutdown_ongoing = true;
-                cancel_token.cancel();
-                teardown_any_routing(maybe_router, true).await;
+                SignalMessage::ReloadLogs => {
+                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
+                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
+                    if let (Some(handle), Some(path)) = (setup.reload_handle.clone(), setup.log_path.clone()) {
+                        let res = logging::make_file_fmt_layer(&path.to_string_lossy())
+                            .map(|new_layer| handle.reload(new_layer));
+                        match res {
+                             Ok(_) => {
+                                 tracing::info!("successfully reloaded logging layer with new log file");
+                            },
+                             Err(e) => {
+                                eprintln!("failed to reopen log file {:?}: {}", path, e);
+                                return Err(exitcode::IOERR);
+                            }
+                        };
+                        tracing::debug!("forwarding SIGHUP to worker process {}", worker_pid);
+                        unsafe {
+                            libc::kill(worker_pid, libc::SIGHUP);
+                        }
+                    } else {
+                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
+                    }
+                }
             },
+
             Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
                 let (socket_reader_half, socket_writer_half) = stream.into_split();
                 let socket_reader = BufReader::new(socket_reader_half);
