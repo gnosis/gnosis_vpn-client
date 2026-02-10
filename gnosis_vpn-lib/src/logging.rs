@@ -85,7 +85,6 @@ pub fn setup_log_file(log_path: PathBuf) -> Result<LogReloadHandle, std::io::Err
         LogReloadHandle,
     ) = reload::Layer::new(make_file_fmt_layer(&log_path_str)?);
     tracing_subscriber::registry().with(reload_layer).with(filter).init();
-    tracing::debug!("logging initialized with file output: {}", log_path_str);
     Ok(reload_handle)
 }
 
@@ -107,5 +106,4 @@ pub fn setup_stdout() {
         .with(fmt::layer().with_ansi(true))
         .with(filter)
         .init();
-    tracing::debug!("logging initialized with stdout/stderr output");
 }
