@@ -182,10 +182,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     );
 
     // Write root pidfile for the newsyslog service to send signals to
-    dirs::setup_root(args.socket_path.clone(), args.pid_file.clone()).map_err(|err| {
-        tracing::error!(error = ?err, "failed to setup root directories");
-        exitcode::IOERR
-    })?;
     if let Some(ref pid_file) = args.pid_file {
         tracing::debug!(path = ?pid_file, "writing pidfile");
         let pid = process::id().to_string();
