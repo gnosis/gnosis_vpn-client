@@ -77,7 +77,7 @@ pub fn make_file_fmt_layer(log_path: &str) -> FileFmtLayer {
 ///
 /// A [`LogReloadHandle`] that can be used to replace the file logging layer
 /// at runtime (e.g. in response to `SIGHUP`).
-pub fn setup(log_path: PathBuf) -> LogReloadHandle {
+pub fn setup_log_file(log_path: PathBuf) -> LogReloadHandle {
     let log_path = log_path.to_string_lossy().to_string();
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
     let (reload_layer, reload_handle): (
@@ -85,5 +85,29 @@ pub fn setup(log_path: PathBuf) -> LogReloadHandle {
         LogReloadHandle,
     ) = reload::Layer::new(make_file_fmt_layer(&log_path));
     tracing_subscriber::registry().with(reload_layer).with(filter).init();
+    tracing::debug!("logging initialized with file output: {}", log_path);
     reload_handle
+}
+
+/// Initializes the global `tracing` subscriber with stdout/stderr logging.
+///
+/// Sets up a [`tracing_subscriber::Registry`] with:
+///
+/// 1. A **formatting layer** that writes structured logs to stdout.
+/// 2. An **[`EnvFilter`]** that controls log verbosity. The filter is read from
+///    the `RUST_LOG` environment variable; if that is unset or invalid, it
+///    defaults to `"info"`.
+///
+/// This setup does not support log rotation since it writes to stdout/stderr.
+///
+/// # Panics
+///
+/// Panics if a global subscriber has already been set.
+pub fn setup_stdout() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_ansi(true))
+        .with(filter)
+        .init();
+    tracing::debug!("logging initialized with stdout/stderr output");
 }

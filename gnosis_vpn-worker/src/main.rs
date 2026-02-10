@@ -24,8 +24,8 @@ mod init;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn ctrlc_channel(
-    reload_handle: LogReloadHandle,
-    log_path: String,
+    reload_handle: Option<LogReloadHandle>,
+    log_path: Option<String>,
 ) -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
@@ -59,12 +59,17 @@ async fn ctrlc_channel(
                     }
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::info!("received SIGHUP: reopening log file");
+                    tracing::info!("received SIGHUP");
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    let new_layer = logging::make_file_fmt_layer(&log_path);
-                    if let Err(e) = reload_handle.reload(new_layer) {
-                        eprintln!("failed to reload logging layer: {e}");
+                    if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
+                        tracing::info!("reopening log file");
+                        let new_layer = logging::make_file_fmt_layer(path);
+                        if let Err(e) = handle.reload(new_layer) {
+                            eprintln!("failed to reload logging layer: {e}");
+                        }
+                    } else {
+                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
                     }
                 },
                 else => {
@@ -80,7 +85,13 @@ async fn ctrlc_channel(
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
-    let reload_handle = logging::setup(args.log_file.clone());
+    let reload_handle = match &args.log_file {
+        Some(log_path) => Some(logging::setup_log_file(log_path.clone())),
+        None => {
+            logging::setup_stdout();
+            None
+        }
+    };
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         "starting {}",
@@ -89,8 +100,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // set up signal handler
     let mut ctrlc_receiver = ctrlc_channel(
-        reload_handle.clone(),
-        args.log_file.clone().to_string_lossy().to_string(),
+        reload_handle,
+        args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
     )
     .await?;
 

@@ -100,7 +100,7 @@ impl Worker {
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
             // set up application state directory
-            let home = dirs::setup(input.state_home, uid, gid).map_err(|err| {
+            let home = dirs::setup_worker(input.state_home, uid, gid).map_err(|err| {
                 tracing::error!(error = ?err, "error setting up home directory");
                 Error::IO(io::Error::other(err.to_string()))
             })?;

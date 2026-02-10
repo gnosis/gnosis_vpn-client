@@ -10,9 +10,8 @@ pub struct Cli {
     #[arg(
         long,
         env = logging::ENV_VAR_LOG_FILE,
-        default_value = logging::DEFAULT_LOG_FILE,
     )]
-    pub log_file: PathBuf,
+    pub log_file: Option<PathBuf>,
 }
 
 pub fn parse() -> Cli {

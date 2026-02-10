@@ -36,7 +36,8 @@ use routing::Routing;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const PIDFILE_PATH: &str = "/var/run/gnosis_vpn/gnosis_vpn.pid";
+pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
+pub const PIDFILE_PATH: &str = "/var/run/gnosisvpn/gnosisvpn.pid";
 
 // Useful struct to bundle up various parameters and resources determined during daemon setup and needed in the main loop without having to pass them around individually
 struct DaemonSetup {
@@ -47,8 +48,8 @@ struct DaemonSetup {
 }
 
 async fn ctrlc_channel(
-    reload_handle: LogReloadHandle,
-    log_path: String,
+    reload_handle: Option<LogReloadHandle>,
+    log_path: Option<String>,
     worker_pid: Arc<Mutex<Option<u32>>>,
 ) -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
@@ -83,12 +84,17 @@ async fn ctrlc_channel(
                     }
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::info!("received SIGHUP: reopening log file");
+                    tracing::info!("received SIGHUP");
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    let new_layer = logging::make_file_fmt_layer(&log_path);
-                    if let Err(e) = reload_handle.reload(new_layer) {
-                        eprintln!("failed to reload logging layer: {e}");
+                    if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
+                        tracing::info!("reopening log file");
+                        let new_layer = logging::make_file_fmt_layer(path);
+                        if let Err(e) = handle.reload(new_layer) {
+                            eprintln!("failed to reload logging layer: {e}");
+                        }
+                    } else {
+                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
                     }
 
                     // Forward SIGHUP to worker process
@@ -162,7 +168,13 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let worker_params = WorkerParams::from(&args);
-    let reload_handle = logging::setup(args.log_file.clone());
+    let reload_handle = match &args.log_file {
+        Some(log_path) => Some(logging::setup_log_file(log_path.clone())),
+        None => {
+            logging::setup_stdout();
+            None
+        }
+    };
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -170,11 +182,18 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_NAME")
     );
 
+    // Write root pidfile for the newsyslog service to send signals to
+    if let Some(ref pid_file) = args.pid_file {
+        tracing::debug!(path = ?pid_file, "writing pidfile");
+        let pid = process::id().to_string();
+        fs::write(PIDFILE_PATH, pid).await.expect("failed to write pidfile");
+    }
+
     // set up signal handler
     let worker_pid = Arc::new(Mutex::new(None));
     let mut ctrlc_receiver = ctrlc_channel(
         reload_handle,
-        args.log_file.to_string_lossy().to_string(),
+        args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()),
         worker_pid.clone(),
     )
     .await?;
@@ -255,9 +274,13 @@ async fn loop_daemon(
         libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
     }
 
-    let mut worker_child = Command::new(setup.worker_user.binary.clone())
-        .arg("--log-file")
-        .arg(setup.args.log_file.to_string_lossy().to_string())
+    let mut worker_command = Command::new(setup.worker_user.binary.clone());
+    if let Some(log_file) = &setup.args.log_file {
+        worker_command
+            .arg("--log-file")
+            .arg(log_file.to_string_lossy().to_string());
+    }
+    let mut worker_child = worker_command
         .current_dir(&setup.worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
@@ -541,10 +564,6 @@ fn spawn_ping(
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let args = cli::parse();
-
-    // Write pidfile for the newsyslog service to send signals to
-    let pid = process::id().to_string();
-    fs::write(PIDFILE_PATH, pid).await.expect("failed to write pidfile");
 
     match daemon(args).await {
         Ok(_) => (),

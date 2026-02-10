@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
 use gnosis_vpn_lib::{config, dirs, hopr, logging, socket};
 
-use crate::worker;
+use crate::{ENV_VAR_PID_FILE, worker};
 
 /// Gnosis VPN system service - client application for Gnosis VPN connections
 #[derive(Clone, Debug, Parser)]
 #[command(version)]
 pub struct Cli {
-    /// Socket path for communication with this servive
+    /// Socket path for communication with this service
     #[arg(
         short,
         long,
@@ -40,9 +40,14 @@ pub struct Cli {
     #[arg(
         long,
         env = logging::ENV_VAR_LOG_FILE,
-        default_value = logging::DEFAULT_LOG_FILE,
     )]
-    pub log_file: PathBuf,
+    pub log_file: Option<PathBuf>,
+
+    #[arg(
+        long,
+        env = ENV_VAR_PID_FILE,
+    )]
+    pub pid_file: Option<PathBuf>,
 
     /// Username of the worker user (needs a home folder for caching and configurations)
     #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
