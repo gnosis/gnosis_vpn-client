@@ -1,14 +1,15 @@
 use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
@@ -49,6 +50,11 @@ struct DaemonSetup {
 enum SignalMessage {
     Shutdown,
     RotateLogs,
+}
+
+struct SocketCmd {
+    cmd: cmdCmd,
+    resp: oneshot::Sender<Response>,
 }
 
 async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
@@ -295,8 +301,8 @@ async fn loop_daemon(
     tracing::debug!("splitting unix stream into reader and writer halves");
     let (reader_half, writer_half) = io::split(parent_stream);
     let reader = BufReader::new(reader_half);
-    let mut lines_reader = reader.lines();
-    let mut writer = BufWriter::new(writer_half);
+    let mut socket_lines_reader = reader.lines();
+    let mut socket_writer = BufWriter::new(writer_half);
 
     // safe state_home for usage later
     let state_home = setup.worker_params.state_home();
@@ -306,18 +312,18 @@ async fn loop_daemon(
         RootToWorker::WorkerParams {
             worker_params: setup.worker_params,
         },
-        &mut writer,
+        &mut socket_writer,
     )
     .await?;
-    send_to_worker(RootToWorker::Config { config: setup.config }, &mut writer).await?;
+    send_to_worker(RootToWorker::Config { config: setup.config }, &mut socket_writer).await?;
 
     // enter main loop
     let mut shutdown_ongoing = false;
-    // root <-> system socket communication setup (UI app)
-    let mut socket_lines_reader: Option<io::Lines<BufReader<OwnedReadHalf>>> = None;
-    let mut socket_writer: Option<BufWriter<OwnedWriteHalf>> = None;
     let cancel_token = CancellationToken::new();
     let (ping_sender, mut ping_receiver) = mpsc::channel(32);
+    let (socket_cmd_sender, mut socket_cmd_receiver) = mpsc::channel(32);
+    let mut pending_response_counter: u64 = 0;
+    let mut pending_responses: HashMap<u64, oneshot::Sender<Response>> = HashMap::new();
 
     tracing::info!("entering main daemon loop");
 
@@ -359,16 +365,22 @@ async fn loop_daemon(
                 }
             },
 
-            Ok((stream, _addr)) = socket.accept() , if socket_lines_reader.is_none() => {
-                let (socket_reader_half, socket_writer_half) = stream.into_split();
-                let socket_reader = BufReader::new(socket_reader_half);
-                socket_lines_reader = Some(socket_reader.lines());
-                socket_writer = Some(BufWriter::new(socket_writer_half));
+            Ok((stream, _addr)) = socket.accept() => {
+                let cmd_sender = socket_cmd_sender.clone();
+                tokio::spawn(async move {
+                    incoming_on_root_socket(stream, &cmd_sender).await;
+                });
+            }
+            Some(socket_cmd) = socket_cmd_receiver.recv() => {
+                pending_response_counter = pending_response_counter + 1;
+                pending_responses.insert(pending_response_counter, socket_cmd.resp);
+                let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: pending_response_counter };
+                send_to_worker(msg, &mut socket_writer).await?;
             }
             Some(res) = ping_receiver.recv() => {
-                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut writer).await?;
+                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut socket_writer).await?;
             }
-            Ok(Some(line)) = lines_reader.next_line() => {
+            Ok(Some(line)) = socket_lines_reader.next_line() => {
                 let cmd = parse_outgoing_worker(line)?;
                 match cmd {
                     WorkerToRoot::Ack => {
@@ -378,12 +390,14 @@ async fn loop_daemon(
                         tracing::error!("worker out of sync with root - exiting");
                         return Err(exitcode::UNAVAILABLE);
                     }
-                    WorkerToRoot::Response ( resp ) => {
+                    WorkerToRoot::Response { id, resp } => {
                         tracing::debug!(?resp, "received worker response");
-                        if let Some(mut writer) = socket_writer.take() {
-                        send_to_socket(&resp, &mut writer).await?;
+                        if let Some(resp_sender) = pending_responses.remove(&id) {
+                            if let Err(err) = resp_sender.send(resp) {
+                                tracing::error!(error = ?err, id, "failed to send response to socket - response channel closed");
+                            }
                         } else {
-                            tracing::error!(?resp, "failed to send response to socket - no socket connection");
+                            tracing::warn!(id, "no pending response found for worker response");
                         }
                     }
                     WorkerToRoot::RequestToRoot(request) => {
@@ -399,7 +413,7 @@ async fn loop_daemon(
                                     Ok(mut router) => {
                                         let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                         *maybe_router = Some(Box::new(router));
-                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
                                     },
                                     Err(error) => {
                                         if error.is_not_available() {
@@ -408,7 +422,7 @@ async fn loop_daemon(
                                             tracing::error!(?error, "failed to build dynamic router");
                                         }
                                         let res = Err(error.to_string());
-                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut writer).await?;
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
                                     }
                                 }
                             },
@@ -422,7 +436,7 @@ async fn loop_daemon(
                                 // bring up new static routing
                                 let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                 *maybe_router = Some(Box::new(new_routing));
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut writer).await?;
+                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
                             }
                             RequestToRoot::TearDownWg => {
                                 teardown_any_routing(maybe_router, true).await;
@@ -434,11 +448,6 @@ async fn loop_daemon(
                     },
                 }
             },
-            Ok(Some(line)) = async { socket_lines_reader.take().unwrap().next_line().await }, if socket_lines_reader.is_some() => {
-                let cmd: cmdCmd = parse_command(line)?;
-                tracing::debug!(command = ?cmd, "received socket command");
-                send_to_worker(RootToWorker::Command ( cmd ), &mut writer).await?;
-            }
             Ok(status) = worker_child.wait() => {
                 if shutdown_ongoing {
                     if status.success() {
@@ -460,17 +469,52 @@ async fn loop_daemon(
     }
 }
 
+async fn incoming_on_root_socket(stream: UnixStream, socket_cmd_sender: &mpsc::Sender<SocketCmd>) {
+    let (socket_reader_half, socket_writer_half) = stream.into_split();
+    let socket_reader = BufReader::new(socket_reader_half);
+    let res_line = socket_reader.lines().next_line().await;
+    match res_line {
+        Ok(Some(line)) => {
+            let res_decode = serde_json::from_str::<cmdCmd>(&line);
+            match res_decode {
+                Ok(cmd) => {
+                    tracing::debug!(command = ?cmd, "received socket command");
+                    let (resp_sender, resp_receiver) = oneshot::channel();
+                    let socket_cmd = SocketCmd { cmd, resp: resp_sender };
+                    if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
+                        tracing::error!(error = ?err, "failed to send socket command to main loop");
+                    }
+                    tokio::spawn(async move {
+                        match resp_receiver.await {
+                            Ok(resp) => {
+                                let mut writer = BufWriter::new(socket_writer_half);
+                                if let Err(err) = send_to_socket(&resp, &mut writer).await {
+                                    tracing::error!(error = ?err, "failed to send response to socket");
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!(error = ?err, "socket command response channel closed");
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "failed parsing incoming socket command");
+                }
+            }
+        }
+        Ok(None) => {
+            tracing::warn!("socket connection closed by peer");
+        }
+        Err(err) => {
+            tracing::error!(error = ?err, "error reading from socket");
+        }
+    }
+}
+
 fn parse_outgoing_worker(line: String) -> Result<WorkerToRoot, exitcode::ExitCode> {
     let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
         tracing::error!(error = %err, "failed parsing outgoing worker command");
-        exitcode::DATAERR
-    })?;
-    Ok(cmd)
-}
-
-fn parse_command(line: String) -> Result<cmdCmd, exitcode::ExitCode> {
-    let cmd: cmdCmd = serde_json::from_str(&line).map_err(|err| {
-        tracing::error!(error = %err, "failed parsing incoming socket command");
         exitcode::DATAERR
     })?;
     Ok(cmd)
