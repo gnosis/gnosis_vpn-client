@@ -107,12 +107,7 @@ impl NetworkDeviceInfo {
             })
             .ok_or(Error::NoInterface)?;
 
-        let links: Vec<_> = handle
-            .link()
-            .get()
-            .execute()
-            .try_collect::<Vec<_>>()
-            .await?;
+        let links: Vec<_> = handle.link().get().execute().try_collect::<Vec<_>>().await?;
 
         let mut vpn_if_index = None;
         let mut wan_if_name = None;
@@ -134,9 +129,8 @@ impl NetworkDeviceInfo {
         }
 
         let vpn_if_index = vpn_if_index.ok_or(Error::NoInterface)?;
-        let wan_if_name = wan_if_name.ok_or_else(|| {
-            Error::General(format!("WAN interface name not found for index {wan_if_index}"))
-        })?;
+        let wan_if_name = wan_if_name
+            .ok_or_else(|| Error::General(format!("WAN interface name not found for index {wan_if_index}")))?;
 
         Ok(Self {
             wan_if_index,
