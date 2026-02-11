@@ -317,13 +317,17 @@ async fn loop_daemon(
     .await?;
     send_to_worker(RootToWorker::Config { config: setup.config }, &mut socket_writer).await?;
 
+    // External socket commands need an internal mapping:
+    // root process will keep track of worker requests and map their responses
+    // so that the requesting stream on the socket receives it's answer
+    let mut pending_response_counter: u64 = 0;
+    let mut pending_responses: HashMap<u64, oneshot::Sender<Response>> = HashMap::new();
+
     // enter main loop
     let mut shutdown_ongoing = false;
     let cancel_token = CancellationToken::new();
     let (ping_sender, mut ping_receiver) = mpsc::channel(32);
     let (socket_cmd_sender, mut socket_cmd_receiver) = mpsc::channel(32);
-    let mut pending_response_counter: u64 = 0;
-    let mut pending_responses: HashMap<u64, oneshot::Sender<Response>> = HashMap::new();
 
     tracing::info!("entering main daemon loop");
 
@@ -483,7 +487,9 @@ async fn incoming_on_root_socket(stream: UnixStream, socket_cmd_sender: &mpsc::S
                     let socket_cmd = SocketCmd { cmd, resp: resp_sender };
                     if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
                         tracing::error!(error = ?err, "failed to send socket command to main loop");
+                        return;
                     }
+                    // wait for response and send back to socket
                     tokio::spawn(async move {
                         match resp_receiver.await {
                             Ok(resp) => {
