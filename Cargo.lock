@@ -1472,7 +1472,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.18.0"
-source = "git+https://github.com/hoprnet/blokli#046906627718881b5a44096209f2fe2cb47cad6b"
+source = "git+https://github.com/hoprnet/blokli#d3a36841edcd9d636d1f46527bb0b7eadb65c41d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2279,9 +2279,9 @@ dependencies = [
 
 [[package]]
 name = "deranged"
-version = "0.5.5"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ececcb659e7ba858fb4f10388c250a7252eb0a27373f1a72b8748afdd248e587"
+checksum = "cc3dc5ad92c2e2d1c193bbbbdf2ea477cb81331de4f3103f267ca18368b988c4"
 dependencies = [
  "powerfmt",
  "serde_core",
@@ -3075,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.70.0"
+version = "0.70.1"
 dependencies = [
  "clap",
  "exitcode",
@@ -3087,7 +3087,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.70.0"
+version = "0.70.1"
 dependencies = [
  "anyhow",
  "backon",
@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-root"
-version = "0.70.0"
+version = "0.70.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-worker"
-version = "0.70.0"
+version = "0.70.1"
 dependencies = [
  "clap",
  "exitcode",
@@ -8408,9 +8408,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.11+spec-1.1.0"
+version = "0.9.12+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3afc9a848309fe1aaffaed6e1546a7a14de1f935dc9d89d32afd9a44bab7c46"
+checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
 dependencies = [
  "indexmap 2.13.0",
  "serde_core",
@@ -8444,9 +8444,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.0.6+spec-1.1.0"
+version = "1.0.7+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3198b4b0a8e11f09dd03e133c0280504d0801269e9afa46362ffde1cbeebf44"
+checksum = "247eaa3197818b831697600aadf81514e577e0cba5eab10f7e064e78ae154df1"
 dependencies = [
  "winnow",
 ]
