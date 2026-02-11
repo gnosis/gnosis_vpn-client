@@ -56,7 +56,7 @@ pub enum Command {
         secret: String,
     },
 
-    /// Solicite a ping response ("pong") from the service and it's worker process to check if it is alive
+    /// Solicit a ping response ("pong") from the service and it's worker process to check if it is alive
     #[command()]
     Ping {},
 }

@@ -6,6 +6,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{Command as cmdCmd, Response};
+use gnosis_vpn_lib::command::{Command as LibCommand, Response};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
@@ -53,7 +54,7 @@ enum SignalMessage {
 }
 
 struct SocketCmd {
-    cmd: cmdCmd,
+    cmd: LibCommand,
     resp: oneshot::Sender<Response>,
 }
 
@@ -111,7 +112,7 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
-            match socket::root::process_cmd(socket_path, &cmdCmd::Ping).await {
+            match socket::root::process_cmd(socket_path, &LibCommand::Ping).await {
                 Ok(_) => {
                     tracing::error!("system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);
@@ -322,6 +323,7 @@ async fn loop_daemon(
     // so that the requesting stream on the socket receives it's answer
     let mut pending_response_counter: u64 = 0;
     let mut pending_responses: HashMap<u64, oneshot::Sender<Response>> = HashMap::new();
+    let mut ongoing_request_responses = JoinSet::new();
 
     // enter main loop
     let mut shutdown_ongoing = false;
@@ -343,6 +345,7 @@ async fn loop_daemon(
                     shutdown_ongoing = true;
                     cancel_token.cancel();
                     teardown_any_routing(maybe_router, true).await;
+                    ongoing_request_responses.shutdown().await;
                 }
                 SignalMessage::RotateLogs => {
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
@@ -371,8 +374,10 @@ async fn loop_daemon(
 
             Ok((stream, _addr)) = socket.accept() => {
                 let cmd_sender = socket_cmd_sender.clone();
-                tokio::spawn(async move {
-                    incoming_on_root_socket(stream, &cmd_sender).await;
+                ongoing_request_responses.spawn(async move {
+                    if let Some(handle) = incoming_on_root_socket(stream, &cmd_sender).await {
+                        handle.await.ok();
+                    }
                 });
             }
             Some(socket_cmd) = socket_cmd_receiver.recv() => {
@@ -473,13 +478,16 @@ async fn loop_daemon(
     }
 }
 
-async fn incoming_on_root_socket(stream: UnixStream, socket_cmd_sender: &mpsc::Sender<SocketCmd>) {
+async fn incoming_on_root_socket(
+    stream: UnixStream,
+    socket_cmd_sender: &mpsc::Sender<SocketCmd>,
+) -> Option<JoinHandle<()>> {
     let (socket_reader_half, socket_writer_half) = stream.into_split();
     let socket_reader = BufReader::new(socket_reader_half);
     let res_line = socket_reader.lines().next_line().await;
     match res_line {
         Ok(Some(line)) => {
-            let res_decode = serde_json::from_str::<cmdCmd>(&line);
+            let res_decode = serde_json::from_str::<LibCommand>(&line);
             match res_decode {
                 Ok(cmd) => {
                     tracing::debug!(command = ?cmd, "received socket command");
@@ -487,10 +495,10 @@ async fn incoming_on_root_socket(stream: UnixStream, socket_cmd_sender: &mpsc::S
                     let socket_cmd = SocketCmd { cmd, resp: resp_sender };
                     if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
                         tracing::error!(error = ?err, "failed to send socket command to main loop");
-                        return;
+                        return None;
                     }
                     // wait for response and send back to socket
-                    tokio::spawn(async move {
+                    let handle = tokio::spawn(async move {
                         match resp_receiver.await {
                             Ok(resp) => {
                                 let mut writer = BufWriter::new(socket_writer_half);
@@ -503,6 +511,7 @@ async fn incoming_on_root_socket(stream: UnixStream, socket_cmd_sender: &mpsc::S
                             }
                         }
                     });
+                    return Some(handle);
                 }
                 Err(err) => {
                     tracing::error!(error = %err, "failed parsing incoming socket command");
@@ -515,7 +524,8 @@ async fn incoming_on_root_socket(stream: UnixStream, socket_cmd_sender: &mpsc::S
         Err(err) => {
             tracing::error!(error = ?err, "error reading from socket");
         }
-    }
+    };
+    None
 }
 
 fn parse_outgoing_worker(line: String) -> Result<WorkerToRoot, exitcode::ExitCode> {
