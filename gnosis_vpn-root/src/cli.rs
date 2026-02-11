@@ -78,7 +78,7 @@ pub struct Cli {
     pub allow_insecure: bool,
 
     /// Avoid dynamic peer discovery while connected to the VPN
-    #[arg(long)]
+    #[arg(long, env = worker::ENV_VAR_FORCE_STATIC_ROUTING)]
     pub force_static_routing: bool,
 }
 

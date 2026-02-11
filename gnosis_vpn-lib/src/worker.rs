@@ -43,6 +43,7 @@ pub const DEFAULT_WORKER_BINARY: &str = "./gnosis_vpn-worker";
 pub const DEFAULT_WORKER_USER: &str = USERNAME;
 pub const ENV_VAR_WORKER_BINARY: &str = "GNOSISVPN_WORKER_BINARY";
 pub const ENV_VAR_WORKER_USER: &str = "GNOSISVPN_WORKER_USER";
+pub const ENV_VAR_FORCE_STATIC_ROUTING: &str = "GNOSISVPN_FORCE_STATIC_ROUTING";
 
 #[derive(Debug, Clone)]
 pub struct Worker {
