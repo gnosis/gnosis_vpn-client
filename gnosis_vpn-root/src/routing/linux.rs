@@ -286,14 +286,12 @@ impl Routing for Router {
             vpn_gw,
             vpn_cidr,
             ..
-        } = &ifs;
-        let (wan_if_index, wan_gw, vpn_if_index, vpn_gw, vpn_cidr) =
-            (*wan_if_index, *wan_gw, *vpn_if_index, *vpn_gw, *vpn_cidr);
+        } = ifs;
 
         // This steps marks all traffic from VPN_USER with FW_MARK and masquerades it on the WAN interface
         // Remove this once we can set the fwmark directly on the libp2p Socket
+        self.if_indices = Some(ifs.clone());
         setup_iptables(self.worker.uid, &ifs.wan_if_name).map_err(Error::iptables)?;
-        self.if_indices = Some(ifs);
         tracing::debug!(uid = self.worker.uid, "iptables rules set up");
 
         // New routing table TABLE_ID: All traffic in this table goes to the WAN interface (bypasses VPN)
