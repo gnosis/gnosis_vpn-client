@@ -263,7 +263,7 @@ async fn incoming_cmd(
     event_sender: &mut mpsc::Sender<WorkerToCore>,
 ) -> Result<WorkerToRoot, exitcode::ExitCode> {
     match cmd {
-        RootToWorker::Command(cmd) => {
+        RootToWorker::Command { cmd, id } => {
             let (sender, recv) = oneshot::channel();
             event_sender
                 .send(WorkerToCore::Command { cmd, resp: sender })
@@ -276,7 +276,7 @@ async fn incoming_cmd(
                 tracing::error!("command responder already closed");
                 exitcode::IOERR
             })?;
-            Ok(WorkerToRoot::Response(resp))
+            Ok(WorkerToRoot::Response { id, resp })
         }
         RootToWorker::WorkerParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
