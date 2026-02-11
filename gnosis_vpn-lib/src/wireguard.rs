@@ -172,10 +172,10 @@ impl WireGuard {
         {
             // on macos to avoid fighting router specific rules we split the range in two
             // this way the routes are more specific and take precedence over other rules
-            lines.push("PostUp = route -n add -inet6 ::/1 -blackhole".to_string());
-            lines.push("PostUp = route -n add -inet6 8000::/1 -blackhole".to_string());
-            lines.push("PreDown = route -n delete -inet6 ::/1 -blackhole".to_string());
-            lines.push("PreDown = route -n delete -inet6 8000::/1 -blackhole".to_string());
+            lines.push("PostUp = route -n add -inet6 ::/1 ::1 -blackhole".to_string());
+            lines.push("PostUp = route -n add -inet6 8000::/1 ::1 -blackhole".to_string());
+            lines.push("PreDown = route -n delete -inet6 ::/1 ::1 -blackhole".to_string());
+            lines.push("PreDown = route -n delete -inet6 8000::/1 ::1 -blackhole".to_string());
         }
 
         lines.push("".to_string()); // Empty line for spacing
