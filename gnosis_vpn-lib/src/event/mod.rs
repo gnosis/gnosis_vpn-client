@@ -42,7 +42,7 @@ pub enum RootToWorker {
     /// Configuration file
     Config { config: Config },
     /// Socket command received by root
-    Command(Command),
+    Command { cmd: Command, id: u64 },
     /// Result of a request to root
     ResponseFromRoot(ResponseFromRoot),
 }
@@ -51,7 +51,7 @@ pub enum RootToWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerToRoot {
     /// Response to a socket command
-    Response(Response),
+    Response { resp: Response, id: u64 },
     /// Acknowledgement other incoming messages
     Ack,
     /// Request to root execution

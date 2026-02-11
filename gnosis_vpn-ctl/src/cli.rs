@@ -55,6 +55,10 @@ pub enum Command {
         /// Your secret hash
         secret: String,
     },
+
+    /// Solicit a ping response ("pong") from the service and it's worker process to check if it is alive
+    #[command()]
+    Ping {},
 }
 
 impl From<Command> for LibCommand {
@@ -66,6 +70,7 @@ impl From<Command> for LibCommand {
             Command::Balance {} => LibCommand::Balance,
             Command::RefreshNode {} => LibCommand::RefreshNode,
             Command::FundingTool { secret } => LibCommand::FundingTool(secret),
+            Command::Ping {} => LibCommand::Ping,
         }
     }
 }
