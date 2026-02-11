@@ -402,8 +402,8 @@ async fn loop_daemon(
                     WorkerToRoot::Response { id, resp } => {
                         tracing::debug!(?resp, "received worker response");
                         if let Some(resp_sender) = pending_responses.remove(&id) {
-                            if let Err(err) = resp_sender.send(resp) {
-                                tracing::error!(error = ?err, id, "failed to send response to socket - response channel closed");
+                            if resp_sender.send(resp).is_err() {
+                                tracing::error!(id, "unexpected channel closure");
                             }
                         } else {
                             tracing::warn!(id, "no pending response found for worker response");
