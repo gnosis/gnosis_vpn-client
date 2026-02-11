@@ -372,7 +372,7 @@ async fn loop_daemon(
                 });
             }
             Some(socket_cmd) = socket_cmd_receiver.recv() => {
-                pending_response_counter = pending_response_counter + 1;
+                pending_response_counter += 1;
                 pending_responses.insert(pending_response_counter, socket_cmd.resp);
                 let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: pending_response_counter };
                 send_to_worker(msg, &mut socket_writer).await?;
