@@ -20,6 +20,9 @@ Problem:
 - iptables stores outgoing packets with that fwmark in lookup table
 - iptables preroutes incoming packets accordingly
 - ip rule specifies routing table based on uid and fwmark (not sure if needed)
+- bypassed traffic needs NAT masquerading (`-j MASQUERADE`) on the WAN interface
+  so the upstream gateway can route responses back (packets otherwise retain the
+  VPN subnet source IP)
 
 Problem:
 

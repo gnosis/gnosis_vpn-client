@@ -43,10 +43,12 @@ pub fn static_fallback_router(
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 struct NetworkDeviceInfo {
     /// Index of the WAN interface
     wan_if_index: u32,
+    /// Name of the WAN interface (e.g. "eth0")
+    wan_if_name: String,
     /// Default gateway of the WAN interface
     wan_gw: Ipv4Addr,
     /// Index of the VPN interface
@@ -105,23 +107,34 @@ impl NetworkDeviceInfo {
             })
             .ok_or(Error::NoInterface)?;
 
-        let vpn_if_index = handle
-            .link()
-            .get()
-            .execute()
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .find_map(|link| {
-                link.attributes.iter().find_map(|attr| match attr {
-                    LinkAttribute::IfName(if_name) if if_name == wireguard::WG_INTERFACE => Some(link.header.index),
-                    _ => None,
-                })
-            })
-            .ok_or(Error::NoInterface)?;
+        let links: Vec<_> = handle.link().get().execute().try_collect::<Vec<_>>().await?;
+
+        let mut vpn_if_index = None;
+        let mut wan_if_name = None;
+
+        for link in &links {
+            let if_name = link.attributes.iter().find_map(|attr| match attr {
+                LinkAttribute::IfName(name) => Some(name.as_str()),
+                _ => None,
+            });
+
+            if let Some(name) = if_name {
+                if name == wireguard::WG_INTERFACE {
+                    vpn_if_index = Some(link.header.index);
+                }
+                if link.header.index == wan_if_index {
+                    wan_if_name = Some(name.to_string());
+                }
+            }
+        }
+
+        let vpn_if_index = vpn_if_index.ok_or(Error::NoInterface)?;
+        let wan_if_name = wan_if_name
+            .ok_or_else(|| Error::General(format!("WAN interface name not found for index {wan_if_index}")))?;
 
         Ok(Self {
             wan_if_index,
+            wan_if_name,
             wan_gw,
             vpn_if_index,
             // Gateway of the VPN interface is the second address in the VPN subnet
@@ -165,14 +178,19 @@ const VPN_SUBNET_PREFIX: u8 = 9;
 const IP_TABLE: &str = "mangle";
 const IP_CHAIN: &str = "OUTPUT";
 
+const NAT_TABLE: &str = "nat";
+const NAT_CHAIN: &str = "POSTROUTING";
+
 /// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
+/// and to NAT-masquerade that traffic on the WAN interface.
 /// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
 ///
 /// Equivalent commands:
 /// 1. `iptables -t mangle -F OUTPUT`
 /// 2. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -o lo -j RETURN`
 /// 3. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
-fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
+/// 4. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j MASQUERADE`
+fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
     if iptables.chain_exists(IP_TABLE, IP_CHAIN)? {
         iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
@@ -193,12 +211,29 @@ fn setup_iptables(vpn_uid: u32) -> Result<(), Box<dyn std::error::Error>> {
         &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
     )?;
 
+    // Rewrite the source address of bypassed (marked) traffic leaving via the WAN interface.
+    // Without this, packets retain the VPN subnet source IP and the upstream gateway drops them
+    // because it has no return route for that subnet.
+    iptables.append(
+        NAT_TABLE,
+        NAT_CHAIN,
+        &format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j MASQUERADE"),
+    )?;
+
     Ok(())
 }
 
-fn flush_ip_tables() -> Result<(), Box<dyn std::error::Error>> {
+fn teardown_iptables(wan_if_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
     iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
+
+    // Delete only our specific NAT rule rather than flushing the entire nat POSTROUTING chain,
+    // because other services (Docker, libvirt, etc.) install their own rules there.
+    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j MASQUERADE");
+    if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule)? {
+        iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
+    }
+
     Ok(())
 }
 
@@ -210,8 +245,8 @@ impl Routing for Router {
     /// The steps:
     ///   1. Generate wg-quick config and run `wg-quick up`
     ///      The `wg-quick` config makes sure that WG UDP packets have the same fwmark set and that it sets no additional routing rules.
-    ///   2. Set all traffic from the VPN user to be marked with the fwmark
-    ///      This is currently done via `iptables` rule, but it will be replaced with an explicit fwmark on the hopr-lib transport socket.
+    ///   2. Set all traffic from the VPN user to be marked with the fwmark, and NAT-masquerade it on the WAN interface
+    ///      This is currently done via `iptables` rules, but it will be replaced with an explicit fwmark on the hopr-lib transport socket.
     ///      See [`setup_iptables`] for details.
     ///   3. Create a new routing table for traffic that does not go through the VPN (TABLE_ID)
     ///      Equivalent command: `ip route add default dev "$IF_WAN" table "$TABLE_ID"`
@@ -243,19 +278,20 @@ impl Routing for Router {
         let ifs =
             NetworkDeviceInfo::get_via_rtnetlink(&self.handle, &self.wg_data.interface_info.address, VPN_SUBNET_PREFIX)
                 .await?;
+        tracing::debug!(?ifs, "interface data");
         let NetworkDeviceInfo {
             wan_if_index,
             wan_gw,
             vpn_if_index,
             vpn_gw,
             vpn_cidr,
+            ..
         } = ifs;
-        self.if_indices = Some(ifs);
-        tracing::debug!(?ifs, "interface data");
 
-        // This steps marks all traffic from VPN_USER with FW_MARK
+        // This steps marks all traffic from VPN_USER with FW_MARK and masquerades it on the WAN interface
         // Remove this once we can set the fwmark directly on the libp2p Socket
-        setup_iptables(self.worker.uid).map_err(Error::iptables)?;
+        self.if_indices = Some(ifs.clone());
+        setup_iptables(self.worker.uid, &ifs.wan_if_name).map_err(Error::iptables)?;
         tracing::debug!(uid = self.worker.uid, "iptables rules set up");
 
         // New routing table TABLE_ID: All traffic in this table goes to the WAN interface (bypasses VPN)
@@ -318,17 +354,17 @@ impl Routing for Router {
     ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
     ///   5. Flush the routing table cache
     ///      Equivalent command: `ip route flush cache`
-    ///   6. Remove the `iptables` rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
+    ///   6. Remove the `iptables` mangle and NAT rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
     ///   7. Run `wg-quick down`
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
             wan_if_index,
+            wan_if_name,
             vpn_if_index,
             vpn_gw,
             vpn_cidr,
             wan_gw,
-            ..
         } = self
             .if_indices
             .take()
@@ -414,11 +450,11 @@ impl Routing for Router {
         flush_routing_cache().await?;
         tracing::debug!("ip route flush cache");
 
-        // Flush the iptables rules
-        if let Err(error) = flush_ip_tables().map_err(Error::iptables) {
-            tracing::error!(%error, "failed to flush iptables rules, continuing anyway");
+        // Remove the iptables mangle and NAT rules
+        if let Err(error) = teardown_iptables(&wan_if_name).map_err(Error::iptables) {
+            tracing::error!(%error, "failed to teardown iptables rules, continuing anyway");
         }
-        tracing::debug!("iptables rules flushed");
+        tracing::debug!("iptables rules removed");
 
         // Run wg-quick down
         wg_tooling::down(self.state_home.clone(), logs).await?;
