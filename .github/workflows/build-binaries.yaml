@@ -192,7 +192,7 @@ jobs:
           done
       - name: Upload ${{ steps.vars.outputs.architecture }} binaries
         if: steps.version.outputs.publish_type == 'workflow'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: binary-${{ steps.vars.outputs.architecture }}-${{ steps.version.outputs.binary_version }}
           path: ${{ github.workspace }}/upload-github-artifacts/*
