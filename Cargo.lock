@@ -1472,7 +1472,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.18.0"
-source = "git+https://github.com/hoprnet/blokli#d3a36841edcd9d636d1f46527bb0b7eadb65c41d"
+source = "git+https://github.com/hoprnet/blokli#8dcf413739fe55068d99cbfdd5afc998bf94df55"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1712,9 +1712,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.57"
+version = "4.5.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6899ea499e3fb9305a65d5ebf6e3d2248c5fab291f300ad0a704fbe142eae31a"
+checksum = "63be97961acde393029492ce0be7a1af7e323e6bae9511ebfac33751be5e6806"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1722,9 +1722,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.57"
+version = "4.5.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b12c8b680195a62a8364d16b8447b01b6c2c8f9aaf68bee653be34d4245e238"
+checksum = "7f13174bda5dfd69d7e947827e5af4b0f2f94a4a3ee92912fba07a66150f21e2"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1746,9 +1746,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.7.7"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
+checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "cmake"
@@ -2598,9 +2598,9 @@ dependencies = [
 
 [[package]]
 name = "eventsource-client"
-version = "0.16.1"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "536a9d86f6684e3b7c9114307e6f795b120ffb56672556c1b88db8cab666012e"
+checksum = "6c4ae984755282f2f4f7bced6102dcdc71f27a95bbef5268a38e57b5f7ee7a72"
 dependencies = [
  "base64 0.22.1",
  "futures",
@@ -3075,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "clap",
  "exitcode",
@@ -3087,7 +3087,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "backon",
@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-root"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-worker"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "clap",
  "exitcode",
@@ -5264,7 +5264,7 @@ checksum = "3d0b95e02c851351f877147b7deea7b1afb1df71b63aa5f8270716e0c5720616"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
- "redox_syscall 0.7.0",
+ "redox_syscall 0.7.1",
 ]
 
 [[package]]
@@ -6619,9 +6619,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49f3fe0889e69e2ae9e41f4d6c4c0181701d00e4697b356fb1f74173a5e0ee27"
+checksum = "35985aa610addc02e24fc232012c86fd11f14111180f902b67e2d5331f8ebf2b"
 dependencies = [
  "bitflags 2.10.0",
 ]
