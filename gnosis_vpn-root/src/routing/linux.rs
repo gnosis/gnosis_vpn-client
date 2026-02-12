@@ -214,11 +214,13 @@ fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::er
     // Rewrite the source address of bypassed (marked) traffic leaving via the WAN interface.
     // Without this, packets retain the VPN subnet source IP and the upstream gateway drops them
     // because it has no return route for that subnet.
-    iptables.append(
-        NAT_TABLE,
-        NAT_CHAIN,
-        &format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j MASQUERADE"),
-    )?;
+    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j MASQUERADE");
+    // Delete any stale rule first (e.g. left over from a previous crash) to avoid duplicates.
+    // Unlike the mangle chain we cannot flush nat POSTROUTING because other services use it.
+    if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule)? {
+        iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
+    }
+    iptables.append(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
 
     Ok(())
 }
@@ -380,7 +382,7 @@ impl Routing for Router {
         if let Err(error) = self.handle.route().add(default_route).execute().await {
             tracing::error!(%error, "failed to set default route back to interface, continuing anyway");
         } else {
-            tracing::debug!("ip route add default via {vpn_gw} dev {wan_if_index}");
+            tracing::debug!("ip route add default via {wan_gw} dev {wan_if_index}");
         }
 
         // Delete the fwmark routing table rule
@@ -437,6 +439,7 @@ impl Routing for Router {
                     .table_id(TABLE_ID)
                     .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
                     .output_interface(wan_if_index)
+                    .gateway(wan_gw)
                     .build(),
             )
             .execute()
@@ -444,7 +447,7 @@ impl Routing for Router {
         {
             tracing::error!(%error, "failed to delete table {TABLE_ID}, continuing anyway");
         } else {
-            tracing::debug!("ip route del default via {vpn_gw} dev {wan_if_index}");
+            tracing::debug!("ip route del default via {wan_gw} dev {wan_if_index} table {TABLE_ID}");
         }
 
         flush_routing_cache().await?;
