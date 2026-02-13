@@ -63,8 +63,7 @@ host:
 safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
-publish:
-    false
+publish: false
 "##,
         port = rand::rng().random_range(20000..65000),
         safe_address = safe_module.safe_address,
