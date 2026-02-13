@@ -79,17 +79,8 @@ async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::Exi
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
-    let reload_handle = match &args.log_file {
-        Some(log_path) => Some(logging::setup_log_file(log_path.clone()).map_err(|err| {
-            eprintln!("Failed to open log file {}: {}", log_path.display(), err);
-            exitcode::IOERR
-        })?),
-        None => {
-            logging::setup_stdout();
-            None
-        }
-    };
-    let log_path = args.log_file.clone();
+    let reload_handle = setup_logging(&args.log_file)?;
+    let log_path = args.log_file;
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         "starting {}",
@@ -160,7 +151,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
-                        let res =  logging::make_file_fmt_layer(&path.to_string_lossy())
+                        let res =  logging::use_file_fmt_layer(&path.to_string_lossy())
                             .map(|new_layer| handle.reload(new_layer));
                         match res {
                             Ok(_) => {
@@ -320,6 +311,28 @@ async fn main_inner() {
         Err(code) => {
             tracing::warn!("abnormal exit");
             process::exit(code);
+        }
+    }
+}
+
+fn setup_logging(
+    log_file: &Option<std::path::PathBuf>,
+) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
+    match log_file {
+        Some(log_path) => {
+            let fmt_layer = logging::use_file_fmt_layer(&log_path.to_string_lossy()).map_err(|err| {
+                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
+                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            Ok(Some(handle))
+        }
+        None => {
+            logging::setup_stdout();
+            Ok(None)
         }
     }
 }

@@ -1,9 +1,11 @@
-use std::fs::OpenOptions;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
-
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
+
+use std::fs::OpenOptions;
+use std::os::unix::fs::{self, OpenOptionsExt};
+use std::path::PathBuf;
+
+use crate::worker::Worker;
 
 pub type FileFmtLayer =
     fmt::Layer<tracing_subscriber::Registry, fmt::format::DefaultFields, fmt::format::Format, BoxMakeWriter>;
@@ -44,13 +46,21 @@ pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 ///
 /// A `Result` containing the [`FileFmtLayer`] configured to append logs to
 /// the specified file.
-pub fn make_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Error> {
+pub fn make_file_fmt_layer(worker: &Worker, log_path: &str) -> Result<FileFmtLayer, std::io::Error> {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .mode(0o666)
+        .mode(0o644)
         .open(log_path)?;
 
+    fs::chown(&log_path, Some(worker.uid), Some(worker.gid))?;
+
+    Ok(fmt::layer().with_writer(BoxMakeWriter::new(file)).with_ansi(false))
+}
+
+/// Uses existing log file for logging without changing ownership or permissions.
+pub fn use_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Error> {
+    let file = OpenOptions::new().append(true).open(log_path)?;
     Ok(fmt::layer().with_writer(BoxMakeWriter::new(file)).with_ansi(false))
 }
 
@@ -58,7 +68,7 @@ pub fn make_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Erro
 ///
 /// Sets up a [`tracing_subscriber::Registry`] with two layers:
 ///
-/// 1. A **reloadable file layer** — created via [`make_file_fmt_layer`] — that
+/// 1. A **reloadable file layer** — created via [`make_file_fmt_layer` or `use_file_fmt_layer`] — that
 ///    writes structured logs to the file at `log_path`.
 /// 2. An **[`EnvFilter`]** that controls log verbosity. The filter is read from
 ///    the `RUST_LOG` environment variable; if that is unset or invalid, it
@@ -76,19 +86,18 @@ pub fn make_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Erro
 ///
 /// # Arguments
 ///
-/// * `log_path` - Filesystem path to the log file.
+/// * `file_fmt_layer` - A [`FileFmtLayer`] configured to write logs to the desired file.
 ///
 /// # Returns
 ///
 /// A `Result` containing the [`LogReloadHandle`] that can be used to replace
 /// the file logging layer at runtime (e.g., in response to `SIGHUP`).
-pub fn setup_log_file(log_path: PathBuf) -> Result<LogReloadHandle, std::io::Error> {
-    let log_path_str = log_path.to_string_lossy().to_string();
+pub fn setup_log_file(file_fmt_layer: FileFmtLayer) -> Result<LogReloadHandle, std::io::Error> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
     let (reload_layer, reload_handle): (
         reload::Layer<FileFmtLayer, tracing_subscriber::Registry>,
         LogReloadHandle,
-    ) = reload::Layer::new(make_file_fmt_layer(&log_path_str)?);
+    ) = reload::Layer::new(file_fmt_layer);
     tracing_subscriber::registry().with(reload_layer).with(filter).init();
     Ok(reload_handle)
 }
