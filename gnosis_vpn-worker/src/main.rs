@@ -321,7 +321,7 @@ fn setup_logging(
     match log_file {
         Some(log_path) => {
             let fmt_layer = logging::use_file_fmt_layer(&log_path.to_string_lossy()).map_err(|err| {
-                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
+                eprintln!("Failed to open log layer for file {}: {}", log_path.display(), err);
                 exitcode::IOERR
             })?;
             let handle = logging::setup_log_file(fmt_layer).map_err(|err| {

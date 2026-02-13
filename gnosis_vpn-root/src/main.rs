@@ -160,16 +160,20 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let worker_params = WorkerParams::from(&args);
-    let reload_handle = match &args.log_file {
-        Some(path) => Some(logging::setup_log_file(path.clone()).map_err(|err| {
-            eprintln!("Failed to open log file {}: {}", path.display(), err);
-            exitcode::IOERR
-        })?),
-        None => {
-            logging::setup_stdout();
-            None
-        }
-    };
+
+    // ensure worker user exists
+    let input = worker::Input::new(
+        args.worker_user.clone(),
+        args.worker_binary.clone(),
+        env!("CARGO_PKG_VERSION"),
+        worker_params.state_home(),
+    );
+    let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
+        tracing::error!(error = ?err, "error determining worker user");
+        exitcode::NOUSER
+    })?;
+
+    let reload_handle = setup_logging(&args.log_file, &worker_user)?;
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -185,18 +189,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     }
 
     let mut signal_receiver = signal_channel().await?;
-
-    // ensure worker user exists
-    let input = worker::Input::new(
-        args.worker_user.clone(),
-        args.worker_binary.clone(),
-        env!("CARGO_PKG_VERSION"),
-        worker_params.state_home(),
-    );
-    let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
-        tracing::error!(error = ?err, "error determining worker user");
-        exitcode::NOUSER
-    })?;
 
     // check wireguard tooling
     wg_tooling::available()
@@ -351,7 +343,7 @@ async fn loop_daemon(
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     if let (Some(handle), Some(path)) = (&setup.reload_handle, &setup.log_path) {
-                        let res = logging::make_file_fmt_layer(&path.to_string_lossy())
+                        let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &setup.worker_user)
                             .map(|new_layer| handle.reload(new_layer));
                         match res {
                             Ok(_) => {
@@ -637,6 +629,29 @@ async fn main() {
         Err(code) => {
             tracing::warn!("abnormal exit");
             process::exit(code);
+        }
+    }
+}
+
+fn setup_logging(
+    log_file: &Option<std::path::PathBuf>,
+    worker: &worker::Worker,
+) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
+    match log_file {
+        Some(log_path) => {
+            let fmt_layer = logging::make_file_fmt_layer(&log_path.to_string_lossy(), worker).map_err(|err| {
+                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
+                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            Ok(Some(handle))
+        }
+        None => {
+            logging::setup_stdout();
+            Ok(None)
         }
     }
 }

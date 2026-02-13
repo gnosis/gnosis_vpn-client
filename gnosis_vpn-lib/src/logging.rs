@@ -46,7 +46,7 @@ pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 ///
 /// A `Result` containing the [`FileFmtLayer`] configured to append logs to
 /// the specified file.
-pub fn make_file_fmt_layer(worker: &Worker, log_path: &str) -> Result<FileFmtLayer, std::io::Error> {
+pub fn make_file_fmt_layer(log_path: &str, worker: &Worker) -> Result<FileFmtLayer, std::io::Error> {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
