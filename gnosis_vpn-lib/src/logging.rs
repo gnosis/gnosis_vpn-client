@@ -1,4 +1,5 @@
 use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
@@ -44,7 +45,11 @@ pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 /// A `Result` containing the [`FileFmtLayer`] configured to append logs to
 /// the specified file.
 pub fn make_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Error> {
-    let file = OpenOptions::new().create(true).append(true).open(log_path)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o666)
+        .open(log_path)?;
 
     Ok(fmt::layer().with_writer(BoxMakeWriter::new(file)).with_ansi(false))
 }
