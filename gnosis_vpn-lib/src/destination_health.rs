@@ -40,6 +40,24 @@ pub enum DestinationHealth {
     },
 }
 
+pub struct Container {
+    instructions_sender: mpsc::Sender<Instruction>,
+    health: DestinationHealth,
+}
+
+/// This event marks an actionable moment to core module
+pub enum HealthCheckEvent {
+    SetupFailed(String),
+    Ready,
+    Dismantled
+}
+
+/// core module triggering next step
+pub enum Instruction {
+    Check,
+    Shutdown,
+}
+
 pub enum Connected {
     Yes,
     No,
@@ -49,22 +67,84 @@ pub struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
     options: Options,
-    old_health: DestinationHealth,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Error {
-    pub message: String,
-    pub checked_at: SystemTime,
+    results_sender: mpsc::Sender<Results>,
+    instructions_receiver: mpsc::Receiver<Instruction>,
 }
 
 impl Runner {
-    pub fn new(destination: Destination, options: Options, old_health: DestinationHealth, hopr: Arc<Hopr>) -> Self {
+    pub fn new(destination: Destination, options: Options, hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>, instructions_receiver: mpsc::Receiver<Instruction>) -> Self {
         Self {
             destination,
             hopr,
             options,
-            old_health,
+            results_sender,
+            instructions_receiver,
+        }
+    }
+
+    pub async fn start(self) {
+        // setup: session config
+        let res_config = runner::to_surb_balancer_config(self.options.buffer_sizes.health, self.options.max_surb_upstream.health);
+        let config = match res_config {
+            Ok(config) => config,
+            Err(err) => {
+                self.send_event(HealthCheckEvent::SetupFailed(format!("Surb balancer config error: {err}"))),
+                return;
+            }
+        };
+
+        // setup: open session
+        let res_session = open_health_session(&self.hopr, &self.destination, &self.options, config).await;
+        let session = match res_session {
+            Ok(session) => session,
+            Err(err) => {
+                self.send_event(HealthCheckEvent::SetupFailed(format!("Surb balancer config error: {err}"))),
+                return;
+            }
+        };
+
+        // waiting for instructions
+        self.send_event(HealthCheckEvent::Ready).await;
+        loop {
+            tokio::select! {
+                Some(instr) = self.instructions_receiver.recv() => {
+                }
+                else => {
+                    tracing::warn!("instructions receiver closed");
+                    break;
+                }
+            }
+        }
+
+        // dismantle: close session
+        close_health_session(&self.hopr, &session).await;
+    }
+
+    pub async check(&mut self) {
+        let checked_at: SystemTime::now();
+        self.send_health(DestinationHealth::Runner { since: checked_at }).await;
+
+        let measure_rtt = Instant::now();
+        let res_health = request_health(&self.options, &self.session).await;
+        let rtt = measure_rtt.elapsed();
+
+        match res_health {
+            Ok(health) => {
+                self.send_health(DestinationHealth::Success {
+                checked_at,
+                health,
+                round_trip_time: rtt,
+                });
+                self.failure_count = 0;
+            },
+            Err(err) => {
+                self.send_health(DestinationHealth::Failure {
+                checked_at,
+                error: format!("Health request error: {err}"),
+                previous_failures: self.failure_count,
+            });
+                self.failure_count ++;
+            },
         }
     }
 
@@ -153,6 +233,22 @@ impl Runner {
             },
         }
     }
+async fn send_health(&self, health: DestinationHealth) {
+        let _ = self.results_sender.send(Results::HealthCheck {
+                id: self.destination.id.clone(),
+                health,
+            })
+            .await;
+}
+
+async fn send_event(&self, evt: HealthCheckEvent) {
+        let _ = self.results_sender.send(Results::HealthCheckEvent {
+                id: self.destination.id.clone(),
+                evt,
+            })
+            .await;
+}
+
 }
 
 async fn open_health_session(
@@ -168,7 +264,7 @@ async fn open_health_session(
         surb_management: Some(surb_management),
         ..Default::default()
     };
-    tracing::debug!(%destination, "attempting to open bridge session for health check");
+    tracing::debug!(%destination, "attempting to open health check session");
     hopr.open_session(
         destination.address,
         options.sessions.health.target.clone(),
@@ -191,7 +287,7 @@ async fn request_health(
 }
 
 async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) {
-    tracing::debug!( bound_host = ?session_client_metadata.bound_host, "closing bridge session from health check");
+    tracing::debug!( bound_host = ?session_client_metadata.bound_host, "closing health check session");
     let _ = hopr
         .close_session(session_client_metadata.bound_host, session_client_metadata.protocol)
         .await
@@ -200,6 +296,7 @@ async fn close_health_session(hopr: &Hopr, session_client_metadata: &SessionClie
             err
         });
 }
+
 
 impl DestinationHealth {
     pub fn next_interval(&self, connected: Connected) -> Option<Duration> {
@@ -219,7 +316,6 @@ impl DestinationHealth {
         }
     }
 }
-
 impl From<bool> for Connected {
     fn from(value: bool) -> Self {
         if value { Connected::Yes } else { Connected::No }

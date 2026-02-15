@@ -26,7 +26,7 @@ use std::time::Duration;
 use crate::balance;
 use crate::compat::SafeModule;
 use crate::connection;
-use crate::destination_health::DestinationHealth;
+use crate::destination_health::{DestinationHealth, HealthCheckEvent};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
@@ -87,6 +87,10 @@ pub enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
+    HealthCheckEvent {
+        id: String,
+        evt: HealthCheckEvent,
+    },
     HealthCheck {
         id: String,
         health: DestinationHealth,
