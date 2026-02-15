@@ -49,7 +49,7 @@ pub fn make_file_fmt_layer(log_path: &str, worker: &Worker) -> Result<FileFmtLay
     let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .mode(0o644)
+        .mode(0o046)
         .open(log_path)?;
 
     fs::chown(log_path, Some(worker.uid), Some(worker.gid))?;
