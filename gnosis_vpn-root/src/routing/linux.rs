@@ -153,9 +153,8 @@ impl NetworkDeviceInfo {
         vpn_ip: &str,
         vpn_prefix: u8,
     ) -> Result<VpnInfo, Error> {
-        let vpn_client_ip_cidr: cidr::Ipv4Cidr =
-            cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
-                .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
+        let vpn_client_ip_cidr: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
+            .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
 
         // This must be a unique VPN client address, not a block of addresses
         if !vpn_client_ip_cidr.is_host_address() {
@@ -371,7 +370,7 @@ impl Routing for Router {
             return Err(Error::General("invalid state: already set up".into()));
         }
 
-        // === PHASE 1: Setup bypass routing BEFORE wg-quick up ===
+        // Phase 1: Setup bypass routing BEFORE wg-quick up
         // This prevents HOPR traffic from being routed through the nascent VPN interface.
 
         // Step 1: Get WAN interface info (VPN doesn't exist yet)
@@ -434,7 +433,7 @@ impl Routing for Router {
         }
         tracing::debug!("ip rule add mark {FW_MARK} table {TABLE_ID} pref {RULE_PRIORITY}");
 
-        // === PHASE 2: Now safe to bring up WireGuard ===
+        // Phase 2: Now safe to bring up WireGuard
         // HOPR traffic is already protected by the bypass rules above.
 
         // Step 5: Generate wg-quick config and run wg-quick up
@@ -450,7 +449,7 @@ impl Routing for Router {
         }
         tracing::debug!("wg-quick up");
 
-        // === PHASE 3: Complete routing with VPN interface info ===
+        // Phase 3: Complete routing with VPN interface info
 
         // Step 6: Get VPN interface info
         let vpn_info = match NetworkDeviceInfo::get_vpn_info_via_rtnetlink(
@@ -667,7 +666,7 @@ impl Routing for FallbackRouter {
     ///   3. Run wg-quick up (safe now - bypass routes are already in place)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
-        // === PHASE 1: Add bypass routes BEFORE wg-quick up ===
+        // Phase 1: Add bypass routes BEFORE wg-quick up
         let (device, gateway) = interface().await?;
         self.wan_info = Some(FallbackWanInfo {
             device: device.clone(),
@@ -680,7 +679,7 @@ impl Routing for FallbackRouter {
         }
         tracing::debug!("Bypass routes added before wg-quick up");
 
-        // === PHASE 2: wg-quick up (without PreUp routing hooks) ===
+        // Phase 2: wg-quick up (without PreUp routing hooks)
         let extra = vec!["Table = off".to_string()];
         let wg_quick_content =
             self.wg_data
@@ -704,15 +703,15 @@ impl Routing for FallbackRouter {
 
     /// Teardown split-tunnel routing for FallbackRouter.
     ///
-    /// Teardown order is important: wg-quick down FIRST, then remove bypass routes.
+    /// Teardown order is important: wg-quick down first, then remove bypass routes.
     /// This ensures HOPR traffic continues to flow via WAN while VPN is being torn down.
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        // === wg-quick down FIRST ===
+        // wg-quick down first
         wg_tooling::down(self.state_home.clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
-        // === THEN remove bypass routes ===
+        // then remove bypass routes
         if let Some(wan_info) = self.wan_info.take() {
             for ip in &self.peer_ips {
                 if let Err(e) = delete_bypass_route_linux(ip, &wan_info.device, wan_info.gateway.as_deref()).await {

@@ -56,7 +56,7 @@ impl Routing for StaticRouter {
     ///   3. Run wg-quick up (safe now - bypass routes are already in place)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
-        // === PHASE 1: Add bypass routes BEFORE wg-quick up ===
+        // Phase 1: Add bypass routes BEFORE wg-quick up
         let (device, gateway) = interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
@@ -65,7 +65,7 @@ impl Routing for StaticRouter {
         }
         tracing::debug!("Bypass routes added before wg-quick up");
 
-        // === PHASE 2: wg-quick up (without PreUp routing hooks) ===
+        // Phase 2: wg-quick up (without PreUp routing hooks)
         // Keep Table = off to manage routing ourselves
         // PostUp hooks add default routes through VPN interface
         let extra = vec![
@@ -95,15 +95,15 @@ impl Routing for StaticRouter {
 
     /// Teardown split-tunnel routing for macOS StaticRouter.
     ///
-    /// Teardown order is important: wg-quick down FIRST, then remove bypass routes.
+    /// Teardown order is important: wg-quick down first, then remove bypass routes.
     /// This ensures HOPR traffic continues to flow via WAN while VPN is being torn down.
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        // === wg-quick down FIRST ===
+        // wg-quick down first
         wg_tooling::down(self.state_home.clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
-        // === THEN remove bypass routes (ignore failures - routes may not exist) ===
+        // then remove bypass routes (ignore failures - routes may not exist)
         for ip in &self.peer_ips {
             let _ = delete_bypass_route_macos(ip).await;
         }
