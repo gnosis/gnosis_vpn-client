@@ -271,6 +271,16 @@ const IP_CHAIN: &str = "OUTPUT";
 const NAT_TABLE: &str = "nat";
 const NAT_CHAIN: &str = "POSTROUTING";
 
+/// RFC1918 + link-local networks that should bypass VPN tunnel.
+/// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)
+/// so they take precedence in the routing table.
+const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
+    ("10.0.0.0", 8),      // RFC1918 Class A private
+    ("172.16.0.0", 12),   // RFC1918 Class B private
+    ("192.168.0.0", 16),  // RFC1918 Class C private
+    ("169.254.0.0", 16),  // Link-local (APIPA)
+];
+
 /// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
 /// and to NAT-masquerade that traffic on the WAN interface.
 /// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
@@ -712,7 +722,14 @@ impl Routing for FallbackRouter {
         for ip in &self.peer_ips {
             add_bypass_route_linux(ip, &device, gateway.as_deref()).await?;
         }
-        tracing::debug!("Bypass routes added before wg-quick up");
+        tracing::debug!("Peer IP bypass routes added before wg-quick up");
+
+        // Bypass routes for RFC1918 networks (enables LAN access including local DNS)
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            add_bypass_subnet_linux(&cidr, &device, gateway.as_deref()).await?;
+        }
+        tracing::debug!("RFC1918 bypass routes added before wg-quick up");
 
         // Phase 2: wg-quick up (without PreUp routing hooks)
         let extra = vec!["Table = off".to_string()];
@@ -726,6 +743,10 @@ impl Routing for FallbackRouter {
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
             for ip in &self.peer_ips {
                 let _ = delete_bypass_route_linux(ip, &device, gateway.as_deref()).await;
+            }
+            for (net, prefix) in RFC1918_BYPASS_NETS {
+                let cidr = format!("{}/{}", net, prefix);
+                let _ = delete_bypass_subnet_linux(&cidr, &device, gateway.as_deref()).await;
             }
             self.wan_info = None;
             return Err(e.into());
@@ -753,7 +774,16 @@ impl Routing for FallbackRouter {
                     tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route, continuing anyway");
                 }
             }
-            tracing::debug!("Bypass routes removed after wg-quick down");
+            tracing::debug!("Peer IP bypass routes removed after wg-quick down");
+
+            // Remove RFC1918 bypass routes
+            for (net, prefix) in RFC1918_BYPASS_NETS {
+                let cidr = format!("{}/{}", net, prefix);
+                if let Err(e) = delete_bypass_subnet_linux(&cidr, &wan_info.device, wan_info.gateway.as_deref()).await {
+                    tracing::warn!(%e, cidr = %cidr, "failed to delete RFC1918 bypass route, continuing anyway");
+                }
+            }
+            tracing::debug!("RFC1918 bypass routes removed after wg-quick down");
         }
 
         Ok(())
@@ -793,6 +823,43 @@ async fn delete_bypass_route_linux(peer_ip: &Ipv4Addr, device: &str, gateway: Op
 
     cmd.run_stdout(Logs::Suppress).await?;
     tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Deleted bypass route");
+    Ok(())
+}
+
+/// Add a bypass route for a subnet on Linux.
+///
+/// This ensures traffic to RFC1918/link-local networks goes directly via WAN,
+/// bypassing the VPN tunnel. Makes the operation idempotent by deleting any
+/// existing route first.
+async fn add_bypass_subnet_linux(cidr: &str, device: &str, gateway: Option<&str>) -> Result<(), Error> {
+    // Delete any existing route first (make idempotent)
+    let _ = delete_bypass_subnet_linux(cidr, device, gateway).await;
+
+    let mut cmd = Command::new("ip");
+    cmd.arg("route").arg("add").arg(cidr);
+
+    if let Some(gw) = gateway {
+        cmd.arg("via").arg(gw);
+    }
+    cmd.arg("dev").arg(device);
+
+    cmd.run_stdout(Logs::Print).await?;
+    tracing::debug!(cidr = %cidr, device = %device, gateway = ?gateway, "Added RFC1918 bypass route");
+    Ok(())
+}
+
+/// Delete a bypass route for a subnet on Linux.
+async fn delete_bypass_subnet_linux(cidr: &str, device: &str, gateway: Option<&str>) -> Result<(), Error> {
+    let mut cmd = Command::new("ip");
+    cmd.arg("route").arg("del").arg(cidr);
+
+    if let Some(gw) = gateway {
+        cmd.arg("via").arg(gw);
+    }
+    cmd.arg("dev").arg(device);
+
+    cmd.run_stdout(Logs::Suppress).await?;
+    tracing::debug!(cidr = %cidr, device = %device, gateway = ?gateway, "Deleted RFC1918 bypass route");
     Ok(())
 }
 

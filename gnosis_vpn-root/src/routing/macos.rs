@@ -19,6 +19,16 @@ use std::path::PathBuf;
 use super::{Error, Routing};
 use crate::wg_tooling;
 
+/// RFC1918 + link-local networks that should bypass VPN tunnel.
+/// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)
+/// so they take precedence in the routing table.
+const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
+    ("10.0.0.0", 8),      // RFC1918 Class A private
+    ("172.16.0.0", 12),   // RFC1918 Class B private
+    ("192.168.0.0", 16),  // RFC1918 Class C private
+    ("169.254.0.0", 16),  // Link-local (APIPA)
+];
+
 /// Dynamic routing not available on macOS.
 pub fn dynamic_router(
     _state_home: PathBuf,
@@ -68,7 +78,14 @@ impl Routing for StaticRouter {
         for ip in &self.peer_ips {
             add_bypass_route_macos(ip, &device, gateway.as_deref()).await?;
         }
-        tracing::debug!("Bypass routes added before wg-quick up");
+        tracing::debug!("Peer IP bypass routes added before wg-quick up");
+
+        // Bypass routes for RFC1918 networks (enables LAN access including local DNS)
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            add_bypass_subnet_macos(&cidr, &device, gateway.as_deref()).await?;
+        }
+        tracing::debug!("RFC1918 bypass routes added before wg-quick up");
 
         // Phase 2: wg-quick up (without PreUp routing hooks)
         // Keep Table = off to manage routing ourselves
@@ -89,6 +106,10 @@ impl Routing for StaticRouter {
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
             for ip in &self.peer_ips {
                 let _ = delete_bypass_route_macos(ip).await;
+            }
+            for (net, prefix) in RFC1918_BYPASS_NETS {
+                let cidr = format!("{}/{}", net, prefix);
+                let _ = delete_bypass_subnet_macos(&cidr).await;
             }
             return Err(e.into());
         }
@@ -112,7 +133,14 @@ impl Routing for StaticRouter {
         for ip in &self.peer_ips {
             let _ = delete_bypass_route_macos(ip).await;
         }
-        tracing::debug!("Bypass routes cleanup attempted after wg-quick down");
+        tracing::debug!("Peer IP bypass routes cleanup attempted after wg-quick down");
+
+        // Remove RFC1918 bypass routes
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            let _ = delete_bypass_subnet_macos(&cidr).await;
+        }
+        tracing::debug!("RFC1918 bypass routes cleanup attempted after wg-quick down");
 
         Ok(())
     }
@@ -159,6 +187,41 @@ async fn delete_bypass_route_macos(peer_ip: &Ipv4Addr) -> Result<(), Error> {
         .run_stdout(Logs::Suppress)
         .await?;
     tracing::debug!(peer_ip = %peer_ip, "Deleted bypass route");
+    Ok(())
+}
+
+/// Add a bypass route for a subnet on macOS.
+///
+/// This ensures traffic to RFC1918/link-local networks goes directly via WAN,
+/// bypassing the VPN tunnel.
+async fn add_bypass_subnet_macos(cidr: &str, device: &str, gateway: Option<&str>) -> Result<(), Error> {
+    // Delete any existing route first (make idempotent)
+    let _ = delete_bypass_subnet_macos(cidr).await;
+
+    let mut cmd = Command::new("route");
+    cmd.arg("-n").arg("add").arg("-net").arg(cidr);
+
+    if let Some(gw) = gateway {
+        cmd.arg(gw);
+    } else {
+        cmd.arg("-interface").arg(device);
+    }
+
+    cmd.run_stdout(Logs::Print).await?;
+    tracing::debug!(cidr = %cidr, device = %device, gateway = ?gateway, "Added RFC1918 bypass route");
+    Ok(())
+}
+
+/// Delete a bypass route for a subnet on macOS.
+async fn delete_bypass_subnet_macos(cidr: &str) -> Result<(), Error> {
+    Command::new("route")
+        .arg("-n")
+        .arg("delete")
+        .arg("-net")
+        .arg(cidr)
+        .run_stdout(Logs::Suppress)
+        .await?;
+    tracing::debug!(cidr = %cidr, "Deleted RFC1918 bypass route");
     Ok(())
 }
 
