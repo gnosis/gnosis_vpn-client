@@ -14,6 +14,16 @@ pub use linux::{dynamic_router, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
 pub use macos::{dynamic_router, static_router};
 
+/// RFC1918 + link-local networks that should bypass VPN tunnel.
+/// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)
+/// so they take precedence in the routing table.
+pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
+    ("10.0.0.0", 8),      // RFC1918 Class A private
+    ("172.16.0.0", 12),   // RFC1918 Class B private
+    ("192.168.0.0", 16),  // RFC1918 Class C private
+    ("169.254.0.0", 16),  // Link-local (APIPA)
+];
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]

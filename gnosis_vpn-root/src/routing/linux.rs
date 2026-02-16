@@ -31,7 +31,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use super::{Error, Routing};
+use super::{Error, Routing, RFC1918_BYPASS_NETS};
 use crate::wg_tooling;
 
 /// Creates a dynamic router using rtnetlink and iptables.
@@ -270,16 +270,6 @@ const IP_CHAIN: &str = "OUTPUT";
 
 const NAT_TABLE: &str = "nat";
 const NAT_CHAIN: &str = "POSTROUTING";
-
-/// RFC1918 + link-local networks that should bypass VPN tunnel.
-/// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)
-/// so they take precedence in the routing table.
-const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
-    ("10.0.0.0", 8),      // RFC1918 Class A private
-    ("172.16.0.0", 12),   // RFC1918 Class B private
-    ("192.168.0.0", 16),  // RFC1918 Class C private
-    ("169.254.0.0", 16),  // Link-local (APIPA)
-];
 
 /// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
 /// and to NAT-masquerade that traffic on the WAN interface.
