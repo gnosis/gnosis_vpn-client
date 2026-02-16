@@ -31,18 +31,7 @@ pub fn static_router(state_home: PathBuf, wg_data: event::WireGuardData, peer_ip
         state_home,
         wg_data,
         peer_ips,
-        wan_info: None,
     }
-}
-
-/// WAN interface info stored for teardown.
-/// Fields are stored for debugging/logging purposes even though macOS route deletion
-/// only requires the peer IP (unlike Linux which needs device/gateway).
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct MacOsWanInfo {
-    device: String,
-    gateway: Option<String>,
 }
 
 /// macOS routing implementation that programs host routes directly before wg-quick up.
@@ -50,7 +39,6 @@ pub struct StaticRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-    wan_info: Option<MacOsWanInfo>,
 }
 
 #[async_trait]
@@ -70,10 +58,6 @@ impl Routing for StaticRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         // === PHASE 1: Add bypass routes BEFORE wg-quick up ===
         let (device, gateway) = interface().await?;
-        self.wan_info = Some(MacOsWanInfo {
-            device: device.clone(),
-            gateway: gateway.clone(),
-        });
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
         for ip in &self.peer_ips {
@@ -101,7 +85,6 @@ impl Routing for StaticRouter {
             for ip in &self.peer_ips {
                 let _ = delete_bypass_route_macos(ip).await;
             }
-            self.wan_info = None;
             return Err(e.into());
         }
         tracing::debug!("wg-quick up");
@@ -120,15 +103,11 @@ impl Routing for StaticRouter {
         wg_tooling::down(self.state_home.clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
-        // === THEN remove bypass routes ===
-        if let Some(_wan_info) = self.wan_info.take() {
-            for ip in &self.peer_ips {
-                if let Err(e) = delete_bypass_route_macos(ip).await {
-                    tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route, continuing anyway");
-                }
-            }
-            tracing::debug!("Bypass routes removed after wg-quick down");
+        // === THEN remove bypass routes (ignore failures - routes may not exist) ===
+        for ip in &self.peer_ips {
+            let _ = delete_bypass_route_macos(ip).await;
         }
+        tracing::debug!("Bypass routes cleanup attempted after wg-quick down");
 
         Ok(())
     }
