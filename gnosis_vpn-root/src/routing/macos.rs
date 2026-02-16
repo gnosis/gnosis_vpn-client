@@ -1,7 +1,12 @@
-//! macOS routing implementation using `wg-quick` hook commands.
+//! macOS routing implementation for split-tunnel VPN behavior.
 //!
-//! Builds a static router that installs per-peer host routes and
-//! default-route overrides via `route` commands for split-tunnel behavior.
+//! Provides a [`StaticRouter`] that:
+//! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
+//! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
+//! 3. Uses PostUp hooks to add default routes (0.0.0.0/1 and 128.0.0.0/1) through VPN
+//! 4. On teardown, brings down WireGuard first, then cleans up bypass routes
+//!
+//! Dynamic routing (using rtnetlink) is not available on macOS.
 use async_trait::async_trait;
 use tokio::process::Command;
 
@@ -157,6 +162,9 @@ async fn delete_bypass_route_macos(peer_ip: &Ipv4Addr) -> Result<(), Error> {
     Ok(())
 }
 
+/// Gets the default WAN interface name and gateway by querying the routing table.
+///
+/// Returns `(device_name, Option<gateway_ip>)`.
 async fn interface() -> Result<(String, Option<String>), Error> {
     let output = Command::new("route")
         .arg("-n")
@@ -169,6 +177,7 @@ async fn interface() -> Result<(String, Option<String>), Error> {
     Ok(res)
 }
 
+/// Parses the output of `route -n get 0.0.0.0` to extract interface and gateway.
 fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
     let parts: Vec<&str> = output.split_whitespace().collect();
     let device_index = parts.iter().position(|&x| x == "interface:");

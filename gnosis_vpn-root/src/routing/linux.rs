@@ -1,3 +1,22 @@
+//! Linux routing implementation for split-tunnel VPN behavior.
+//!
+//! Provides two router implementations:
+//!
+//! ## [`Router`] (Dynamic)
+//! Uses rtnetlink and iptables for advanced split-tunnel routing:
+//! 1. Sets up iptables rules to mark HOPR traffic with a firewall mark (fwmark)
+//! 2. Creates a separate routing table for marked traffic to bypass VPN
+//! 3. Runs `wg-quick up` with `Table = off` to prevent automatic routing
+//! 4. Configures default route through VPN for all other traffic
+//!
+//! ## [`FallbackRouter`] (Static)
+//! Simpler implementation using direct `ip route` commands:
+//! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
+//! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
+//! 3. On teardown, brings down WireGuard first, then cleans up bypass routes
+//!
+//! Both implementations use a phased approach to avoid race conditions during VPN setup.
+
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use rtnetlink::IpVersion;
@@ -15,6 +34,10 @@ use std::str::FromStr;
 use super::{Error, Routing};
 use crate::wg_tooling;
 
+/// Creates a dynamic router using rtnetlink and iptables.
+///
+/// This is the preferred router on Linux as it provides more robust split-tunnel
+/// routing using firewall marks (fwmark) and policy-based routing.
 pub fn dynamic_router(
     state_home: PathBuf,
     worker: worker::Worker,
@@ -31,6 +54,10 @@ pub fn dynamic_router(
     })
 }
 
+/// Creates a static fallback router using direct `ip route` commands.
+///
+/// Used when dynamic routing is not available. Provides simpler routing
+/// by adding explicit host routes for peer IPs before bringing up WireGuard.
 pub fn static_fallback_router(
     state_home: PathBuf,
     wg_data: event::WireGuardData,
@@ -195,6 +222,10 @@ impl NetworkDeviceInfo {
     }
 }
 
+/// Dynamic router using rtnetlink and iptables for split-tunnel routing.
+///
+/// Uses firewall marks (fwmark) and policy-based routing to ensure HOPR traffic
+/// bypasses the VPN while all other traffic routes through it.
 pub struct Router {
     state_home: PathBuf,
     worker: worker::Worker,
@@ -211,6 +242,10 @@ struct FallbackWanInfo {
     gateway: Option<String>,
 }
 
+/// Static fallback router using direct `ip route` commands.
+///
+/// Used when dynamic routing (rtnetlink + iptables) is not available or not desired.
+/// Simpler than [`Router`] but provides the same phased setup to avoid race conditions.
 pub struct FallbackRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
@@ -772,8 +807,11 @@ async fn flush_routing_cache() -> Result<(), Error> {
     Ok(())
 }
 
+/// Gets the default WAN interface name and gateway by querying the routing table.
+///
+/// Returns `(device_name, Option<gateway_ip>)`.
+/// Used by FallbackRouter; the dynamic Router uses rtnetlink directly.
 async fn interface() -> Result<(String, Option<String>), Error> {
-    // TODO: rewrite via rtnetlink
     let output = Command::new("ip")
         .arg("route")
         .arg("show")
@@ -785,6 +823,7 @@ async fn interface() -> Result<(String, Option<String>), Error> {
     Ok(res)
 }
 
+/// Parses the output of `ip route show default` to extract interface and gateway.
 fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
     let parts: Vec<&str> = output.split_whitespace().collect();
 
