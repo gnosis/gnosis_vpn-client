@@ -31,33 +31,105 @@ pub fn static_router(state_home: PathBuf, wg_data: event::WireGuardData, peer_ip
         state_home,
         wg_data,
         peer_ips,
+        wan_info: None,
     }
 }
 
-/// macOS routing implementation that programs host routes via `wg-quick` hooks.
+/// WAN interface info stored for teardown.
+/// Fields are stored for debugging/logging purposes even though macOS route deletion
+/// only requires the peer IP (unlike Linux which needs device/gateway).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct MacOsWanInfo {
+    device: String,
+    gateway: Option<String>,
+}
+
+/// macOS routing implementation that programs host routes directly before wg-quick up.
 pub struct StaticRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
+    wan_info: Option<MacOsWanInfo>,
 }
 
 #[async_trait]
 impl Routing for StaticRouter {
+    /// Install split-tunnel routing for macOS StaticRouter.
+    ///
+    /// Uses a phased approach to avoid a race condition where HOPR p2p connections
+    /// could briefly drop when the WireGuard interface comes up.
+    ///
+    /// Phase 1 (before wg-quick up):
+    ///   1. Get WAN interface info
+    ///   2. Add bypass routes for all peer IPs directly via WAN
+    ///
+    /// Phase 2:
+    ///   3. Run wg-quick up (safe now - bypass routes are already in place)
+    ///
     async fn setup(&mut self) -> Result<(), Error> {
-        let interface_gateway = interface().await?;
-        let extra = build_static_extra_lines(&self.peer_ips, interface_gateway);
+        // === PHASE 1: Add bypass routes BEFORE wg-quick up ===
+        let (device, gateway) = interface().await?;
+        self.wan_info = Some(MacOsWanInfo {
+            device: device.clone(),
+            gateway: gateway.clone(),
+        });
+        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
+
+        for ip in &self.peer_ips {
+            add_bypass_route_macos(ip, &device, gateway.as_deref()).await?;
+        }
+        tracing::debug!("Bypass routes added before wg-quick up");
+
+        // === PHASE 2: wg-quick up (without PreUp routing hooks) ===
+        // Keep Table = off to manage routing ourselves
+        // PostUp hooks add default routes through VPN interface
+        let extra = vec![
+            "Table = off".to_string(),
+            "PostUp = route -n add -inet 0.0.0.0/1 -interface %i".to_string(),
+            "PostUp = route -n add -inet 128.0.0.0/1 -interface %i".to_string(),
+        ];
 
         let wg_quick_content =
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
-        wg_tooling::up(self.state_home.clone(), wg_quick_content).await?;
 
+        if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
+            // Rollback bypass routes on failure
+            tracing::warn!("wg-quick up failed, rolling back bypass routes");
+            for ip in &self.peer_ips {
+                let _ = delete_bypass_route_macos(ip).await;
+            }
+            self.wan_info = None;
+            return Err(e.into());
+        }
+        tracing::debug!("wg-quick up");
+
+        tracing::info!("routing is ready (macOS static)");
         Ok(())
     }
 
+    /// Teardown split-tunnel routing for macOS StaticRouter.
+    ///
+    /// Teardown order is important: wg-quick down FIRST, then remove bypass routes.
+    /// This ensures HOPR traffic continues to flow via WAN while VPN is being torn down.
+    ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        // === wg-quick down FIRST ===
         wg_tooling::down(self.state_home.clone(), logs).await?;
+        tracing::debug!("wg-quick down");
+
+        // === THEN remove bypass routes ===
+        if let Some(_wan_info) = self.wan_info.take() {
+            for ip in &self.peer_ips {
+                if let Err(e) = delete_bypass_route_macos(ip).await {
+                    tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route, continuing anyway");
+                }
+            }
+            tracing::debug!("Bypass routes removed after wg-quick down");
+        }
+
         Ok(())
     }
 }
@@ -74,42 +146,36 @@ impl Routing for DynamicRouter {
     }
 }
 
-fn build_static_extra_lines(peer_ips: &[Ipv4Addr], interface_gateway: (String, Option<String>)) -> Vec<String> {
-    // take over routing from wg-quick
-    let mut extra = vec!["Table = off".to_string()];
-    // default routes are added PostUp on wg interface
-    extra.push("PostUp = route -n add -inet 0.0.0.0/1 -interface %i".to_string());
-    extra.push("PostUp = route -n add -inet 128.0.0.0/1 -interface %i".to_string());
-    // add routes exceptions to all connected peers
-    extra.extend(peer_ips.iter().map(|ip| pre_up_routing(ip, interface_gateway.clone())));
-    // remove routes exceptions on PostDown
-    extra.extend(
-        peer_ips
-            .iter()
-            .map(|ip| post_down_routing(ip, interface_gateway.clone())),
-    );
-    extra
-}
+/// Add a bypass route for a peer IP on macOS.
+///
+/// This ensures traffic to the peer IP goes directly via WAN, bypassing the VPN tunnel.
+/// macOS `route` command is idempotent - it returns exit code 0 even if route already exists.
+async fn add_bypass_route_macos(peer_ip: &Ipv4Addr, device: &str, gateway: Option<&str>) -> Result<(), Error> {
+    let mut cmd = Command::new("route");
+    cmd.arg("-n").arg("add").arg("-host").arg(peer_ip.to_string());
 
-fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
-    match gateway {
-        Some(gw) => format!(
-            // NOTE: difference to linux: route command acts idempotent in a way that it always returns exit code 0 - even if a route already exists
-            "PreUp = route -n add -host {relayer_ip} {gateway}",
-            relayer_ip = relayer_ip,
-            gateway = gw,
-        ),
-        None => format!(
-            // NOTE: difference to linux: route command acts idempotent in a way that it always returns exit code 0 - even if a route already exists
-            "PreUp = route -n add -host {relayer_ip} -interface {device}",
-            relayer_ip = relayer_ip,
-            device = device
-        ),
+    if let Some(gw) = gateway {
+        cmd.arg(gw);
+    } else {
+        cmd.arg("-interface").arg(device);
     }
+
+    cmd.run_stdout(Logs::Print).await?;
+    tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Added bypass route");
+    Ok(())
 }
 
-fn post_down_routing(relayer_ip: &Ipv4Addr, (_device, _gateway): (String, Option<String>)) -> String {
-    format!("PostDown = route -n delete -host {relayer_ip}", relayer_ip = relayer_ip)
+/// Delete a bypass route for a peer IP on macOS.
+async fn delete_bypass_route_macos(peer_ip: &Ipv4Addr) -> Result<(), Error> {
+    Command::new("route")
+        .arg("-n")
+        .arg("delete")
+        .arg("-host")
+        .arg(peer_ip.to_string())
+        .run_stdout(Logs::Suppress)
+        .await?;
+    tracing::debug!(peer_ip = %peer_ip, "Deleted bypass route");
+    Ok(())
 }
 
 async fn interface() -> Result<(String, Option<String>), Error> {

@@ -40,6 +40,7 @@ pub fn static_fallback_router(
         state_home,
         wg_data,
         peer_ips,
+        wan_info: None,
     }
 }
 
@@ -204,10 +205,18 @@ pub struct Router {
     if_indices: Option<NetworkDeviceInfo>,
 }
 
+/// WAN interface info stored for FallbackRouter teardown.
+#[derive(Debug, Clone)]
+struct FallbackWanInfo {
+    device: String,
+    gateway: Option<String>,
+}
+
 pub struct FallbackRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
+    wan_info: Option<FallbackWanInfo>,
 }
 
 // FwMark for traffic the does not go through the VPN
@@ -645,80 +654,112 @@ impl Routing for Router {
 
 #[async_trait]
 impl Routing for FallbackRouter {
+    /// Install split-tunnel routing for FallbackRouter.
+    ///
+    /// Uses a phased approach to avoid a race condition where HOPR p2p connections
+    /// could briefly drop when the WireGuard interface comes up.
+    ///
+    /// Phase 1 (before wg-quick up):
+    ///   1. Get WAN interface info
+    ///   2. Add bypass routes for all peer IPs directly via WAN
+    ///
+    /// Phase 2:
+    ///   3. Run wg-quick up (safe now - bypass routes are already in place)
+    ///
     async fn setup(&mut self) -> Result<(), Error> {
-        let interface_gateway = interface().await?;
-        let mut extra = vec![];
+        // === PHASE 1: Add bypass routes BEFORE wg-quick up ===
+        let (device, gateway) = interface().await?;
+        self.wan_info = Some(FallbackWanInfo {
+            device: device.clone(),
+            gateway: gateway.clone(),
+        });
+        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
+
         for ip in &self.peer_ips {
-            extra.extend(pre_up_routing(ip, interface_gateway.clone()));
+            add_bypass_route_linux(ip, &device, gateway.as_deref()).await?;
         }
-        for ip in &self.peer_ips {
-            extra.push(post_down_routing(ip, interface_gateway.clone()));
-        }
+        tracing::debug!("Bypass routes added before wg-quick up");
+
+        // === PHASE 2: wg-quick up (without PreUp routing hooks) ===
+        let extra = vec!["Table = off".to_string()];
         let wg_quick_content =
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
-        wg_tooling::up(self.state_home.clone(), wg_quick_content).await?;
+
+        if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
+            // Rollback bypass routes on failure
+            tracing::warn!("wg-quick up failed, rolling back bypass routes");
+            for ip in &self.peer_ips {
+                let _ = delete_bypass_route_linux(ip, &device, gateway.as_deref()).await;
+            }
+            self.wan_info = None;
+            return Err(e.into());
+        }
+        tracing::debug!("wg-quick up");
+
+        tracing::info!("routing is ready (fallback)");
         Ok(())
     }
 
+    /// Teardown split-tunnel routing for FallbackRouter.
+    ///
+    /// Teardown order is important: wg-quick down FIRST, then remove bypass routes.
+    /// This ensures HOPR traffic continues to flow via WAN while VPN is being torn down.
+    ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        // === wg-quick down FIRST ===
         wg_tooling::down(self.state_home.clone(), logs).await?;
+        tracing::debug!("wg-quick down");
+
+        // === THEN remove bypass routes ===
+        if let Some(wan_info) = self.wan_info.take() {
+            for ip in &self.peer_ips {
+                if let Err(e) = delete_bypass_route_linux(ip, &wan_info.device, wan_info.gateway.as_deref()).await {
+                    tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route, continuing anyway");
+                }
+            }
+            tracing::debug!("Bypass routes removed after wg-quick down");
+        }
+
         Ok(())
     }
 }
 
-fn pre_up_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> Vec<String> {
-    // TODO: rewrite via rtnetlink
-    match gateway {
-        Some(gw) => vec![
-            // make routing idempotent by deleting routes before adding them ignoring errors
-            format!(
-                "PreUp = ip route del {relayer_ip} via {gateway} dev {device} || true",
-                relayer_ip = relayer_ip,
-                gateway = gw,
-                device = device
-            ),
-            format!(
-                "PreUp = ip route add {relayer_ip} via {gateway} dev {device}",
-                relayer_ip = relayer_ip,
-                gateway = gw,
-                device = device
-            ),
-        ],
-        None => vec![
-            // make routing idempotent by deleting routes before adding them ignoring errors
-            format!(
-                "PreUp = ip route del {relayer_ip} dev {device} || true",
-                relayer_ip = relayer_ip,
-                device = device
-            ),
-            format!(
-                "PreUp = ip route add {relayer_ip} dev {device}",
-                relayer_ip = relayer_ip,
-                device = device
-            ),
-        ],
+/// Add a bypass route for a peer IP via the WAN gateway.
+///
+/// This ensures traffic to the peer IP goes directly via WAN, bypassing the VPN tunnel.
+/// Makes the operation idempotent by deleting any existing route first.
+async fn add_bypass_route_linux(peer_ip: &Ipv4Addr, device: &str, gateway: Option<&str>) -> Result<(), Error> {
+    // Delete any existing route first (make idempotent)
+    let _ = delete_bypass_route_linux(peer_ip, device, gateway).await;
+
+    let mut cmd = Command::new("ip");
+    cmd.arg("route").arg("add").arg(peer_ip.to_string());
+
+    if let Some(gw) = gateway {
+        cmd.arg("via").arg(gw);
     }
+    cmd.arg("dev").arg(device);
+
+    cmd.run_stdout(Logs::Print).await?;
+    tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Added bypass route");
+    Ok(())
 }
 
-fn post_down_routing(relayer_ip: &Ipv4Addr, (device, gateway): (String, Option<String>)) -> String {
-    // TODO: rewrite via rtnetlink
-    match gateway {
-        Some(gw) => format!(
-            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
-            "PostDown = ip route del {relayer_ip} via {gateway} dev {device} || true",
-            relayer_ip = relayer_ip,
-            gateway = gw,
-            device = device,
-        ),
-        None => format!(
-            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
-            "PostDown = ip route del {relayer_ip} dev {device} || true",
-            relayer_ip = relayer_ip,
-            device = device,
-        ),
+/// Delete a bypass route for a peer IP.
+async fn delete_bypass_route_linux(peer_ip: &Ipv4Addr, device: &str, gateway: Option<&str>) -> Result<(), Error> {
+    let mut cmd = Command::new("ip");
+    cmd.arg("route").arg("del").arg(peer_ip.to_string());
+
+    if let Some(gw) = gateway {
+        cmd.arg("via").arg(gw);
     }
+    cmd.arg("dev").arg(device);
+
+    cmd.run_stdout(Logs::Suppress).await?;
+    tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Deleted bypass route");
+    Ok(())
 }
 
 /// Flushes the routing table cache - this cannot be done via rtnetlink crate.
