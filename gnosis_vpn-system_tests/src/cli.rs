@@ -22,7 +22,7 @@ pub struct SharedArgs {
         long = "blokliUrl",
         env = "SYSTEM_TEST_BLOKLI_URL",
         value_name = "URL",
-        default_value = "https://blokli.rotsee.hoprnet.link"
+        default_value = "https://blokli.jura.hoprnet.link"
     )]
     pub blokli_url: Url,
 
