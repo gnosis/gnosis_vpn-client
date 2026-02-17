@@ -54,7 +54,10 @@ pub enum RunMode {
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: balance::FundingTool,
+        safe_creation_error: Option<String>,
     },
+    /// Safe deployment ongoing
+    DeployingSafe { node_address: Address },
     /// Hopr started, determining ticket value for strategies
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
@@ -147,13 +150,19 @@ impl RunMode {
         node_address: Address,
         pre_safe: &Option<balance::PreSafe>,
         funding_tool: balance::FundingTool,
+        safe_creation_error: Option<String>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
             node_xdai: pre_safe.clone().map(|s| s.node_xdai).unwrap_or_default(),
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
+            safe_creation_error,
         }
+    }
+
+    pub fn deploying_safe(node_address: Address) -> Self {
+        RunMode::DeployingSafe { node_address }
     }
 
     pub fn warmup(edgli_init_state: Option<EdgliInitState>, hopr_state: Option<HoprState>) -> Self {
@@ -300,12 +309,23 @@ impl Display for RunMode {
                 node_xdai,
                 node_wxhopr,
                 funding_tool,
+                safe_creation_error,
             } => {
-                write!(
-                    f,
-                    "Waiting for funding on {node_address}({node_xdai}, {node_wxhopr}) - {funding_tool}"
-                )
+                if let Some(error) = safe_creation_error {
+                    write!(
+                        f,
+                        "Preparing Safe (node: {}, xdai: {}, wxHOPR: {}, funding tool: {}, error: {})",
+                        node_address, node_xdai, node_wxhopr, funding_tool, error
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Preparing Safe (node: {}, xdai: {}, wxHOPR: {}, funding tool: {})",
+                        node_address, node_xdai, node_wxhopr, funding_tool
+                    )
+                }
             }
+            RunMode::DeployingSafe { node_address } => write!(f, "Deploying Safe (node: {})", node_address),
             RunMode::Warmup {
                 hopr_init_status,
                 hopr_status,
