@@ -96,6 +96,10 @@ enum Phase {
         query_safe: Querying<Option<SafeModule>>,
         deploy_safe: Querying<SafeModule>,
     },
+    DeployingSafe {
+        node_balance: Querying<balance::PreSafe>,
+        query_safe: Querying<Option<SafeModule>>,
+    },
     Starting(Option<EdgliInitState>),
     HoprSyncing,
     HoprRunning,
@@ -278,14 +282,27 @@ impl Core {
                             Phase::CreatingSafe {
                                 node_balance,
                                 query_safe: _,
-                                deploy_safe: _,
+                                deploy_safe,
                             } => {
+                                let safe_creation_error = match deploy_safe {
+                                    Querying::Error(e) => Some(e.clone()),
+                                    _ => None,
+                                };
                                 let balance = match node_balance {
                                     Querying::Success(b) => Some(b),
                                     _ => None,
                                 };
-                                RunMode::preparing_safe(self.node_address, &balance, self.funding_tool.clone())
+                                RunMode::preparing_safe(
+                                    self.node_address,
+                                    &balance,
+                                    self.funding_tool.clone(),
+                                    safe_creation_error,
+                                )
                             }
+                            Phase::DeployingSafe {
+                                node_balance: _,
+                                query_safe: _,
+                            } => RunMode::deploying_safe(self.node_address),
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
@@ -827,7 +844,7 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         match (res, self.phase.clone()) {
-            (Ok(safe_module), Phase::CreatingSafe { .. }) => {
+            (Ok(safe_module), Phase::DeployingSafe { .. }) => {
                 tracing::info!(?safe_module, "deployed safe module");
                 // start edge client with new safe module
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
@@ -836,10 +853,9 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::DeployingSafe {
                     node_balance,
                     query_safe,
-                    deploy_safe: _,
                 },
             ) => {
                 tracing::error!(?err, "failed to deploy safe module - retrying from balance check");
@@ -862,13 +878,17 @@ impl Core {
             node_balance: Querying::Success(presafe),
             query_safe: Querying::Success(None),
             deploy_safe: _,
-        } = &self.phase
+        } = self.phase.clone()
         {
             if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
                 tracing::warn!("insufficient funds to start safe deployment - waiting for funding");
             } else {
+                self.phase = Phase::DeployingSafe {
+                    node_balance: Querying::Success(presafe.clone()),
+                    query_safe: Querying::Success(None),
+                };
                 self.cancel_presafe_queries.cancel();
-                self.spawn_safe_deployment_runner(presafe, results_sender);
+                self.spawn_safe_deployment_runner(&presafe, results_sender);
             }
         }
     }
