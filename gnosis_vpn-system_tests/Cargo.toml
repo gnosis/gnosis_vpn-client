@@ -1,0 +1,17 @@
+[package]
+name = "gnosis_vpn-system_tests"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+exitcode.workspace = true
+gnosis_vpn-lib.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true

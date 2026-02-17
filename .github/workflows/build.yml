@@ -74,6 +74,51 @@ jobs:
           USER: runner
       - name: Run flake checks
         run: nix flake check -L --show-trace
+  system-test:
+    name: Execute system test against rotsee network
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@v16
+        with:
+          name: gnosis-vpn-client
+        env:
+          USER: runner
+      - name: Install system test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard-tools
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Build system service and test binary
+        run: |
+          nix build .#gnosis_vpn-dev
+      - name: Run the system test
+        env:
+          SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
+          SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
+          SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
+          SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
+          SYSTEM_TEST_WORKER_BINARY: ./result/bin/gnosis_vpn-worker
+        run: just system-tests ./result/bin/gnosis_vpn-system_tests
   build-binaries:
     strategy:
       matrix:

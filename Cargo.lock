@@ -3143,6 +3143,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnosis_vpn-system_tests"
+version = "0.71.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "exitcode",
+ "gnosis_vpn-lib",
+ "rand 0.9.2",
+ "reqwest 0.13.2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "gnosis_vpn-worker"
 version = "0.72.1"
 dependencies = [

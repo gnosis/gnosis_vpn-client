@@ -59,6 +59,7 @@
           ...
         }:
         let
+          fs = lib.fileset;
           pkgs = (
             import nixpkgs {
               localSystem = system;
@@ -366,10 +367,7 @@
             inherit pre-commit-check;
             default = gnosis_vpn-release;
           };
-
-          apps = {
-            inherit generate-lockfile;
-          };
+          # // systemTestsDockerPackages;
 
           devShells.default = craneLib.devShell {
             inherit pre-commit-check;

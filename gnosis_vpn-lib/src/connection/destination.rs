@@ -68,6 +68,10 @@ impl Destination {
         metas.sort();
         metas.join(", ")
     }
+
+    pub fn get_meta(&self, key: &str) -> Option<String> {
+        self.meta.get(key).cloned()
+    }
 }
 
 impl Display for Destination {
