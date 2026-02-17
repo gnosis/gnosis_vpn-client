@@ -75,7 +75,7 @@ jobs:
       - name: Run flake checks
         run: nix flake check -L --show-trace
   system-test:
-    name: Execute system test against jura network
+    name: Execute system test against rotsee network
     runs-on: ubuntu-22.04
     steps:
       - name: Free Disk Space
