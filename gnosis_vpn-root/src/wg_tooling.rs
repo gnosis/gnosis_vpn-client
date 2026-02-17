@@ -1,7 +1,8 @@
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::{dirs, wireguard};
@@ -24,11 +25,23 @@ pub async fn executable() -> Result<(), wireguard::Error> {
         .map_err(wireguard::Error::from)
 }
 
-pub async fn up(config_content: String) -> Result<(), wireguard::Error> {
-    let conf_file = dirs::cache_dir(wireguard::WG_CONFIG_FILE)?;
+pub async fn up(state_home: PathBuf, config_content: String) -> Result<(), wireguard::Error> {
+    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)?;
     let content = config_content.as_bytes();
-    fs::write(&conf_file, content).await?;
-    fs::set_permissions(&conf_file, std::fs::Permissions::from_mode(0o600)).await?;
+
+    // Remove stale config so mode() applies to a fresh file (O_CREAT only sets mode on creation)
+    let _ = fs::remove_file(&conf_file).await;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&conf_file)
+        .await?;
+    file.write_all(content).await?;
+    file.flush().await?;
+
     Command::new("wg-quick")
         .arg("up")
         .arg(conf_file)
@@ -37,8 +50,8 @@ pub async fn up(config_content: String) -> Result<(), wireguard::Error> {
     Ok(())
 }
 
-pub async fn down(logs: Logs) -> Result<(), wireguard::Error> {
-    let conf_file = dirs::cache_dir(wireguard::WG_CONFIG_FILE)?;
+pub async fn down(state_home: PathBuf, logs: Logs) -> Result<(), wireguard::Error> {
+    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)?;
     Command::new("wg-quick").arg("down").arg(conf_file).run(logs).await?;
     Ok(())
 }

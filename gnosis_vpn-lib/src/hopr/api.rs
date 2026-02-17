@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
@@ -55,6 +56,8 @@ impl Hopr {
         db_data_dir: &std::path::Path,
         keys: edgli::hopr_lib::HoprKeys,
         blokli_url: Option<url::Url>,
+        blokli_config: BlockchainConnectorConfig,
+        init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
         let edge_node = Edgli::new(
@@ -62,7 +65,8 @@ impl Hopr {
             db_data_dir,
             keys,
             blokli_url.map(|u| u.to_string()),
-            None::<fn(edgli::EdgliInitState)>,
+            Some(blokli_config),
+            init_visitor,
         )
         .await
         .map_err(|e| HoprError::Construction(e.to_string()))?;
@@ -144,7 +148,7 @@ impl Hopr {
         cfg: SessionClientConfig,
     ) -> Result<SessionClientMetadata, HoprError> {
         tracing::debug!("open hopr session");
-        let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
+        let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into();
 
         let protocol = match target {
             SessionTarget::TcpStream(_) => IpProtocol::TCP,
@@ -252,7 +256,7 @@ impl Hopr {
         protocol: IpProtocol,
     ) -> std::result::Result<(), HoprError> {
         tracing::debug!("close hopr session");
-        let unspecified: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0).into();
+        let unspecified: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into();
 
         // Find all listeners with protocol, listening IP and optionally port number (if > 0)
         let to_remove = self

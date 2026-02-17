@@ -50,6 +50,11 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # capabilities = [ "segmentation", "retransmission", "retransmission_ack_only" ]
 # target = "172.30.0.1:8000"
 
+# determine specific connection parameters for ephemeral exit health check connections
+# [connection.health]
+# capabilities = [ "segmentation", "retransmission", "retransmission_ack_only" ]
+# target = "172.30.0.1:8000"
+
 # determine specific connection parameters for persistent main connection
 # [connection.wg]
 # capabilities = [ "segmentation", "no_delay" ]
@@ -65,11 +70,13 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # adjust session internal options
 # [connection.max_surb_upstream]
 # bridge = "512 Kb/s"
+# health = "256 Kb/s"
 # ping = "1 Mb/s"
 # main = "16 Mb/s"
 #
 # [connection.buffer]
 # bridge = "32 kB"
+# health = "16 kB"
 # ping = "32 kB"
 # main = "10 MB"
 
@@ -83,3 +90,12 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # allowed_ips = "0.0.0.0/0"
 # If you want to disable WireGuard key rotation, provide a static private key here.
 # force_private_key = "<your WireGuard private key>"
+
+###
+## chain provider section - query blockchain settings
+
+# see https://github.com/hoprnet/hoprnet/blob/5f719c4642f0babafd29044e36b741097fcf82f4/chain/connector/src/connector/mod.rs#L46 for documentation
+# [blokli]
+# tx_confirm_timeout: "90s"
+# connection_timeout: "30s"
+# sync_tolerance: 50

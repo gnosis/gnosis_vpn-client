@@ -12,6 +12,7 @@ use std::process;
 use gnosis_vpn_lib::core::Core;
 use gnosis_vpn_lib::event::{CoreToWorker, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
+use gnosis_vpn_lib::logging;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -22,7 +23,12 @@ mod init;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
+enum SignalMessage {
+    Shutdown,
+    RotateLogs,
+}
+
+async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
         tracing::error!(error = ?e, "error setting up SIGINT handler");
@@ -32,38 +38,57 @@ async fn ctrlc_channel() -> Result<mpsc::Receiver<()>, exitcode::ExitCode> {
         tracing::error!(error = ?e, "error setting up SIGTERM handler");
         exitcode::IOERR
     })?;
+    let mut sighup = signal(SignalKind::hangup()).map_err(|e| {
+        tracing::error!(error = ?e, "error setting up SIGHUP handler");
+        exitcode::IOERR
+    })?;
 
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
                     tracing::debug!("received SIGINT");
-                    if sender.send(()).await.is_err() {
-                        tracing::warn!("sigint: receiver closed");
+                    if sender.send(SignalMessage::Shutdown).await.is_err() {
+                        tracing::warn!("SIGINT: receiver closed");
                         break;
                     }
                 },
                 Some(_) = sigterm.recv() => {
                     tracing::debug!("received SIGTERM");
-                    if sender.send(()).await.is_err() {
-                        tracing::warn!("sigterm: receiver closed");
+                    if sender.send(SignalMessage::Shutdown).await.is_err() {
+                        tracing::warn!("SIGTERM: receiver closed");
                         break;
                     }
                 },
+                Some(_) = sighup.recv() => {
+                    tracing::debug!("received SIGHUP");
+                    if sender.send(SignalMessage::RotateLogs).await.is_err() {
+                        tracing::warn!("SIGHUP: receiver closed");
+                        break;
+                    }
+                }
                 else => {
-                    tracing::warn!("sigint and sigterm streams closed");
+                    tracing::warn!("signal streams closed");
                     break;
                 }
             }
         }
     });
-
     Ok(receiver)
 }
 
-async fn daemon() -> Result<(), exitcode::ExitCode> {
+async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    // Set up logging
+    let reload_handle = setup_logging(&args.log_file)?;
+    let log_path = args.log_file;
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
+
     // set up signal handler
-    let mut ctrlc_receiver = ctrlc_channel().await?;
+    let mut signal_receiver = signal_channel().await?;
 
     tracing::debug!("accessing unix socket from fd");
     let fd: i32 = env::var(socket::worker::ENV_VAR)
@@ -105,7 +130,8 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
-            Some(_) = ctrlc_receiver.recv() => {
+            Some(signal) = signal_receiver.recv() => match signal {
+                SignalMessage::Shutdown => {
                 if shutdown_ongoing {
                     tracing::info!("force shutdown immediately");
                     return Ok(());
@@ -120,6 +146,26 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                     tracing::error!("command receiver already closed");
                     exitcode::IOERR
                 })?;
+                }
+                SignalMessage::RotateLogs => {
+                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
+                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
+                    if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
+                        let res =  logging::use_file_fmt_layer(&path.to_string_lossy())
+                            .map(|new_layer| handle.reload(new_layer));
+                        match res {
+                            Ok(_) => {
+                                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                            }
+                            Err(e) => {
+                                eprintln!("failed to reopen log file {:?}: {}", path, e);
+                                return Err(exitcode::IOERR);
+                            }
+                        }
+                    } else {
+                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
+                    }
+                },
             },
             Ok(Some(line)) = lines_reader.next_line() => {
                 tracing::debug!(line = %line, "incoming from root service");
@@ -127,9 +173,9 @@ async fn daemon() -> Result<(), exitcode::ExitCode> {
                 if let Some(init) = init_opt.take() {
                     let next = init.incoming_cmd(wcmd);
                     send_outgoing(WorkerToRoot::Ack, &mut writer).await?;
-                    if let Some((config, hopr_params)) = next.ready() {
+                    if let Some((config, worker_params)) = next.ready() {
                         if let (Some(mut incoming_event_receiver), Some(outgoing_event_sender)) = (incoming_event_receiver_opt.take(), outoing_event_sender_opt.take()) {
-                            let core = Core::init(config, hopr_params, outgoing_event_sender).await.map_err(|err| {
+                            let core = Core::init(config, worker_params, outgoing_event_sender).await.map_err(|err| {
                                 tracing::error!(error = ?err, "failed to initialize core logic");
                                 exitcode::OSERR
                             })?;
@@ -208,7 +254,7 @@ async fn incoming_cmd(
     event_sender: &mut mpsc::Sender<WorkerToCore>,
 ) -> Result<WorkerToRoot, exitcode::ExitCode> {
     match cmd {
-        RootToWorker::Command(cmd) => {
+        RootToWorker::Command { cmd, id } => {
             let (sender, recv) = oneshot::channel();
             event_sender
                 .send(WorkerToCore::Command { cmd, resp: sender })
@@ -221,9 +267,9 @@ async fn incoming_cmd(
                 tracing::error!("command responder already closed");
                 exitcode::IOERR
             })?;
-            Ok(WorkerToRoot::Response(resp))
+            Ok(WorkerToRoot::Response { id, resp })
         }
-        RootToWorker::HoprParams { .. } => {
+        RootToWorker::WorkerParams { .. } => {
             tracing::warn!("received hopr params after init - ignoring");
             Ok(WorkerToRoot::OutOfSync)
         }
@@ -257,22 +303,36 @@ fn main() {
 }
 
 async fn main_inner() {
-    let _args = cli::parse();
+    let args = cli::parse();
 
-    // install global collector configured based on RUST_LOG env var.
-    tracing_subscriber::fmt::init();
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "starting {}",
-        env!("CARGO_PKG_NAME")
-    );
-
-    match daemon().await {
+    match daemon(args).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {
             tracing::warn!("abnormal exit");
             process::exit(code);
+        }
+    }
+}
+
+fn setup_logging(
+    log_file: &Option<std::path::PathBuf>,
+) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
+    match log_file {
+        Some(log_path) => {
+            let fmt_layer = logging::use_file_fmt_layer(&log_path.to_string_lossy()).map_err(|err| {
+                eprintln!("Failed to open log layer for file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
+                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            Ok(Some(handle))
+        }
+        None => {
+            logging::setup_stdout();
+            Ok(None)
         }
     }
 }

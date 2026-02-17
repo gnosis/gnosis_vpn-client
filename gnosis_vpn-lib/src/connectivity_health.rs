@@ -1,7 +1,5 @@
-/// This module keeps track of a destination's health indicating wether a connection can be
-/// successful.
-/// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted
-/// connections.
+/// This module keeps track of a destination's connectivity health indicating whether a connection can be successful.
+/// **last_error** and **health** are dynamic values depending on connected hopr peers and attempted connections.
 /// The **need** field indicates what is required to make the destination healthy in general.
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +8,8 @@ use std::fmt::{self, Display};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DestinationHealth {
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConnectivityHealth {
     pub id: String,
     pub last_error: Option<String>,
     pub health: Health,
@@ -20,17 +18,23 @@ pub struct DestinationHealth {
 
 /// Requirements to be able to connect to this destination
 /// This is statically derived at construction time from a destination's routing options.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Need {
     Channel(Address),
     AnyChannel,
     Peering(Address),
     Nothing,
+    // TODO refactor to avoid hashmap lookup failure leading to this default value
+    #[default]
+    DestinationMissing,
 }
 
 /// Potential problems or final health states of a destination
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Health {
+    // TODO refactor to avoid hashmap lookup failure leading to this default value
+    #[default]
+    DestinationMissing,
     ReadyToConnect,
     MissingPeeredFundedChannel,
     MissingPeeredChannel,
@@ -38,20 +42,20 @@ pub enum Health {
     NotPeered,
     // final - not allowed to connect to this destination
     NotAllowed,
-    // final - destination address is invalid - should be impossible due to config deserialization
-    InvalidAddress,
+    // final - destination id is invalid - should be impossible due to config deserialization
+    InvalidId,
     // final - destination path is invalid - should be impossible due to config deserialization
     InvalidPath,
 }
 
 // Determine if any destination needs peers
-pub fn needs_peers(dest_healths: &[&DestinationHealth]) -> bool {
+pub fn needs_peers(dest_healths: &[&ConnectivityHealth]) -> bool {
     dest_healths
         .iter()
         .any(|v| matches!(v.need, Need::Channel(_) | Need::Peering(_) | Need::AnyChannel))
 }
 
-pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
+pub fn count_distinct_channels(dest_healths: &[&ConnectivityHealth]) -> usize {
     let mut addresses = HashSet::new();
     for dh in dest_healths {
         if let Need::Channel(addr) = dh.need {
@@ -65,7 +69,7 @@ pub fn count_distinct_channels(dest_healths: &[&DestinationHealth]) -> usize {
     count
 }
 
-impl DestinationHealth {
+impl ConnectivityHealth {
     pub fn from_destination(dest: &Destination, allow_insecure: bool) -> Self {
         match dest.routing.clone() {
             RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => {
@@ -102,7 +106,7 @@ impl DestinationHealth {
                     NodeId::Offchain(_) => Self {
                         id: dest.id.clone(),
                         last_error: None,
-                        health: Health::InvalidAddress,
+                        health: Health::InvalidId,
                         need: Need::Nothing,
                     },
                 },
@@ -165,6 +169,7 @@ impl DestinationHealth {
                 _ => self.health.clone(),
             },
             Need::Nothing => self.health.clone(),
+            Need::DestinationMissing => self.health.clone(),
         };
         Self {
             id: self.id.clone(),
@@ -206,6 +211,7 @@ impl DestinationHealth {
             ),
             Need::Peering(_) => matches!(self.health, Health::NotPeered),
             Need::Nothing => false,
+            Need::DestinationMissing => false,
         }
     }
 
@@ -226,12 +232,12 @@ impl DestinationHealth {
     pub fn is_unrecoverable(&self) -> bool {
         matches!(
             self.health,
-            Health::NotAllowed | Health::InvalidAddress | Health::InvalidPath
+            Health::NotAllowed | Health::InvalidId | Health::InvalidPath
         )
     }
 }
 
-impl Display for DestinationHealth {
+impl Display for ConnectivityHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let error = if let Some(err) = self.last_error.as_ref() {
             format!("Last error: {}, ", err)
@@ -254,6 +260,7 @@ impl Display for Need {
             Need::AnyChannel => write!(f, "needs any peered channel"),
             Need::Peering(addr) => write!(f, "needs peer {}", addr),
             Need::Nothing => write!(f, "unable to connect"),
+            Need::DestinationMissing => write!(f, "destination missing"),
         }
     }
 }
@@ -267,31 +274,31 @@ mod tests {
         let addr_1 = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
         let addr_2 = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
 
-        let dh1 = DestinationHealth {
+        let dh1 = ConnectivityHealth {
             id: "dest1".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_1),
         };
-        let dh2 = DestinationHealth {
+        let dh2 = ConnectivityHealth {
             id: "dest2".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_2),
         };
-        let dh3 = DestinationHealth {
+        let dh3 = ConnectivityHealth {
             id: "dest3".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::Channel(addr_1),
         };
-        let dh4 = DestinationHealth {
+        let dh4 = ConnectivityHealth {
             id: "dest4".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,
             need: Need::AnyChannel,
         };
-        let dh5 = DestinationHealth {
+        let dh5 = ConnectivityHealth {
             id: "dest5".to_string(),
             last_error: None,
             health: Health::MissingPeeredFundedChannel,

@@ -1,6 +1,6 @@
 use gnosis_vpn_lib::config::Config;
 use gnosis_vpn_lib::event::RootToWorker;
-use gnosis_vpn_lib::hopr_params::HoprParams;
+use gnosis_vpn_lib::worker_params::WorkerParams;
 
 #[derive(Debug, Clone)]
 pub struct Init {
@@ -11,8 +11,8 @@ pub struct Init {
 enum State {
     AwaitingResources,
     AwaitingHoprParams(Config),
-    AwaitingConfig(HoprParams),
-    Ready(Config, HoprParams),
+    AwaitingConfig(WorkerParams),
+    Ready(Config, WorkerParams),
 }
 
 impl Init {
@@ -22,9 +22,9 @@ impl Init {
         }
     }
 
-    pub fn ready(&self) -> Option<(Config, HoprParams)> {
-        if let State::Ready(config, hopr_params) = &self.state {
-            Some((config.clone(), hopr_params.clone()))
+    pub fn ready(&self) -> Option<(Config, WorkerParams)> {
+        if let State::Ready(config, worker_params) = &self.state {
+            Some((config.clone(), worker_params.clone()))
         } else {
             None
         }
@@ -32,17 +32,17 @@ impl Init {
 
     pub fn incoming_cmd(&self, cmd: RootToWorker) -> Self {
         match (self.state.clone(), cmd) {
-            (State::AwaitingResources, RootToWorker::HoprParams { hopr_params }) => Init {
-                state: State::AwaitingConfig(hopr_params),
+            (State::AwaitingResources, RootToWorker::WorkerParams { worker_params }) => Init {
+                state: State::AwaitingConfig(worker_params),
             },
             (State::AwaitingResources, RootToWorker::Config { config }) => Init {
                 state: State::AwaitingHoprParams(config),
             },
-            (State::AwaitingHoprParams(config), RootToWorker::HoprParams { hopr_params }) => Init {
-                state: State::Ready(config, hopr_params),
+            (State::AwaitingHoprParams(config), RootToWorker::WorkerParams { worker_params }) => Init {
+                state: State::Ready(config, worker_params),
             },
-            (State::AwaitingConfig(hopr_params), RootToWorker::Config { config }) => Init {
-                state: State::Ready(config, hopr_params),
+            (State::AwaitingConfig(worker_params), RootToWorker::Config { config }) => Init {
+                state: State::Ready(config, worker_params),
             },
             (state, worker_command) => {
                 tracing::warn!(?state, ?worker_command, "received unexpected worker command - ignoring");

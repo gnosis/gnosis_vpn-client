@@ -2,9 +2,19 @@ use thiserror::Error;
 
 use std::fs::DirBuilder;
 use std::io::{self, ErrorKind};
-use std::os::unix::fs as unix_fs;
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{self as unix_fs};
 use std::path::PathBuf;
+
+pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
+
+#[cfg(target_os = "linux")]
+pub const DEFAULT_STATE_HOME: &str = "/var/lib/gnosisvpn";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_STATE_HOME: &str = "/Library/Application Support/GnosisVPN";
+
+const CONFIG_DIRECTORY: &str = ".config";
+const CACHE_DIRECTORY: &str = ".cache";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -12,15 +22,8 @@ pub enum Error {
     IO(#[from] io::Error),
 }
 
-const CONFIG_DIRECTORY: &str = ".config";
-const CACHE_DIRECTORY: &str = ".cache";
-
-pub const ENV_VAR_HOME: &str = "GNOSISVPN_HOME";
-pub const DEFAULT_STATE_DIR_LINUX: &str = "/var/lib/gnosisvpn";
-pub const DEFAULT_STATE_DIR_MACOS: &str = "/Library/Application Support/GnosisVPN";
-
-pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
-    let home = home();
+// Sets up the required directories for the worker, ensuring they are owned by the worker user
+pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
     tracing::debug!("Using gnosisvpn home directory: {}", home.display());
     // home folder will be created by installer
     let cache_path = home.join(CACHE_DIRECTORY);
@@ -36,36 +39,20 @@ pub fn setup(uid: u32, gid: u32) -> Result<PathBuf, Error> {
     Ok(home)
 }
 
-pub fn cache_dir(file: &str) -> Result<PathBuf, Error> {
-    let cache_file = home().join(CACHE_DIRECTORY).join(file);
+pub fn cache_dir(home: PathBuf, file: &str) -> Result<PathBuf, Error> {
+    let cache_file = home.join(CACHE_DIRECTORY).join(file);
     tracing::debug!("Using cache file: {}", cache_file.display());
     Ok(cache_file)
 }
 
-pub fn config_dir(file: &str) -> Result<PathBuf, Error> {
-    let config_file = home().join(CONFIG_DIRECTORY).join(file);
+pub fn config_dir(home: PathBuf, file: &str) -> Result<PathBuf, Error> {
+    let config_file = home.join(CONFIG_DIRECTORY).join(file);
     tracing::debug!("Using config file: {}", config_file.display());
     Ok(config_file)
 }
 
-fn home() -> PathBuf {
-    if let Ok(home) = std::env::var(ENV_VAR_HOME) {
-        return PathBuf::from(home);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from(DEFAULT_STATE_DIR_MACOS)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        PathBuf::from(DEFAULT_STATE_DIR_LINUX)
-    }
-}
-
 fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
     let res = DirBuilder::new().mode(0o700).create(path);
-    println!("res: {:?}", res);
     match res {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),

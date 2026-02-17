@@ -39,7 +39,7 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
-        // 0. disconnect wg tunnel done from root
+        // 0. disconnect wg tunnel done from root - already happens in spawning process
 
         // 1. open bridge session
         let _ = results_sender
@@ -110,11 +110,7 @@ async fn unregister(
     session_client_metadata: &SessionClientMetadata,
     public_key: String,
 ) -> Result<(), gvpn_client::Error> {
-    let input = gvpn_client::Input::new(
-        public_key,
-        session_client_metadata.bound_host.port(),
-        options.timeouts.http,
-    );
+    let input = gvpn_client::Input::new(public_key, session_client_metadata.bound_host, options.timeouts.http);
     let client = reqwest::Client::new();
     gvpn_client::unregister(&client, &input).await
 }

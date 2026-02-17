@@ -19,6 +19,7 @@ pub struct Config {
     pub(super) destinations: Option<HashMap<Address, Destination>>,
     pub(super) connection: Option<v5::Connection>,
     pub(super) wireguard: Option<v5::WireGuard>,
+    pub(super) blokli: Option<v5::BlokliConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -133,10 +134,12 @@ impl TryFrom<Config> for config::Config {
         let connection = value.connection.into();
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
+        let blokli = value.blokli.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
+            blokli,
         })
     }
 }

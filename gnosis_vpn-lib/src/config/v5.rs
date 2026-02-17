@@ -14,6 +14,7 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
+use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
 
@@ -25,6 +26,7 @@ pub struct Config {
     pub(super) destinations: Option<HashMap<String, Destination>>,
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
+    pub(super) blokli: Option<BlokliConfig>,
 }
 
 #[serde_as]
@@ -50,6 +52,7 @@ pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     http_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
+    health: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
     buffer: Option<BufferOptions>,
@@ -88,19 +91,21 @@ struct PingOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct BufferOptions {
-    // could be improved by using bytesize crates parser
     bridge: Option<ByteSize>,
+    health: Option<ByteSize>,
     ping: Option<ByteSize>,
     main: Option<ByteSize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct MaxSurbUpstreamOptions {
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
     bridge: Option<Bandwidth>,
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
+    health: Option<Bandwidth>,
+    #[serde(default, with = "human_bandwidth::serde")]
     ping: Option<Bandwidth>,
-    #[serde(with = "human_bandwidth::serde")]
+    #[serde(default, with = "human_bandwidth::serde")]
     main: Option<Bandwidth>,
 }
 
@@ -109,6 +114,15 @@ pub(super) struct WireGuard {
     pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct BlokliConfig {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) tx_confirm_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) connection_timeout: Option<Duration>,
+    pub(super) sync_tolerance: Option<usize>,
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
@@ -130,6 +144,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+
+        // blokli nested struct
+        if key == "blokli" {
+            if let Some(blokli) = value.as_table() {
+                for (k, _v) in blokli.iter() {
+                    if k == "tx_confirm_timeout" || k == "connection_timeout" || k == "sync_tolerance" {
+                        continue;
+                    }
+                    wrong_keys.push(format!("blokli.{k}"));
+                }
+            }
+            continue;
+        }
+
         // connection nested struct
         if key == "connection" {
             if let Some(connection) = value.as_table() {
@@ -137,13 +165,13 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "http_timeout" {
                         continue;
                     }
-                    if k == "bridge" || k == "wg" {
+                    if k == "bridge" || k == "wg" || k == "health" {
                         if let Some(prot) = v.as_table() {
-                            for (k, _v) in prot.iter() {
-                                if k == "capabilities" || k == "target" {
+                            for (k2, _v) in prot.iter() {
+                                if k2 == "capabilities" || k2 == "target" {
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.bridge.{k}"));
+                                wrong_keys.push(format!("connection.{k}.{k2}"));
                             }
                         }
                         continue;
@@ -162,7 +190,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "buffer" {
                         if let Some(buffer) = v.as_table() {
                             for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.buffer.{k}"));
@@ -173,7 +201,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "max_surb_upstream" {
                         if let Some(surbs) = v.as_table() {
                             for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
@@ -248,11 +276,26 @@ impl Connection {
         ]
     }
 
+    pub fn default_health_capabilities() -> Vec<Capability> {
+        vec![
+            Capability::Segmentation,
+            Capability::Retransmission,
+            Capability::RetransmissionAckOnly,
+        ]
+    }
+
     pub fn default_wg_capabilities() -> Vec<Capability> {
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
     pub fn default_bridge_target() -> SessionTarget {
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            8000,
+        )))))
+    }
+
+    pub fn default_health_target() -> SessionTarget {
         SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
             [172, 30, 0, 1],
             8000,
@@ -280,6 +323,7 @@ impl From<BufferOptions> for options::BufferSizes {
         let def = options::BufferSizes::default();
         options::BufferSizes {
             bridge: buffer.bridge.unwrap_or(def.bridge),
+            health: buffer.health.unwrap_or(def.health),
             ping: buffer.ping.unwrap_or(def.ping),
             main: buffer.main.unwrap_or(def.main),
         }
@@ -291,6 +335,7 @@ impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
         let def = options::MaxSurbUpstream::default();
         options::MaxSurbUpstream {
             bridge: surbs.bridge.unwrap_or(def.bridge),
+            health: surbs.health.unwrap_or(def.health),
             ping: surbs.ping.unwrap_or(def.ping),
             main: surbs.main.unwrap_or(def.main),
         }
@@ -311,6 +356,17 @@ impl From<Option<Connection>> for options::Options {
             .unwrap_or(Connection::default_bridge_capabilities());
         let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
 
+        let health_target = connection
+            .and_then(|c| c.health.as_ref())
+            .and_then(|b| b.target)
+            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_health_target());
+        let health_caps = connection
+            .and_then(|c| c.health.as_ref())
+            .and_then(|b| b.capabilities.clone())
+            .unwrap_or(Connection::default_health_capabilities());
+        let params_health = options::SessionParameters::new(health_target, to_flags(health_caps));
+
         let wg_target = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.target)
@@ -321,8 +377,10 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
         let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
+
         let sessions = options::Sessions {
             bridge: params_bridge,
+            health: params_health,
             wg: params_wg,
         };
 
@@ -375,6 +433,25 @@ impl From<Option<WireGuard>> for WireGuardConfig {
     }
 }
 
+impl From<Option<BlokliConfig>> for HoprBlokliConfig {
+    fn from(value: Option<BlokliConfig>) -> Self {
+        let tx_confirm_timeout = value
+            .as_ref()
+            .and_then(|b| b.tx_confirm_timeout)
+            .unwrap_or_else(|| Duration::from_secs(90));
+        let connection_timeout = value
+            .as_ref()
+            .and_then(|b| b.connection_timeout)
+            .unwrap_or_else(|| Duration::from_secs(30));
+        let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
+        HoprBlokliConfig {
+            tx_confirm_timeout,
+            connection_timeout,
+            sync_tolerance,
+        }
+    }
+}
+
 impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
@@ -382,10 +459,12 @@ impl TryFrom<Config> for config::Config {
         let connection = value.connection.into();
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
+        let blokli = value.blokli.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
+            blokli,
         })
     }
 }
@@ -475,6 +554,10 @@ http_timeout = "60s"
 capabilities = [ "segmentation", "retransmission" ]
 target = "127.0.0.1:8000"
 
+[connection.health]
+capabilities = [ "segmentation", "retransmission" ]
+target = "127.0.0.1:8000"
+
 [connection.wg]
 capabilities = [ "segmentation", "no_delay" ]
 target = "127.0.0.1:51820"
@@ -487,11 +570,13 @@ seq_count = 1
 
 [connection.max_surb_upstream]
 bridge = "512 Kb/s"
+health = "256 Kb/s"
 ping = "1 Mb/s"
 main = "16 Mb/s"
 
 [connection.buffer]
 bridge = "32 kB"
+health = "16 kB"
 ping = "32 kB"
 main = "2 MB"
 
@@ -500,6 +585,11 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
+
+[blokli]
+tx_confirm_timeout = "90s"
+connection_timeout = "30s"
+sync_tolerance = 50
 "#####;
         toml::from_str::<Config>(config)?;
 

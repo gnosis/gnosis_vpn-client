@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use crate::command::{Command, Response};
 use crate::config::Config;
-use crate::hopr_params::HoprParams;
 use crate::ping;
 use crate::wireguard::{self, WireGuard};
+use crate::worker_params::WorkerParams;
 
 /// Messages sent from worker to core application logic
 #[derive(Debug)]
@@ -33,14 +33,16 @@ pub enum CoreToWorker {
 }
 
 /// Messages sent from root to worker
+/// Allowing large variant as this is sent between processes
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
     /// Startup parameters for hoprd
-    HoprParams { hopr_params: HoprParams },
+    WorkerParams { worker_params: WorkerParams },
     /// Configuration file
     Config { config: Config },
     /// Socket command received by root
-    Command(Command),
+    Command { cmd: Command, id: u64 },
     /// Result of a request to root
     ResponseFromRoot(ResponseFromRoot),
 }
@@ -49,7 +51,7 @@ pub enum RootToWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerToRoot {
     /// Response to a socket command
-    Response(Response),
+    Response { resp: Response, id: u64 },
     /// Acknowledgement other incoming messages
     Ack,
     /// Request to root execution
@@ -58,9 +60,9 @@ pub enum WorkerToRoot {
     OutOfSync,
 }
 
-/// Runner requesting root command and waiting for response
+/// Runner requesting root command and usually waiting for response
 #[derive(Debug)]
-pub enum RespondableRequestToRoot {
+pub enum RunnerToRoot {
     DynamicWgRouting {
         wg_data: WireGuardData,
         resp: oneshot::Sender<Result<(), String>>,
@@ -70,6 +72,7 @@ pub enum RespondableRequestToRoot {
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<(), String>>,
     },
+    TearDownWg,
     Ping {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
