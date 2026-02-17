@@ -31,7 +31,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use super::{Error, Routing, RFC1918_BYPASS_NETS};
+use super::{Error, RFC1918_BYPASS_NETS, Routing};
 use crate::wg_tooling;
 
 /// Creates a dynamic router using rtnetlink and iptables.

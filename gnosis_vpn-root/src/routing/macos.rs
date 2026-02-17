@@ -19,7 +19,7 @@ use gnosis_vpn_lib::{event, worker};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use super::{Error, Routing, RFC1918_BYPASS_NETS};
+use super::{Error, RFC1918_BYPASS_NETS, Routing};
 use crate::wg_tooling;
 
 /// Dynamic routing not available on macOS.
@@ -94,7 +94,10 @@ impl Routing for StaticRouter {
             };
             extra.push(route_cmd);
         }
-        tracing::debug!(rfc1918_routes = RFC1918_BYPASS_NETS.len(), "RFC1918 bypass routes configured as PostUp commands");
+        tracing::debug!(
+            rfc1918_routes = RFC1918_BYPASS_NETS.len(),
+            "RFC1918 bypass routes configured as PostUp commands"
+        );
 
         let wg_quick_content =
             self.wg_data
