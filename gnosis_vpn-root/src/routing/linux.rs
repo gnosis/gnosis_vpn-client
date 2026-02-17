@@ -480,7 +480,7 @@ impl Routing for Router {
         if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
             // Rollback Phase 1 setup on failure
             self.rollback_phase1(&wan_info).await;
-            return Err(e);
+            return Err(e.into());
         }
         tracing::debug!("wg-quick up");
 
@@ -497,7 +497,7 @@ impl Routing for Router {
             Ok(info) => info,
             Err(e) => {
                 // Rollback: bring down WG and cleanup Phase 1
-                let _ = wg_tooling::down(self.state_home.clone(), gnosis_vpn_lib::shell_command_ext::Logs::Omit).await;
+                let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
                 self.rollback_phase1(&wan_info).await;
                 return Err(e);
             }
@@ -517,7 +517,7 @@ impl Routing for Router {
         if let Err(e) = self.handle.route().add(vpn_addrs_route).execute().await {
             // Rollback: bring down WG and cleanup Phase 1
             self.if_indices = None;
-            let _ = wg_tooling::down(self.state_home.clone(), gnosis_vpn_lib::shell_command_ext::Logs::Omit).await;
+            let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
             self.rollback_phase1(&wan_info).await;
             return Err(e.into());
         }
@@ -548,7 +548,7 @@ impl Routing for Router {
                 .execute()
                 .await;
             self.if_indices = None;
-            let _ = wg_tooling::down(self.state_home.clone(), gnosis_vpn_lib::shell_command_ext::Logs::Omit).await;
+            let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
             self.rollback_phase1(&wan_info).await;
             return Err(e.into());
         }
