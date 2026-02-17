@@ -2,10 +2,8 @@ use gnosis_vpn_lib::command::{
     BalanceResponse, Command, ConnectResponse, ConnectionState, DestinationState, DisconnectResponse, Response,
     RunMode, StatusResponse,
 };
-use gnosis_vpn_lib::connection::{
-    destination::{Address, Destination},
-    destination_health::Health,
-};
+use gnosis_vpn_lib::connection::destination::{Address, Destination};
+use gnosis_vpn_lib::connectivity_health::Health;
 use gnosis_vpn_lib::hopr::hopr_lib::ToHex;
 use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
@@ -286,12 +284,7 @@ impl DestinationReadiness {
         let mut not_ready = Vec::new();
 
         for state in states {
-            if state
-                .health
-                .as_ref()
-                .map(|health| health.health == Health::ReadyToConnect)
-                .unwrap_or(false)
-            {
+            if state.connectivity.health == Health::ReadyToConnect {
                 ready.push(state.destination);
             } else {
                 not_ready.push(state.destination);
