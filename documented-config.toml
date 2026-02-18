@@ -96,5 +96,5 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 # see https://github.com/hoprnet/hoprnet/blob/6525d753fde70b5026d19d7a647b8143352b26df/chain/connector/src/connector/mod.rs#L46 for documentation
 # [blokli]
-# connection_sync_timeout: "30s"
-# sync_tolerance: 50
+# connection_sync_timeout = "30s"
+# sync_tolerance = 50
