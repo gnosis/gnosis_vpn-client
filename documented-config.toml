@@ -94,8 +94,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 ###
 ## chain provider section - query blockchain settings
 
-# see https://github.com/hoprnet/hoprnet/blob/5f719c4642f0babafd29044e36b741097fcf82f4/chain/connector/src/connector/mod.rs#L46 for documentation
+# see https://github.com/hoprnet/hoprnet/blob/6525d753fde70b5026d19d7a647b8143352b26df/chain/connector/src/connector/mod.rs#L46 for documentation
 # [blokli]
-# tx_confirm_timeout: "90s"
-# connection_timeout: "30s"
+# connection_sync_timeout: "30s"
 # sync_tolerance: 50
