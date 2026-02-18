@@ -119,9 +119,7 @@ pub(super) struct WireGuard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct BlokliConfig {
     #[serde(default, with = "humantime_serde::option")]
-    pub(super) tx_confirm_timeout: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) connection_timeout: Option<Duration>,
+    pub(super) connection_sync_timeout: Option<Duration>,
     pub(super) sync_tolerance: Option<usize>,
 }
 
@@ -149,7 +147,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
-                    if k == "tx_confirm_timeout" || k == "connection_timeout" || k == "sync_tolerance" {
+                    if k == "connection_sync_timeout" || k == "sync_tolerance" {
                         continue;
                     }
                     wrong_keys.push(format!("blokli.{k}"));
@@ -435,18 +433,14 @@ impl From<Option<WireGuard>> for WireGuardConfig {
 
 impl From<Option<BlokliConfig>> for HoprBlokliConfig {
     fn from(value: Option<BlokliConfig>) -> Self {
-        let tx_confirm_timeout = value
+        let connection_sync_timeout = value
             .as_ref()
-            .and_then(|b| b.tx_confirm_timeout)
-            .unwrap_or_else(|| Duration::from_secs(90));
-        let connection_timeout = value
-            .as_ref()
-            .and_then(|b| b.connection_timeout)
-            .unwrap_or_else(|| Duration::from_secs(30));
+            .and_then(|b| b.connection_sync_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().connection_sync_timeout);
+        // Edge client uses less tolerance than the default of 90%
         let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
         HoprBlokliConfig {
-            tx_confirm_timeout,
-            connection_timeout,
+            connection_sync_timeout,
             sync_tolerance,
         }
     }
@@ -587,8 +581,7 @@ allowed_ips = "10.128.0.1/9"
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 
 [blokli]
-tx_confirm_timeout = "90s"
-connection_timeout = "30s"
+connection_sync_timeout = "30s"
 sync_tolerance = 50
 "#####;
         toml::from_str::<Config>(config)?;

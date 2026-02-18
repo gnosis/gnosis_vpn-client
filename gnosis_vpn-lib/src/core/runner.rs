@@ -10,7 +10,7 @@ use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
-use rand::Rng;
+use rand::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
