@@ -155,13 +155,23 @@
           );
 
           # Clean cargo source to exclude build artifacts and unnecessary files
-          src = craneLib.cleanCargoSource ./.;
+          srcFiles = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-root)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-worker)
+            ];
+          };
 
           # Common build arguments shared across all crane operations
           # These are used for dependency building, clippy, docs, tests, etc.
           # CARGO_PROFILE is part of the commonArgs to make depsonly build match the target derivations
           commonArgsRelease = {
-            inherit src;
+            src = srcFiles;
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
             # Build-time dependencies (available during compilation)
@@ -222,7 +232,7 @@
               lib
               pkgs
               ;
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
+            inherit (craneLib.crateNameFromCargoToml { src = srcFiles; }) version;
             pname = "gnosis_vpn";
             commonArgs = commonArgsRelease;
             cargoArtifacts = cargoArtifacts-release;
@@ -236,7 +246,7 @@
               lib
               pkgs
               ;
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
+            inherit (craneLib.crateNameFromCargoToml { src = srcFiles; }) version;
             pname = "gnosis_vpn-dev";
             commonArgs = commonArgsDev;
             cargoArtifacts = cargoArtifacts-dev;
@@ -335,14 +345,15 @@
 
             # Audit dependencies
             audit = craneLib.cargoAudit {
-              inherit src advisory-db;
+              src = srcFiles;
+              inherit advisory-db;
               # Ignore RSA vulnerability (RUSTSEC-2023-0071) - comes from hopr-lib transitive dependency
               cargoAuditExtraArgs = "--ignore RUSTSEC-2023-0071";
             };
 
             # Audit licenses
             licenses = craneLib.cargoDeny {
-              inherit src;
+              src = srcFiles;
             };
 
             # Run tests with cargo-nextest
