@@ -158,12 +158,17 @@
           srcFiles = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
+              ./.cargo/config.toml
               ./Cargo.toml
               ./Cargo.lock
+              ./deny.toml
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-root)
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-worker)
+              ./rustfmt.toml
+              ./rust-toolchain.toml
+              ./taplo.toml
             ];
           };
 
