@@ -276,15 +276,17 @@ const IP_CHAIN: &str = "OUTPUT";
 const NAT_TABLE: &str = "nat";
 const NAT_CHAIN: &str = "POSTROUTING";
 
-/// Creates `iptables` rules to mark all traffic from the VPN user with `FW_MARK`
-/// and to NAT-masquerade that traffic on the WAN interface.
-/// This is currently a temporary solution until the fwmark can be set explicit on the libp2p socket in hopr-lib.
+/// Sets up iptables rules for HOPR traffic bypass using connection tracking.
 ///
-/// Equivalent commands:
-/// 1. `iptables -t mangle -F OUTPUT`
-/// 2. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -o lo -j RETURN`
-/// 3. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
-/// 4. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j MASQUERADE`
+/// Uses conntrack to mark connections once and restore marks on subsequent packets:
+/// 1. `iptables -t mangle -A OUTPUT -o lo -j RETURN`
+/// 2. `iptables -t mangle -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark`
+/// 3. `iptables -t mangle -A OUTPUT -m conntrack --ctstate NEW -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
+/// 4. `iptables -t mangle -A OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0 -j CONNMARK --save-mark`
+/// 5. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j MASQUERADE`
+///
+/// This optimization ensures the expensive `--uid-owner` match is only evaluated for NEW
+/// connections. ESTABLISHED packets use fast conntrack lookup to restore marks.
 fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
     if iptables.chain_exists(IP_TABLE, IP_CHAIN)? {
@@ -293,17 +295,30 @@ fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::er
         iptables.new_chain(IP_TABLE, IP_CHAIN)?;
     }
 
-    // Keep loopback for VPN user unmarked
+    // Rule 1: Keep loopback traffic unmarked
+    iptables.append(IP_TABLE, IP_CHAIN, "-o lo -j RETURN")?;
+
+    // Rule 2: Restore mark from conntrack for existing connections (fast path)
     iptables.append(
         IP_TABLE,
         IP_CHAIN,
-        &format!("-m owner --uid-owner {vpn_uid} -o lo -j RETURN"),
+        "-m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark",
     )?;
-    // Mark all other traffic from VPN user
+
+    // Rule 3: Mark NEW connections from VPN user
     iptables.append(
         IP_TABLE,
         IP_CHAIN,
-        &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
+        &format!(
+            "-m conntrack --ctstate NEW -m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"
+        ),
+    )?;
+
+    // Rule 4: Save mark to conntrack for NEW connections
+    iptables.append(
+        IP_TABLE,
+        IP_CHAIN,
+        "-m conntrack --ctstate NEW -m mark ! --mark 0 -j CONNMARK --save-mark",
     )?;
 
     // Rewrite the source address of bypassed (marked) traffic leaving via the WAN interface.
@@ -403,8 +418,9 @@ impl Routing for Router {
     ///   6. Get VPN interface info
     ///   7. Add VPN subnet route to TABLE_ID (so bypassed traffic can reach VPN peers)
     ///   7b. Add VPN subnet route to main table (overrides RFC1918 bypass for VPN server)
-    ///   8. Replace main default route to VPN interface (all other traffic uses VPN)
-    ///   9. Flush routing cache
+    ///   7c. Flush routing cache (clear stale cached routes before default route change)
+    ///   8. Replace main default route to VPN interface (atomic replace, all other traffic uses VPN)
+    ///   9. Flush routing cache (ensure all traffic uses new routes)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         if self.if_indices.is_some() {
@@ -545,13 +561,19 @@ impl Routing for Router {
         }
         tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
 
+        // Flush routing cache BEFORE changing default route
+        // This ensures any cached route decisions are cleared before the switch
+        flush_routing_cache().await?;
+        tracing::debug!("flushed routing cache before default route change");
+
         // Step 8: Replace main default route to VPN interface
         // All non-bypassed traffic now goes through VPN
+        // Use replace() for atomic replacement - avoids brief window with two default routes
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(vpn_info.if_index)
             .build();
-        if let Err(e) = self.handle.route().add(default_route).execute().await {
+        if let Err(e) = self.handle.route().add(default_route).replace().execute().await {
             // Rollback: remove VPN subnet route, bring down WG and cleanup Phase 1
             let _ = self
                 .handle
@@ -587,8 +609,8 @@ impl Routing for Router {
     /// fwmark rule and TABLE_ID) while the VPN interface is being torn down.
     ///
     /// The steps:
-    ///   1. Restore the default route in the MAIN routing table to WAN
-    ///      Equivalent command: `ip route add default via $WAN_GW dev $IF_WAN`
+    ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace)
+    ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN`
     ///   2. Delete the VPN subnet route from the MAIN table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
     ///   3. Run `wg-quick down` (while bypass is still active for HOPR traffic)
@@ -616,16 +638,17 @@ impl Routing for Router {
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
         // Set the default route back to the WAN interface
+        // Use replace() to handle case where VPN route still exists
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
             .output_interface(wan_if_index)
             .gateway(wan_gw)
             .build();
 
-        if let Err(error) = self.handle.route().add(default_route).execute().await {
+        if let Err(error) = self.handle.route().add(default_route).replace().execute().await {
             tracing::error!(%error, "failed to set default route back to interface, continuing anyway");
         } else {
-            tracing::debug!("ip route add default via {wan_gw} dev {wan_if_index}");
+            tracing::debug!("ip route replace default via {wan_gw} dev {wan_if_index}");
         }
 
         // Delete the VPN subnet route from the main table
