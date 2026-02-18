@@ -103,26 +103,17 @@ impl Runner {
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
         if self.worker_params.force_static_routing() {
-            tracing::info!("force static routing enabled - skipping dynamic routing attempt");
-            self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+            tracing::info!("static routing enabled via CLI flag");
+            self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                 .await
         } else {
-            let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
-            match res {
-                Ok(()) => {
-                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
-                        .await
-                }
-                Err(err) => {
-                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                    self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
-                        .await
-                }
-            }
+            // Dynamic routing - no automatic fallback to static
+            request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await?;
+            self.run_check_dynamic_routing(&session, &results_sender).await
         }
     }
 
-    async fn run_fallback_to_static_wg_tunnel(
+    async fn run_static_wg_tunnel(
         &self,
         wg: &WireGuard,
         registration: &Registration,
@@ -130,23 +121,23 @@ impl Runner {
         peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 6b. dismantle dynamic routing and request static wg tunnel from root
+        // 6b. request static wg tunnel from root
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
 
-        // teardown any existing dynamic routing
+        // teardown any existing routing
         let _ = results_sender
             .send(Results::ConnectionRequestToRoot(RunnerToRoot::TearDownWg))
             .await;
 
-        // static routing needs to first close the session already used for dynamic routing
+        // static routing needs to first close the existing session
         if let Err(err) = self
             .hopr
             .close_session(old_session.bound_host, old_session.protocol)
             .await
         {
-            tracing::warn!(error = ?err, "failed to close ping session used for dynamic routing - attempting to continue with static routing setup");
+            tracing::warn!(error = ?err, "failed to close ping session - attempting to continue with static routing setup");
         }
 
         // open a new ping session
@@ -170,27 +161,15 @@ impl Runner {
 
     async fn run_check_dynamic_routing(
         &self,
-        wg: &WireGuard,
-        registration: &Registration,
         session: &SessionClientMetadata,
-        peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
         // 7a. request ping from root to check if dynamic routing works
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        // only one retry to avoid long fallback time in case dynamic routing doesn't work
-        let res = request_ping(&self.options.ping_options, 1, results_sender).await;
-        match res {
-            Ok(round_trip_time) => {
-                self.run_after_verified_working(round_trip_time, session, results_sender)
-                    .await
-            }
-            Err(err) => {
-                tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
-                    .await
-            }
-        }
+        // Multiple retries since dynamic routing should work and ping failures may be transient
+        let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
+        self.run_after_verified_working(round_trip_time, session, results_sender)
+            .await
     }
 
     async fn run_check_static_routing(

@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
-use gnosis_vpn_lib::{event, worker};
+use gnosis_vpn_lib::event;
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -30,11 +30,15 @@ use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
 
 use crate::wg_tooling;
 
+/// WAN interface information stub for macOS (never used since dynamic routing is not available).
+#[derive(Debug, Clone)]
+pub struct WanInfo;
+
 /// Dynamic routing not available on macOS.
 pub fn dynamic_router(
     _state_home: PathBuf,
-    _worker: worker::Worker,
     _wg_data: event::WireGuardData,
+    _wan_info: WanInfo,
 ) -> Result<DynamicRouter, Error> {
     Err(Error::NotAvailable)
 }

@@ -10,9 +10,12 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-pub use linux::{dynamic_router, static_fallback_router as static_router};
+pub use linux::{
+    FwmarkInfrastructure, WanInfo, dynamic_router, setup_fwmark_infrastructure,
+    static_fallback_router as static_router, teardown_fwmark_infrastructure,
+};
 #[cfg(target_os = "macos")]
-pub use macos::{dynamic_router, static_router};
+pub use macos::{WanInfo, dynamic_router, static_router};
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)

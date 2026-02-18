@@ -46,18 +46,21 @@ use crate::wg_tooling;
 ///
 /// This is the preferred router on Linux as it provides more robust split-tunnel
 /// routing using firewall marks (fwmark) and policy-based routing.
+///
+/// The router requires pre-existing fwmark infrastructure (set up via
+/// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
 pub fn dynamic_router(
     state_home: PathBuf,
-    worker: worker::Worker,
     wg_data: event::WireGuardData,
+    wan_info: WanInfo,
 ) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn); // Task terminates once the Router is dropped
     Ok(Router {
         state_home,
-        worker,
         wg_data,
         handle,
+        wan_info,
         if_indices: None,
     })
 }
@@ -97,10 +100,175 @@ struct NetworkDeviceInfo {
 
 /// WAN interface information gathered before VPN interface exists.
 #[derive(Debug, Clone)]
-struct WanInfo {
-    if_index: u32,
-    if_name: String,
-    gateway: Ipv4Addr,
+pub struct WanInfo {
+    pub if_index: u32,
+    pub if_name: String,
+    pub gateway: Ipv4Addr,
+}
+
+/// Persistent fwmark infrastructure that lives for the daemon's lifetime.
+///
+/// This struct holds the resources needed for fwmark-based routing bypass.
+/// It is created at daemon startup and destroyed at daemon shutdown,
+/// independent of individual WireGuard connection lifecycles.
+pub struct FwmarkInfrastructure {
+    pub handle: rtnetlink::Handle,
+    pub wan_info: WanInfo,
+    pub worker_uid: u32,
+}
+
+/// Sets up the persistent fwmark infrastructure at daemon startup.
+///
+/// This establishes the iptables rules and routing table entries that
+/// allow HOPR traffic to bypass the VPN tunnel. This setup persists
+/// for the lifetime of the daemon, independent of individual VPN connections.
+///
+/// The setup includes:
+/// 1. Creating an rtnetlink connection for route management
+/// 2. Getting WAN interface info (index, name, gateway)
+/// 3. Setting up iptables rules to mark HOPR traffic with FW_MARK
+/// 4. Creating TABLE_ID routing table with WAN as default gateway
+/// 5. Adding fwmark rule: marked traffic uses TABLE_ID (bypasses VPN)
+pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkInfrastructure, Error> {
+    let (conn, handle, _) = rtnetlink::new_connection()?;
+    tokio::task::spawn(conn);
+
+    // Get WAN interface info
+    let wan_info = NetworkDeviceInfo::get_wan_info_via_rtnetlink(&handle).await?;
+    tracing::debug!(?wan_info, "WAN interface data for fwmark infrastructure");
+
+    // Setup iptables rules to mark HOPR traffic for bypass
+    setup_iptables(worker.uid, &wan_info.if_name).map_err(Error::iptables)?;
+    tracing::debug!(uid = worker.uid, "iptables rules set up");
+
+    // Create TABLE_ID with WAN default route
+    let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+        .table_id(TABLE_ID)
+        .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+        .output_interface(wan_info.if_index)
+        .gateway(wan_info.gateway)
+        .build();
+    if let Err(e) = handle.route().add(no_vpn_route).execute().await {
+        // Rollback iptables on failure
+        let _ = teardown_iptables(&wan_info.if_name);
+        return Err(e.into());
+    }
+    tracing::debug!(
+        "ip route add default via {} dev {} table {TABLE_ID}",
+        wan_info.gateway,
+        wan_info.if_index
+    );
+
+    // Add fwmark rule - marked traffic goes to TABLE_ID
+    if let Err(e) = handle
+        .rule()
+        .add()
+        .v4()
+        .fw_mark(FW_MARK)
+        .priority(RULE_PRIORITY)
+        .table_id(TABLE_ID)
+        .action(RuleAction::ToTable)
+        .execute()
+        .await
+    {
+        // Rollback TABLE_ID route and iptables on failure
+        let _ = handle
+            .route()
+            .del(
+                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+                    .table_id(TABLE_ID)
+                    .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+                    .output_interface(wan_info.if_index)
+                    .gateway(wan_info.gateway)
+                    .build(),
+            )
+            .execute()
+            .await;
+        let _ = teardown_iptables(&wan_info.if_name);
+        return Err(e.into());
+    }
+    tracing::debug!("ip rule add mark {FW_MARK} table {TABLE_ID} pref {RULE_PRIORITY}");
+
+    tracing::info!("fwmark infrastructure is ready");
+    Ok(FwmarkInfrastructure {
+        handle,
+        wan_info,
+        worker_uid: worker.uid,
+    })
+}
+
+/// Tears down the persistent fwmark infrastructure at daemon shutdown.
+///
+/// This removes the iptables rules and routing table entries that were
+/// set up by `setup_fwmark_infrastructure`.
+///
+/// The teardown includes:
+/// 1. Deleting the fwmark routing rule
+/// 2. Deleting the TABLE_ID default route
+/// 3. Flushing the routing cache
+/// 4. Removing iptables mangle and NAT rules
+pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfrastructure) {
+    let FwmarkInfrastructure { handle, wan_info, .. } = infra;
+
+    // Delete the fwmark routing table rule
+    if let Ok(rules) = handle
+        .rule()
+        .get(IpVersion::V4)
+        .execute()
+        .try_collect::<Vec<_>>()
+        .await
+    {
+        for rule in rules.into_iter().filter(|rule| {
+            rule.attributes
+                .iter()
+                .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
+                && rule
+                    .attributes
+                    .iter()
+                    .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
+        }) {
+            if let Err(error) = handle.rule().del(rule).execute().await {
+                tracing::error!(%error, "failed to delete fwmark routing table rule, continuing anyway");
+            } else {
+                tracing::debug!("ip rule del mark {FW_MARK} table {TABLE_ID}");
+            }
+        }
+    }
+
+    // Delete the TABLE_ID routing table default route
+    if let Err(error) = handle
+        .route()
+        .del(
+            rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+                .table_id(TABLE_ID)
+                .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+                .output_interface(wan_info.if_index)
+                .gateway(wan_info.gateway)
+                .build(),
+        )
+        .execute()
+        .await
+    {
+        tracing::error!(%error, "failed to delete table {TABLE_ID} default route, continuing anyway");
+    } else {
+        tracing::debug!("ip route del default via {} dev {} table {TABLE_ID}", wan_info.gateway, wan_info.if_index);
+    }
+
+    // Flush routing cache
+    if let Err(error) = flush_routing_cache().await {
+        tracing::error!(%error, "failed to flush routing cache, continuing anyway");
+    } else {
+        tracing::debug!("ip route flush cache");
+    }
+
+    // Remove the iptables mangle and NAT rules
+    if let Err(error) = teardown_iptables(&wan_info.if_name).map_err(Error::iptables) {
+        tracing::error!(%error, "failed to teardown iptables rules, continuing anyway");
+    } else {
+        tracing::debug!("iptables rules removed");
+    }
+
+    tracing::info!("fwmark infrastructure teardown complete");
 }
 
 /// VPN interface information gathered after `wg-quick up`.
@@ -234,12 +402,19 @@ impl NetworkDeviceInfo {
 ///
 /// Uses firewall marks (fwmark) and policy-based routing to ensure HOPR traffic
 /// bypasses the VPN while all other traffic routes through it.
+///
+/// This router assumes fwmark infrastructure is already set up via
+/// `setup_fwmark_infrastructure`. It only handles VPN-specific routing:
+/// - wg-quick up/down
+/// - VPN subnet routes
+/// - Default route through VPN
 pub struct Router {
     state_home: PathBuf,
-    worker: worker::Worker,
     wg_data: event::WireGuardData,
     // Once dropped, the spawned rtnetlink task will terminate
     handle: rtnetlink::Handle,
+    /// WAN interface info, obtained from FwmarkInfrastructure
+    wan_info: WanInfo,
     if_indices: Option<NetworkDeviceInfo>,
 }
 
@@ -349,166 +524,51 @@ fn teardown_iptables(wan_if_name: &str) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-impl Router {
-    /// Rollback Phase 1 setup (fwmark rule, TABLE_ID route, iptables).
-    /// Used when Phase 2 or Phase 3 fails.
-    async fn rollback_phase1(&self, wan_info: &WanInfo) {
-        // Delete fwmark rule
-        if let Ok(rules) = self
-            .handle
-            .rule()
-            .get(IpVersion::V4)
-            .execute()
-            .try_collect::<Vec<_>>()
-            .await
-        {
-            for rule in rules.into_iter().filter(|rule| {
-                rule.attributes
-                    .iter()
-                    .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
-                    && rule
-                        .attributes
-                        .iter()
-                        .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
-            }) {
-                let _ = self.handle.rule().del(rule).execute().await;
-            }
-        }
-
-        // Delete TABLE_ID default route
-        let _ = self
-            .handle
-            .route()
-            .del(
-                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                    .table_id(TABLE_ID)
-                    .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-                    .output_interface(wan_info.if_index)
-                    .gateway(wan_info.gateway)
-                    .build(),
-            )
-            .execute()
-            .await;
-
-        // Remove iptables rules
-        let _ = teardown_iptables(&wan_info.if_name);
-    }
-}
-
 /// Linux-specific implementation of [`Routing`] for split-tunnel routing.
 #[async_trait]
 impl Routing for Router {
-    /// Install split-tunnel routing.
+    /// Install VPN-specific routing (assumes fwmark infrastructure is already set up).
     ///
-    /// The setup is split into phases to avoid a race condition where HOPR p2p connections
-    /// could briefly drop when the WireGuard interface comes up. By establishing bypass
-    /// routing rules BEFORE creating the VPN interface, marked HOPR traffic always uses
-    /// the WAN interface, even during the VPN setup window.
+    /// This method requires that fwmark infrastructure has been established via
+    /// `setup_fwmark_infrastructure`. It only handles VPN-specific routing:
     ///
-    /// Phase 1 (before wg-quick up):
-    ///   1. Get WAN interface info (index, name, gateway)
-    ///   2. Set up iptables rules to mark HOPR traffic with FW_MARK
-    ///   3. Create TABLE_ID routing table with WAN as default gateway
-    ///   4. Add fwmark rule: marked traffic uses TABLE_ID (bypasses VPN)
+    /// Phase 1 (wg-quick up):
+    ///   1. Generate wg-quick config and run wg-quick up
     ///
-    /// Phase 2:
-    ///   5. Run wg-quick up (safe now - HOPR traffic is already protected)
-    ///
-    /// Phase 3 (after wg-quick up):
-    ///   6. Get VPN interface info
-    ///   7. Add VPN subnet route to TABLE_ID (so bypassed traffic can reach VPN peers)
-    ///   7b. Add VPN subnet route to main table (overrides RFC1918 bypass for VPN server)
-    ///   7c. Flush routing cache (clear stale cached routes before default route change)
-    ///   8. Replace main default route to VPN interface (atomic replace, all other traffic uses VPN)
-    ///   9. Flush routing cache (ensure all traffic uses new routes)
+    /// Phase 2 (after wg-quick up):
+    ///   2. Get VPN interface info
+    ///   3. Add VPN subnet route to TABLE_ID (so bypassed traffic can reach VPN peers)
+    ///   4. Add VPN subnet route to main table (overrides RFC1918 bypass for VPN server)
+    ///   5. Flush routing cache (clear stale cached routes before default route change)
+    ///   6. Replace main default route to VPN interface (atomic replace)
+    ///   7. Flush routing cache (ensure all traffic uses new routes)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         if self.if_indices.is_some() {
             return Err(Error::General("invalid state: already set up".into()));
         }
 
-        // Phase 1: Setup bypass routing BEFORE wg-quick up
-        // This prevents HOPR traffic from being routed through the nascent VPN interface.
+        // Use pre-existing WAN info from FwmarkInfrastructure
+        let wan_info = &self.wan_info;
+        tracing::debug!(?wan_info, "using WAN interface from fwmark infrastructure");
 
-        // Step 1: Get WAN interface info (VPN doesn't exist yet)
-        let wan_info = NetworkDeviceInfo::get_wan_info_via_rtnetlink(&self.handle).await?;
-        tracing::debug!(?wan_info, "WAN interface data");
+        // Phase 1: Bring up WireGuard
+        // HOPR traffic is already protected by the fwmark infrastructure.
 
-        // Step 2: Setup iptables rules to mark HOPR traffic for bypass
-        // Remove this once we can set the fwmark directly on the libp2p Socket
-        setup_iptables(self.worker.uid, &wan_info.if_name).map_err(Error::iptables)?;
-        tracing::debug!(uid = self.worker.uid, "iptables rules set up");
-
-        // Step 3: Create TABLE_ID with WAN default route
-        // All traffic in this table bypasses VPN and goes directly to WAN
-        let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .table_id(TABLE_ID)
-            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-            .output_interface(wan_info.if_index)
-            .gateway(wan_info.gateway)
-            .build();
-        if let Err(e) = self.handle.route().add(no_vpn_route).execute().await {
-            // Rollback iptables on failure
-            let _ = teardown_iptables(&wan_info.if_name);
-            return Err(e.into());
-        }
-        tracing::debug!(
-            "ip route add default via {} dev {} table {TABLE_ID}",
-            wan_info.gateway,
-            wan_info.if_index
-        );
-
-        // Step 4: Add fwmark rule - marked traffic goes to TABLE_ID
-        if let Err(e) = self
-            .handle
-            .rule()
-            .add()
-            .v4()
-            .fw_mark(FW_MARK)
-            .priority(RULE_PRIORITY)
-            .table_id(TABLE_ID)
-            .action(RuleAction::ToTable)
-            .execute()
-            .await
-        {
-            // Rollback TABLE_ID route and iptables on failure
-            let _ = self
-                .handle
-                .route()
-                .del(
-                    rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                        .table_id(TABLE_ID)
-                        .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-                        .output_interface(wan_info.if_index)
-                        .gateway(wan_info.gateway)
-                        .build(),
-                )
-                .execute()
-                .await;
-            let _ = teardown_iptables(&wan_info.if_name);
-            return Err(e.into());
-        }
-        tracing::debug!("ip rule add mark {FW_MARK} table {TABLE_ID} pref {RULE_PRIORITY}");
-
-        // Phase 2: Now safe to bring up WireGuard
-        // HOPR traffic is already protected by the bypass rules above.
-
-        // Step 5: Generate wg-quick config and run wg-quick up
+        // Step 1: Generate wg-quick config and run wg-quick up
         let wg_quick_content = self.wg_data.wg.to_file_string(
             &self.wg_data.interface_info,
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
         if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
-            // Rollback Phase 1 setup on failure
-            self.rollback_phase1(&wan_info).await;
             return Err(e.into());
         }
         tracing::debug!("wg-quick up");
 
-        // Phase 3: Complete routing with VPN interface info
+        // Phase 2: Complete routing with VPN interface info
 
-        // Step 6: Get VPN interface info
+        // Step 2: Get VPN interface info
         let vpn_info = match NetworkDeviceInfo::get_vpn_info_via_rtnetlink(
             &self.handle,
             &self.wg_data.interface_info.address,
@@ -518,9 +578,8 @@ impl Routing for Router {
         {
             Ok(info) => info,
             Err(e) => {
-                // Rollback: bring down WG and cleanup Phase 1
+                // Rollback: bring down WG
                 let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
-                self.rollback_phase1(&wan_info).await;
                 return Err(e);
             }
         };
@@ -529,7 +588,7 @@ impl Routing for Router {
         // Store combined info for teardown
         self.if_indices = Some(NetworkDeviceInfo::from_parts(wan_info.clone(), vpn_info.clone()));
 
-        // Step 7: Add VPN subnet route to TABLE_ID
+        // Step 3: Add VPN subnet route to TABLE_ID
         // This allows bypassed traffic to still reach VPN addresses
         let vpn_addrs_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .table_id(TABLE_ID)
@@ -537,10 +596,9 @@ impl Routing for Router {
             .output_interface(vpn_info.if_index)
             .build();
         if let Err(e) = self.handle.route().add(vpn_addrs_route).execute().await {
-            // Rollback: bring down WG and cleanup Phase 1
+            // Rollback: bring down WG
             self.if_indices = None;
             let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
-            self.rollback_phase1(&wan_info).await;
             return Err(e.into());
         }
         tracing::debug!(
@@ -549,7 +607,7 @@ impl Routing for Router {
             vpn_info.if_index
         );
 
-        // Step 7b: Add VPN subnet route to main table
+        // Step 4: Add VPN subnet route to main table
         // This ensures VPN subnet traffic uses tunnel, overriding any pre-existing RFC1918 routes
         let vpn_subnet_main_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(vpn_info.cidr.first_address(), vpn_info.cidr.network_length())
@@ -561,12 +619,12 @@ impl Routing for Router {
         }
         tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
 
-        // Flush routing cache BEFORE changing default route
+        // Step 5: Flush routing cache BEFORE changing default route
         // This ensures any cached route decisions are cleared before the switch
         flush_routing_cache().await?;
         tracing::debug!("flushed routing cache before default route change");
 
-        // Step 8: Replace main default route to VPN interface
+        // Step 6: Replace main default route to VPN interface
         // All non-bypassed traffic now goes through VPN
         // Use replace() for atomic replacement - avoids brief window with two default routes
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
@@ -574,7 +632,7 @@ impl Routing for Router {
             .output_interface(vpn_info.if_index)
             .build();
         if let Err(e) = self.handle.route().add(default_route).replace().execute().await {
-            // Rollback: remove VPN subnet route, bring down WG and cleanup Phase 1
+            // Rollback: remove VPN subnet route, bring down WG
             let _ = self
                 .handle
                 .route()
@@ -589,12 +647,11 @@ impl Routing for Router {
                 .await;
             self.if_indices = None;
             let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
-            self.rollback_phase1(&wan_info).await;
             return Err(e.into());
         }
         tracing::debug!("ip route add default dev {}", vpn_info.if_index);
 
-        // Step 9: Flush routing cache
+        // Step 7: Flush routing cache
         flush_routing_cache().await?;
         tracing::debug!("flushed routing cache");
 
@@ -602,11 +659,11 @@ impl Routing for Router {
         Ok(())
     }
 
-    /// Uninstalls the split-tunnel routing.
+    /// Uninstalls VPN-specific routing (fwmark infrastructure remains active).
     ///
-    /// Teardown order is important: wg-quick down runs while bypass infrastructure is
-    /// still active. This ensures HOPR traffic continues to flow via WAN (through the
-    /// fwmark rule and TABLE_ID) while the VPN interface is being torn down.
+    /// This method only tears down VPN-specific routes and the WireGuard interface.
+    /// The fwmark infrastructure (iptables rules, TABLE_ID default route, fwmark rule)
+    /// remains active for the daemon's lifetime.
     ///
     /// The steps:
     ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace)
@@ -614,22 +671,17 @@ impl Routing for Router {
     ///   2. Delete the VPN subnet route from the MAIN table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
     ///   3. Run `wg-quick down` (while bypass is still active for HOPR traffic)
-    ///   4. Delete the fwmark rule for TABLE_ID (safe - VPN interface is gone)
-    ///      Equivalent command: `ip rule del mark $FW_MARK table $TABLE_ID`
-    ///   5. Delete the VPN subnet route from TABLE_ID
+    ///   4. Delete the VPN subnet route from TABLE_ID
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
-    ///   6. Delete the default route from TABLE_ID
-    ///      Equivalent command: `ip route del default via $WAN_GW dev $IF_WAN table $TABLE_ID`
-    ///   7. Flush the routing table cache
+    ///   5. Flush the routing table cache
     ///      Equivalent command: `ip route flush cache`
-    ///   8. Remove the `iptables` mangle and NAT rules (safe - no marked traffic)
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
             wan_if_index,
-            wan_if_name,
+            wan_if_name: _,
             vpn_if_index,
-            vpn_gw,
+            vpn_gw: _,
             vpn_cidr,
             wan_gw,
         } = self
@@ -637,7 +689,7 @@ impl Routing for Router {
             .take()
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
-        // Set the default route back to the WAN interface
+        // Step 1: Set the default route back to the WAN interface
         // Use replace() to handle case where VPN route still exists
         let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
@@ -651,7 +703,7 @@ impl Routing for Router {
             tracing::debug!("ip route replace default via {wan_gw} dev {wan_if_index}");
         }
 
-        // Delete the VPN subnet route from the main table
+        // Step 2: Delete the VPN subnet route from the main table
         if let Err(error) = self
             .handle
             .route()
@@ -669,40 +721,13 @@ impl Routing for Router {
             tracing::debug!("ip route del {vpn_cidr} dev {vpn_if_index}");
         }
 
-        // Run wg-quick down while bypass infrastructure is still active
+        // Step 3: Run wg-quick down while bypass infrastructure is still active
         // HOPR traffic continues: iptables marks → fwmark rule → TABLE_ID → WAN
         wg_tooling::down(self.state_home.clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
-        // Now safe to cleanup bypass infrastructure - VPN interface is gone
-
-        // Delete the fwmark routing table rule
-        if let Ok(rules) = self
-            .handle
-            .rule()
-            .get(IpVersion::V4)
-            .execute()
-            .try_collect::<Vec<_>>()
-            .await
-        {
-            for rule in rules.into_iter().filter(|rule| {
-                rule.attributes
-                    .iter()
-                    .any(|a| matches!(a, RuleAttribute::FwMark(fwmark) if fwmark == &FW_MARK))
-                    && rule
-                        .attributes
-                        .iter()
-                        .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
-            }) {
-                if let Err(error) = self.handle.rule().del(rule).execute().await {
-                    tracing::error!(%error, "failed to delete fwmark routing table rule, continuing anyway");
-                } else {
-                    tracing::debug!("ip rule del mark {FW_MARK} table {TABLE_ID}");
-                }
-            }
-        }
-
-        // Delete the TABLE_ID routing table VPN route
+        // Step 4: Delete the TABLE_ID routing table VPN route
+        // (fwmark rule and TABLE_ID default route stay active for the daemon's lifetime)
         if let Err(error) = self
             .handle
             .route()
@@ -716,40 +741,16 @@ impl Routing for Router {
             .execute()
             .await
         {
-            tracing::error!(%error, "failed to delete table {TABLE_ID}, continuing anyway");
+            tracing::error!(%error, "failed to delete VPN subnet route from table {TABLE_ID}, continuing anyway");
         } else {
-            tracing::debug!("ip route del {vpn_cidr} via {vpn_gw} dev {vpn_if_index}");
+            tracing::debug!("ip route del {vpn_cidr} dev {vpn_if_index} table {TABLE_ID}");
         }
 
-        // Delete the TABLE_ID routing table default route
-        if let Err(error) = self
-            .handle
-            .route()
-            .del(
-                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                    .table_id(TABLE_ID)
-                    .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-                    .output_interface(wan_if_index)
-                    .gateway(wan_gw)
-                    .build(),
-            )
-            .execute()
-            .await
-        {
-            tracing::error!(%error, "failed to delete table {TABLE_ID}, continuing anyway");
-        } else {
-            tracing::debug!("ip route del default via {wan_gw} dev {wan_if_index} table {TABLE_ID}");
-        }
-
+        // Step 5: Flush routing cache
         flush_routing_cache().await?;
         tracing::debug!("ip route flush cache");
 
-        // Remove the iptables mangle and NAT rules
-        if let Err(error) = teardown_iptables(&wan_if_name).map_err(Error::iptables) {
-            tracing::error!(%error, "failed to teardown iptables rules, continuing anyway");
-        }
-        tracing::debug!("iptables rules removed");
-
+        tracing::info!("VPN routing teardown complete (fwmark infrastructure remains active)");
         Ok(())
     }
 }
