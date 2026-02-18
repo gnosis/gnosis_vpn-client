@@ -5,9 +5,16 @@
 //! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
 //! 3. Uses PostUp hooks to add:
 //!    - Default routes (0.0.0.0/1 and 128.0.0.0/1) through VPN
+//!    - VPN subnet route (10.128.0.0/9) through VPN - overrides the 10.0.0.0/8 bypass
+//!      so VPN server traffic (e.g. 10.128.0.1) uses the tunnel
 //!    - RFC1918 bypass routes (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16)
 //!      through WAN gateway for LAN access
 //! 4. On teardown, brings down WireGuard first, then cleans up peer IP bypass routes
+//!
+//! Route precedence (most specific wins):
+//! - 10.128.0.0/9 → VPN interface (VPN server subnet)
+//! - 10.0.0.0/8 → WAN gateway (other RFC1918 Class A)
+//! - 0.0.0.0/1, 128.0.0.0/1 → VPN interface (catch-all)
 //!
 //! Dynamic routing (using rtnetlink) is not available on macOS.
 use async_trait::async_trait;
@@ -19,7 +26,8 @@ use gnosis_vpn_lib::{event, worker};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use super::{Error, RFC1918_BYPASS_NETS, Routing};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
+
 use crate::wg_tooling;
 
 /// Dynamic routing not available on macOS.
@@ -81,6 +89,11 @@ impl Routing for StaticRouter {
             // VPN default routes (catch-all via tunnel)
             "PostUp = route -n add -inet 0.0.0.0/1 -interface %i".to_string(),
             "PostUp = route -n add -inet 128.0.0.0/1 -interface %i".to_string(),
+            // VPN internal subnet (more specific than 10.0.0.0/8 bypass below)
+            format!(
+                "PostUp = route -n add -inet {}/{} -interface %i",
+                VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1
+            ),
         ];
 
         // RFC1918 bypass routes via PostUp (using captured WAN gateway)

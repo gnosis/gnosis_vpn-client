@@ -5,17 +5,24 @@
 //! ## [`Router`] (Dynamic)
 //! Uses rtnetlink and iptables for advanced split-tunnel routing:
 //! 1. Sets up iptables rules to mark HOPR traffic with a firewall mark (fwmark)
-//! 2. Creates a separate routing table for marked traffic to bypass VPN
+//! 2. Creates a separate routing table (TABLE_ID) for marked traffic to bypass VPN
 //! 3. Runs `wg-quick up` with `Table = off` to prevent automatic routing
-//! 4. Configures default route through VPN for all other traffic
+//! 4. Adds VPN subnet route (10.128.0.0/9) to both TABLE_ID and main table
+//! 5. Configures default route through VPN for all other traffic
 //!
 //! ## [`FallbackRouter`] (Static)
 //! Simpler implementation using direct `ip route` commands:
 //! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
-//! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
-//! 3. On teardown, brings down WireGuard first, then cleans up bypass routes
+//! 2. Adds RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
+//! 3. Runs `wg-quick up` with PostUp hook for VPN subnet route (10.128.0.0/9)
+//! 4. On teardown, brings down WireGuard first, then cleans up bypass routes
 //!
 //! Both implementations use a phased approach to avoid race conditions during VPN setup.
+//!
+//! ## Route Precedence
+//! The VPN subnet (10.128.0.0/9) is more specific than the RFC1918 bypass (10.0.0.0/8),
+//! so VPN server traffic (e.g. to 10.128.0.1) routes through the tunnel while other
+//! RFC1918 Class A traffic bypasses to the WAN for LAN access.
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -31,7 +38,8 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use super::{Error, RFC1918_BYPASS_NETS, Routing};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
+
 use crate::wg_tooling;
 
 /// Creates a dynamic router using rtnetlink and iptables.
@@ -262,9 +270,6 @@ const TABLE_ID: u32 = 108;
 // Priority of the FwMark routing table rule
 const RULE_PRIORITY: u32 = 1;
 
-// Subnet prefix length for the VPN subnet, @esterlus this might need to be configurable
-const VPN_SUBNET_PREFIX: u8 = 9;
-
 const IP_TABLE: &str = "mangle";
 const IP_CHAIN: &str = "OUTPUT";
 
@@ -397,6 +402,7 @@ impl Routing for Router {
     /// Phase 3 (after wg-quick up):
     ///   6. Get VPN interface info
     ///   7. Add VPN subnet route to TABLE_ID (so bypassed traffic can reach VPN peers)
+    ///   7b. Add VPN subnet route to main table (overrides RFC1918 bypass for VPN server)
     ///   8. Replace main default route to VPN interface (all other traffic uses VPN)
     ///   9. Flush routing cache
     ///
@@ -490,7 +496,7 @@ impl Routing for Router {
         let vpn_info = match NetworkDeviceInfo::get_vpn_info_via_rtnetlink(
             &self.handle,
             &self.wg_data.interface_info.address,
-            VPN_SUBNET_PREFIX,
+            VPN_TUNNEL_SUBNET.1,
         )
         .await
         {
@@ -526,6 +532,18 @@ impl Routing for Router {
             vpn_info.cidr,
             vpn_info.if_index
         );
+
+        // Step 7b: Add VPN subnet route to main table
+        // This ensures VPN subnet traffic uses tunnel, overriding any pre-existing RFC1918 routes
+        let vpn_subnet_main_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+            .destination_prefix(vpn_info.cidr.first_address(), vpn_info.cidr.network_length())
+            .output_interface(vpn_info.if_index)
+            .build();
+        if let Err(e) = self.handle.route().add(vpn_subnet_main_route).execute().await {
+            // Log warning but continue - default route should still work
+            tracing::warn!(%e, "failed to add VPN subnet route to main table");
+        }
+        tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
 
         // Step 8: Replace main default route to VPN interface
         // All non-bypassed traffic now goes through VPN
@@ -565,18 +583,20 @@ impl Routing for Router {
     /// Uninstalls the split-tunnel routing.
     ///
     /// The steps:
-    ///   1. Replace the default route in the MAIN routing table
-    ///      Equivalent command: `ip route replace default dev "$IF_WAN"`
-    ///   2. Delete the mark rule for the TABLE_ID
+    ///   1. Restore the default route in the MAIN routing table to WAN
+    ///      Equivalent command: `ip route add default via $WAN_GW dev $IF_WAN`
+    ///   2. Delete the VPN subnet route from the MAIN table
+    ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
+    ///   3. Delete the fwmark rule for TABLE_ID
     ///      Equivalent command: `ip rule del mark $FW_MARK table $TABLE_ID`
-    ///   3. Delete the TABLE_ID routing table
-    ///      Equivalent command: `ip route del $VPN_RANGE dev "$VPN_WAN" table "$TABLE_ID"`
-    ///   4. Delete the TABLE_ID routing table
-    ///      Equivalent command: `ip route del default dev "$IF_WAN" table "$TABLE_ID"`
-    ///   5. Flush the routing table cache
+    ///   4. Delete the VPN subnet route from TABLE_ID
+    ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
+    ///   5. Delete the default route from TABLE_ID
+    ///      Equivalent command: `ip route del default via $WAN_GW dev $IF_WAN table $TABLE_ID`
+    ///   6. Flush the routing table cache
     ///      Equivalent command: `ip route flush cache`
-    ///   6. Remove the `iptables` mangle and NAT rules. This is temporary until hopr-lib supports explicit fwmark on the transport socket.
-    ///   7. Run `wg-quick down`
+    ///   7. Remove the `iptables` mangle and NAT rules
+    ///   8. Run `wg-quick down`
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
@@ -602,6 +622,24 @@ impl Routing for Router {
             tracing::error!(%error, "failed to set default route back to interface, continuing anyway");
         } else {
             tracing::debug!("ip route add default via {wan_gw} dev {wan_if_index}");
+        }
+
+        // Delete the VPN subnet route from the main table
+        if let Err(error) = self
+            .handle
+            .route()
+            .del(
+                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+                    .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
+                    .output_interface(vpn_if_index)
+                    .build(),
+            )
+            .execute()
+            .await
+        {
+            tracing::warn!(%error, "failed to delete VPN subnet route from main table, continuing anyway");
+        } else {
+            tracing::debug!("ip route del {vpn_cidr} dev {vpn_if_index}");
         }
 
         // Delete the fwmark routing table rule
@@ -696,9 +734,11 @@ impl Routing for FallbackRouter {
     /// Phase 1 (before wg-quick up):
     ///   1. Get WAN interface info
     ///   2. Add bypass routes for all peer IPs directly via WAN
+    ///   3. Add RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
     ///
     /// Phase 2:
-    ///   3. Run wg-quick up (safe now - bypass routes are already in place)
+    ///   4. Run wg-quick up with PostUp hook for VPN subnet route (10.128.0.0/9)
+    ///      The VPN subnet route overrides the 10.0.0.0/8 bypass for VPN server traffic
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         // Phase 1: Add bypass routes BEFORE wg-quick up
@@ -721,8 +761,15 @@ impl Routing for FallbackRouter {
         }
         tracing::debug!("RFC1918 bypass routes added before wg-quick up");
 
-        // Phase 2: wg-quick up (without PreUp routing hooks)
-        let extra = vec!["Table = off".to_string()];
+        // Phase 2: wg-quick up with PostUp for VPN subnet route
+        let extra = vec![
+            "Table = off".to_string(),
+            // VPN internal subnet (more specific than 10.0.0.0/8 bypass)
+            format!(
+                "PostUp = ip route add {}/{} dev %i",
+                VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1
+            ),
+        ];
         let wg_quick_content =
             self.wg_data
                 .wg

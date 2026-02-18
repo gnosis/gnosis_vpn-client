@@ -24,6 +24,11 @@ pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
     ("169.254.0.0", 16), // Link-local (APIPA)
 ];
 
+/// VPN internal subnet that must be routed through the tunnel.
+/// This is more specific than the RFC1918 bypass (10.0.0.0/8),
+/// so it takes precedence and ensures VPN server traffic uses the tunnel.
+pub(crate) const VPN_TUNNEL_SUBNET: (&str, u8) = ("10.128.0.0", 9);
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
