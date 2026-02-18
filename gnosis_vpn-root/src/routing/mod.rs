@@ -69,6 +69,7 @@ impl Error {
         Self::IpTables(e.into().to_string())
     }
 
+    #[allow(dead_code)] // May be used for error handling in the future
     pub fn is_not_available(&self) -> bool {
         matches!(self, Self::NotAvailable)
     }

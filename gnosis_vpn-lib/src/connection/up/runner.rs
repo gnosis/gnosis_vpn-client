@@ -29,6 +29,7 @@ pub struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
+    #[allow(dead_code)] // Used on Linux only for force_static_routing check
     worker_params: WorkerParams,
 }
 
@@ -102,12 +103,18 @@ impl Runner {
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        if self.worker_params.force_static_routing() {
-            tracing::info!("static routing enabled via CLI flag");
+        // Dynamic routing is only available on Linux; other platforms always use static routing
+        #[cfg(target_os = "linux")]
+        let use_static = self.worker_params.force_static_routing();
+        #[cfg(not(target_os = "linux"))]
+        let use_static = true;
+
+        if use_static {
+            tracing::info!("using static routing");
             self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                 .await
         } else {
-            // Dynamic routing - no automatic fallback to static
+            // Dynamic routing (Linux only) - no automatic fallback to static
             request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await?;
             self.run_check_dynamic_routing(&session, &results_sender).await
         }
