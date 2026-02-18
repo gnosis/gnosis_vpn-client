@@ -17,3 +17,13 @@ impl From<BlokliConfig> for BlockchainConnectorConfig {
         }
     }
 }
+
+impl Default for BlokliConfig {
+    fn default() -> Self {
+        let def = BlockchainConnectorConfig::default();
+        Self {
+            connection_sync_timeout: def.connection_sync_timeout,
+            sync_tolerance: def.sync_tolerance,
+        }
+    }
+}

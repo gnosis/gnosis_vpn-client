@@ -436,7 +436,7 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
         let connection_sync_timeout = value
             .as_ref()
             .and_then(|b| b.connection_sync_timeout)
-            .unwrap_or_default();
+            .unwrap_or_else(|| HoprBlokliConfig::default().connection_sync_timeout);
         // Edge client uses less tolerance than the default of 90%
         let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
         HoprBlokliConfig {
