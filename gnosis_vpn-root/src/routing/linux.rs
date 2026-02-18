@@ -582,21 +582,25 @@ impl Routing for Router {
 
     /// Uninstalls the split-tunnel routing.
     ///
+    /// Teardown order is important: wg-quick down runs while bypass infrastructure is
+    /// still active. This ensures HOPR traffic continues to flow via WAN (through the
+    /// fwmark rule and TABLE_ID) while the VPN interface is being torn down.
+    ///
     /// The steps:
     ///   1. Restore the default route in the MAIN routing table to WAN
     ///      Equivalent command: `ip route add default via $WAN_GW dev $IF_WAN`
     ///   2. Delete the VPN subnet route from the MAIN table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
-    ///   3. Delete the fwmark rule for TABLE_ID
+    ///   3. Run `wg-quick down` (while bypass is still active for HOPR traffic)
+    ///   4. Delete the fwmark rule for TABLE_ID (safe - VPN interface is gone)
     ///      Equivalent command: `ip rule del mark $FW_MARK table $TABLE_ID`
-    ///   4. Delete the VPN subnet route from TABLE_ID
+    ///   5. Delete the VPN subnet route from TABLE_ID
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
-    ///   5. Delete the default route from TABLE_ID
+    ///   6. Delete the default route from TABLE_ID
     ///      Equivalent command: `ip route del default via $WAN_GW dev $IF_WAN table $TABLE_ID`
-    ///   6. Flush the routing table cache
+    ///   7. Flush the routing table cache
     ///      Equivalent command: `ip route flush cache`
-    ///   7. Remove the `iptables` mangle and NAT rules
-    ///   8. Run `wg-quick down`
+    ///   8. Remove the `iptables` mangle and NAT rules (safe - no marked traffic)
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
@@ -641,6 +645,13 @@ impl Routing for Router {
         } else {
             tracing::debug!("ip route del {vpn_cidr} dev {vpn_if_index}");
         }
+
+        // Run wg-quick down while bypass infrastructure is still active
+        // HOPR traffic continues: iptables marks → fwmark rule → TABLE_ID → WAN
+        wg_tooling::down(self.state_home.clone(), logs).await?;
+        tracing::debug!("wg-quick down");
+
+        // Now safe to cleanup bypass infrastructure - VPN interface is gone
 
         // Delete the fwmark routing table rule
         if let Ok(rules) = self
@@ -715,10 +726,6 @@ impl Routing for Router {
             tracing::error!(%error, "failed to teardown iptables rules, continuing anyway");
         }
         tracing::debug!("iptables rules removed");
-
-        // Run wg-quick down
-        wg_tooling::down(self.state_home.clone(), logs).await?;
-        tracing::debug!("wg-quick down");
 
         Ok(())
     }
