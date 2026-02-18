@@ -1,7 +1,7 @@
 use edgli::hopr_lib::exports::crypto::keypair::errors::KeyPairError;
 use edgli::hopr_lib::{HoprKeys, IdentityRetrievalModes};
-use rand::Rng;
 use rand::distr::Alphanumeric;
+use rand::prelude::*;
 use thiserror::Error;
 
 use std::path::{Path, PathBuf};
