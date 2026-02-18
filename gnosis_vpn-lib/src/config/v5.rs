@@ -147,7 +147,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
-                    if k == "tx_confirm_timeout" || k == "connection_timeout" || k == "sync_tolerance" {
+                    if k == "connection_sync_timeout" || k == "sync_tolerance" {
                         continue;
                     }
                     wrong_keys.push(format!("blokli.{k}"));
