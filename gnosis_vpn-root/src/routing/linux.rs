@@ -52,11 +52,7 @@ use crate::wg_tooling;
 ///
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
-pub fn dynamic_router(
-    state_home: PathBuf,
-    wg_data: event::WireGuardData,
-    wan_info: WanInfo,
-) -> Result<Router, Error> {
+pub fn dynamic_router(state_home: PathBuf, wg_data: event::WireGuardData, wan_info: WanInfo) -> Result<Router, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn); // Task terminates once the Router is dropped
     Ok(Router {
@@ -81,7 +77,7 @@ pub fn static_fallback_router(
         state_home,
         wg_data,
         peer_ips,
-        wan_info: None,
+        bypass_manager: None,
     }
 }
 
@@ -147,12 +143,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
     tracing::debug!(uid = worker.uid, wan_ip = %wan_info.ip_addr, "iptables rules set up");
 
     // Create TABLE_ID with WAN default route
-    let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-        .table_id(TABLE_ID)
-        .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-        .output_interface(wan_info.if_index)
-        .gateway(wan_info.gateway)
-        .build();
+    let no_vpn_route = default_route(wan_info.if_index, Some(wan_info.gateway), Some(TABLE_ID));
     if let Err(e) = handle.route().add(no_vpn_route).execute().await {
         // Rollback iptables on failure
         let _ = teardown_iptables(&wan_info.if_name, wan_info.ip_addr);
@@ -179,14 +170,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
         // Rollback TABLE_ID route and iptables on failure
         let _ = handle
             .route()
-            .del(
-                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                    .table_id(TABLE_ID)
-                    .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-                    .output_interface(wan_info.if_index)
-                    .gateway(wan_info.gateway)
-                    .build(),
-            )
+            .del(default_route(wan_info.if_index, Some(wan_info.gateway), Some(TABLE_ID)))
             .execute()
             .await;
         let _ = teardown_iptables(&wan_info.if_name, wan_info.ip_addr);
@@ -216,13 +200,7 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfrastructure) {
     let FwmarkInfrastructure { handle, wan_info, .. } = infra;
 
     // Delete the fwmark routing table rule
-    if let Ok(rules) = handle
-        .rule()
-        .get(IpVersion::V4)
-        .execute()
-        .try_collect::<Vec<_>>()
-        .await
-    {
+    if let Ok(rules) = handle.rule().get(IpVersion::V4).execute().try_collect::<Vec<_>>().await {
         for rule in rules.into_iter().filter(|rule| {
             rule.attributes
                 .iter()
@@ -233,7 +211,7 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfrastructure) {
                     .any(|a| matches!(a, RuleAttribute::Table(table) if table == &TABLE_ID))
         }) {
             if let Err(error) = handle.rule().del(rule).execute().await {
-                tracing::error!(%error, "failed to delete fwmark routing table rule, continuing anyway");
+                tracing::warn!(%error, "failed to delete fwmark routing table rule, continuing anyway");
             } else {
                 tracing::debug!("ip rule del mark {FW_MARK} table {TABLE_ID}");
             }
@@ -241,37 +219,29 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfrastructure) {
     }
 
     // Delete the TABLE_ID routing table default route
-    if let Err(error) = handle
-        .route()
-        .del(
-            rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                .table_id(TABLE_ID)
-                .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-                .output_interface(wan_info.if_index)
-                .gateway(wan_info.gateway)
-                .build(),
-        )
-        .execute()
-        .await
-    {
-        tracing::error!(%error, "failed to delete table {TABLE_ID} default route, continuing anyway");
-    } else {
-        tracing::debug!("ip route del default via {} dev {} table {TABLE_ID}", wan_info.gateway, wan_info.if_index);
-    }
+    teardown_op(
+        &format!("delete table {TABLE_ID} default route"),
+        &format!(
+            "ip route del default via {} dev {} table {TABLE_ID}",
+            wan_info.gateway, wan_info.if_index
+        ),
+        || {
+            handle
+                .route()
+                .del(default_route(wan_info.if_index, Some(wan_info.gateway), Some(TABLE_ID)))
+                .execute()
+        },
+    )
+    .await;
 
     // Flush routing cache
-    if let Err(error) = flush_routing_cache().await {
-        tracing::error!(%error, "failed to flush routing cache, continuing anyway");
-    } else {
-        tracing::debug!("ip route flush cache");
-    }
+    teardown_op("flush routing cache", "ip route flush cache", flush_routing_cache).await;
 
     // Remove the iptables mangle and NAT rules
-    if let Err(error) = teardown_iptables(&wan_info.if_name, wan_info.ip_addr).map_err(Error::iptables) {
-        tracing::error!(%error, "failed to teardown iptables rules, continuing anyway");
-    } else {
-        tracing::debug!("iptables rules removed");
-    }
+    teardown_op("teardown iptables rules", "iptables rules removed", || async {
+        teardown_iptables(&wan_info.if_name, wan_info.ip_addr).map_err(Error::iptables)
+    })
+    .await;
 
     tracing::info!("fwmark infrastructure teardown complete");
 }
@@ -440,13 +410,6 @@ pub struct Router {
     if_indices: Option<NetworkDeviceInfo>,
 }
 
-/// WAN interface info stored for FallbackRouter teardown.
-#[derive(Debug, Clone)]
-struct FallbackWanInfo {
-    device: String,
-    gateway: Option<String>,
-}
-
 /// Static fallback router using direct `ip route` commands.
 ///
 /// Used when dynamic routing (rtnetlink + iptables) is not available or not desired.
@@ -455,7 +418,7 @@ pub struct FallbackRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-    wan_info: Option<FallbackWanInfo>,
+    bypass_manager: Option<super::BypassRouteManager>,
 }
 
 // FwMark for traffic the does not go through the VPN
@@ -472,6 +435,81 @@ const IP_CHAIN: &str = "OUTPUT";
 
 const NAT_TABLE: &str = "nat";
 const NAT_CHAIN: &str = "POSTROUTING";
+
+// ============================================================================
+// Route Message Builders
+// ============================================================================
+// Helper functions to reduce RouteMessageBuilder boilerplate throughout the router.
+
+/// Builds a route message for a VPN subnet.
+///
+/// # Arguments
+/// * `vpn_cidr` - The VPN subnet CIDR to route
+/// * `vpn_if_index` - The VPN interface index
+/// * `table_id` - Optional routing table ID (None = main table)
+fn vpn_subnet_route(
+    vpn_cidr: &cidr::Ipv4Cidr,
+    vpn_if_index: u32,
+    table_id: Option<u32>,
+) -> rtnetlink::packet_route::route::RouteMessage {
+    let mut builder = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+        .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
+        .output_interface(vpn_if_index);
+    if let Some(id) = table_id {
+        builder = builder.table_id(id);
+    }
+    builder.build()
+}
+
+/// Builds a default route message (0.0.0.0/0).
+///
+/// # Arguments
+/// * `if_index` - The interface index for the route
+/// * `gateway` - Optional gateway IP (None for interface routes)
+/// * `table_id` - Optional routing table ID (None = main table)
+fn default_route(
+    if_index: u32,
+    gateway: Option<Ipv4Addr>,
+    table_id: Option<u32>,
+) -> rtnetlink::packet_route::route::RouteMessage {
+    let mut builder = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
+        .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+        .output_interface(if_index);
+    if let Some(gw) = gateway {
+        builder = builder.gateway(gw);
+    }
+    if let Some(id) = table_id {
+        builder = builder.table_id(id);
+    }
+    builder.build()
+}
+
+// ============================================================================
+// Teardown Helpers
+// ============================================================================
+// Helpers to reduce repetitive "try-and-warn" patterns in teardown code.
+
+/// Executes a teardown operation, logging warnings on failure but continuing.
+///
+/// This pattern is common in teardown code where we want to attempt cleanup
+/// but not fail the entire teardown if one step fails.
+///
+/// # Arguments
+/// * `op_name` - Description for the warning message (e.g., "delete VPN route")
+/// * `debug_msg` - Message to log on success (e.g., "ip route del ...")
+/// * `op` - The async operation to execute
+async fn teardown_op<F, Fut, E>(op_name: &str, debug_msg: &str, op: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+    E: std::fmt::Display,
+{
+    if let Err(error) = op().await {
+        tracing::warn!(%error, "failed to {}, continuing anyway", op_name);
+    } else {
+        tracing::debug!("{}", debug_msg);
+    }
+}
 
 /// Sets up iptables rules for HOPR traffic bypass.
 ///
@@ -596,11 +634,7 @@ impl Routing for Router {
 
         // Step 3: Add VPN subnet route to TABLE_ID
         // This allows bypassed traffic to still reach VPN addresses
-        let vpn_addrs_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .table_id(TABLE_ID)
-            .destination_prefix(vpn_info.cidr.first_address(), vpn_info.cidr.network_length())
-            .output_interface(vpn_info.if_index)
-            .build();
+        let vpn_addrs_route = vpn_subnet_route(&vpn_info.cidr, vpn_info.if_index, Some(TABLE_ID));
         if let Err(e) = self.handle.route().add(vpn_addrs_route).execute().await {
             // Rollback: bring down WG
             self.if_indices = None;
@@ -615,10 +649,7 @@ impl Routing for Router {
 
         // Step 4: Add VPN subnet route to main table
         // This ensures VPN subnet traffic uses tunnel, overriding any pre-existing RFC1918 routes
-        let vpn_subnet_main_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .destination_prefix(vpn_info.cidr.first_address(), vpn_info.cidr.network_length())
-            .output_interface(vpn_info.if_index)
-            .build();
+        let vpn_subnet_main_route = vpn_subnet_route(&vpn_info.cidr, vpn_info.if_index, None);
         if let Err(e) = self.handle.route().add(vpn_subnet_main_route).execute().await {
             // Log warning but continue - default route should still work
             tracing::warn!(%e, "failed to add VPN subnet route to main table");
@@ -633,22 +664,13 @@ impl Routing for Router {
         // Step 6: Replace main default route to VPN interface
         // All non-bypassed traffic now goes through VPN
         // Use replace() for atomic replacement - avoids brief window with two default routes
-        let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-            .output_interface(vpn_info.if_index)
-            .build();
-        if let Err(e) = self.handle.route().add(default_route).replace().execute().await {
+        let vpn_default_route = default_route(vpn_info.if_index, None, None);
+        if let Err(e) = self.handle.route().add(vpn_default_route).replace().execute().await {
             // Rollback: remove VPN subnet route, bring down WG
             let _ = self
                 .handle
                 .route()
-                .del(
-                    rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                        .table_id(TABLE_ID)
-                        .destination_prefix(vpn_info.cidr.first_address(), vpn_info.cidr.network_length())
-                        .output_interface(vpn_info.if_index)
-                        .build(),
-                )
+                .del(vpn_subnet_route(&vpn_info.cidr, vpn_info.if_index, Some(TABLE_ID)))
                 .execute()
                 .await;
             self.if_indices = None;
@@ -697,35 +719,31 @@ impl Routing for Router {
 
         // Step 1: Set the default route back to the WAN interface
         // Use replace() to handle case where VPN route still exists
-        let default_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-            .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-            .output_interface(wan_if_index)
-            .gateway(wan_gw)
-            .build();
-
-        if let Err(error) = self.handle.route().add(default_route).replace().execute().await {
-            tracing::error!(%error, "failed to set default route back to interface, continuing anyway");
-        } else {
-            tracing::debug!("ip route replace default via {wan_gw} dev {wan_if_index}");
-        }
+        teardown_op(
+            "set default route back to interface",
+            &format!("ip route replace default via {wan_gw} dev {wan_if_index}"),
+            || {
+                self.handle
+                    .route()
+                    .add(default_route(wan_if_index, Some(wan_gw), None))
+                    .replace()
+                    .execute()
+            },
+        )
+        .await;
 
         // Step 2: Delete the VPN subnet route from the main table
-        if let Err(error) = self
-            .handle
-            .route()
-            .del(
-                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                    .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
-                    .output_interface(vpn_if_index)
-                    .build(),
-            )
-            .execute()
-            .await
-        {
-            tracing::warn!(%error, "failed to delete VPN subnet route from main table, continuing anyway");
-        } else {
-            tracing::debug!("ip route del {vpn_cidr} dev {vpn_if_index}");
-        }
+        teardown_op(
+            "delete VPN subnet route from main table",
+            &format!("ip route del {vpn_cidr} dev {vpn_if_index}"),
+            || {
+                self.handle
+                    .route()
+                    .del(vpn_subnet_route(&vpn_cidr, vpn_if_index, None))
+                    .execute()
+            },
+        )
+        .await;
 
         // Step 3: Run wg-quick down while bypass infrastructure is still active
         // HOPR traffic continues: iptables marks → fwmark rule → TABLE_ID → WAN
@@ -734,23 +752,17 @@ impl Routing for Router {
 
         // Step 4: Delete the TABLE_ID routing table VPN route
         // (fwmark rule and TABLE_ID default route stay active for the daemon's lifetime)
-        if let Err(error) = self
-            .handle
-            .route()
-            .del(
-                rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
-                    .table_id(TABLE_ID)
-                    .destination_prefix(vpn_cidr.first_address(), vpn_cidr.network_length())
-                    .output_interface(vpn_if_index)
-                    .build(),
-            )
-            .execute()
-            .await
-        {
-            tracing::error!(%error, "failed to delete VPN subnet route from table {TABLE_ID}, continuing anyway");
-        } else {
-            tracing::debug!("ip route del {vpn_cidr} dev {vpn_if_index} table {TABLE_ID}");
-        }
+        teardown_op(
+            &format!("delete VPN subnet route from table {TABLE_ID}"),
+            &format!("ip route del {vpn_cidr} dev {vpn_if_index} table {TABLE_ID}"),
+            || {
+                self.handle
+                    .route()
+                    .del(vpn_subnet_route(&vpn_cidr, vpn_if_index, Some(TABLE_ID)))
+                    .execute()
+            },
+        )
+        .await;
 
         // Step 5: Flush routing cache
         flush_routing_cache().await?;
@@ -780,23 +792,14 @@ impl Routing for FallbackRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         // Phase 1: Add bypass routes BEFORE wg-quick up
         let (device, gateway) = interface().await?;
-        self.wan_info = Some(FallbackWanInfo {
-            device: device.clone(),
-            gateway: gateway.clone(),
-        });
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
-        for ip in &self.peer_ips {
-            add_bypass_route_linux(ip, &device, gateway.as_deref()).await?;
-        }
-        tracing::debug!("Peer IP bypass routes added before wg-quick up");
+        let mut bypass_manager =
+            super::BypassRouteManager::new(super::WanInterface { device, gateway }, self.peer_ips.clone());
 
-        // Bypass routes for RFC1918 networks (enables LAN access including local DNS)
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let cidr = format!("{}/{}", net, prefix);
-            add_bypass_subnet_linux(&cidr, &device, gateway.as_deref()).await?;
-        }
-        tracing::debug!("RFC1918 bypass routes added before wg-quick up");
+        // Add peer IP and RFC1918 bypass routes (auto-rollback on failure)
+        bypass_manager.setup_peer_routes().await?;
+        bypass_manager.setup_rfc1918_routes().await?;
 
         // Phase 2: wg-quick up with PostUp for VPN subnet route
         let extra = vec![
@@ -813,20 +816,13 @@ impl Routing for FallbackRouter {
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
         if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
-            // Rollback bypass routes on failure
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
-            for ip in &self.peer_ips {
-                let _ = delete_bypass_route_linux(ip, &device, gateway.as_deref()).await;
-            }
-            for (net, prefix) in RFC1918_BYPASS_NETS {
-                let cidr = format!("{}/{}", net, prefix);
-                let _ = delete_bypass_subnet_linux(&cidr, &device, gateway.as_deref()).await;
-            }
-            self.wan_info = None;
+            bypass_manager.rollback().await;
             return Err(e.into());
         }
         tracing::debug!("wg-quick up");
 
+        self.bypass_manager = Some(bypass_manager);
         tracing::info!("routing is ready (fallback)");
         Ok(())
     }
@@ -842,99 +838,13 @@ impl Routing for FallbackRouter {
         tracing::debug!("wg-quick down");
 
         // then remove bypass routes
-        if let Some(wan_info) = self.wan_info.take() {
-            for ip in &self.peer_ips {
-                if let Err(e) = delete_bypass_route_linux(ip, &wan_info.device, wan_info.gateway.as_deref()).await {
-                    tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route, continuing anyway");
-                }
-            }
-            tracing::debug!("Peer IP bypass routes removed after wg-quick down");
-
-            // Remove RFC1918 bypass routes
-            for (net, prefix) in RFC1918_BYPASS_NETS {
-                let cidr = format!("{}/{}", net, prefix);
-                if let Err(e) = delete_bypass_subnet_linux(&cidr, &wan_info.device, wan_info.gateway.as_deref()).await {
-                    tracing::warn!(%e, cidr = %cidr, "failed to delete RFC1918 bypass route, continuing anyway");
-                }
-            }
-            tracing::debug!("RFC1918 bypass routes removed after wg-quick down");
+        if let Some(ref mut bypass_manager) = self.bypass_manager {
+            bypass_manager.teardown().await;
         }
+        self.bypass_manager = None;
 
         Ok(())
     }
-}
-
-/// Add a bypass route for a peer IP via the WAN gateway.
-///
-/// This ensures traffic to the peer IP goes directly via WAN, bypassing the VPN tunnel.
-/// Makes the operation idempotent by deleting any existing route first.
-async fn add_bypass_route_linux(peer_ip: &Ipv4Addr, device: &str, gateway: Option<&str>) -> Result<(), Error> {
-    // Delete any existing route first (make idempotent)
-    let _ = delete_bypass_route_linux(peer_ip, device, gateway).await;
-
-    let mut cmd = Command::new("ip");
-    cmd.arg("route").arg("add").arg(peer_ip.to_string());
-
-    if let Some(gw) = gateway {
-        cmd.arg("via").arg(gw);
-    }
-    cmd.arg("dev").arg(device);
-
-    cmd.run_stdout(Logs::Print).await?;
-    tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Added bypass route");
-    Ok(())
-}
-
-/// Delete a bypass route for a peer IP.
-async fn delete_bypass_route_linux(peer_ip: &Ipv4Addr, device: &str, gateway: Option<&str>) -> Result<(), Error> {
-    let mut cmd = Command::new("ip");
-    cmd.arg("route").arg("del").arg(peer_ip.to_string());
-
-    if let Some(gw) = gateway {
-        cmd.arg("via").arg(gw);
-    }
-    cmd.arg("dev").arg(device);
-
-    cmd.run_stdout(Logs::Suppress).await?;
-    tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Deleted bypass route");
-    Ok(())
-}
-
-/// Add a bypass route for a subnet on Linux.
-///
-/// This ensures traffic to RFC1918/link-local networks goes directly via WAN,
-/// bypassing the VPN tunnel. Makes the operation idempotent by deleting any
-/// existing route first.
-async fn add_bypass_subnet_linux(cidr: &str, device: &str, gateway: Option<&str>) -> Result<(), Error> {
-    // Delete any existing route first (make idempotent)
-    let _ = delete_bypass_subnet_linux(cidr, device, gateway).await;
-
-    let mut cmd = Command::new("ip");
-    cmd.arg("route").arg("add").arg(cidr);
-
-    if let Some(gw) = gateway {
-        cmd.arg("via").arg(gw);
-    }
-    cmd.arg("dev").arg(device);
-
-    cmd.run_stdout(Logs::Print).await?;
-    tracing::debug!(cidr = %cidr, device = %device, gateway = ?gateway, "Added RFC1918 bypass route");
-    Ok(())
-}
-
-/// Delete a bypass route for a subnet on Linux.
-async fn delete_bypass_subnet_linux(cidr: &str, device: &str, gateway: Option<&str>) -> Result<(), Error> {
-    let mut cmd = Command::new("ip");
-    cmd.arg("route").arg("del").arg(cidr);
-
-    if let Some(gw) = gateway {
-        cmd.arg("via").arg(gw);
-    }
-    cmd.arg("dev").arg(device);
-
-    cmd.run_stdout(Logs::Suppress).await?;
-    tracing::debug!(cidr = %cidr, device = %device, gateway = ?gateway, "Deleted RFC1918 bypass route");
-    Ok(())
 }
 
 /// Flushes the routing table cache - this cannot be done via rtnetlink crate.
@@ -966,21 +876,7 @@ async fn interface() -> Result<(String, Option<String>), Error> {
 
 /// Parses the output of `ip route show default` to extract interface and gateway.
 fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
-    let parts: Vec<&str> = output.split_whitespace().collect();
-
-    let device_index = parts.iter().position(|&x| x == "dev");
-    let via_index = parts.iter().position(|&x| x == "via");
-
-    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
-        Some(dev) => dev.to_string(),
-        None => {
-            tracing::error!(%output, "Unable to determine default interface");
-            return Err(Error::NoInterface);
-        }
-    };
-
-    let gateway = via_index.and_then(|idx| parts.get(idx + 1)).map(|gw| gw.to_string());
-    Ok((device, gateway))
+    super::parse_key_value_output(output, "dev", "via", None)
 }
 
 #[cfg(test)]

@@ -29,7 +29,7 @@ pub struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
-    #[allow(dead_code)] // Used on Linux only for force_static_routing check
+    #[cfg_attr(not(target_os = "linux"), allow(unused))]
     worker_params: WorkerParams,
 }
 

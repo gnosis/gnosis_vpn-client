@@ -20,6 +20,12 @@ use crate::wireguard::Config as WireGuardConfig;
 
 const MAX_HOPS: u8 = 3;
 
+/// Default timeout for blockchain transaction confirmations.
+const DEFAULT_TX_CONFIRM_TIMEOUT_SECS: u64 = 90;
+
+/// Default timeout for establishing connections to the blokli service.
+const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 30;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
@@ -438,11 +444,11 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
         let tx_confirm_timeout = value
             .as_ref()
             .and_then(|b| b.tx_confirm_timeout)
-            .unwrap_or_else(|| Duration::from_secs(90));
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TX_CONFIRM_TIMEOUT_SECS));
         let connection_timeout = value
             .as_ref()
             .and_then(|b| b.connection_timeout)
-            .unwrap_or_else(|| Duration::from_secs(30));
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_CONNECTION_TIMEOUT_SECS));
         let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
         HoprBlokliConfig {
             tx_confirm_timeout,

@@ -218,7 +218,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
     let log_path = args.log_file.clone();
-    #[allow(unused_variables)]
+    #[cfg(target_os = "linux")]
     let force_static_routing = args.force_static_routing;
     let setup = DaemonSetup {
         args,
@@ -445,7 +445,7 @@ async fn loop_daemon(
                                 let router_result = match &wan_info {
                                     Some(info) => routing::dynamic_router(state_home.clone(), wg_data, info.clone()),
                                     None => {
-                                        let res = Err("dynamic routing not available".to_string());
+                                        let res = Err("WAN interface detection failed during startup - dynamic routing unavailable".to_string());
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
                                         continue;
                                     }

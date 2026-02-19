@@ -11,17 +11,32 @@
 //!      through WAN gateway for LAN access
 //! 4. On teardown, brings down WireGuard first, then cleans up peer IP bypass routes
 //!
-//! Route precedence (most specific wins):
+//! ## Route Precedence (most specific wins)
+//!
 //! - 10.128.0.0/9 → VPN interface (VPN server subnet)
 //! - 10.0.0.0/8 → WAN gateway (other RFC1918 Class A)
 //! - 0.0.0.0/1, 128.0.0.0/1 → VPN interface (catch-all)
+//!
+//! ## Race Condition Window
+//!
+//! Peer IP bypass routes are added before `wg-quick up`, eliminating the race condition
+//! for HOPR traffic. However, RFC1918 routes are added via PostUp hooks (after interface
+//! is up), so there is a brief window where RFC1918 traffic could be routed incorrectly
+//! if the VPN captures those routes before PostUp runs. This is acceptable because:
+//!
+//! - RFC1918 traffic (LAN access) is less time-sensitive than peer traffic
+//! - The window is very short (milliseconds during wg-quick startup)
+//! - PostUp hooks cannot reference the WAN gateway captured before wg-quick up
+//!   without adding complexity (the gateway may change when VPN becomes active)
+//!
+//! ## Platform Notes
 //!
 //! Dynamic routing (using rtnetlink) is not available on macOS.
 use async_trait::async_trait;
 use tokio::process::Command;
 
-use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use gnosis_vpn_lib::event;
+use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -51,6 +66,7 @@ pub fn static_router(state_home: PathBuf, wg_data: event::WireGuardData, peer_ip
         state_home,
         wg_data,
         peer_ips,
+        bypass_manager: None,
     }
 }
 
@@ -59,6 +75,7 @@ pub struct StaticRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
+    bypass_manager: Option<super::BypassRouteManager>,
 }
 
 #[async_trait]
@@ -80,10 +97,16 @@ impl Routing for StaticRouter {
         let (device, gateway) = interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
-        for ip in &self.peer_ips {
-            add_bypass_route_macos(ip, &device, gateway.as_deref()).await?;
-        }
-        tracing::debug!("Peer IP bypass routes added before wg-quick up");
+        let mut bypass_manager = super::BypassRouteManager::new(
+            super::WanInterface {
+                device: device.clone(),
+                gateway: gateway.clone(),
+            },
+            self.peer_ips.clone(),
+        );
+
+        // Only add peer IP bypass routes (RFC1918 done via PostUp hooks)
+        bypass_manager.setup_peer_routes().await?;
 
         // Phase 2: wg-quick up with PostUp hooks for VPN and RFC1918 routes
         // Table = off prevents wg-quick from managing routes automatically
@@ -122,15 +145,13 @@ impl Routing for StaticRouter {
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
         if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
-            // Rollback peer IP bypass routes on failure (RFC1918 routes weren't added yet)
             tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
-            for ip in &self.peer_ips {
-                let _ = delete_bypass_route_macos(ip).await;
-            }
+            bypass_manager.rollback().await;
             return Err(e.into());
         }
         tracing::debug!("wg-quick up");
 
+        self.bypass_manager = Some(bypass_manager);
         tracing::info!("routing is ready (macOS static)");
         Ok(())
     }
@@ -146,10 +167,11 @@ impl Routing for StaticRouter {
         wg_tooling::down(self.state_home.clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
-        // Remove peer IP bypass routes (ignore failures - routes may not exist)
-        for ip in &self.peer_ips {
-            let _ = delete_bypass_route_macos(ip).await;
+        // Remove peer IP bypass routes using the bypass manager
+        if let Some(ref mut bypass_manager) = self.bypass_manager {
+            bypass_manager.rollback().await; // Use rollback for silent cleanup
         }
+        self.bypass_manager = None;
         tracing::debug!("Peer IP bypass routes cleanup attempted after wg-quick down");
 
         Ok(())
@@ -166,38 +188,6 @@ impl Routing for DynamicRouter {
     async fn teardown(&mut self, _logs: Logs) -> Result<(), Error> {
         Err(Error::NotAvailable)
     }
-}
-
-/// Add a bypass route for a peer IP on macOS.
-///
-/// This ensures traffic to the peer IP goes directly via WAN, bypassing the VPN tunnel.
-/// macOS `route` command is idempotent - it returns exit code 0 even if route already exists.
-async fn add_bypass_route_macos(peer_ip: &Ipv4Addr, device: &str, gateway: Option<&str>) -> Result<(), Error> {
-    let mut cmd = Command::new("route");
-    cmd.arg("-n").arg("add").arg("-host").arg(peer_ip.to_string());
-
-    if let Some(gw) = gateway {
-        cmd.arg(gw);
-    } else {
-        cmd.arg("-interface").arg(device);
-    }
-
-    cmd.run_stdout(Logs::Print).await?;
-    tracing::debug!(peer_ip = %peer_ip, device = %device, gateway = ?gateway, "Added bypass route");
-    Ok(())
-}
-
-/// Delete a bypass route for a peer IP on macOS.
-async fn delete_bypass_route_macos(peer_ip: &Ipv4Addr) -> Result<(), Error> {
-    Command::new("route")
-        .arg("-n")
-        .arg("delete")
-        .arg("-host")
-        .arg(peer_ip.to_string())
-        .run_stdout(Logs::Suppress)
-        .await?;
-    tracing::debug!(peer_ip = %peer_ip, "Deleted bypass route");
-    Ok(())
 }
 
 /// Gets the default WAN interface name and gateway by querying the routing table.
@@ -217,24 +207,9 @@ async fn interface() -> Result<(String, Option<String>), Error> {
 
 /// Parses the output of `route -n get 0.0.0.0` to extract interface and gateway.
 fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
-    let parts: Vec<&str> = output.split_whitespace().collect();
-    let device_index = parts.iter().position(|&x| x == "interface:");
-    let via_index = parts.iter().position(|&x| x == "gateway:");
-    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
-        Some(dev) => dev.to_string(),
-        None => {
-            tracing::error!(%output, "Unable to determine default interface");
-            return Err(Error::NoInterface);
-        }
-    };
-
-    // Filter out field labels (tokens ending with ':') which can appear when
-    // gateway has no value (e.g., "gateway: index: 28" when VPN is active)
-    let gateway = via_index
-        .and_then(|idx| parts.get(idx + 1))
-        .filter(|gw| !gw.ends_with(':'))
-        .map(|gw| gw.to_string());
-    Ok((device, gateway))
+    // Use shared parser with macOS-specific keys and suffix filter
+    // (filters out "index:" when gateway shows "gateway: index: 28")
+    super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))
 }
 
 #[cfg(test)]
