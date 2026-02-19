@@ -63,6 +63,12 @@ fn pretty_print(resp: &Response) {
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
         }
+        Response::Telemetry(Some(metrics)) => {
+            println!("{metrics}");
+        }
+        Response::Telemetry(None) => {
+            println!("No telemetry information available.");
+        }
         Response::Status(command::StatusResponse { run_mode, destinations }) => {
             let mut str_resp = format!("{run_mode}\n");
             for dest_state in destinations {
@@ -141,5 +147,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Empty => exitcode::OK,
         Response::Metrics(..) => exitcode::OK,
+        Response::Telemetry(Some(_)) => exitcode::OK,
+        Response::Telemetry(None) => exitcode::UNAVAILABLE,
     }
 }

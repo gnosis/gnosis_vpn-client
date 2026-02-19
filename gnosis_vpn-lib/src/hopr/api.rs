@@ -369,12 +369,6 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub fn telemetry(&self) -> Result<String, HoprError> {
-        tracing::debug!("query hopr telemetry");
-        edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
         tracing::debug!("query hopr ticket price");
         let ticket_price = self.edgli.get_ticket_price().await?;

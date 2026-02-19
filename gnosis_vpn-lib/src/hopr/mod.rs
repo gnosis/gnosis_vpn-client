@@ -14,3 +14,8 @@ pub const ENV_VAR_CONFIG: &str = "GNOSISVPN_HOPR_CONFIG_PATH";
 pub const ENV_VAR_ID_FILE: &str = "GNOSISVPN_HOPR_IDENTITY_FILE";
 pub const ENV_VAR_ID_PASS: &str = "GNOSISVPN_HOPR_IDENTITY_PASS";
 pub const ENV_VAR_BLOKLI_URL: &str = "GNOSISVPN_HOPR_BLOKLI_URL";
+
+pub fn telemetry() -> Result<String, HoprError> {
+    tracing::debug!("query hopr telemetry");
+    edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
+}
