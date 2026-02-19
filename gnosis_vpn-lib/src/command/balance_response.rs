@@ -103,12 +103,12 @@ fn add_from_destinations<'a>(
             ChannelDestination::Unconfigured(_) => false,
         }) {
             let destination = ChannelDestination::Configured((id.clone(), dest.address));
-            let balance = if ongoing_channel_fundings.contains(&&dest.address) {
-                ChannelBalance::FundingOngoing
-            } else {
-                ChannelBalance::Unknown
+            if ongoing_channel_fundings.contains(&&dest.address) {
+                channels_out.push(ChannelOut {
+                    destination,
+                    balance: ChannelBalance::FundingOngoing,
+                });
             };
-            channels_out.push(ChannelOut { destination, balance });
         }
     }
 }
