@@ -3,6 +3,7 @@ use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 use std::time::SystemTime;
