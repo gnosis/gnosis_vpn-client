@@ -351,7 +351,7 @@ impl Hopr {
         Ok(Balances {
             node_xdai: self.edgli.get_balance().await?,
             safe_wxhopr: self.edgli.get_safe_balance().await?,
-            channels_out_wxhopr: self
+            channels_out: self
                 .edgli
                 .channels_from(&self.edgli.me_onchain())
                 .await?
@@ -360,13 +360,12 @@ impl Hopr {
                     if matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
                         || matches!(ch.status, edgli::hopr_lib::ChannelStatus::PendingToClose(_))
                     {
-                        Some(ch.balance)
+                        Some((ch.destination, ch.balance))
                     } else {
                         None
                     }
                 })
-                .reduce(|acc, x| acc + x)
-                .unwrap_or(edgli::hopr_lib::Balance::<edgli::hopr_lib::WxHOPR>::zero()),
+                .collect(),
         })
     }
 

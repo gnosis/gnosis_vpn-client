@@ -2,6 +2,7 @@ use edgli::hopr_lib::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
+use std::fmt::{self, Display};
 
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
@@ -9,19 +10,19 @@ use crate::connectivity_health::{self, ConnectivityHealth};
 use crate::info::Info;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-struct ChannelOut {
-    destination: ChannelDestination,
-    balance: ChannelBalance,
+pub struct ChannelOut {
+    pub destination: ChannelDestination,
+    pub balance: ChannelBalance,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-enum ChannelDestination {
+pub enum ChannelDestination {
     Unconfigured(Address),
     Configured((String, Address)),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-enum ChannelBalance {
+pub enum ChannelBalance {
     Unknown,
     FundingOngoing,
     Completed(Balance<WxHOPR>),
@@ -100,6 +101,36 @@ fn add_from_destinations<'a>(
                 ChannelBalance::Unknown
             };
             channels_out.push(ChannelOut { destination, balance });
+        }
+    }
+}
+
+impl Display for ChannelOut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Channel to {dest}: {bal}",
+            dest = self.destination,
+            bal = self.balance
+        )
+    }
+}
+
+impl Display for ChannelBalance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChannelBalance::Unknown => write!(f, "unknown balance"),
+            ChannelBalance::FundingOngoing => write!(f, "funding ongoing"),
+            ChannelBalance::Completed(balance) => write!(f, "{balance}"),
+        }
+    }
+}
+
+impl Display for ChannelDestination {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChannelDestination::Unconfigured(addr) => write!(f, "{addr} (unconfigured)"),
+            ChannelDestination::Configured((id, addr)) => write!(f, "{addr} ({id})"),
         }
     }
 }

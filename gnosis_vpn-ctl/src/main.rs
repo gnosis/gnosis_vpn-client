@@ -102,8 +102,8 @@ fn pretty_print(resp: &Response) {
             } else {
                 str_resp.push_str("---\n");
             }
-            for (id, addr, balance) in channels_out {
-                str_resp.push_str(&format!("Channel to {id}({addr}): {balance}\n"));
+            for ch in channels_out {
+                str_resp.push_str(&format!("{ch}\n"));
             }
             if !issues.is_empty() {
                 str_resp.push_str("---\nFunding Issues:\n");

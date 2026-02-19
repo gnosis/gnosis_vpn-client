@@ -97,8 +97,8 @@ impl Balances {
             return issues;
         }
 
-        let allChannelFunds = self.channels_out.values().copied().sum::<Balance<WxHOPR>>();
-        if allChannelFunds < min_stake_threshold(ticket_value) {
+        let all_channel_funds = self.channels_out.values().copied().sum::<Balance<WxHOPR>>();
+        if all_channel_funds < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 

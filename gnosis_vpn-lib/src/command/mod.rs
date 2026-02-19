@@ -15,7 +15,7 @@ use crate::destination_health::DestinationHealth;
 use crate::log_output;
 
 mod balance_response;
-pub use balance_response::BalanceResponse;
+pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
