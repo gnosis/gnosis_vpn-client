@@ -409,9 +409,14 @@ impl Core {
                         if let (Some(hopr), Some(balances), Some(ticket_value)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_value)
                         {
-                            let info = hopr.info();
-                            let res =
-                                command::BalanceResponse::new(info, balances, ticket_value, self.connectivity_health);
+                            let res = command::BalanceResponse::new(
+                                &hopr.info(),
+                                &balances,
+                                &ticket_value,
+                                &self.config.destinations.clone(),
+                                self.connectivity_health.values().collect::<Vec<_>>().as_slice(),
+                                self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
+                            );
                             let _ = resp.send(Response::Balance(Some(res)));
                         } else {
                             let _ = resp.send(Response::Balance(None));

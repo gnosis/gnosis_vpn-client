@@ -3,7 +3,6 @@ use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 use std::time::SystemTime;
@@ -13,10 +12,10 @@ use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::connectivity_health::ConnectivityHealth;
 use crate::destination_health::DestinationHealth;
-use crate::info::Info;
 use crate::log_output;
 
 mod balance_response;
+pub use balance_response::BalanceResponse;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
@@ -139,15 +138,6 @@ pub enum ConnectionState {
     Disconnecting(SystemTime, connection::down::Phase),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct BalanceResponse {
-    pub node: Balance<XDai>,
-    pub safe: Balance<WxHOPR>,
-    pub channels_out: Vec<(String, Address, Balance<WxHOPR>)>,
-    pub info: Info,
-    pub issues: Vec<FundingIssue>,
-}
-
 impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
@@ -211,24 +201,6 @@ impl DisconnectResponse {
 impl StatusResponse {
     pub fn new(run_mode: RunMode, destinations: Vec<DestinationState>) -> Self {
         StatusResponse { run_mode, destinations }
-    }
-}
-
-impl BalanceResponse {
-    pub fn new(
-        node: Balance<XDai>,
-        safe: Balance<WxHOPR>,
-        channels_out: HashMap<String, Balance<WxHOPR>>,
-        issues: Vec<FundingIssue>,
-        info: Info,
-    ) -> Self {
-        BalanceResponse {
-            node,
-            safe,
-            channels_out,
-            issues,
-            info,
-        }
     }
 }
 
