@@ -27,8 +27,11 @@
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use rtnetlink::IpVersion;
+use rtnetlink::packet_route::address::AddressAttribute;
 use rtnetlink::packet_route::link::LinkAttribute;
 use rtnetlink::packet_route::rule::{RuleAction, RuleAttribute};
+
+use std::net::IpAddr;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
@@ -104,6 +107,8 @@ pub struct WanInfo {
     pub if_index: u32,
     pub if_name: String,
     pub gateway: Ipv4Addr,
+    /// WAN interface's IPv4 address (used for SNAT)
+    pub ip_addr: Ipv4Addr,
 }
 
 /// Persistent fwmark infrastructure that lives for the daemon's lifetime.
@@ -138,8 +143,8 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
     tracing::debug!(?wan_info, "WAN interface data for fwmark infrastructure");
 
     // Setup iptables rules to mark HOPR traffic for bypass
-    setup_iptables(worker.uid, &wan_info.if_name).map_err(Error::iptables)?;
-    tracing::debug!(uid = worker.uid, "iptables rules set up");
+    setup_iptables(worker.uid, &wan_info.if_name, wan_info.ip_addr).map_err(Error::iptables)?;
+    tracing::debug!(uid = worker.uid, wan_ip = %wan_info.ip_addr, "iptables rules set up");
 
     // Create TABLE_ID with WAN default route
     let no_vpn_route = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
@@ -150,7 +155,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
         .build();
     if let Err(e) = handle.route().add(no_vpn_route).execute().await {
         // Rollback iptables on failure
-        let _ = teardown_iptables(&wan_info.if_name);
+        let _ = teardown_iptables(&wan_info.if_name, wan_info.ip_addr);
         return Err(e.into());
     }
     tracing::debug!(
@@ -184,7 +189,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
             )
             .execute()
             .await;
-        let _ = teardown_iptables(&wan_info.if_name);
+        let _ = teardown_iptables(&wan_info.if_name, wan_info.ip_addr);
         return Err(e.into());
     }
     tracing::debug!("ip rule add mark {FW_MARK} table {TABLE_ID} pref {RULE_PRIORITY}");
@@ -262,7 +267,7 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfrastructure) {
     }
 
     // Remove the iptables mangle and NAT rules
-    if let Err(error) = teardown_iptables(&wan_info.if_name).map_err(Error::iptables) {
+    if let Err(error) = teardown_iptables(&wan_info.if_name, wan_info.ip_addr).map_err(Error::iptables) {
         tracing::error!(%error, "failed to teardown iptables rules, continuing anyway");
     } else {
         tracing::debug!("iptables rules removed");
@@ -342,10 +347,27 @@ impl NetworkDeviceInfo {
             })
             .ok_or_else(|| Error::General(format!("WAN interface name not found for index {if_index}")))?;
 
+        // Get interface's IPv4 address for SNAT
+        let addresses: Vec<_> = handle.address().get().execute().try_collect().await?;
+        let ip_addr = addresses
+            .iter()
+            .find_map(|addr| {
+                if addr.header.index == if_index {
+                    addr.attributes.iter().find_map(|attr| match attr {
+                        AddressAttribute::Address(IpAddr::V4(ip)) => Some(*ip),
+                        _ => None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::General(format!("WAN interface IP not found for index {if_index}")))?;
+
         Ok(WanInfo {
             if_index,
             if_name,
             gateway,
+            ip_addr,
         })
     }
 
@@ -451,18 +473,17 @@ const IP_CHAIN: &str = "OUTPUT";
 const NAT_TABLE: &str = "nat";
 const NAT_CHAIN: &str = "POSTROUTING";
 
-/// Sets up iptables rules for HOPR traffic bypass using connection tracking.
+/// Sets up iptables rules for HOPR traffic bypass.
 ///
-/// Uses conntrack to mark connections once and restore marks on subsequent packets:
+/// Marks ALL packets from the HOPR UID and uses SNAT for stable UDP/QUIC flows:
 /// 1. `iptables -t mangle -A OUTPUT -o lo -j RETURN`
-/// 2. `iptables -t mangle -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark`
-/// 3. `iptables -t mangle -A OUTPUT -m conntrack --ctstate NEW -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
-/// 4. `iptables -t mangle -A OUTPUT -m conntrack --ctstate NEW -m mark ! --mark 0 -j CONNMARK --save-mark`
-/// 5. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j MASQUERADE`
+/// 2. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
+/// 3. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j SNAT --to-source $WAN_IP`
 ///
-/// This optimization ensures the expensive `--uid-owner` match is only evaluated for NEW
-/// connections. ESTABLISHED packets use fast conntrack lookup to restore marks.
-fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// This approach marks every packet from the HOPR UID, ensuring reliable routing
+/// even when the default route changes (VPN connects/disconnects). SNAT with a
+/// fixed source IP is more stable for long-lived UDP flows than MASQUERADE.
+fn setup_iptables(vpn_uid: u32, wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
     if iptables.chain_exists(IP_TABLE, IP_CHAIN)? {
         iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
@@ -473,33 +494,18 @@ fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::er
     // Rule 1: Keep loopback traffic unmarked
     iptables.append(IP_TABLE, IP_CHAIN, "-o lo -j RETURN")?;
 
-    // Rule 2: Restore mark from conntrack for existing connections (fast path)
+    // Rule 2: Mark ALL traffic from VPN user (no conntrack dependency)
     iptables.append(
         IP_TABLE,
         IP_CHAIN,
-        "-m conntrack --ctstate ESTABLISHED,RELATED -j CONNMARK --restore-mark",
-    )?;
-
-    // Rule 3: Mark NEW connections from VPN user
-    iptables.append(
-        IP_TABLE,
-        IP_CHAIN,
-        &format!(
-            "-m conntrack --ctstate NEW -m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"
-        ),
-    )?;
-
-    // Rule 4: Save mark to conntrack for NEW connections
-    iptables.append(
-        IP_TABLE,
-        IP_CHAIN,
-        "-m conntrack --ctstate NEW -m mark ! --mark 0 -j CONNMARK --save-mark",
+        &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
     )?;
 
     // Rewrite the source address of bypassed (marked) traffic leaving via the WAN interface.
+    // Use SNAT with fixed IP instead of MASQUERADE for more stable UDP/QUIC flows.
     // Without this, packets retain the VPN subnet source IP and the upstream gateway drops them
     // because it has no return route for that subnet.
-    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j MASQUERADE");
+    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j SNAT --to-source {wan_ip}");
     // Delete any stale rule first (e.g. left over from a previous crash) to avoid duplicates.
     // Unlike the mangle chain we cannot flush nat POSTROUTING because other services use it.
     if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule)? {
@@ -510,13 +516,13 @@ fn setup_iptables(vpn_uid: u32, wan_if_name: &str) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-fn teardown_iptables(wan_if_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn teardown_iptables(wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
     iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
 
     // Delete only our specific NAT rule rather than flushing the entire nat POSTROUTING chain,
     // because other services (Docker, libvirt, etc.) install their own rules there.
-    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j MASQUERADE");
+    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j SNAT --to-source {wan_ip}");
     if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule)? {
         iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
     }
