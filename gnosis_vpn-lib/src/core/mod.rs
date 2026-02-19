@@ -80,6 +80,7 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
+    tcp_sessions: HashMap<String, SessionClientMetadata>,
     destination_healths: HashMap<String, DestinationHealth>,
     connectivity_health: HashMap<String, ConnectivityHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,

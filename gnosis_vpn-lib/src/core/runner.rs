@@ -86,7 +86,9 @@ pub enum Results {
         wg_public_key: String,
         res: Result<(), connection::down::Error>,
     },
-    SessionMonitorFailed,
+    SessionMonitorEvent {
+        sessions: Vec<SessionClientMetadata>,
+    },
     HealthCheckEvent {
         id: String,
         evt: HealthCheckEvent,
@@ -216,9 +218,8 @@ pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
     let _ = results_sender.send(Results::ConnectedPeers { res }).await;
 }
 
-pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
-    run_monitor_session(hopr, session).await;
-    let _ = results_sender.send(Results::SessionMonitorFailed).await;
+pub async fn monitor_sessions(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    run_monitor_sessions(hopr, results_sender).await;
 }
 
 async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
@@ -408,18 +409,12 @@ async fn run_fund_channel(
     .await
 }
 
-async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
-    tracing::debug!(?session, "starting session monitor runner");
+async fn run_monitor_sessions(hopr: Arc<Hopr>, results_sender: &mpsc::Sender<Results>) {
+    tracing::debug!("starting session monitor runner");
     loop {
-        let delay = rand::rng().random_range(5..10);
+        let delay = rand::rng().random_range(5..15);
         time::sleep(Duration::from_secs(delay)).await;
-        let sessions = hopr.list_sessions(IpProtocol::UDP).await;
-        let found = sessions.iter().any(|s| s == session);
-        if found {
-            tracing::info!(?session, "session still active");
-        } else {
-            break;
-        }
+        let sessions = hopr.list_sessions(session.protocol).await;
     }
 }
 

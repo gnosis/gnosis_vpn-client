@@ -72,7 +72,7 @@ impl Display for PreSafe {
 pub struct Balances {
     pub node_xdai: Balance<XDai>,
     pub safe_wxhopr: Balance<WxHOPR>,
-    pub channels_out_wxhopr: Balance<WxHOPR>,
+    pub channels_out: HashMap<Address, Balance<WxHOPR>>,
 }
 
 impl Display for Balances {

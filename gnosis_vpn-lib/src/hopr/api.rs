@@ -293,18 +293,17 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
+    pub async fn list_sessions(&self) -> Vec<SessionClientMetadata> {
         tracing::debug!("list hopr sessions");
         self.open_listeners
             .as_ref()
             .0
             .iter()
-            .filter(|content| content.key().0 == protocol)
             .map(|content| {
                 let key = content.key();
                 let entry = content.value();
                 SessionClientMetadata {
-                    protocol,
+                    protocol: key.0,
                     bound_host: key.1,
                     target: entry.target.to_string(),
                     forward_path: entry.forward_path.clone(),
