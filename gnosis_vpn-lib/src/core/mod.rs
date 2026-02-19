@@ -23,7 +23,7 @@ use crate::connectivity_health::{self, ConnectivityHealth};
 use crate::destination_health::{self, DestinationHealth};
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
+use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::ticket_stats::TicketStats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
@@ -425,6 +425,17 @@ impl Core {
 
                     Command::Ping => {
                         let _ = resp.send(Response::Pong);
+                    }
+
+                    Command::Telemetry => {
+                        let res = match hopr::telemetry() {
+                            Ok(t) => Some(t),
+                            Err(err) => {
+                                tracing::error!(?err, "failed to collect hopr telemetry");
+                                None
+                            }
+                        };
+                        let _ = resp.send(Response::Telemetry(res));
                     }
 
                     Command::RefreshNode => {

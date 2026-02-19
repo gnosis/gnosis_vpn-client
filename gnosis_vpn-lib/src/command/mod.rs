@@ -27,6 +27,7 @@ pub enum Command {
     Ping,
     RefreshNode,
     FundingTool(String),
+    Telemetry,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,6 +37,7 @@ pub enum Response {
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
     Metrics(String),
+    Telemetry(Option<String>),
     Pong,
     Empty,
 }
