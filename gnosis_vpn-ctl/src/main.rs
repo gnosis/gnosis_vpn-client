@@ -96,9 +96,15 @@ fn pretty_print(resp: &Response) {
                 "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
                 info.node_address, info.node_peer_id, info.safe_address
             ));
-            str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n"
-            ));
+            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}\n"));
+            if channels_out.is_empty() {
+                str_resp.push_str("---\nNo outgoing channels.\n");
+            } else {
+                str_resp.push_str("---\n");
+            }
+            for (id, addr, balance) in channels_out {
+                str_resp.push_str(&format!("Channel to {id}({addr}): {balance}\n"));
+            }
             if !issues.is_empty() {
                 str_resp.push_str("---\nFunding Issues:\n");
                 for issue in issues {

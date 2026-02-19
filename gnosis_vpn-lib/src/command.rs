@@ -140,7 +140,7 @@ pub enum ConnectionState {
 pub struct BalanceResponse {
     pub node: Balance<XDai>,
     pub safe: Balance<WxHOPR>,
-    pub channels_out: Balance<WxHOPR>,
+    pub channels_out: Vec<(String, Address, Balance<WxHOPR>)>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
 }
@@ -215,7 +215,7 @@ impl BalanceResponse {
     pub fn new(
         node: Balance<XDai>,
         safe: Balance<WxHOPR>,
-        channels_out: Balance<WxHOPR>,
+        channels_out: HashMap<String, Balance<WxHOPR>>,
         issues: Vec<FundingIssue>,
         info: Info,
     ) -> Self {

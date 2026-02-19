@@ -419,7 +419,7 @@ impl Core {
                             let res = command::BalanceResponse::new(
                                 balances.node_xdai,
                                 balances.safe_wxhopr,
-                                balances.channels_out_wxhopr,
+                                balances.channels_out,
                                 issues,
                                 info,
                             );
