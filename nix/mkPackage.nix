@@ -38,8 +38,8 @@ let
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-ctl)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-root)
       (craneLib.fileset.commonCargoSources ../gnosis_vpn-worker)
-      ./rustfmt.toml
-      ./rust-toolchain.toml
+      ../rustfmt.toml
+      ../rust-toolchain.toml
     ];
   };
 
