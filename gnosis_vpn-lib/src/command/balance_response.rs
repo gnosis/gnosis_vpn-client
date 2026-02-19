@@ -1,4 +1,4 @@
-use edgli::hopr_lib::{Address, Balance, WxHOPR, XDai};
+use edgli::hopr_lib::{Address, Balance, NodeId, RoutingOptions, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -69,11 +69,19 @@ fn from_balances<'a, 'b>(
     channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>,
     destinations: impl Iterator<Item = (&'b String, &'b Destination)>,
 ) -> Vec<ChannelOut> {
-    let destinations_by_address: HashMap<Address, String> =
-        destinations.map(|(id, dest)| (dest.address, id.clone())).collect();
+    let destinations_by_relay_address: HashMap<Address, String> = destinations
+        .filter_map(|(id, dest)| match dest.routing.clone() {
+            RoutingOptions::Hops(_) => None,
+            RoutingOptions::IntermediatePath(nodes) => nodes.into_iter().next().and_then(|node_id| match node_id {
+                NodeId::Chain(addr) => Some((addr, id.clone())),
+                NodeId::Offchain(_) => None,
+            }),
+        })
+        .collect();
+
     channels_out
         .map(|(address, balance)| {
-            let destination = if let Some(id) = destinations_by_address.get(address) {
+            let destination = if let Some(id) = destinations_by_relay_address.get(address) {
                 ChannelDestination::Configured((id.clone(), *address))
             } else {
                 ChannelDestination::Unconfigured(*address)
