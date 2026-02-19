@@ -16,6 +16,8 @@ use crate::destination_health::DestinationHealth;
 use crate::info::Info;
 use crate::log_output;
 
+mod balance_response;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
