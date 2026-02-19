@@ -12,7 +12,6 @@ use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
 use multiaddr::Protocol;
-use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
@@ -370,28 +369,9 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub fn get_telemetry(&self) -> Result<HoprTelemetry, HoprError> {
+    pub fn telemetry(&self) -> Result<String, HoprError> {
         tracing::debug!("query hopr telemetry");
-        // Regex to match: hopr_indexer_sync_progress followed by optional labels and a float value
-        // Handles cases like:
-        // hopr_indexer_sync_progress 0.85
-        // hopr_indexer_sync_progress{label="value"} 0.85
-        // hopr_indexer_sync_progress{label1="value1",label2="value2"} 0.85
-        let re = Regex::new(r"hopr_indexer_sync_progress(?:\{[^}]*\})?\s+([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
-            .expect("the sync extraction regex is constructible");
-
-        edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics()
-            .map(move |prometheus_values| {
-                tracing::debug!("prometheus metrics: {}", prometheus_values);
-                let sync_percentage = re
-                    .captures(prometheus_values.as_ref())
-                    .and_then(|caps| caps.get(1))
-                    .and_then(|m| m.as_str().parse::<f32>().ok())
-                    .unwrap_or_default();
-
-                HoprTelemetry { sync_percentage }
-            })
-            .map_err(|e| HoprError::Telemetry(e.to_string()))
+        edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
