@@ -409,19 +409,13 @@ impl Core {
                         if let (Some(hopr), Some(balances), Some(ticket_value)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_value)
                         {
-                            let info = hopr.info();
-                            let min_channel_count = connectivity_health::count_distinct_channels(
-                                &self.connectivity_health.values().collect::<Vec<_>>(),
-                            );
-                            let issues: Vec<balance::FundingIssue> =
-                                balances.to_funding_issues(min_channel_count, ticket_value);
-
                             let res = command::BalanceResponse::new(
-                                balances.node_xdai,
-                                balances.safe_wxhopr,
-                                balances.channels_out_wxhopr,
-                                issues,
-                                info,
+                                &hopr.info(),
+                                &balances,
+                                &ticket_value,
+                                &self.config.destinations.clone(),
+                                self.connectivity_health.values().collect::<Vec<_>>().as_slice(),
+                                self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
                             let _ = resp.send(Response::Balance(Some(res)));
                         } else {

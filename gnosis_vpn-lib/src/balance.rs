@@ -1,6 +1,7 @@
-pub use edgli::hopr_lib::{Balance, WxHOPR, XDai};
+pub use edgli::hopr_lib::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 
 // in order of priority
@@ -72,7 +73,7 @@ impl Display for PreSafe {
 pub struct Balances {
     pub node_xdai: Balance<XDai>,
     pub safe_wxhopr: Balance<WxHOPR>,
-    pub channels_out_wxhopr: Balance<WxHOPR>,
+    pub channels_out: HashMap<Address, Balance<WxHOPR>>,
 }
 
 impl Display for Balances {
@@ -80,7 +81,9 @@ impl Display for Balances {
         write!(
             f,
             "Balances(node_xdai: {}, safe_wxhopr: {}, channels_out_wxhopr: {})",
-            self.node_xdai, self.safe_wxhopr, self.channels_out_wxhopr
+            self.node_xdai,
+            self.safe_wxhopr,
+            self.channels_out.values().copied().sum::<Balance<WxHOPR>>()
         )
     }
 }
@@ -94,13 +97,14 @@ impl Balances {
             return issues;
         }
 
-        if self.channels_out_wxhopr < min_stake_threshold(ticket_value) {
+        let all_channel_funds = self.channels_out.values().copied().sum::<Balance<WxHOPR>>();
+        if all_channel_funds < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if self.safe_wxhopr < min_stake_threshold(ticket_value) {
+        if self.safe_wxhopr < funding_amount(ticket_value) {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < (min_stake_threshold(ticket_value) * channel_targets_len) {
+        } else if self.safe_wxhopr < (funding_amount(ticket_value) * channel_targets_len) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
@@ -138,7 +142,7 @@ mod tests {
         let balances = Balances {
             node_xdai: Balance::<XDai>::zero(),
             safe_wxhopr: Balance::<WxHOPR>::zero(),
-            channels_out_wxhopr: Balance::<WxHOPR>::zero(),
+            channels_out: HashMap::new(),
         };
         let issues = balances.to_funding_issues(2, Balance::<WxHOPR>::from(5u64));
 
