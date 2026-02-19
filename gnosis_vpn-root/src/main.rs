@@ -239,7 +239,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         match routing::setup_fwmark_infrastructure(&worker_user).await {
             Ok(infra) => Some(infra),
             Err(e) => {
-                tracing::error!(?e, "fwmark setup failed - dynamic routing unavailable");
+                tracing::error!(
+                    ?e,
+                    "Dynamic routing is unavailable. VPN connections must use static routing which \
+                     may have reduced reliability during network changes. This typically occurs due to \
+                     insufficient permissions or missing iptables. Use the CLI flag --force-static-routing"
+                );
                 None
             }
         }

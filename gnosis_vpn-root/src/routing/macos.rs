@@ -93,6 +93,10 @@ impl Routing for StaticRouter {
     ///   3. Run wg-quick up (safe now - bypass routes are already in place)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
+        if self.bypass_manager.is_some() {
+            return Err(Error::General("invalid state: already set up".into()));
+        }
+
         // Phase 1: Add peer IP bypass routes BEFORE wg-quick up
         let (device, gateway) = interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");

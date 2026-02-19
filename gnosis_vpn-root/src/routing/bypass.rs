@@ -55,7 +55,7 @@ impl BypassRouteManager {
     ///
     /// On error, automatically rolls back any routes that were successfully added.
     pub async fn setup_peer_routes(&mut self) -> Result<(), Error> {
-        for ip in &self.peer_ips.clone() {
+        for ip in &self.peer_ips {
             if let Err(e) = self.add_peer_route(ip).await {
                 // Rollback what we added so far
                 self.rollback().await;
@@ -155,13 +155,16 @@ impl BypassRouteManager {
 
     #[cfg(target_os = "linux")]
     async fn delete_peer_route(&self, peer_ip: &Ipv4Addr) -> Result<(), Error> {
-        let mut cmd = Command::new("ip");
-        cmd.arg("route").arg("del").arg(peer_ip.to_string());
-        if let Some(ref gw) = self.wan.gateway {
-            cmd.arg("via").arg(gw);
-        }
-        cmd.arg("dev").arg(&self.wan.device);
-        cmd.run_stdout(Logs::Suppress).await?;
+        // Omit gateway from deletion - the gateway may have changed since the route was added,
+        // and ip route del can match by destination + device alone
+        Command::new("ip")
+            .arg("route")
+            .arg("del")
+            .arg(peer_ip.to_string())
+            .arg("dev")
+            .arg(&self.wan.device)
+            .run_stdout(Logs::Suppress)
+            .await?;
         tracing::debug!(peer_ip = %peer_ip, "deleted bypass route");
         Ok(())
     }
@@ -184,13 +187,16 @@ impl BypassRouteManager {
 
     #[cfg(target_os = "linux")]
     async fn delete_subnet_route(&self, cidr: &str) -> Result<(), Error> {
-        let mut cmd = Command::new("ip");
-        cmd.arg("route").arg("del").arg(cidr);
-        if let Some(ref gw) = self.wan.gateway {
-            cmd.arg("via").arg(gw);
-        }
-        cmd.arg("dev").arg(&self.wan.device);
-        cmd.run_stdout(Logs::Suppress).await?;
+        // Omit gateway from deletion - the gateway may have changed since the route was added,
+        // and ip route del can match by destination + device alone
+        Command::new("ip")
+            .arg("route")
+            .arg("del")
+            .arg(cidr)
+            .arg("dev")
+            .arg(&self.wan.device)
+            .run_stdout(Logs::Suppress)
+            .await?;
         tracing::debug!(cidr = %cidr, "deleted RFC1918 bypass route");
         Ok(())
     }

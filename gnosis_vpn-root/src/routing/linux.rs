@@ -112,10 +112,26 @@ pub struct WanInfo {
 /// This struct holds the resources needed for fwmark-based routing bypass.
 /// It is created at daemon startup and destroyed at daemon shutdown,
 /// independent of individual WireGuard connection lifecycles.
+///
+/// **Important**: Must be explicitly torn down via `teardown_fwmark_infrastructure()`
+/// to clean up iptables rules and routing table entries. Dropping without teardown
+/// will log a warning and may leave the system in an inconsistent state.
 pub struct FwmarkInfrastructure {
     pub handle: rtnetlink::Handle,
     pub wan_info: WanInfo,
     pub worker_uid: u32,
+    /// Tracks whether teardown was called. Set to true when teardown_fwmark_infrastructure() is invoked.
+    pub(super) torn_down: bool,
+}
+
+impl Drop for FwmarkInfrastructure {
+    fn drop(&mut self) {
+        if !self.torn_down {
+            tracing::warn!(
+                "FwmarkInfrastructure dropped without teardown - iptables rules and routing entries may be leaked"
+            );
+        }
+    }
 }
 
 /// Sets up the persistent fwmark infrastructure at daemon startup.
@@ -146,7 +162,9 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
     let no_vpn_route = default_route(wan_info.if_index, Some(wan_info.gateway), Some(TABLE_ID));
     if let Err(e) = handle.route().add(no_vpn_route).execute().await {
         // Rollback iptables on failure
-        let _ = teardown_iptables(&wan_info.if_name, wan_info.ip_addr);
+        if let Err(rollback_err) = teardown_iptables(&wan_info.if_name, wan_info.ip_addr) {
+            tracing::warn!(%rollback_err, "rollback failed: could not teardown iptables rules");
+        }
         return Err(e.into());
     }
     tracing::debug!(
@@ -168,12 +186,17 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
         .await
     {
         // Rollback TABLE_ID route and iptables on failure
-        let _ = handle
+        if let Err(rollback_err) = handle
             .route()
             .del(default_route(wan_info.if_index, Some(wan_info.gateway), Some(TABLE_ID)))
             .execute()
-            .await;
-        let _ = teardown_iptables(&wan_info.if_name, wan_info.ip_addr);
+            .await
+        {
+            tracing::warn!(%rollback_err, "rollback failed: could not delete TABLE_ID default route");
+        }
+        if let Err(rollback_err) = teardown_iptables(&wan_info.if_name, wan_info.ip_addr) {
+            tracing::warn!(%rollback_err, "rollback failed: could not teardown iptables rules");
+        }
         return Err(e.into());
     }
     tracing::debug!("ip rule add mark {FW_MARK} table {TABLE_ID} pref {RULE_PRIORITY}");
@@ -183,6 +206,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
         handle,
         wan_info,
         worker_uid: worker.uid,
+        torn_down: false,
     })
 }
 
@@ -196,7 +220,9 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
 /// 2. Deleting the TABLE_ID default route
 /// 3. Flushing the routing cache
 /// 4. Removing iptables mangle and NAT rules
-pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfrastructure) {
+pub async fn teardown_fwmark_infrastructure(mut infra: FwmarkInfrastructure) {
+    // Mark as torn down before we start cleanup - this prevents the Drop warning
+    infra.torn_down = true;
     let FwmarkInfrastructure { handle, wan_info, .. } = infra;
 
     // Delete the fwmark routing table rule
@@ -623,7 +649,9 @@ impl Routing for Router {
             Ok(info) => info,
             Err(e) => {
                 // Rollback: bring down WG
-                let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
+                if let Err(rollback_err) = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await {
+                    tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
+                }
                 return Err(e);
             }
         };
@@ -638,7 +666,9 @@ impl Routing for Router {
         if let Err(e) = self.handle.route().add(vpn_addrs_route).execute().await {
             // Rollback: bring down WG
             self.if_indices = None;
-            let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
+            if let Err(rollback_err) = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await {
+                tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
+            }
             return Err(e.into());
         }
         tracing::debug!(
@@ -667,14 +697,19 @@ impl Routing for Router {
         let vpn_default_route = default_route(vpn_info.if_index, None, None);
         if let Err(e) = self.handle.route().add(vpn_default_route).replace().execute().await {
             // Rollback: remove VPN subnet route, bring down WG
-            let _ = self
+            if let Err(rollback_err) = self
                 .handle
                 .route()
                 .del(vpn_subnet_route(&vpn_info.cidr, vpn_info.if_index, Some(TABLE_ID)))
                 .execute()
-                .await;
+                .await
+            {
+                tracing::warn!(%rollback_err, "rollback failed: could not delete VPN subnet route from TABLE_ID");
+            }
             self.if_indices = None;
-            let _ = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await;
+            if let Err(rollback_err) = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await {
+                tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
+            }
             return Err(e.into());
         }
         tracing::debug!("ip route add default dev {}", vpn_info.if_index);
@@ -790,6 +825,10 @@ impl Routing for FallbackRouter {
     ///      The VPN subnet route overrides the 10.0.0.0/8 bypass for VPN server traffic
     ///
     async fn setup(&mut self) -> Result<(), Error> {
+        if self.bypass_manager.is_some() {
+            return Err(Error::General("invalid state: already set up".into()));
+        }
+
         // Phase 1: Add bypass routes BEFORE wg-quick up
         let (device, gateway) = interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");

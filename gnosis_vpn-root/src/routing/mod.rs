@@ -102,7 +102,6 @@ pub enum Error {
     #[allow(dead_code)]
     NotAvailable,
 
-    #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
     General(String),
 
