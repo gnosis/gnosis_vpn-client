@@ -104,7 +104,7 @@ impl Balances {
 
         if self.safe_wxhopr < funding_amount(ticket_value) {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < (min_stake_threshold(ticket_value) * channel_targets_len) {
+        } else if self.safe_wxhopr < (funding_amount(ticket_value) * channel_targets_len) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
