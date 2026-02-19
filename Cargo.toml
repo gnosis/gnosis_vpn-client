@@ -3,7 +3,7 @@ members = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.72.1"
+version = "0.73.0"
 edition = "2024"
 license = "LGPL-3.0"
 
