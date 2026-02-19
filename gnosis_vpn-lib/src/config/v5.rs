@@ -572,7 +572,7 @@ main = "16 Mb/s"
 bridge = "32 kB"
 health = "16 kB"
 ping = "32 kB"
-main = "2 MB"
+main = "6 MB"
 
 [wireguard]
 listen_port = 51820
