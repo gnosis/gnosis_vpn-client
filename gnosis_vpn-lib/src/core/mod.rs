@@ -669,9 +669,9 @@ impl Core {
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
-                        tracing::info!(%dest, "disconnecting from target destination due to connection error");
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
+                        tracing::info!(%dest, "restarting edge client due to exhausted connection retries");
+                        self.hopr = None;
+                        self.initial_runner(results_sender).await;
                     }
                 }
                 (Err(err), phase) => {
