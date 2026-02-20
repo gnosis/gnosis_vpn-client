@@ -30,6 +30,7 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
+    /// Service state directory - practically identical with home directory of the worker user
     #[arg(
         long,
         env = dirs::ENV_VAR_STATE_HOME,
@@ -37,12 +38,14 @@ pub struct Cli {
     )]
     pub state_home: PathBuf,
 
+    /// Log file path - provide if you want the service to manage the log file
     #[arg(
         long,
         env = logging::ENV_VAR_LOG_FILE,
     )]
     pub log_file: Option<PathBuf>,
 
+    /// PID file path - needed if cannot get the process id otherwise
     #[arg(
         long,
         env = ENV_VAR_PID_FILE,

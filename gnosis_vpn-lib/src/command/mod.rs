@@ -17,6 +17,7 @@ use crate::log_output;
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
 
+/// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
