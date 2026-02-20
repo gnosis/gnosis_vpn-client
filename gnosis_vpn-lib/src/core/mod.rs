@@ -76,7 +76,6 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
@@ -90,21 +89,33 @@ pub struct Core {
 
 #[derive(Debug, Clone)]
 enum Phase {
+    /// initial phase - determine if safe is present
     Initial,
-    CreatingSafe {
+    /// safe absent or safe deployment error - repeatedly query node balance and safe info
+    CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
-        deploy_safe: Querying<SafeModule>,
+        funding_tool: balance::FundingTool,
+        deploy_safe_error: Option<String>,
     },
+    /// enough funds and no deployed safe - run safe deployment
     DeployingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
     },
+    /// safe found - waiting for start command
+    Ready,
+    /// construct edge client
     Starting(Option<EdgliInitState>),
+    /// start edge client
     HoprSyncing,
+    /// edge client running normally
     HoprRunning,
+    /// connecting to a destination
     Connecting(connection::up::Up),
+    /// connected to a destination
     Connected(connection::up::Up),
+    /// dismantle state
     ShuttingDown,
 }
 
@@ -112,8 +123,6 @@ enum Phase {
 enum Querying<T> {
     Init,
     Success(T),
-    // TODO expose error in status
-    #[allow(dead_code)]
     Error(String),
 }
 
@@ -167,7 +176,6 @@ impl Core {
             // runtime data
             phase: Phase::Initial,
             balances: None,
-            funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             safeless_interactor: Arc::new(safeless_interactor),
             ticket_value: None,
@@ -279,30 +287,30 @@ impl Core {
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
-                            Phase::CreatingSafe {
+                            Phase::CheckingSafe {
                                 node_balance,
                                 query_safe: _,
-                                deploy_safe,
+                                funding_tool,
+                                deploy_safe_error,
                             } => {
-                                let safe_creation_error = match deploy_safe {
-                                    Querying::Error(e) => Some(e.clone()),
-                                    _ => None,
-                                };
+                                let safe_creation_error = deploy_safe_error;
                                 let balance = match node_balance {
                                     Querying::Success(b) => Some(b),
                                     _ => None,
                                 };
-                                RunMode::preparing_safe(
-                                    self.node_address,
-                                    &balance,
-                                    self.funding_tool.clone(),
-                                    safe_creation_error,
-                                )
+                                let funding_tool = match funding_tool {
+                                    balance::FundingTool::Init => None,
+                                    balance::FundingTool::InProgress => Some("Funding tool running"),
+                                    balance::FundingTool::Success => Some("Funding tool ran successfully"),
+                                    balance::FundingTool::Error(err) => Some("Funding tool error: {err}"),
+                                };
+                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, safe_creation_error)
                             }
                             Phase::DeployingSafe {
                                 node_balance: _,
                                 query_safe: _,
                             } => RunMode::deploying_safe(self.node_address),
+                            Phase::Ready
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
@@ -447,13 +455,32 @@ impl Core {
                     }
 
                     Command::FundingTool(secret) => {
-                        if matches!(self.phase, Phase::CreatingSafe { .. }) {
-                            self.funding_tool = balance::FundingTool::InProgress;
-                            self.spawn_funding_runner(secret, results_sender);
-                            let _ = resp.send(Response::Empty);
-                        } else {
-                            tracing::warn!("cannot start funding tool - safe already deployed");
-                            let _ = resp.send(Response::Empty);
+                        match self.phase {
+                            Phase::CheckingSafe {
+                                node_balance,
+                                query_safe,
+                                funding_tool,
+                                deploy_safe_error,
+                            } => {
+                                match funding_tool {
+                           balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
+                                self.phase = Phase::CheckingSafe {
+                                    node_balance,
+                                    query_safe,
+                                    funding_tool: balance::FundingTool::InProgress,
+                                    deploy_safe_error,
+                                };
+                                self.spawn_funding_runner(secret, results_sender);
+                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
+                           },
+                            balance::FundingTool::InProgress => {
+                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
+                            },
+                        }
+                    },
+                    _ => {
+                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
+                    },
                         }
                     }
 

@@ -37,17 +37,6 @@ impl Display for FundingIssue {
     }
 }
 
-impl Display for FundingTool {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FundingTool::NotStarted => write!(f, "Funding not started"),
-            FundingTool::InProgress => write!(f, "Funding in progress"),
-            FundingTool::CompletedSuccess => write!(f, "Funding successful"),
-            FundingTool::CompletedError(err) => write!(f, "Funding error: {}", err),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PreSafe {
     pub node_xdai: Balance<XDai>,

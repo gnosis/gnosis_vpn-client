@@ -41,6 +41,7 @@ pub enum Response {
     Balance(Option<BalanceResponse>),
     Metrics(String),
     Telemetry(Option<String>),
+    FundingTool(FundingToolResponse),
     Pong,
     Empty,
 }
@@ -60,11 +61,13 @@ pub enum RunMode {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
-        funding_tool: balance::FundingTool,
+        funding_tool: Option<String>,
         safe_creation_error: Option<String>,
     },
     /// Safe deployment ongoing
     DeployingSafe { node_address: Address },
+    /// Waiting for start command
+    Ready,
     /// Hopr started, determining ticket value for strategies
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
@@ -75,6 +78,8 @@ pub enum RunMode {
         funding: FundingState,
         hopr_status: Option<HoprStatus>,
     },
+    /// Shutting down hopr edge client
+    Cooldown,
     /// Shutting down service
     Shutdown,
 }
@@ -127,6 +132,14 @@ pub enum DisconnectResponse {
     NotConnected,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum FundingToolResponse {
+    WrongPhase,
+    Started,
+    InProgress,
+    Done,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
@@ -147,7 +160,7 @@ impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
         pre_safe: &Option<balance::PreSafe>,
-        funding_tool: balance::FundingTool,
+        funding_tool: Option<String>,
         safe_creation_error: Option<String>,
     ) -> Self {
         RunMode::PreparingSafe {
@@ -220,6 +233,10 @@ impl Response {
 
     pub fn status(stat: StatusResponse) -> Self {
         Response::Status(stat)
+    }
+
+    pub fn funding_tool(funding_tool: FundingToolResponse) -> Self {
+        Response::FundingTool(funding_tool)
     }
 }
 
@@ -306,6 +323,7 @@ impl Display for RunMode {
                 }
             }
             RunMode::DeployingSafe { node_address } => write!(f, "Deploying Safe (node: {})", node_address),
+            RunMode::Ready => write!(f, "Ready to start"),
             RunMode::Warmup {
                 hopr_init_status,
                 hopr_status,
@@ -318,6 +336,7 @@ impl Display for RunMode {
                 Some(hopr_status) => write!(f, "Ready ({hopr_status}), {funding}"),
                 None => write!(f, "Ready, {funding}"),
             },
+            RunMode::Cooldown => write!(f, "Cooldown"),
             RunMode::Shutdown => write!(f, "Shutting down"),
         }
     }
