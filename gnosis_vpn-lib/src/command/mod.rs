@@ -21,6 +21,8 @@ pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
+    Start,
+    Stop,
     Connect(String),
     Metrics,
     Disconnect,

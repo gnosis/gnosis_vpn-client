@@ -30,6 +30,14 @@ pub enum Command {
     #[command()]
     Status {},
 
+    /// Start edge client to enable mixnet connections
+    #[command()]
+    Start {},
+
+    /// Stop edge client
+    #[command()]
+    Stop {},
+
     /// Connect to this exit location
     #[command()]
     Connect {
@@ -69,6 +77,8 @@ impl From<Command> for LibCommand {
     fn from(val: Command) -> Self {
         match val {
             Command::Status {} => LibCommand::Status,
+            Command::Start {} => LibCommand::Start,
+            Command::Stop {} => LibCommand::Stop,
             Command::Connect { id } => LibCommand::Connect(id),
             Command::Disconnect {} => LibCommand::Disconnect,
             Command::Balance {} => LibCommand::Balance,

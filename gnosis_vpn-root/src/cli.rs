@@ -83,6 +83,10 @@ pub struct Cli {
     /// Avoid dynamic peer discovery while connected to the VPN
     #[arg(long, env = worker::ENV_VAR_FORCE_STATIC_ROUTING)]
     pub force_static_routing: bool,
+
+    /// Start worker after startup without waiting for start command
+    #[arg(long)]
+    pub autostart: bool,
 }
 
 pub fn parse() -> Cli {
