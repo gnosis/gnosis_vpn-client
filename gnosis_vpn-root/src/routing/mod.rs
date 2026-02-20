@@ -69,6 +69,11 @@ pub use linux::{
 #[cfg(target_os = "macos")]
 pub use macos::{WanInfo, dynamic_router, static_router};
 
+#[cfg(target_os = "linux")]
+pub type RouterHandle = rtnetlink::Handle;
+#[cfg(not(target_os = "linux"))]
+pub type RouterHandle = ();
+
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)
 /// so they take precedence in the routing table.
@@ -118,11 +123,6 @@ impl Error {
     #[cfg(target_os = "linux")]
     pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
         Self::IpTables(e.into().to_string())
-    }
-
-    #[allow(dead_code)] // May be used for error handling in the future
-    pub fn is_not_available(&self) -> bool {
-        matches!(self, Self::NotAvailable)
     }
 }
 

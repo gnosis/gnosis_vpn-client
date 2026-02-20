@@ -203,6 +203,9 @@ impl BypassRouteManager {
 
     #[cfg(target_os = "macos")]
     async fn add_peer_route(&self, peer_ip: &Ipv4Addr) -> Result<(), Error> {
+        // Delete any existing route first (make idempotent)
+        let _ = self.delete_peer_route(peer_ip).await;
+
         let mut cmd = Command::new("route");
         cmd.arg("-n").arg("add").arg("-host").arg(peer_ip.to_string());
         if let Some(ref gw) = self.wan.gateway {

@@ -250,14 +250,26 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         }
     };
 
-    // Extract WanInfo for dynamic routing (Linux only)
+    // Extract WanInfo and rtnetlink handle for dynamic routing (Linux only)
     #[cfg(target_os = "linux")]
     let wan_info: Option<routing::WanInfo> = fwmark_infra.as_ref().map(|i| i.wan_info.clone());
+    #[cfg(target_os = "linux")]
+    let rtnetlink_handle: Option<routing::RouterHandle> = fwmark_infra.as_ref().map(|i| i.handle.clone());
 
     #[cfg(not(target_os = "linux"))]
     let wan_info: Option<routing::WanInfo> = None;
+    #[cfg(not(target_os = "linux"))]
+    let rtnetlink_handle: Option<routing::RouterHandle> = None;
 
-    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router, wan_info).await;
+    let res = loop_daemon(
+        setup,
+        &mut signal_receiver,
+        socket,
+        &mut maybe_router,
+        wan_info,
+        rtnetlink_handle,
+    )
+    .await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
@@ -281,6 +293,7 @@ async fn loop_daemon(
     socket: UnixListener,
     maybe_router: &mut Option<Box<dyn Routing>>,
     wan_info: Option<routing::WanInfo>,
+    rtnetlink_handle: Option<routing::RouterHandle>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -447,9 +460,12 @@ async fn loop_daemon(
                                 teardown_any_routing(maybe_router, false).await;
 
                                 // Dynamic routing requires WAN info (from fwmark infrastructure on Linux)
-                                let router_result = match &wan_info {
-                                    Some(info) => routing::dynamic_router(state_home.clone(), wg_data, info.clone()),
-                                    None => {
+                                let router_result = match (&wan_info, &rtnetlink_handle) {
+                                    #[cfg(target_os = "linux")]
+                                    (Some(info), Some(handle)) => routing::dynamic_router(state_home.clone(), wg_data, info.clone(), handle.clone()),
+                                    #[cfg(not(target_os = "linux"))]
+                                    (Some(info), _) => routing::dynamic_router(state_home.clone(), wg_data, info.clone()),
+                                    _ => {
                                         let res = Err("WAN interface detection failed during startup - dynamic routing unavailable".to_string());
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
                                         continue;

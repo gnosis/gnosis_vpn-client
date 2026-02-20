@@ -52,9 +52,12 @@ use crate::wg_tooling;
 ///
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
-pub fn dynamic_router(state_home: PathBuf, wg_data: event::WireGuardData, wan_info: WanInfo) -> Result<Router, Error> {
-    let (conn, handle, _) = rtnetlink::new_connection()?;
-    tokio::task::spawn(conn); // Task terminates once the Router is dropped
+pub fn dynamic_router(
+    state_home: PathBuf,
+    wg_data: event::WireGuardData,
+    wan_info: WanInfo,
+    handle: rtnetlink::Handle,
+) -> Result<Router, Error> {
     Ok(Router {
         state_home,
         wg_data,
@@ -429,7 +432,7 @@ impl NetworkDeviceInfo {
 pub struct Router {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
-    // Once dropped, the spawned rtnetlink task will terminate
+    // Shared rtnetlink handle, cloned from FwmarkInfrastructure
     handle: rtnetlink::Handle,
     /// WAN interface info, obtained from FwmarkInfrastructure
     wan_info: WanInfo,
@@ -458,6 +461,7 @@ const RULE_PRIORITY: u32 = 1;
 
 const IP_TABLE: &str = "mangle";
 const IP_CHAIN: &str = "OUTPUT";
+const CUSTOM_CHAIN: &str = "GNOSIS_VPN";
 
 const NAT_TABLE: &str = "nat";
 const NAT_CHAIN: &str = "POSTROUTING";
@@ -537,31 +541,43 @@ where
     }
 }
 
-/// Sets up iptables rules for HOPR traffic bypass.
+/// Sets up iptables rules for HOPR traffic bypass using a custom chain.
 ///
-/// Marks ALL packets from the HOPR UID and uses SNAT for stable UDP/QUIC flows:
-/// 1. `iptables -t mangle -A OUTPUT -o lo -j RETURN`
-/// 2. `iptables -t mangle -A OUTPUT -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
-/// 3. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j SNAT --to-source $WAN_IP`
+/// Uses a dedicated `GNOSIS_VPN` chain in the mangle table to avoid flushing the
+/// built-in OUTPUT chain (which would destroy rules from other services):
+/// 1. Create/flush `GNOSIS_VPN` chain in mangle table
+/// 2. Add jump rule: `iptables -t mangle -A OUTPUT -j GNOSIS_VPN`
+/// 3. `iptables -t mangle -A GNOSIS_VPN -o lo -j RETURN`
+/// 4. `iptables -t mangle -A GNOSIS_VPN -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
+/// 5. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j SNAT --to-source $WAN_IP`
 ///
 /// This approach marks every packet from the HOPR UID, ensuring reliable routing
 /// even when the default route changes (VPN connects/disconnects). SNAT with a
 /// fixed source IP is more stable for long-lived UDP flows than MASQUERADE.
 fn setup_iptables(vpn_uid: u32, wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
-    if iptables.chain_exists(IP_TABLE, IP_CHAIN)? {
-        iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
+
+    // Step 1: Create or flush our custom chain (idempotent for crash recovery)
+    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN)? {
+        iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN)?;
     } else {
-        iptables.new_chain(IP_TABLE, IP_CHAIN)?;
+        iptables.new_chain(IP_TABLE, CUSTOM_CHAIN)?;
     }
 
-    // Rule 1: Keep loopback traffic unmarked
-    iptables.append(IP_TABLE, IP_CHAIN, "-o lo -j RETURN")?;
+    // Step 2: Ensure a single jump rule from OUTPUT → GNOSIS_VPN
+    let jump_rule = format!("-j {CUSTOM_CHAIN}");
+    if iptables.exists(IP_TABLE, IP_CHAIN, &jump_rule)? {
+        iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule)?;
+    }
+    iptables.append(IP_TABLE, IP_CHAIN, &jump_rule)?;
 
-    // Rule 2: Mark ALL traffic from VPN user (no conntrack dependency)
+    // Step 3: Keep loopback traffic unmarked
+    iptables.append(IP_TABLE, CUSTOM_CHAIN, "-o lo -j RETURN")?;
+
+    // Step 4: Mark ALL traffic from VPN user (no conntrack dependency)
     iptables.append(
         IP_TABLE,
-        IP_CHAIN,
+        CUSTOM_CHAIN,
         &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
     )?;
 
@@ -582,7 +598,16 @@ fn setup_iptables(vpn_uid: u32, wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(
 
 fn teardown_iptables(wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
-    iptables.flush_chain(IP_TABLE, IP_CHAIN)?;
+
+    // Ordering: flush chain → delete jump from OUTPUT → delete chain
+    iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN)?;
+
+    let jump_rule = format!("-j {CUSTOM_CHAIN}");
+    if iptables.exists(IP_TABLE, IP_CHAIN, &jump_rule)? {
+        iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule)?;
+    }
+
+    iptables.delete_chain(IP_TABLE, CUSTOM_CHAIN)?;
 
     // Delete only our specific NAT rule rather than flushing the entire nat POSTROUTING chain,
     // because other services (Docker, libvirt, etc.) install their own rules there.
