@@ -42,6 +42,7 @@ pub enum Response {
     Metrics(String),
     Telemetry(Option<String>),
     FundingTool(FundingToolResponse),
+    StartStop(StartStopResponse),
     Pong,
     Empty,
 }
@@ -140,6 +141,12 @@ pub enum FundingToolResponse {
     Done,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum StartStopResponse {
+    Ok,
+    WrongPhase,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
@@ -167,7 +174,7 @@ impl RunMode {
             node_address,
             node_xdai: pre_safe.clone().map(|s| s.node_xdai).unwrap_or_default(),
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
-            funding_tool,
+            funding_tool: funding_tool,
             safe_creation_error,
         }
     }

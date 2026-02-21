@@ -77,6 +77,7 @@ pub struct Core {
     phase: Phase,
     balances: Option<balance::Balances>,
     hopr: Option<Arc<Hopr>>,
+    safe_module: Option<SafeModule>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
     destination_healths: HashMap<String, DestinationHealth>,
@@ -85,6 +86,15 @@ pub struct Core {
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
     ongoing_channel_fundings: Vec<Address>,
+}
+
+enum Target {
+    /// Idle in ready state waiting to start
+    Stopped,
+    /// Idle in running state waiting for connection
+    Disconnected,
+    /// connect to target destination
+    Connect(Destination),
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +125,8 @@ enum Phase {
     Connecting(connection::up::Up),
     /// connected to a destination
     Connected(connection::up::Up),
+    /// stop edge client and return to ready state
+    Stopping,
     /// dismantle state
     ShuttingDown,
 }
@@ -177,6 +189,7 @@ impl Core {
             phase: Phase::Initial,
             balances: None,
             hopr: None,
+            safe_module: None,
             safeless_interactor: Arc::new(safeless_interactor),
             ticket_value: None,
             strategy_handle: None,
@@ -299,10 +312,14 @@ impl Core {
                                     _ => None,
                                 };
                                 let funding_tool = match funding_tool {
-                                    balance::FundingTool::Init => None,
-                                    balance::FundingTool::InProgress => Some("Funding tool running"),
-                                    balance::FundingTool::Success => Some("Funding tool ran successfully"),
-                                    balance::FundingTool::Error(err) => Some("Funding tool error: {err}"),
+                                    balance::FundingTool::NotStarted => None,
+                                    balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
+                                    balance::FundingTool::CompletedSuccess => {
+                                        Some("Funding tool ran successfully".to_string())
+                                    }
+                                    balance::FundingTool::CompletedError(err) => {
+                                        Some("Funding tool error: {err}".to_string())
+                                    }
                                 };
                                 RunMode::preparing_safe(self.node_address, &balance, funding_tool, safe_creation_error)
                             }
@@ -310,7 +327,7 @@ impl Core {
                                 node_balance: _,
                                 query_safe: _,
                             } => RunMode::deploying_safe(self.node_address),
-                            Phase::Ready
+                            Phase::Ready => RunMode::Ready,
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
@@ -324,6 +341,7 @@ impl Core {
                                     RunMode::running(None, self.hopr.as_ref().map(|h| h.status()))
                                 }
                             }
+                            Phase::Stopping => RunMode::Cooldown,
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
@@ -454,16 +472,14 @@ impl Core {
                         let _ = resp.send(Response::Empty);
                     }
 
-                    Command::FundingTool(secret) => {
-                        match self.phase {
-                            Phase::CheckingSafe {
-                                node_balance,
-                                query_safe,
-                                funding_tool,
-                                deploy_safe_error,
-                            } => {
-                                match funding_tool {
-                           balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
+                    Command::FundingTool(secret) => match self.phase {
+                        Phase::CheckingSafe {
+                            node_balance,
+                            query_safe,
+                            funding_tool,
+                            deploy_safe_error,
+                        } => match funding_tool {
+                            balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
                                 self.phase = Phase::CheckingSafe {
                                     node_balance,
                                     query_safe,
@@ -471,18 +487,19 @@ impl Core {
                                     deploy_safe_error,
                                 };
                                 self.spawn_funding_runner(secret, results_sender);
-                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
-                           },
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
+                            }
                             balance::FundingTool::InProgress => {
-                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
-                            },
-                        }
-                    },
-                    _ => {
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
+                            }
+                            balance::FundingTool::CompletedSuccess => {
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Done));
+                            }
+                        },
+                        _ => {
                             let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
-                    },
                         }
-                    }
+                    },
 
                     Command::Metrics => {
                         let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
@@ -493,6 +510,22 @@ impl Core {
                             }
                         };
                         let _ = resp.send(Response::Metrics(metrics));
+                    }
+                    Command::Start => {
+                        if self.phase == Phase.Ready {
+                            self.spawn_hopr_runner(results_sender, Duration::ZERO);
+                            let _ = resp.send(Response::start_stop(command::StartStopResponse::Ok));
+                        } else {
+                            let _ = resp.send(Response::start_stop(command::StartStopResponse::WrongPhase));
+                        }
+                    }
+                    Command::Stop => {
+                        if self.phase == Phase.Ready {
+                            self.spawn_hopr_runner(results_sender, Duration::ZERO);
+                            let _ = resp.send(Response::start_stop(command::StartStopResponse::Ok));
+                        } else {
+                            let _ = resp.send(Response::start_stop(command::StartStopResponse::WrongPhase));
+                        }
                     }
                 }
                 true
@@ -929,9 +962,17 @@ impl Core {
         let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
             Ok(safe_module) => {
-                tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
-                // start edge client with existing safe module
-                self.spawn_hopr_runner(safe_module, results_sender, Duration::ZERO);
+                self.safe_module = Some(safe_module.clone());
+                if self.worker_params.autostart() {
+                    tracing::debug!(?safe_module, "found existing safe module - autostarting hopr runner");
+                    self.spawn_hopr_runner(safe_module, results_sender, Duration::ZERO);
+                } else {
+                    tracing::debug!(
+                        ?safe_module,
+                        "found existing safe module - ready waiting for start command"
+                    );
+                    self.phase = Phase::Ready;
+                }
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
@@ -942,10 +983,11 @@ impl Core {
                         "error deserializing existing safe module - querying safeless interactor"
                     );
                 }
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Init,
                     query_safe: Querying::Init,
-                    deploy_safe: Querying::Init,
+                    deploy_safe_error: None,
+                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::ZERO);
                 self.spawn_node_balance_runner(results_sender, Duration::ZERO);
