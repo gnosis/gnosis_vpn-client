@@ -83,7 +83,7 @@ impl Default for MaxSurbUpstream {
             bridge: Bandwidth::from_kbps(512),
             health: Bandwidth::from_kbps(256),
             ping: Bandwidth::from_kbps(512),
-            main: Bandwidth::from_mbps(8),
+            main: Bandwidth::from_mbps(16),
         }
     }
 }
@@ -95,7 +95,7 @@ impl Default for BufferSizes {
             health: ByteSize::kb(16),
             ping: ByteSize::mb(1),
             // maximum allowed buffer size is 10 MB
-            main: ByteSize::mb(6),
+            main: ByteSize::mb(10),
         }
     }
 }

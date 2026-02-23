@@ -59,6 +59,10 @@ pub enum Command {
     /// Solicit a ping response ("pong") from the service and it's worker process to check if it is alive
     #[command()]
     Ping {},
+
+    /// Trigger telemetry gathering from underlying edge client
+    #[command()]
+    Telemetry {},
 }
 
 impl From<Command> for LibCommand {
@@ -71,6 +75,7 @@ impl From<Command> for LibCommand {
             Command::RefreshNode {} => LibCommand::RefreshNode,
             Command::FundingTool { secret } => LibCommand::FundingTool(secret),
             Command::Ping {} => LibCommand::Ping,
+            Command::Telemetry {} => LibCommand::Telemetry,
         }
     }
 }

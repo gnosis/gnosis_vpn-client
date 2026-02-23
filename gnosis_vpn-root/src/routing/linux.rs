@@ -65,7 +65,6 @@ pub fn dynamic_router(
         wan_info,
         if_indices: None,
     })
-}   })
 }
 
 /// Creates a static fallback router using direct `ip route` commands.
@@ -145,7 +144,6 @@ impl Drop for FwmarkInfrastructure {
     }
 }
 
-
 /// Cleans up any stale iptables rules and routing entries from a previous crash.
 ///
 /// This should be called at daemon startup before `setup_fwmark_infrastructure()`
@@ -192,9 +190,10 @@ pub async fn cleanup_stale_fwmark_rules() {
         while let Ok(Some(rule)) = rules.try_next().await {
             // Check if this rule matches our fwmark and table
             let is_our_rule = rule.header.table == TABLE_ID as u8
-                || rule.attributes.iter().any(|attr| {
-                    matches!(attr, RuleAttribute::FwMark(m) if *m == FW_MARK)
-                });
+                || rule
+                    .attributes
+                    .iter()
+                    .any(|attr| matches!(attr, RuleAttribute::FwMark(m) if *m == FW_MARK));
 
             if is_our_rule {
                 tracing::info!("found stale fwmark rule - cleaning up");

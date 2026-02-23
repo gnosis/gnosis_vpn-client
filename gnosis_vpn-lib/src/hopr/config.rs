@@ -1,4 +1,3 @@
-use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
 use tokio::fs;
@@ -57,15 +56,11 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
 pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
     let content = format!(
         r##"
-host:
-    port: {port}
-    address: !Domain edge.example.com
 safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
 publish: false
 "##,
-        port = rand::rng().random_range(20000..65000),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
     );

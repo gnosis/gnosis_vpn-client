@@ -63,6 +63,12 @@ fn pretty_print(resp: &Response) {
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
         }
+        Response::Telemetry(Some(metrics)) => {
+            println!("{metrics}");
+        }
+        Response::Telemetry(None) => {
+            println!("No telemetry information available.");
+        }
         Response::Status(command::StatusResponse { run_mode, destinations }) => {
             let mut str_resp = format!("{run_mode}\n");
             for dest_state in destinations {
@@ -96,9 +102,15 @@ fn pretty_print(resp: &Response) {
                 "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
                 info.node_address, info.node_peer_id, info.safe_address
             ));
-            str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}\nChannels Out: {channels_out}\n"
-            ));
+            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}\n"));
+            if channels_out.is_empty() {
+                str_resp.push_str("---\nNo outgoing channels.\n");
+            } else {
+                str_resp.push_str("---\n");
+            }
+            for ch in channels_out {
+                str_resp.push_str(&format!("{ch}\n"));
+            }
             if !issues.is_empty() {
                 str_resp.push_str("---\nFunding Issues:\n");
                 for issue in issues {
@@ -135,5 +147,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Empty => exitcode::OK,
         Response::Metrics(..) => exitcode::OK,
+        Response::Telemetry(Some(_)) => exitcode::OK,
+        Response::Telemetry(None) => exitcode::UNAVAILABLE,
     }
 }
