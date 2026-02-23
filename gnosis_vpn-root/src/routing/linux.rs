@@ -3,15 +3,15 @@
 //! Provides two router implementations:
 //!
 //! ## [`Router`] (Dynamic)
-//! Uses rtnetlink and iptables for advanced split-tunnel routing:
-//! 1. Sets up iptables rules to mark HOPR traffic with a firewall mark (fwmark)
+//! Uses rtnetlink and firewall rules for advanced split-tunnel routing:
+//! 1. Sets up firewall rules to mark HOPR traffic with a firewall mark (fwmark)
 //! 2. Creates a separate routing table (TABLE_ID) for marked traffic to bypass VPN
 //! 3. Runs `wg-quick up` with `Table = off` to prevent automatic routing
 //! 4. Adds VPN subnet route (10.128.0.0/9) to both TABLE_ID and main table
 //! 5. Configures default route through VPN for all other traffic
 //!
 //! ## [`FallbackRouter`] (Static)
-//! Simpler implementation using direct `ip route` commands:
+//! Simpler implementation using route operations via netlink:
 //! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
 //! 2. Adds RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
 //! 3. Runs `wg-quick up` with PostUp hook for VPN subnet route (10.128.0.0/9)
@@ -33,9 +33,11 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::iptables_ops::{IptablesOps, RealIptablesOps};
+use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
 use super::netlink_ops::{NetlinkOps, RealNetlinkOps, RouteSpec, RuleSpec};
-use super::shell_ops::{RealShellOps, ShellOps};
+use super::route_ops::RouteOps;
+use super::route_ops_linux::NetlinkRouteOps;
+use super::wg_ops::{RealWgOps, WgOps};
 use super::{Error, Routing, VPN_TUNNEL_SUBNET};
 
 // ============================================================================
@@ -49,7 +51,7 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 // Factory Functions (public convenience wrappers)
 // ============================================================================
 
-/// Creates a dynamic router using rtnetlink and iptables.
+/// Creates a dynamic router using rtnetlink and firewall rules.
 ///
 /// This is the preferred router on Linux as it provides more robust split-tunnel
 /// routing using firewall marks (fwmark) and policy-based routing.
@@ -62,19 +64,21 @@ pub fn dynamic_router(
     wan_info: WanInfo,
     handle: rtnetlink::Handle,
 ) -> Result<impl Routing, Error> {
-    let netlink = RealNetlinkOps::new(handle);
-    let shell = RealShellOps;
+    let netlink = RealNetlinkOps::new(handle.clone());
+    let route_ops = NetlinkRouteOps::new(handle);
+    let wg = RealWgOps;
     Ok(Router {
         state_home,
         wg_data,
         netlink,
-        shell,
+        route_ops,
+        wg,
         wan_info,
         if_indices: None,
     })
 }
 
-/// Creates a static fallback router using direct `ip route` commands.
+/// Creates a static fallback router using route operations via netlink.
 ///
 /// Used when dynamic routing is not available. Provides simpler routing
 /// by adding explicit host routes for peer IPs before bringing up WireGuard.
@@ -82,21 +86,26 @@ pub fn static_fallback_router(
     state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-) -> impl Routing {
-    FallbackRouter {
+) -> Result<impl Routing, Error> {
+    let (conn, handle, _) = rtnetlink::new_connection()?;
+    tokio::task::spawn(conn);
+    let route_ops = NetlinkRouteOps::new(handle);
+    let wg = RealWgOps;
+    Ok(FallbackRouter {
         state_home,
         wg_data,
         peer_ips,
-        shell: RealShellOps,
+        route_ops,
+        wg,
         bypass_manager: None,
-    }
+    })
 }
 
 // ============================================================================
 // Fwmark Infrastructure (public convenience wrappers)
 // ============================================================================
 
-/// Cleans up any stale iptables rules and routing entries from a previous crash.
+/// Cleans up any stale firewall rules and routing entries from a previous crash.
 ///
 /// This should be called at daemon startup before `setup_fwmark_infrastructure()`
 /// to ensure a clean slate. Safe to call even if no stale rules exist.
@@ -105,10 +114,10 @@ pub fn static_fallback_router(
 pub async fn cleanup_stale_fwmark_rules() {
     tracing::debug!("checking for stale fwmark infrastructure from previous crash");
 
-    let iptables = match RealIptablesOps::new() {
-        Ok(ipt) => ipt,
+    let nft = match RealNfTablesOps::new() {
+        Ok(nft) => nft,
         Err(e) => {
-            tracing::debug!("cannot create iptables for stale cleanup: {e}");
+            tracing::debug!("cannot create firewall ops for stale cleanup: {e}");
             return;
         }
     };
@@ -123,19 +132,19 @@ pub async fn cleanup_stale_fwmark_rules() {
     tokio::task::spawn(conn);
     let netlink = RealNetlinkOps::new(handle);
 
-    cleanup_stale_fwmark_rules_with(&netlink, &iptables).await;
+    cleanup_stale_fwmark_rules_with(&netlink, &nft).await;
 }
 
 /// Sets up the persistent fwmark infrastructure at daemon startup.
 ///
-/// This establishes the iptables rules and routing table entries that
+/// This establishes the firewall rules and routing table entries that
 /// allow HOPR traffic to bypass the VPN tunnel. This setup persists
 /// for the lifetime of the daemon, independent of individual VPN connections.
 ///
 /// The setup includes:
 /// 1. Creating an rtnetlink connection for route management
 /// 2. Getting WAN interface info (index, name, gateway)
-/// 3. Setting up iptables rules to mark HOPR traffic with FW_MARK
+/// 3. Setting up firewall rules to mark HOPR traffic with FW_MARK
 /// 4. Creating TABLE_ID routing table with WAN as default gateway
 /// 5. Adding fwmark rule: marked traffic uses TABLE_ID (bypasses VPN)
 pub async fn setup_fwmark_infrastructure(
@@ -144,29 +153,30 @@ pub async fn setup_fwmark_infrastructure(
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
     let netlink = RealNetlinkOps::new(handle);
-    let iptables = RealIptablesOps::new().map_err(Error::iptables)?;
-    setup_fwmark_infrastructure_with(worker, netlink, &iptables).await
+    let nft = RealNfTablesOps::new()?;
+    setup_fwmark_infrastructure_with(worker, netlink, &nft).await
 }
 
 /// Tears down the persistent fwmark infrastructure at daemon shutdown.
 ///
-/// This removes the iptables rules and routing table entries that were
+/// This removes the firewall rules and routing table entries that were
 /// set up by `setup_fwmark_infrastructure`.
 ///
 /// The teardown includes:
 /// 1. Deleting the fwmark routing rule
 /// 2. Deleting the TABLE_ID default route
-/// 3. Flushing the routing cache
-/// 4. Removing iptables mangle and NAT rules
+/// 3. Removing firewall mangle and NAT rules
 pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
-    let Ok(iptables) = RealIptablesOps::new().map_err(|e| {
-        tracing::warn!(
-            "cannot create iptables for teardown, cleanup will happen at next startup: {e}"
-        );
-    }) else {
-        return;
+    let nft = match RealNfTablesOps::new() {
+        Ok(nft) => nft,
+        Err(e) => {
+            tracing::warn!(
+                "cannot create firewall ops for teardown, cleanup will happen at next startup: {e}"
+            );
+            return;
+        }
     };
-    teardown_fwmark_infrastructure_with(infra, &iptables, &RealShellOps).await;
+    teardown_fwmark_infrastructure_with(infra, &nft).await;
 }
 
 // ============================================================================
@@ -174,33 +184,13 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
 // ============================================================================
 
 /// Testable version of `cleanup_stale_fwmark_rules`.
-pub(crate) async fn cleanup_stale_fwmark_rules_with<N: NetlinkOps, I: IptablesOps>(
+pub(crate) async fn cleanup_stale_fwmark_rules_with<N: NetlinkOps, F: NfTablesOps>(
     netlink: &N,
-    iptables: &I,
+    nft: &F,
 ) {
-    // Try to remove stale iptables rules (ignore errors - they may not exist)
-    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN).unwrap_or(false) {
-        tracing::info!("found stale {} chain - cleaning up", CUSTOM_CHAIN);
-        let _ = iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN);
-        let jump_rule = format!("-j {CUSTOM_CHAIN}");
-        let _ = iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule);
-        let _ = iptables.delete_chain(IP_TABLE, CUSTOM_CHAIN);
-    }
-
-    // Clean up stale NAT rules by scanning for our mark pattern.
-    // We can't know the exact WAN IP from a previous run, but we can look for rules
-    // with our distinctive fwmark. This is approximate - we delete any SNAT rule
-    // matching our mark pattern.
-    if let Ok(rules) = iptables.list(NAT_TABLE, NAT_CHAIN) {
-        let mark_pattern = format!("--mark {FW_MARK:#x}");
-        let mark_pattern_alt = format!("--mark {FW_MARK}");
-        for rule in rules {
-            if rule.contains(&mark_pattern) || rule.contains(&mark_pattern_alt) {
-                tracing::info!("found stale NAT rule - cleaning up: {}", rule);
-                // The rule from list() includes the -A prefix, need to construct delete
-                let _ = iptables.delete(NAT_TABLE, NAT_CHAIN, &rule);
-            }
-        }
+    // Try to remove stale firewall rules (ignore errors - they may not exist)
+    if let Err(e) = nft.cleanup_stale_rules(FW_MARK) {
+        tracing::debug!("stale firewall cleanup error (may be benign): {e}");
     }
 
     // Try to remove stale TABLE_ID routes and fwmark rules via netlink
@@ -228,19 +218,18 @@ pub(crate) async fn cleanup_stale_fwmark_rules_with<N: NetlinkOps, I: IptablesOp
 }
 
 /// Testable version of `setup_fwmark_infrastructure`.
-pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, I: IptablesOps>(
+pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesOps>(
     worker: &worker::Worker,
     netlink: N,
-    iptables: &I,
+    nft: &F,
 ) -> Result<FwmarkInfrastructure<N>, Error> {
     // Get WAN interface info
     let wan_info = get_wan_info(&netlink).await?;
     tracing::debug!(?wan_info, "WAN interface data for fwmark infrastructure");
 
-    // Setup iptables rules to mark HOPR traffic for bypass
-    setup_iptables_with(iptables, worker.uid, &wan_info.if_name, wan_info.ip_addr)
-        .map_err(Error::iptables)?;
-    tracing::debug!(uid = worker.uid, wan_ip = %wan_info.ip_addr, "iptables rules set up");
+    // Setup firewall rules to mark HOPR traffic for bypass
+    nft.setup_fwmark_rules(worker.uid, &wan_info.if_name, FW_MARK, wan_info.ip_addr)?;
+    tracing::debug!(uid = worker.uid, wan_ip = %wan_info.ip_addr, "firewall rules set up");
 
     // Create TABLE_ID with WAN default route
     let no_vpn_route = RouteSpec {
@@ -251,11 +240,11 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, I: IptablesO
         table_id: Some(TABLE_ID),
     };
     if let Err(e) = netlink.route_add(&no_vpn_route).await {
-        // Rollback iptables on failure
+        // Rollback firewall rules on failure
         if let Err(rollback_err) =
-            teardown_iptables_with(iptables, &wan_info.if_name, wan_info.ip_addr)
+            nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr)
         {
-            tracing::warn!(%rollback_err, "rollback failed: could not teardown iptables rules");
+            tracing::warn!(%rollback_err, "rollback failed: could not teardown firewall rules");
         }
         return Err(e);
     }
@@ -272,14 +261,14 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, I: IptablesO
         priority: RULE_PRIORITY,
     };
     if let Err(e) = netlink.rule_add(&fwmark_rule).await {
-        // Rollback TABLE_ID route and iptables on failure
+        // Rollback TABLE_ID route and firewall rules on failure
         if let Err(rollback_err) = netlink.route_del(&no_vpn_route).await {
             tracing::warn!(%rollback_err, "rollback failed: could not delete TABLE_ID default route");
         }
         if let Err(rollback_err) =
-            teardown_iptables_with(iptables, &wan_info.if_name, wan_info.ip_addr)
+            nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr)
         {
-            tracing::warn!(%rollback_err, "rollback failed: could not teardown iptables rules");
+            tracing::warn!(%rollback_err, "rollback failed: could not teardown firewall rules");
         }
         return Err(e);
     }
@@ -294,10 +283,9 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, I: IptablesO
 }
 
 /// Testable version of `teardown_fwmark_infrastructure`.
-pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, I: IptablesOps, S: ShellOps>(
+pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesOps>(
     mut infra: FwmarkInfrastructure<N>,
-    iptables: &I,
-    shell: &S,
+    nft: &F,
 ) {
     // Mark as torn down before we start cleanup - this prevents the Drop warning
     infra.torn_down = true;
@@ -341,16 +329,9 @@ pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, I: Iptabl
     )
     .await;
 
-    // Flush routing cache
-    teardown_op("flush routing cache", "ip route flush cache", || {
-        shell.flush_routing_cache()
-    })
-    .await;
-
-    // Remove the iptables mangle and NAT rules
-    teardown_op("teardown iptables rules", "iptables rules removed", || async {
-        teardown_iptables_with(iptables, &wan_info.if_name, wan_info.ip_addr)
-            .map_err(Error::iptables)
+    // Remove the firewall mangle and NAT rules
+    teardown_op("teardown firewall rules", "firewall rules removed", || async {
+        nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr)
     })
     .await;
 
@@ -397,7 +378,7 @@ pub struct WanInfo {
 /// independent of individual WireGuard connection lifecycles.
 ///
 /// **Important**: Must be explicitly torn down via `teardown_fwmark_infrastructure()`
-/// to clean up iptables rules and routing table entries. Dropping without teardown
+/// to clean up firewall rules and routing table entries. Dropping without teardown
 /// will log a warning and may leave the system in an inconsistent state.
 pub struct FwmarkInfrastructure<N: NetlinkOps> {
     pub netlink: N,
@@ -410,7 +391,7 @@ impl<N: NetlinkOps> Drop for FwmarkInfrastructure<N> {
     fn drop(&mut self) {
         if !self.torn_down {
             tracing::warn!(
-                "FwmarkInfrastructure dropped without teardown - iptables rules and routing entries may be leaked"
+                "FwmarkInfrastructure dropped without teardown - firewall rules and routing entries may be leaked"
             );
         }
     }
@@ -435,7 +416,7 @@ impl NetworkDeviceInfo {
     }
 }
 
-/// Dynamic router using rtnetlink and iptables for split-tunnel routing.
+/// Dynamic router using rtnetlink and firewall rules for split-tunnel routing.
 ///
 /// Uses firewall marks (fwmark) and policy-based routing to ensure HOPR traffic
 /// bypasses the VPN while all other traffic routes through it.
@@ -445,26 +426,28 @@ impl NetworkDeviceInfo {
 /// - wg-quick up/down
 /// - VPN subnet routes
 /// - Default route through VPN
-pub struct Router<N: NetlinkOps, S: ShellOps> {
+pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
     state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     netlink: N,
-    shell: S,
+    route_ops: R,
+    wg: W,
     /// WAN interface info, obtained from FwmarkInfrastructure
     wan_info: WanInfo,
     if_indices: Option<NetworkDeviceInfo>,
 }
 
-/// Static fallback router using direct `ip route` commands.
+/// Static fallback router using route operations via netlink.
 ///
-/// Used when dynamic routing (rtnetlink + iptables) is not available or not desired.
+/// Used when dynamic routing (rtnetlink + firewall rules) is not available or not desired.
 /// Simpler than [`Router`] but provides the same phased setup to avoid race conditions.
-pub struct FallbackRouter<S: ShellOps> {
+pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-    shell: S,
-    bypass_manager: Option<super::BypassRouteManager<S>>,
+    route_ops: R,
+    wg: W,
+    bypass_manager: Option<super::BypassRouteManager<R>>,
 }
 
 // ============================================================================
@@ -473,12 +456,12 @@ pub struct FallbackRouter<S: ShellOps> {
 
 /// Firewall mark used to identify HOPR traffic for bypass routing.
 ///
-/// This mark is applied by iptables to packets owned by the worker process (UID-based),
+/// This mark is applied by firewall rules to packets owned by the worker process (UID-based),
 /// allowing policy-based routing to send them via WAN instead of VPN tunnel.
 ///
 /// Value 0xFEED_CAFE is arbitrary but memorable and unlikely to conflict with
 /// other fwmark users (Docker uses 0x1, etc.).
-const FW_MARK: u32 = 0xFEED_CAFE;
+const FW_MARK: u32 = nftables_ops::FW_MARK;
 
 /// Routing table ID for fwmark-based bypass traffic.
 ///
@@ -494,24 +477,6 @@ const TABLE_ID: u32 = 108;
 /// before most other policy rules while still allowing local table (priority 0)
 /// to handle loopback traffic.
 const RULE_PRIORITY: u32 = 1;
-
-/// iptables table for packet modification (mangle table handles marking).
-const IP_TABLE: &str = "mangle";
-
-/// iptables chain for locally-generated outbound packets.
-const IP_CHAIN: &str = "OUTPUT";
-
-/// Custom iptables chain name for HOPR traffic marking.
-///
-/// Using a custom chain rather than directly modifying OUTPUT allows clean
-/// setup/teardown without affecting other iptables users.
-const CUSTOM_CHAIN: &str = "GNOSIS_VPN";
-
-/// iptables table for NAT rules.
-const NAT_TABLE: &str = "nat";
-
-/// iptables chain for source address translation on outbound packets.
-const NAT_CHAIN: &str = "POSTROUTING";
 
 // ============================================================================
 // Network Info Helpers
@@ -615,117 +580,12 @@ where
 }
 
 // ============================================================================
-// iptables Setup/Teardown (generic)
-// ============================================================================
-
-/// Sets up iptables rules for HOPR traffic bypass using a custom chain.
-///
-/// Uses a dedicated `GNOSIS_VPN` chain in the mangle table to avoid flushing the
-/// built-in OUTPUT chain (which would destroy rules from other services):
-/// 1. Create/flush `GNOSIS_VPN` chain in mangle table
-/// 2. Add jump rule: `iptables -t mangle -A OUTPUT -j GNOSIS_VPN`
-/// 3. `iptables -t mangle -A GNOSIS_VPN -o lo -j RETURN`
-/// 4. `iptables -t mangle -A GNOSIS_VPN -m owner --uid-owner $VPN_UID -j MARK --set-mark $FW_MARK`
-/// 5. `iptables -t nat -A POSTROUTING -m mark --mark $FW_MARK -o $WAN_IF -j SNAT --to-source $WAN_IP`
-///
-/// This approach marks every packet from the HOPR UID, ensuring reliable routing
-/// even when the default route changes (VPN connects/disconnects). SNAT with a
-/// fixed source IP is more stable for long-lived UDP flows than MASQUERADE.
-pub(crate) fn setup_iptables_with<I: IptablesOps>(
-    iptables: &I,
-    vpn_uid: u32,
-    wan_if_name: &str,
-    wan_ip: Ipv4Addr,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Step 1: Create or flush our custom chain (idempotent for crash recovery)
-    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN)? {
-        iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN)?;
-    } else {
-        iptables.new_chain(IP_TABLE, CUSTOM_CHAIN)?;
-    }
-
-    // Step 2: Ensure a single jump rule from OUTPUT → GNOSIS_VPN
-    let jump_rule = format!("-j {CUSTOM_CHAIN}");
-    if iptables.exists(IP_TABLE, IP_CHAIN, &jump_rule)? {
-        iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule)?;
-    }
-    iptables.append(IP_TABLE, IP_CHAIN, &jump_rule)?;
-
-    // Step 3: Keep loopback traffic unmarked
-    iptables.append(IP_TABLE, CUSTOM_CHAIN, "-o lo -j RETURN")?;
-
-    // Step 4: Mark ALL traffic from VPN user (no conntrack dependency)
-    iptables.append(
-        IP_TABLE,
-        CUSTOM_CHAIN,
-        &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {FW_MARK}"),
-    )?;
-
-    // Rewrite the source address of bypassed (marked) traffic leaving via the WAN interface.
-    // Use SNAT with fixed IP instead of MASQUERADE for more stable UDP/QUIC flows.
-    // Without this, packets retain the VPN subnet source IP and the upstream gateway drops them
-    // because it has no return route for that subnet.
-    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j SNAT --to-source {wan_ip}");
-    // Delete any stale rule first (e.g. left over from a previous crash) to avoid duplicates.
-    // Unlike the mangle chain we cannot flush nat POSTROUTING because other services use it.
-    if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule)? {
-        iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
-    }
-    iptables.append(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
-
-    Ok(())
-}
-
-pub(crate) fn teardown_iptables_with<I: IptablesOps>(
-    iptables: &I,
-    wan_if_name: &str,
-    wan_ip: Ipv4Addr,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut errors: Vec<String> = Vec::new();
-
-    // Ordering: flush chain → delete jump from OUTPUT → delete chain
-    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN).unwrap_or(false) {
-        if let Err(e) = iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN) {
-            errors.push(format!("flush chain: {e}"));
-        }
-    }
-
-    let jump_rule = format!("-j {CUSTOM_CHAIN}");
-    if iptables.exists(IP_TABLE, IP_CHAIN, &jump_rule).unwrap_or(false) {
-        if let Err(e) = iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule) {
-            errors.push(format!("delete jump rule: {e}"));
-        }
-    }
-
-    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN).unwrap_or(false) {
-        if let Err(e) = iptables.delete_chain(IP_TABLE, CUSTOM_CHAIN) {
-            errors.push(format!("delete chain: {e}"));
-        }
-    }
-
-    // Always attempt NAT cleanup regardless of previous errors.
-    // This ensures the SNAT rule is removed even if chain cleanup fails.
-    let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j SNAT --to-source {wan_ip}");
-    if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule).unwrap_or(false) {
-        if let Err(e) = iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule) {
-            errors.push(format!("delete NAT SNAT rule: {e}"));
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; ").into())
-    }
-}
-
-// ============================================================================
 // Routing Implementations
 // ============================================================================
 
 /// Linux-specific implementation of [`Routing`] for split-tunnel routing.
 #[async_trait]
-impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
+impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing for Router<N, R, W> {
     /// Install VPN-specific routing (assumes fwmark infrastructure is already set up).
     ///
     /// This method requires that fwmark infrastructure has been established via
@@ -760,7 +620,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
-        self.shell
+        self.wg
             .wg_quick_up((*self.state_home).clone(), wg_quick_content)
             .await?;
         tracing::debug!("wg-quick up");
@@ -779,7 +639,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
             Err(e) => {
                 // Rollback: bring down WG
                 if let Err(rollback_err) = self
-                    .shell
+                    .wg
                     .wg_quick_down((*self.state_home).clone(), Logs::Suppress)
                     .await
                 {
@@ -806,7 +666,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
             // Rollback: bring down WG
             self.if_indices = None;
             if let Err(rollback_err) = self
-                .shell
+                .wg
                 .wg_quick_down((*self.state_home).clone(), Logs::Suppress)
                 .await
             {
@@ -837,7 +697,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
 
         // Step 5: Flush routing cache BEFORE changing default route
         // This ensures any cached route decisions are cleared before the switch
-        self.shell.flush_routing_cache().await?;
+        self.route_ops.flush_routing_cache().await?;
         tracing::debug!("flushed routing cache before default route change");
 
         // Step 6: Replace main default route to VPN interface
@@ -857,7 +717,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
             }
             self.if_indices = None;
             if let Err(rollback_err) = self
-                .shell
+                .wg
                 .wg_quick_down((*self.state_home).clone(), Logs::Suppress)
                 .await
             {
@@ -868,7 +728,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
         tracing::debug!("ip route add default dev {}", vpn_info.if_index);
 
         // Step 7: Flush routing cache
-        self.shell.flush_routing_cache().await?;
+        self.route_ops.flush_routing_cache().await?;
         tracing::debug!("flushed routing cache");
 
         tracing::info!("routing is ready");
@@ -878,7 +738,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
     /// Uninstalls VPN-specific routing (fwmark infrastructure remains active).
     ///
     /// This method only tears down VPN-specific routes and the WireGuard interface.
-    /// The fwmark infrastructure (iptables rules, TABLE_ID default route, fwmark rule)
+    /// The fwmark infrastructure (firewall rules, TABLE_ID default route, fwmark rule)
     /// remains active for the daemon's lifetime.
     ///
     /// The steps:
@@ -935,8 +795,8 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
         .await;
 
         // Step 3: Run wg-quick down while bypass infrastructure is still active
-        // HOPR traffic continues: iptables marks → fwmark rule → TABLE_ID → WAN
-        self.shell
+        // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
+        self.wg
             .wg_quick_down((*self.state_home).clone(), logs)
             .await?;
         tracing::debug!("wg-quick down");
@@ -958,7 +818,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
         .await;
 
         // Step 5: Flush routing cache
-        self.shell.flush_routing_cache().await?;
+        self.route_ops.flush_routing_cache().await?;
         tracing::debug!("ip route flush cache");
 
         tracing::info!("VPN routing teardown complete (fwmark infrastructure remains active)");
@@ -967,7 +827,7 @@ impl<N: NetlinkOps + 'static, S: ShellOps + 'static> Routing for Router<N, S> {
 }
 
 #[async_trait]
-impl<S: ShellOps + 'static> Routing for FallbackRouter<S> {
+impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W> {
     /// Install split-tunnel routing for FallbackRouter.
     ///
     /// Uses a phased approach to avoid a race condition where HOPR p2p connections
@@ -988,13 +848,13 @@ impl<S: ShellOps + 'static> Routing for FallbackRouter<S> {
         }
 
         // Phase 1: Add bypass routes BEFORE wg-quick up
-        let (device, gateway) = self.shell.ip_route_show_default().await?;
+        let (device, gateway) = self.route_ops.get_default_interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
         let mut bypass_manager = super::BypassRouteManager::new(
             super::WanInterface { device, gateway },
             self.peer_ips.clone(),
-            self.shell.clone(),
+            self.route_ops.clone(),
         );
 
         // Add peer IP and RFC1918 bypass routes (auto-rollback on failure)
@@ -1016,7 +876,7 @@ impl<S: ShellOps + 'static> Routing for FallbackRouter<S> {
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
         if let Err(e) = self
-            .shell
+            .wg
             .wg_quick_up((*self.state_home).clone(), wg_quick_content)
             .await
         {
@@ -1039,7 +899,7 @@ impl<S: ShellOps + 'static> Routing for FallbackRouter<S> {
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         // wg-quick down first
         let wg_result = self
-            .shell
+            .wg
             .wg_quick_down((*self.state_home).clone(), logs)
             .await;
         if let Err(ref e) = wg_result {
@@ -1181,89 +1041,45 @@ mod tests {
         })
     }
 
-    fn mock_iptables() -> MockIptablesOps {
-        MockIptablesOps::new().with_builtin_chains()
+    fn mock_nft() -> MockNfTablesOps {
+        MockNfTablesOps::new()
     }
 
     // ====================================================================
-    // iptables lifecycle tests
+    // Firewall rule lifecycle tests
     // ====================================================================
 
     #[test]
-    fn setup_iptables_creates_chain_and_rules() {
-        let ipt = mock_iptables();
+    fn setup_nft_creates_rules() {
+        let nft = mock_nft();
 
-        setup_iptables_with(&ipt, 1000, "eth0", Ipv4Addr::new(192, 168, 1, 100)).unwrap();
+        nft.setup_fwmark_rules(1000, "eth0", FW_MARK, Ipv4Addr::new(192, 168, 1, 100))
+            .unwrap();
 
-        let state = ipt.state.lock().unwrap();
-        let mangle = state.tables.get("mangle").unwrap();
-
-        // GNOSIS_VPN chain should exist with 2 rules
-        let chain_rules = mangle.get("GNOSIS_VPN").unwrap();
-        assert_eq!(chain_rules.len(), 2);
-        assert_eq!(chain_rules[0], "-o lo -j RETURN");
-        assert!(chain_rules[1].contains("--uid-owner 1000"));
-        assert!(chain_rules[1].contains(&format!("--set-mark {FW_MARK}")));
-
-        // OUTPUT should have jump rule
-        let output_rules = mangle.get("OUTPUT").unwrap();
-        assert!(output_rules.contains(&"-j GNOSIS_VPN".to_string()));
-
-        // NAT POSTROUTING should have SNAT rule
-        let nat = state.tables.get("nat").unwrap();
-        let nat_rules = nat.get("POSTROUTING").unwrap();
-        assert_eq!(nat_rules.len(), 1);
-        assert!(nat_rules[0].contains("SNAT"));
-        assert!(nat_rules[0].contains("192.168.1.100"));
+        let state = nft.state.lock().unwrap();
+        assert!(state.rules_active);
+        let params = state.setup_params.as_ref().unwrap();
+        assert_eq!(params.0, 1000);
+        assert_eq!(params.1, "eth0");
+        assert_eq!(params.2, FW_MARK);
+        assert_eq!(params.3, Ipv4Addr::new(192, 168, 1, 100));
     }
 
     #[test]
-    fn setup_iptables_flushes_existing_chain() {
-        let ipt = mock_iptables();
-
-        // Pre-populate with stale rules
-        {
-            let mut state = ipt.state.lock().unwrap();
-            state
-                .tables
-                .get_mut("mangle")
-                .unwrap()
-                .insert("GNOSIS_VPN".into(), vec!["stale rule".into()]);
-        }
-
-        setup_iptables_with(&ipt, 1000, "eth0", Ipv4Addr::new(192, 168, 1, 100)).unwrap();
-
-        let state = ipt.state.lock().unwrap();
-        let chain_rules = state.tables["mangle"].get("GNOSIS_VPN").unwrap();
-        // Stale rule should be flushed, only fresh rules remain
-        assert_eq!(chain_rules.len(), 2);
-        assert!(!chain_rules.contains(&"stale rule".to_string()));
-    }
-
-    #[test]
-    fn teardown_iptables_removes_everything() {
-        let ipt = mock_iptables();
+    fn teardown_nft_removes_rules() {
+        let nft = mock_nft();
 
         // Setup first
-        setup_iptables_with(&ipt, 1000, "eth0", Ipv4Addr::new(192, 168, 1, 100)).unwrap();
+        nft.setup_fwmark_rules(1000, "eth0", FW_MARK, Ipv4Addr::new(192, 168, 1, 100))
+            .unwrap();
 
         // Teardown
-        teardown_iptables_with(&ipt, "eth0", Ipv4Addr::new(192, 168, 1, 100)).unwrap();
+        nft.teardown_rules("eth0", FW_MARK, Ipv4Addr::new(192, 168, 1, 100))
+            .unwrap();
 
-        let state = ipt.state.lock().unwrap();
-        let mangle = state.tables.get("mangle").unwrap();
-
-        // GNOSIS_VPN chain should be deleted
-        assert!(!mangle.contains_key("GNOSIS_VPN"));
-
-        // OUTPUT should have no jump rule
-        let output_rules = mangle.get("OUTPUT").unwrap();
-        assert!(!output_rules.contains(&"-j GNOSIS_VPN".to_string()));
-
-        // NAT POSTROUTING should have no SNAT rule
-        let nat = state.tables.get("nat").unwrap();
-        let nat_rules = nat.get("POSTROUTING").unwrap();
-        assert!(nat_rules.is_empty());
+        let state = nft.state.lock().unwrap();
+        assert!(!state.rules_active);
+        assert!(state.setup_params.is_none());
     }
 
     // ====================================================================
@@ -1273,10 +1089,10 @@ mod tests {
     #[tokio::test]
     async fn setup_fwmark_creates_route_and_rule() {
         let netlink = mock_netlink_with_wan();
-        let ipt = mock_iptables();
+        let nft = mock_nft();
         let worker = mock_worker();
 
-        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &ipt)
+        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
             .await
             .unwrap();
 
@@ -1301,12 +1117,16 @@ mod tests {
         assert_eq!(infra.wan_info.if_name, "eth0");
         assert_eq!(infra.wan_info.gateway, Ipv4Addr::new(192, 168, 1, 1));
 
+        // Verify firewall rules were set up
+        let nft_state = nft.state.lock().unwrap();
+        assert!(nft_state.rules_active);
+
         // Mark as torn down to suppress Drop warning
         drop(infra);
     }
 
     #[tokio::test]
-    async fn setup_fwmark_rolls_back_iptables_on_route_failure() {
+    async fn setup_fwmark_rolls_back_nft_on_route_failure() {
         let netlink = mock_netlink_with_wan();
         {
             let mut state = netlink.state.lock().unwrap();
@@ -1314,19 +1134,19 @@ mod tests {
                 .fail_on
                 .insert("route_add".into(), "simulated route failure".into());
         }
-        let ipt = mock_iptables();
+        let nft = mock_nft();
         let worker = mock_worker();
 
-        let result = setup_fwmark_infrastructure_with(&worker, netlink, &ipt).await;
+        let result = setup_fwmark_infrastructure_with(&worker, netlink, &nft).await;
         assert!(result.is_err());
 
-        // iptables should be rolled back (chain deleted)
-        let ipt_state = ipt.state.lock().unwrap();
-        assert!(!ipt_state.tables["mangle"].contains_key("GNOSIS_VPN"));
+        // Firewall rules should be rolled back
+        let nft_state = nft.state.lock().unwrap();
+        assert!(!nft_state.rules_active);
     }
 
     #[tokio::test]
-    async fn setup_fwmark_rolls_back_route_and_iptables_on_rule_failure() {
+    async fn setup_fwmark_rolls_back_route_and_nft_on_rule_failure() {
         let netlink = mock_netlink_with_wan();
         {
             let mut state = netlink.state.lock().unwrap();
@@ -1334,10 +1154,10 @@ mod tests {
                 .fail_on
                 .insert("rule_add".into(), "simulated rule failure".into());
         }
-        let ipt = mock_iptables();
+        let nft = mock_nft();
         let worker = mock_worker();
 
-        let result = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &ipt).await;
+        let result = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft).await;
         assert!(result.is_err());
 
         // TABLE_ID route should be rolled back
@@ -1349,23 +1169,22 @@ mod tests {
             .collect();
         assert!(table_routes.is_empty());
 
-        // iptables should be rolled back
-        let ipt_state = ipt.state.lock().unwrap();
-        assert!(!ipt_state.tables["mangle"].contains_key("GNOSIS_VPN"));
+        // Firewall rules should be rolled back
+        let nft_state = nft.state.lock().unwrap();
+        assert!(!nft_state.rules_active);
     }
 
     #[tokio::test]
     async fn teardown_fwmark_removes_all_resources() {
         let netlink = mock_netlink_with_wan();
-        let ipt = mock_iptables();
-        let shell = MockShellOps::new();
+        let nft = mock_nft();
         let worker = mock_worker();
 
-        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &ipt)
+        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
             .await
             .unwrap();
 
-        teardown_fwmark_infrastructure_with(infra, &ipt, &shell).await;
+        teardown_fwmark_infrastructure_with(infra, &nft).await;
 
         // Verify rule was removed
         let nl_state = netlink.state.lock().unwrap();
@@ -1379,13 +1198,9 @@ mod tests {
             .collect();
         assert!(table_routes.is_empty());
 
-        // Verify routing cache was flushed
-        let shell_state = shell.state.lock().unwrap();
-        assert!(shell_state.cache_flush_count > 0);
-
-        // Verify iptables was torn down
-        let ipt_state = ipt.state.lock().unwrap();
-        assert!(!ipt_state.tables["mangle"].contains_key("GNOSIS_VPN"));
+        // Verify firewall rules were torn down
+        let nft_state = nft.state.lock().unwrap();
+        assert!(!nft_state.rules_active);
     }
 
     #[tokio::test]
@@ -1406,25 +1221,12 @@ mod tests {
             ..Default::default()
         });
 
-        let mut ipt_state = IptablesState::default();
-        ipt_state
-            .tables
-            .entry("mangle".into())
-            .or_default()
-            .insert("OUTPUT".into(), vec!["-j GNOSIS_VPN".into()]);
-        ipt_state
-            .tables
-            .get_mut("mangle")
-            .unwrap()
-            .insert("GNOSIS_VPN".into(), vec!["stale rule".into()]);
-        ipt_state
-            .tables
-            .entry("nat".into())
-            .or_default()
-            .insert("POSTROUTING".into(), Vec::new());
-        let ipt = MockIptablesOps::with_state(ipt_state);
+        let nft = MockNfTablesOps::with_state(NfTablesState {
+            rules_active: true,
+            ..Default::default()
+        });
 
-        cleanup_stale_fwmark_rules_with(&netlink, &ipt).await;
+        cleanup_stale_fwmark_rules_with(&netlink, &nft).await;
 
         // Verify stale rule was removed
         let nl_state = netlink.state.lock().unwrap();
@@ -1438,18 +1240,18 @@ mod tests {
             .collect();
         assert!(table_routes.is_empty());
 
-        // Verify stale chain was removed
-        let ipt_state = ipt.state.lock().unwrap();
-        assert!(!ipt_state.tables["mangle"].contains_key("GNOSIS_VPN"));
+        // Verify stale firewall rules were cleaned up
+        let nft_state = nft.state.lock().unwrap();
+        assert!(!nft_state.rules_active);
     }
 
     #[tokio::test]
     async fn cleanup_stale_is_idempotent_on_empty_state() {
         let netlink = MockNetlinkOps::new();
-        let ipt = MockIptablesOps::new().with_builtin_chains();
+        let nft = MockNfTablesOps::new();
 
         // Should not panic or error
-        cleanup_stale_fwmark_rules_with(&netlink, &ipt).await;
+        cleanup_stale_fwmark_rules_with(&netlink, &nft).await;
     }
 
     // ====================================================================
@@ -1520,13 +1322,15 @@ mod tests {
 
     fn make_router(
         netlink: MockNetlinkOps,
-        shell: MockShellOps,
-    ) -> Router<MockNetlinkOps, MockShellOps> {
+        route_ops: MockRouteOps,
+        wg: MockWgOps,
+    ) -> Router<MockNetlinkOps, MockRouteOps, MockWgOps> {
         Router {
             state_home: Arc::new(PathBuf::from("/tmp/test")),
             wg_data: test_wg_data(),
             netlink,
-            shell,
+            route_ops,
+            wg,
             wan_info: wan_info(),
             if_indices: None,
         }
@@ -1587,8 +1391,9 @@ mod tests {
     #[tokio::test]
     async fn router_setup_creates_routes() {
         let netlink = mock_netlink_with_wan_and_wg();
-        let shell = MockShellOps::new();
-        let mut router = make_router(netlink.clone(), shell.clone());
+        let route_ops = MockRouteOps::new();
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
 
         router.setup().await.unwrap();
 
@@ -1622,11 +1427,12 @@ mod tests {
         assert_eq!(defaults[0].if_index, 5); // VPN interface
 
         // WG was brought up
-        let shell_state = shell.state.lock().unwrap();
-        assert!(shell_state.wg_up);
+        let wg_state = wg.state.lock().unwrap();
+        assert!(wg_state.wg_up);
 
         // Cache was flushed (at least twice - before and after default route change)
-        assert!(shell_state.cache_flush_count >= 2);
+        let route_state = route_ops.state.lock().unwrap();
+        assert!(route_state.cache_flush_count >= 2);
     }
 
     #[tokio::test]
@@ -1638,22 +1444,24 @@ mod tests {
                 .fail_on
                 .insert("route_add".into(), "simulated failure".into());
         }
-        let shell = MockShellOps::new();
-        let mut router = make_router(netlink.clone(), shell.clone());
+        let route_ops = MockRouteOps::new();
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink.clone(), route_ops, wg.clone());
 
         let result = router.setup().await;
         assert!(result.is_err());
 
         // WG should be brought down (rollback)
-        let shell_state = shell.state.lock().unwrap();
-        assert!(!shell_state.wg_up);
+        let wg_state = wg.state.lock().unwrap();
+        assert!(!wg_state.wg_up);
     }
 
     #[tokio::test]
     async fn router_setup_rejects_double_setup() {
         let netlink = mock_netlink_with_wan_and_wg();
-        let shell = MockShellOps::new();
-        let mut router = make_router(netlink, shell);
+        let route_ops = MockRouteOps::new();
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink, route_ops, wg);
 
         router.setup().await.unwrap();
         let result = router.setup().await;
@@ -1664,14 +1472,15 @@ mod tests {
     #[tokio::test]
     async fn router_teardown_restores_routes() {
         let netlink = mock_netlink_with_wan_and_wg();
-        let shell = MockShellOps::new();
-        let mut router = make_router(netlink.clone(), shell.clone());
+        let route_ops = MockRouteOps::new();
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
 
         router.setup().await.unwrap();
 
         // Reset flush count to isolate teardown flushes
         {
-            let mut s = shell.state.lock().unwrap();
+            let mut s = route_ops.state.lock().unwrap();
             s.cache_flush_count = 0;
         }
 
@@ -1698,18 +1507,22 @@ mod tests {
         assert!(vpn_routes.is_empty());
 
         // WG should be down
-        let shell_state = shell.state.lock().unwrap();
-        assert!(!shell_state.wg_up);
+        let wg_state = wg.state.lock().unwrap();
+        assert!(!wg_state.wg_up);
 
         // Cache should be flushed
-        assert!(shell_state.cache_flush_count >= 1);
+        let route_state = route_ops.state.lock().unwrap();
+        assert!(route_state.cache_flush_count >= 1);
     }
 
     // ====================================================================
     // FallbackRouter lifecycle tests
     // ====================================================================
 
-    fn make_fallback_router(shell: MockShellOps) -> FallbackRouter<MockShellOps> {
+    fn make_fallback_router(
+        route_ops: MockRouteOps,
+        wg: MockWgOps,
+    ) -> FallbackRouter<MockRouteOps, MockWgOps> {
         FallbackRouter {
             state_home: Arc::new(PathBuf::from("/tmp/test")),
             wg_data: test_wg_data(),
@@ -1717,22 +1530,24 @@ mod tests {
                 Ipv4Addr::new(1, 2, 3, 4),
                 Ipv4Addr::new(5, 6, 7, 8),
             ],
-            shell,
+            route_ops,
+            wg,
             bypass_manager: None,
         }
     }
 
     #[tokio::test]
     async fn fallback_setup_adds_bypass_routes_then_wg_up() {
-        let shell = MockShellOps::with_state(ShellState {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
         });
+        let wg = MockWgOps::new();
 
-        let mut router = make_fallback_router(shell.clone());
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
         router.setup().await.unwrap();
 
-        let state = shell.state.lock().unwrap();
+        let state = route_ops.state.lock().unwrap();
 
         // Peer IP routes should be added (2 peers)
         // RFC1918 routes should be added (4 networks)
@@ -1747,13 +1562,17 @@ mod tests {
         assert_eq!(state.added_routes[3].0, "172.16.0.0/12");
 
         // WG should be up
-        assert!(state.wg_up);
+        let wg_state = wg.state.lock().unwrap();
+        assert!(wg_state.wg_up);
     }
 
     #[tokio::test]
     async fn fallback_wg_failure_rolls_back_bypass_routes() {
-        let shell = MockShellOps::with_state(ShellState {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::with_state(WgState {
             fail_on: {
                 let mut m = std::collections::HashMap::new();
                 m.insert("wg_quick_up".into(), "simulated wg failure".into());
@@ -1762,47 +1581,50 @@ mod tests {
             ..Default::default()
         });
 
-        let mut router = make_fallback_router(shell.clone());
+        let mut router = make_fallback_router(route_ops.clone(), wg);
         let result = router.setup().await;
         assert!(result.is_err());
 
         // Bypass routes should be rolled back
-        let state = shell.state.lock().unwrap();
+        let state = route_ops.state.lock().unwrap();
         assert!(state.added_routes.is_empty());
-        assert!(!state.wg_up);
     }
 
     #[tokio::test]
     async fn fallback_teardown_wg_down_then_bypass_cleanup() {
-        let shell = MockShellOps::with_state(ShellState {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
         });
+        let wg = MockWgOps::new();
 
-        let mut router = make_fallback_router(shell.clone());
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
         router.setup().await.unwrap();
         router.teardown(Logs::Suppress).await.unwrap();
 
-        let state = shell.state.lock().unwrap();
-        // WG should be down
-        assert!(!state.wg_up);
+        let state = route_ops.state.lock().unwrap();
         // Bypass routes should be cleaned up
         assert!(state.added_routes.is_empty());
+
+        // WG should be down
+        let wg_state = wg.state.lock().unwrap();
+        assert!(!wg_state.wg_up);
     }
 
     #[tokio::test]
     async fn fallback_teardown_cleans_bypass_even_if_wg_down_fails() {
-        let shell = MockShellOps::with_state(ShellState {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
         });
+        let wg = MockWgOps::new();
 
-        let mut router = make_fallback_router(shell.clone());
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
         router.setup().await.unwrap();
 
         // Make wg_quick_down fail
         {
-            let mut s = shell.state.lock().unwrap();
+            let mut s = wg.state.lock().unwrap();
             s.fail_on
                 .insert("wg_quick_down".into(), "simulated wg down failure".into());
         }
@@ -1812,7 +1634,7 @@ mod tests {
         assert!(result.is_err());
 
         // But bypass routes should still be cleaned up
-        let state = shell.state.lock().unwrap();
+        let state = route_ops.state.lock().unwrap();
         assert!(state.added_routes.is_empty());
     }
 }

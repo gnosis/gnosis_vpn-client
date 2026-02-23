@@ -11,7 +11,7 @@ use std::net::Ipv4Addr;
 
 use super::Error;
 
-use super::shell_ops::ShellOps;
+use super::route_ops::RouteOps;
 use super::RFC1918_BYPASS_NETS;
 
 /// WAN interface information for bypass routing.
@@ -26,27 +26,27 @@ pub struct WanInterface {
 /// Tracks which routes were successfully added to enable proper rollback
 /// if setup fails partway through.
 ///
-/// Generic over `S: ShellOps` so tests can inject mock shell operations.
-pub struct BypassRouteManager<S: ShellOps> {
+/// Generic over `R: RouteOps` so tests can inject mock route operations.
+pub struct BypassRouteManager<R: RouteOps> {
     wan: WanInterface,
     peer_ips: Vec<Ipv4Addr>,
-    shell: S,
+    route_ops: R,
     /// Peer IPs for which routes were successfully added (for rollback)
     added_peer_routes: Vec<Ipv4Addr>,
     /// RFC1918 CIDRs for which routes were successfully added (for rollback)
     added_rfc1918_routes: Vec<String>,
 }
 
-impl<S: ShellOps> BypassRouteManager<S> {
+impl<R: RouteOps> BypassRouteManager<R> {
     /// Creates a new bypass route manager.
     ///
     /// The manager starts with no routes added. Call `setup_peer_routes()`
     /// and optionally `setup_rfc1918_routes()` to add routes.
-    pub fn new(wan: WanInterface, peer_ips: Vec<Ipv4Addr>, shell: S) -> Self {
+    pub fn new(wan: WanInterface, peer_ips: Vec<Ipv4Addr>, route_ops: R) -> Self {
         Self {
             wan,
             peer_ips,
-            shell,
+            route_ops,
             added_peer_routes: Vec::new(),
             added_rfc1918_routes: Vec::new(),
         }
@@ -136,15 +136,15 @@ impl<S: ShellOps> BypassRouteManager<S> {
     }
 
     // ========================================================================
-    // Route operations via ShellOps trait
+    // Route operations via RouteOps trait
     // ========================================================================
 
     async fn add_peer_route(&self, peer_ip: &Ipv4Addr) -> Result<(), Error> {
         // Delete any existing route first (make idempotent)
         let _ = self.delete_peer_route(peer_ip).await;
 
-        self.shell
-            .ip_route_add(
+        self.route_ops
+            .route_add(
                 &peer_ip.to_string(),
                 self.wan.gateway.as_deref(),
                 &self.wan.device,
@@ -156,9 +156,9 @@ impl<S: ShellOps> BypassRouteManager<S> {
 
     async fn delete_peer_route(&self, peer_ip: &Ipv4Addr) -> Result<(), Error> {
         // Omit gateway from deletion - the gateway may have changed since the route was added,
-        // and ip route del can match by destination + device alone
-        self.shell
-            .ip_route_del(&peer_ip.to_string(), &self.wan.device)
+        // and route del can match by destination + device alone
+        self.route_ops
+            .route_del(&peer_ip.to_string(), &self.wan.device)
             .await?;
         tracing::debug!(peer_ip = %peer_ip, "deleted bypass route");
         Ok(())
@@ -168,8 +168,8 @@ impl<S: ShellOps> BypassRouteManager<S> {
         // Delete any existing route first (make idempotent)
         let _ = self.delete_subnet_route(cidr).await;
 
-        self.shell
-            .ip_route_add(cidr, self.wan.gateway.as_deref(), &self.wan.device)
+        self.route_ops
+            .route_add(cidr, self.wan.gateway.as_deref(), &self.wan.device)
             .await?;
         tracing::debug!(cidr = %cidr, device = %self.wan.device, gateway = ?self.wan.gateway, "added RFC1918 bypass route");
         Ok(())
@@ -177,8 +177,8 @@ impl<S: ShellOps> BypassRouteManager<S> {
 
     async fn delete_subnet_route(&self, cidr: &str) -> Result<(), Error> {
         // Omit gateway from deletion - the gateway may have changed since the route was added,
-        // and ip route del can match by destination + device alone
-        self.shell.ip_route_del(cidr, &self.wan.device).await?;
+        // and route del can match by destination + device alone
+        self.route_ops.route_del(cidr, &self.wan.device).await?;
         tracing::debug!(cidr = %cidr, "deleted RFC1918 bypass route");
         Ok(())
     }
@@ -187,11 +187,11 @@ impl<S: ShellOps> BypassRouteManager<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routing::mocks::MockShellOps;
-    use crate::routing::mocks::ShellState;
+    use crate::routing::mocks::MockRouteOps;
+    use crate::routing::mocks::RouteOpsState;
 
-    fn make_shell() -> MockShellOps {
-        MockShellOps::new()
+    fn make_route_ops() -> MockRouteOps {
+        MockRouteOps::new()
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         };
         let peer_ips = vec!["1.2.3.4".parse().unwrap(), "5.6.7.8".parse().unwrap()];
 
-        let manager = BypassRouteManager::new(wan.clone(), peer_ips.clone(), make_shell());
+        let manager = BypassRouteManager::new(wan.clone(), peer_ips.clone(), make_route_ops());
 
         assert_eq!(manager.wan.device, "eth0");
         assert_eq!(manager.wan.gateway, Some("192.168.1.1".to_string()));
@@ -228,7 +228,7 @@ mod tests {
             device: "eth0".to_string(),
             gateway: Some("10.0.0.1".to_string()),
         };
-        let manager = BypassRouteManager::new(wan, vec![], make_shell());
+        let manager = BypassRouteManager::new(wan, vec![], make_route_ops());
 
         assert!(manager.peer_ips.is_empty());
         assert!(manager.added_peer_routes.is_empty());
@@ -236,17 +236,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_setup_peer_routes_adds_routes() {
-        let shell = make_shell();
+        let route_ops = make_route_ops();
         let wan = WanInterface {
             device: "eth0".to_string(),
             gateway: Some("192.168.1.1".to_string()),
         };
         let peer_ips: Vec<Ipv4Addr> = vec!["1.2.3.4".parse().unwrap(), "5.6.7.8".parse().unwrap()];
 
-        let mut manager = BypassRouteManager::new(wan, peer_ips, shell.clone());
+        let mut manager = BypassRouteManager::new(wan, peer_ips, route_ops.clone());
         manager.setup_peer_routes().await.unwrap();
 
-        let state = shell.state.lock().unwrap();
+        let state = route_ops.state.lock().unwrap();
         // Each peer gets a delete attempt (idempotent) then an add.
         // The delete fails silently (route doesn't exist), then add succeeds.
         assert_eq!(state.added_routes.len(), 2);
@@ -258,16 +258,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_setup_rfc1918_routes_adds_routes() {
-        let shell = make_shell();
+        let route_ops = make_route_ops();
         let wan = WanInterface {
             device: "eth0".to_string(),
             gateway: Some("10.0.0.1".to_string()),
         };
 
-        let mut manager = BypassRouteManager::new(wan, vec![], shell.clone());
+        let mut manager = BypassRouteManager::new(wan, vec![], route_ops.clone());
         manager.setup_rfc1918_routes().await.unwrap();
 
-        let state = shell.state.lock().unwrap();
+        let state = route_ops.state.lock().unwrap();
         assert_eq!(state.added_routes.len(), 4); // 4 RFC1918 networks
         assert_eq!(state.added_routes[0].0, "10.0.0.0/8");
         assert_eq!(state.added_routes[1].0, "172.16.0.0/12");
@@ -277,12 +277,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_setup_peer_routes_rollback_on_failure() {
-        let shell = MockShellOps::with_state(ShellState {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
             fail_on: {
                 let mut m = std::collections::HashMap::new();
-                // Fail on the second ip_route_add (after the first succeeds)
-                // We'll use a different strategy: fail the add for a specific route
-                m.insert("ip_route_add".into(), "simulated failure".into());
+                // Fail on route_add
+                m.insert("route_add".into(), "simulated failure".into());
                 m
             },
             ..Default::default()
@@ -294,7 +293,7 @@ mod tests {
         };
         let peer_ips = vec!["1.2.3.4".parse().unwrap()];
 
-        let mut manager = BypassRouteManager::new(wan, peer_ips, shell.clone());
+        let mut manager = BypassRouteManager::new(wan, peer_ips, route_ops.clone());
         let result = manager.setup_peer_routes().await;
 
         assert!(result.is_err());
@@ -303,20 +302,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_teardown_clears_routes() {
-        let shell = make_shell();
+        let route_ops = make_route_ops();
         let wan = WanInterface {
             device: "eth0".to_string(),
             gateway: Some("192.168.1.1".to_string()),
         };
         let peer_ips: Vec<Ipv4Addr> = vec!["1.2.3.4".parse().unwrap()];
 
-        let mut manager = BypassRouteManager::new(wan, peer_ips, shell.clone());
+        let mut manager = BypassRouteManager::new(wan, peer_ips, route_ops.clone());
         manager.setup_peer_routes().await.unwrap();
         manager.setup_rfc1918_routes().await.unwrap();
 
         // Verify routes exist
         {
-            let state = shell.state.lock().unwrap();
+            let state = route_ops.state.lock().unwrap();
             assert_eq!(state.added_routes.len(), 5); // 1 peer + 4 RFC1918
         }
 
@@ -324,7 +323,7 @@ mod tests {
 
         // Verify routes are cleaned up
         {
-            let state = shell.state.lock().unwrap();
+            let state = route_ops.state.lock().unwrap();
             assert!(state.added_routes.is_empty());
         }
         assert!(manager.added_peer_routes.is_empty());
@@ -333,17 +332,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_bypass_without_gateway() {
-        let shell = make_shell();
+        let route_ops = make_route_ops();
         let wan = WanInterface {
             device: "wlan0".to_string(),
             gateway: None,
         };
         let peer_ips: Vec<Ipv4Addr> = vec!["8.8.8.8".parse().unwrap()];
 
-        let mut manager = BypassRouteManager::new(wan, peer_ips, shell.clone());
+        let mut manager = BypassRouteManager::new(wan, peer_ips, route_ops.clone());
         manager.setup_peer_routes().await.unwrap();
 
-        let state = shell.state.lock().unwrap();
+        let state = route_ops.state.lock().unwrap();
         assert_eq!(state.added_routes.len(), 1);
         assert_eq!(state.added_routes[0].1, None); // no gateway
     }

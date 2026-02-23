@@ -490,16 +490,23 @@ async fn loop_daemon(
                                 }
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                                let mut new_routing = routing::static_router(state_home.clone(), wg_data, peer_ips);
+                                match routing::static_router(state_home.clone(), wg_data, peer_ips) {
+                                    Ok(mut new_routing) => {
+                                        // ensure we run down before going up to ensure clean slate
+                                        teardown_any_routing(maybe_router, true).await;
+                                        let _ = new_routing.teardown(Logs::Suppress).await;
 
-                                // ensure we run down before going up to ensure clean slate
-                                teardown_any_routing(maybe_router, true).await;
-                                let _ = new_routing.teardown(Logs::Suppress).await;
-
-                                // bring up new static routing
-                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *maybe_router = Some(Box::new(new_routing));
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+                                        // bring up new static routing
+                                        let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                        *maybe_router = Some(Box::new(new_routing));
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+                                    }
+                                    Err(error) => {
+                                        tracing::error!(?error, "failed to build static router");
+                                        let res = Err(error.to_string());
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+                                    }
+                                }
                             }
                             RequestToRoot::TearDownWg => {
                                 teardown_any_routing(maybe_router, true).await;

@@ -3,11 +3,11 @@
 //! This module provides split-tunnel VPN routing implementations for different platforms.
 //!
 //! ## Dynamic Routing (Linux only, default)
-//! Uses rtnetlink + iptables for policy-based routing with firewall marks.
+//! Uses rtnetlink + firewall rules for policy-based routing with firewall marks.
 //! Most reliable but requires root and iptables availability.
 //!
 //! ## Static Routing (all platforms)
-//! Uses direct route commands (`ip route` on Linux, `route` on macOS).
+//! Uses route operations via platform-native APIs.
 //! Simpler but may have reduced reliability during network changes.
 //!
 //! **Note:** There is no automatic fallback from dynamic to static routing.
@@ -21,13 +21,18 @@ use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use gnosis_vpn_lib::{dirs, wireguard};
 
 mod bypass;
+pub(crate) mod route_ops;
+pub(crate) mod wg_ops;
 
 #[cfg(target_os = "linux")]
-pub(crate) mod iptables_ops;
+pub(crate) mod nftables_ops;
 #[cfg(target_os = "linux")]
 pub(crate) mod netlink_ops;
 #[cfg(target_os = "linux")]
-pub(crate) mod shell_ops;
+pub(crate) mod route_ops_linux;
+
+#[cfg(target_os = "macos")]
+pub(crate) mod route_ops_macos;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -57,6 +62,8 @@ pub(crate) use bypass::{BypassRouteManager, WanInterface};
 ///
 /// # Returns
 /// A tuple of (device_name, Option<gateway_ip>)
+// Used on macOS (route_ops_macos.rs) and in tests
+#[allow(dead_code)]
 pub(crate) fn parse_key_value_output(
     output: &str,
     device_key: &str,
