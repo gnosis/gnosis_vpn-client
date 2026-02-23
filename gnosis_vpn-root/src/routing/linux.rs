@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
+use super::{Error, Routing, VPN_TUNNEL_SUBNET};
 
 use crate::wg_tooling;
 /// Creates a dynamic router using rtnetlink and iptables.
@@ -88,14 +88,10 @@ pub fn static_fallback_router(
 struct NetworkDeviceInfo {
     /// Index of the WAN interface
     wan_if_index: u32,
-    /// Name of the WAN interface (e.g. "eth0")
-    wan_if_name: String,
     /// Default gateway of the WAN interface
     wan_gw: Ipv4Addr,
     /// Index of the VPN interface
     vpn_if_index: u32,
-    /// Default gateway of the VPN interface
-    vpn_gw: Ipv4Addr,
     /// CIDR of the VPN subnet
     vpn_cidr: cidr::Ipv4Cidr,
 }
@@ -129,7 +125,6 @@ pub struct WanInfo {
 pub struct FwmarkInfrastructure {
     pub handle: rtnetlink::Handle,
     pub wan_info: WanInfo,
-    pub worker_uid: u32,
     /// Tracks whether teardown was called. Set to true when teardown_fwmark_infrastructure() is invoked.
     pub(super) torn_down: bool,
 }
@@ -197,27 +192,17 @@ pub async fn cleanup_stale_fwmark_rules() {
 
             if is_our_rule {
                 tracing::info!("found stale fwmark rule - cleaning up");
-                // Delete by recreating the rule request
-                let _ = handle
-                    .rule()
-                    .del()
-                    .v4()
-                    .fw_mark(FW_MARK)
-                    .priority(RULE_PRIORITY)
-                    .table_id(TABLE_ID)
-                    .execute()
-                    .await;
+                let _ = handle.rule().del(rule).execute().await;
                 break;
             }
         }
 
         // Delete TABLE_ID default route if exists
         // We flush all routes in TABLE_ID since it's our private table
-        let mut routes = handle
-            .route()
-            .get(rtnetlink::IpVersion::V4)
+        let route_msg = rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default()
             .table_id(TABLE_ID)
-            .execute();
+            .build();
+        let mut routes = handle.route().get(route_msg).execute();
         while let Some(Ok(route)) = routes.next().await {
             tracing::info!("found stale route in table {} - cleaning up", TABLE_ID);
             let _ = handle.route().del(route).execute().await;
@@ -298,7 +283,6 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
     Ok(FwmarkInfrastructure {
         handle,
         wan_info,
-        worker_uid: worker.uid,
         torn_down: false,
     })
 }
@@ -316,7 +300,8 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
 pub async fn teardown_fwmark_infrastructure(mut infra: FwmarkInfrastructure) {
     // Mark as torn down before we start cleanup - this prevents the Drop warning
     infra.torn_down = true;
-    let FwmarkInfrastructure { handle, wan_info, .. } = infra;
+    let handle = &infra.handle;
+    let wan_info = &infra.wan_info;
 
     // Delete the fwmark routing table rule
     if let Ok(rules) = handle.rule().get(IpVersion::V4).execute().try_collect::<Vec<_>>().await {
@@ -369,7 +354,6 @@ pub async fn teardown_fwmark_infrastructure(mut infra: FwmarkInfrastructure) {
 #[derive(Debug, Clone)]
 struct VpnInfo {
     if_index: u32,
-    gateway: Ipv4Addr,
     cidr: cidr::Ipv4Cidr,
 }
 
@@ -378,10 +362,8 @@ impl NetworkDeviceInfo {
     fn from_parts(wan: WanInfo, vpn: VpnInfo) -> Self {
         Self {
             wan_if_index: wan.if_index,
-            wan_if_name: wan.if_name,
             wan_gw: wan.gateway,
             vpn_if_index: vpn.if_index,
-            vpn_gw: vpn.gateway,
             vpn_cidr: vpn.cidr,
         }
     }
@@ -494,16 +476,8 @@ impl NetworkDeviceInfo {
             })
             .ok_or(Error::NoInterface)?;
 
-        // Gateway of the VPN interface is the second address in the VPN subnet
-        let gateway = cidr
-            .iter()
-            .addresses()
-            .nth(1)
-            .ok_or(Error::General("invalid vpn subnet range".into()))?;
-
         Ok(VpnInfo {
             if_index,
-            gateway,
             cidr,
         })
     }
@@ -900,9 +874,7 @@ impl Routing for Router {
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
             wan_if_index,
-            wan_if_name: _,
             vpn_if_index,
-            vpn_gw: _,
             vpn_cidr,
             wan_gw,
         } = self
