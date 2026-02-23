@@ -42,7 +42,6 @@ pub enum Response {
     Metrics(String),
     Telemetry(Option<String>),
     FundingTool(FundingToolResponse),
-    StartStop(StartStopResponse),
     Pong,
     Empty,
 }
@@ -139,12 +138,6 @@ pub enum FundingToolResponse {
     Started,
     InProgress,
     Done,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum StartStopResponse {
-    Ok,
-    WrongPhase,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

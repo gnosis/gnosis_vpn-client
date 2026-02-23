@@ -70,8 +70,8 @@ pub struct Core {
     cancel_for_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
 
-    // user provided data
-    target_destination: Option<Destination>,
+    // user provided input
+    target: Target,
 
     // runtime data
     phase: Phase,
@@ -88,13 +88,14 @@ pub struct Core {
     ongoing_channel_fundings: Vec<Address>,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 enum Target {
     /// Idle in ready state waiting to start
     Stopped,
     /// Idle in running state waiting for connection
     Disconnected,
     /// connect to target destination
-    Connect(Destination),
+    Connected(Destination),
 }
 
 #[derive(Debug, Clone)]
@@ -182,8 +183,8 @@ impl Core {
             cancel_for_shutdown: CancellationToken::new(),
             cancel_presafe_queries: CancellationToken::new(),
 
-            // user provided data
-            target_destination: None,
+            // user provided input
+            target: Target::Stopped,
 
             // runtime data
             phase: Phase::Initial,
@@ -389,7 +390,7 @@ impl Core {
                                 if connectivity.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
-                                    self.target_destination = Some(dest.clone());
+                                    self.target = Target::Connected(dest.clone());
                                     self.act_on_target(results_sender);
                                 } else if connectivity.is_unrecoverable() {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::unable(
@@ -401,7 +402,7 @@ impl Core {
                                         dest.clone(),
                                         connectivity.clone(),
                                     )));
-                                    self.target_destination = Some(dest.clone());
+                                    self.target = Target::Connected(dest.clone());
                                 }
                             } else {
                                 tracing::warn!(%id, "no connectivity health found for destination - this should not happen");
@@ -415,7 +416,7 @@ impl Core {
                     },
 
                     Command::Disconnect => {
-                        self.target_destination = None;
+                        self.target = Target::Disconnected;
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
@@ -512,20 +513,16 @@ impl Core {
                         let _ = resp.send(Response::Metrics(metrics));
                     }
                     Command::Start => {
-                        if self.phase == Phase.Ready {
-                            self.spawn_hopr_runner(results_sender, Duration::ZERO);
-                            let _ = resp.send(Response::start_stop(command::StartStopResponse::Ok));
-                        } else {
-                            let _ = resp.send(Response::start_stop(command::StartStopResponse::WrongPhase));
+                        if self.target == Target::Stopped {
+                            self.target = Target::Disconnected;
                         }
+                        let _ = resp.send(Response::Empty);
+                        self.act_on_target(results_sender);
                     }
                     Command::Stop => {
-                        if self.phase == Phase.Ready {
-                            self.spawn_hopr_runner(results_sender, Duration::ZERO);
-                            let _ = resp.send(Response::start_stop(command::StartStopResponse::Ok));
-                        } else {
-                            let _ = resp.send(Response::start_stop(command::StartStopResponse::WrongPhase));
-                        }
+                        self.target == Target::Stopped;
+                        let _ = resp.send(Response::Empty);
+                        self.act_on_target(results_sender);
                     }
                 }
                 true
@@ -538,6 +535,10 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
+            Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
+            Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
+            Results::FundingTool { res } => self.on_results_funding_tool(res),
+
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -553,8 +554,6 @@ impl Core {
                 }
             },
 
-            Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
-            Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
 
             Results::PersistSafe { res, safe_module } => match res {
@@ -580,15 +579,6 @@ impl Core {
                 Err(err) => {
                     tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
                     self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
-                }
-            },
-
-            Results::FundingTool { res } => match res {
-                Ok(None) => self.funding_tool = balance::FundingTool::CompletedSuccess,
-                Ok(Some(reason)) => self.funding_tool = balance::FundingTool::CompletedError(reason),
-                Err(err) => {
-                    tracing::error!(?err, "funding runner exited with error");
-                    self.funding_tool = balance::FundingTool::CompletedError(err.to_string());
                 }
             },
 
@@ -726,12 +716,15 @@ impl Core {
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(%conn, ?err, "connection failed");
                     self.update_health(conn.destination.id.clone(), |h| h.with_error(err.to_string()));
-                    if let Some(dest) = self.target_destination.clone()
-                        && dest == conn.destination
-                    {
-                        tracing::info!(%dest, "restarting edge client due to exhausted connection retries");
-                        self.hopr = None;
-                        self.initial_runner(results_sender).await;
+                    match self.target.clone() {
+                        Target::Connected(dest) if dest == conn.destination => {
+                            tracing::info!(%dest, "restarting edge client due to exhausted connection retries");
+                            self.hopr = None;
+                            self.initial_runner(results_sender).await;
+                        }
+                        _ => {
+                            self.act_on_target(results_sender);
+                        }
                     }
                 }
                 (Err(err), phase) => {
@@ -810,17 +803,19 @@ impl Core {
         match (res, self.phase.clone()) {
             (
                 Ok(presafe),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::info!(%presafe, "on presafe node balance");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
@@ -828,17 +823,19 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to fetch presafe node balance - retrying");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Error(err.to_string()),
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
@@ -854,28 +851,31 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         match (res, self.phase.clone()) {
-            (Ok(Some(safe_module)), Phase::CreatingSafe { .. }) => {
+            (Ok(Some(safe_module)), Phase::CheckingSafe { .. }) => {
                 tracing::info!(?safe_module, "found safe module");
+                self.safe_module = Some(safe_module.clone());
                 // we got our safe module - cancel presafe balance checks
                 self.cancel_presafe_queries.cancel();
-                // start edge client with queried safe module
-                self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
                 self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
+                self.phase = Phase::Ready;
+                self.act_on_target(results_sender);
             }
             (
                 Ok(None),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::info!("found no deployed safe module");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Success(None),
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -883,22 +883,81 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to query safe module - retrying");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Error(err.to_string()),
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
             (res, phase) => {
                 tracing::warn!(?phase, ?res, "ignoring query safe result in unexpected phase");
+            }
+        }
+    }
+
+    fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
+        match (res, self.phase.clone()) {
+            (
+                Ok(None),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedSuccess,
+                }
+            }
+            (
+                Ok(Some(reason)),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedError(reason),
+                }
+            }
+            (
+                Err(err),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedError(err.to_string()),
+                }
+            }
+
+            (res, phase) => {
+                tracing::warn!(?res, ?phase, "unexpted funding tool response in wrong phase");
             }
         }
     }
@@ -911,10 +970,10 @@ impl Core {
         match (res, self.phase.clone()) {
             (Ok(safe_module), Phase::DeployingSafe { .. }) => {
                 tracing::info!(?safe_module, "deployed safe module");
-                // start edge client with new safe module
-                self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
+                self.phase == Phase::Ready;
                 // try persisting safe module to disk - might fail but we consider this non critical
                 self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
+                self.act_on_target(results_sender);
             }
             (
                 Err(err),
@@ -962,17 +1021,13 @@ impl Core {
         let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
             Ok(safe_module) => {
-                self.safe_module = Some(safe_module.clone());
-                if self.worker_params.autostart() {
-                    tracing::debug!(?safe_module, "found existing safe module - autostarting hopr runner");
-                    self.spawn_hopr_runner(safe_module, results_sender, Duration::ZERO);
-                } else {
-                    tracing::debug!(
-                        ?safe_module,
-                        "found existing safe module - ready waiting for start command"
-                    );
-                    self.phase = Phase::Ready;
-                }
+                tracing::debug!(
+                    ?safe_module,
+                    "found existing safe module - ready waiting for start command"
+                );
+                self.safe_module = Some(safe_module);
+                self.phase = Phase::Ready;
+                self.act_on_target(results_sender);
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
