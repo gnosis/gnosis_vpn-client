@@ -25,7 +25,7 @@
 //! RFC1918 Class A traffic bypasses to the WAN for LAN access.
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use rtnetlink::IpVersion;
 use rtnetlink::packet_route::address::AddressAttribute;
 use rtnetlink::packet_route::link::LinkAttribute;
@@ -40,11 +40,11 @@ use gnosis_vpn_lib::{event, wireguard, worker};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
 
 use crate::wg_tooling;
-
 /// Creates a dynamic router using rtnetlink and iptables.
 ///
 /// This is the preferred router on Linux as it provides more robust split-tunnel
@@ -53,7 +53,7 @@ use crate::wg_tooling;
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
 pub fn dynamic_router(
-    state_home: PathBuf,
+    state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     wan_info: WanInfo,
     handle: rtnetlink::Handle,
@@ -65,6 +65,7 @@ pub fn dynamic_router(
         wan_info,
         if_indices: None,
     })
+}   })
 }
 
 /// Creates a static fallback router using direct `ip route` commands.
@@ -72,7 +73,7 @@ pub fn dynamic_router(
 /// Used when dynamic routing is not available. Provides simpler routing
 /// by adding explicit host routes for peer IPs before bringing up WireGuard.
 pub fn static_fallback_router(
-    state_home: PathBuf,
+    state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 ) -> impl Routing {
@@ -101,6 +102,13 @@ struct NetworkDeviceInfo {
 }
 
 /// WAN interface information gathered before VPN interface exists.
+///
+/// **Limitation:** The `ip_addr` field is captured once at daemon startup and used for SNAT rules.
+/// If the WAN IP changes during operation (DHCP renewal, network switch), the SNAT rules
+/// will use the stale IP, causing bypassed traffic to fail silently. In such cases,
+/// restarting the daemon will refresh the IP. Using MASQUERADE instead of SNAT would
+/// handle IP changes automatically but may cause connection instability for long-lived
+/// UDP/QUIC flows.
 #[derive(Debug, Clone)]
 pub struct WanInfo {
     pub if_index: u32,
@@ -135,6 +143,89 @@ impl Drop for FwmarkInfrastructure {
             );
         }
     }
+}
+
+
+/// Cleans up any stale iptables rules and routing entries from a previous crash.
+///
+/// This should be called at daemon startup before `setup_fwmark_infrastructure()`
+/// to ensure a clean slate. Safe to call even if no stale rules exist.
+///
+/// Cleanup is best-effort: errors are logged but do not prevent startup.
+pub async fn cleanup_stale_fwmark_rules() {
+    tracing::debug!("checking for stale fwmark infrastructure from previous crash");
+
+    // Try to remove stale iptables rules (ignore errors - they may not exist)
+    if let Ok(iptables) = iptables::new(false) {
+        // Check if our custom chain exists
+        if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN).unwrap_or(false) {
+            tracing::info!("found stale {} chain - cleaning up", CUSTOM_CHAIN);
+            let _ = iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN);
+            let jump_rule = format!("-j {CUSTOM_CHAIN}");
+            let _ = iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule);
+            let _ = iptables.delete_chain(IP_TABLE, CUSTOM_CHAIN);
+        }
+
+        // Clean up stale NAT rules by scanning for our mark pattern.
+        // We can't know the exact WAN IP from a previous run, but we can look for rules
+        // with our distinctive fwmark. This is approximate - we delete any SNAT rule
+        // matching our mark pattern.
+        if let Ok(rules) = iptables.list(NAT_TABLE, NAT_CHAIN) {
+            let mark_pattern = format!("--mark {FW_MARK:#x}");
+            let mark_pattern_alt = format!("--mark {FW_MARK}");
+            for rule in rules {
+                if rule.contains(&mark_pattern) || rule.contains(&mark_pattern_alt) {
+                    tracing::info!("found stale NAT rule - cleaning up: {}", rule);
+                    // The rule from list() includes the -A prefix, need to construct delete
+                    let _ = iptables.delete(NAT_TABLE, NAT_CHAIN, &rule);
+                }
+            }
+        }
+    }
+
+    // Try to remove stale TABLE_ID routes and fwmark rules via rtnetlink
+    if let Ok((conn, handle, _)) = rtnetlink::new_connection() {
+        tokio::task::spawn(conn);
+
+        // Delete fwmark rule if exists (by enumerating all rules)
+        let mut rules = handle.rule().get(rtnetlink::IpVersion::V4).execute();
+        while let Ok(Some(rule)) = rules.try_next().await {
+            // Check if this rule matches our fwmark and table
+            let is_our_rule = rule.header.table == TABLE_ID as u8
+                || rule.attributes.iter().any(|attr| {
+                    matches!(attr, RuleAttribute::FwMark(m) if *m == FW_MARK)
+                });
+
+            if is_our_rule {
+                tracing::info!("found stale fwmark rule - cleaning up");
+                // Delete by recreating the rule request
+                let _ = handle
+                    .rule()
+                    .del()
+                    .v4()
+                    .fw_mark(FW_MARK)
+                    .priority(RULE_PRIORITY)
+                    .table_id(TABLE_ID)
+                    .execute()
+                    .await;
+                break;
+            }
+        }
+
+        // Delete TABLE_ID default route if exists
+        // We flush all routes in TABLE_ID since it's our private table
+        let mut routes = handle
+            .route()
+            .get(rtnetlink::IpVersion::V4)
+            .table_id(TABLE_ID)
+            .execute();
+        while let Some(Ok(route)) = routes.next().await {
+            tracing::info!("found stale route in table {} - cleaning up", TABLE_ID);
+            let _ = handle.route().del(route).execute().await;
+        }
+    }
+
+    tracing::debug!("stale fwmark infrastructure cleanup complete");
 }
 
 /// Sets up the persistent fwmark infrastructure at daemon startup.
@@ -430,7 +521,7 @@ impl NetworkDeviceInfo {
 /// - VPN subnet routes
 /// - Default route through VPN
 pub struct Router {
-    state_home: PathBuf,
+    state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     // Shared rtnetlink handle, cloned from FwmarkInfrastructure
     handle: rtnetlink::Handle,
@@ -444,26 +535,52 @@ pub struct Router {
 /// Used when dynamic routing (rtnetlink + iptables) is not available or not desired.
 /// Simpler than [`Router`] but provides the same phased setup to avoid race conditions.
 pub struct FallbackRouter {
-    state_home: PathBuf,
+    state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
     bypass_manager: Option<super::BypassRouteManager>,
 }
 
-// FwMark for traffic the does not go through the VPN
+/// Firewall mark used to identify HOPR traffic for bypass routing.
+///
+/// This mark is applied by iptables to packets owned by the worker process (UID-based),
+/// allowing policy-based routing to send them via WAN instead of VPN tunnel.
+///
+/// Value 0xFEED_CAFE is arbitrary but memorable and unlikely to conflict with
+/// other fwmark users (Docker uses 0x1, etc.).
 const FW_MARK: u32 = 0xFEED_CAFE;
 
-// Table for traffic that does not go through the VPN
+/// Routing table ID for fwmark-based bypass traffic.
+///
+/// Policy routing rule directs FW_MARK-ed packets to this table, which contains
+/// a default route via WAN gateway. Value 108 is arbitrary but avoids conflicts
+/// with standard tables (local=255, main=254, default=253) and common custom
+/// tables (Docker typically uses 100-107).
 const TABLE_ID: u32 = 108;
 
-// Priority of the FwMark routing table rule
+/// Priority for the fwmark routing rule.
+///
+/// Lower values = higher priority. Value 1 ensures our bypass rule is evaluated
+/// before most other policy rules while still allowing local table (priority 0)
+/// to handle loopback traffic.
 const RULE_PRIORITY: u32 = 1;
 
+/// iptables table for packet modification (mangle table handles marking).
 const IP_TABLE: &str = "mangle";
+
+/// iptables chain for locally-generated outbound packets.
 const IP_CHAIN: &str = "OUTPUT";
+
+/// Custom iptables chain name for HOPR traffic marking.
+///
+/// Using a custom chain rather than directly modifying OUTPUT allows clean
+/// setup/teardown without affecting other iptables users.
 const CUSTOM_CHAIN: &str = "GNOSIS_VPN";
 
+/// iptables table for NAT rules.
 const NAT_TABLE: &str = "nat";
+
+/// iptables chain for source address translation on outbound packets.
 const NAT_CHAIN: &str = "POSTROUTING";
 
 // ============================================================================
@@ -598,25 +715,42 @@ fn setup_iptables(vpn_uid: u32, wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(
 
 fn teardown_iptables(wan_if_name: &str, wan_ip: Ipv4Addr) -> Result<(), Box<dyn std::error::Error>> {
     let iptables = iptables::new(false)?;
+    let mut errors: Vec<String> = Vec::new();
 
     // Ordering: flush chain → delete jump from OUTPUT → delete chain
-    iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN)?;
+    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN).unwrap_or(false) {
+        if let Err(e) = iptables.flush_chain(IP_TABLE, CUSTOM_CHAIN) {
+            errors.push(format!("flush chain: {e}"));
+        }
+    }
 
     let jump_rule = format!("-j {CUSTOM_CHAIN}");
-    if iptables.exists(IP_TABLE, IP_CHAIN, &jump_rule)? {
-        iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule)?;
+    if iptables.exists(IP_TABLE, IP_CHAIN, &jump_rule).unwrap_or(false) {
+        if let Err(e) = iptables.delete(IP_TABLE, IP_CHAIN, &jump_rule) {
+            errors.push(format!("delete jump rule: {e}"));
+        }
     }
 
-    iptables.delete_chain(IP_TABLE, CUSTOM_CHAIN)?;
+    if iptables.chain_exists(IP_TABLE, CUSTOM_CHAIN).unwrap_or(false) {
+        if let Err(e) = iptables.delete_chain(IP_TABLE, CUSTOM_CHAIN) {
+            errors.push(format!("delete chain: {e}"));
+        }
+    }
 
-    // Delete only our specific NAT rule rather than flushing the entire nat POSTROUTING chain,
-    // because other services (Docker, libvirt, etc.) install their own rules there.
+    // Always attempt NAT cleanup regardless of previous errors.
+    // This ensures the SNAT rule is removed even if chain cleanup fails.
     let nat_rule = format!("-m mark --mark {FW_MARK} -o {wan_if_name} -j SNAT --to-source {wan_ip}");
-    if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule)? {
-        iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule)?;
+    if iptables.exists(NAT_TABLE, NAT_CHAIN, &nat_rule).unwrap_or(false) {
+        if let Err(e) = iptables.delete(NAT_TABLE, NAT_CHAIN, &nat_rule) {
+            errors.push(format!("delete NAT SNAT rule: {e}"));
+        }
     }
 
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; ").into())
+    }
 }
 
 /// Linux-specific implementation of [`Routing`] for split-tunnel routing.
@@ -656,7 +790,7 @@ impl Routing for Router {
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
-        if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
+        if let Err(e) = wg_tooling::up((*self.state_home).clone(), wg_quick_content).await {
             return Err(e.into());
         }
         tracing::debug!("wg-quick up");
@@ -674,7 +808,7 @@ impl Routing for Router {
             Ok(info) => info,
             Err(e) => {
                 // Rollback: bring down WG
-                if let Err(rollback_err) = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await {
+                if let Err(rollback_err) = wg_tooling::down((*self.state_home).clone(), Logs::Suppress).await {
                     tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
                 }
                 return Err(e);
@@ -691,7 +825,7 @@ impl Routing for Router {
         if let Err(e) = self.handle.route().add(vpn_addrs_route).execute().await {
             // Rollback: bring down WG
             self.if_indices = None;
-            if let Err(rollback_err) = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await {
+            if let Err(rollback_err) = wg_tooling::down((*self.state_home).clone(), Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
             return Err(e.into());
@@ -732,7 +866,7 @@ impl Routing for Router {
                 tracing::warn!(%rollback_err, "rollback failed: could not delete VPN subnet route from TABLE_ID");
             }
             self.if_indices = None;
-            if let Err(rollback_err) = wg_tooling::down(self.state_home.clone(), Logs::Suppress).await {
+            if let Err(rollback_err) = wg_tooling::down((*self.state_home).clone(), Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
             return Err(e.into());
@@ -807,7 +941,7 @@ impl Routing for Router {
 
         // Step 3: Run wg-quick down while bypass infrastructure is still active
         // HOPR traffic continues: iptables marks → fwmark rule → TABLE_ID → WAN
-        wg_tooling::down(self.state_home.clone(), logs).await?;
+        wg_tooling::down((*self.state_home).clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
         // Step 4: Delete the TABLE_ID routing table VPN route
@@ -879,7 +1013,7 @@ impl Routing for FallbackRouter {
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
+        if let Err(e) = wg_tooling::up((*self.state_home).clone(), wg_quick_content).await {
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
             bypass_manager.rollback().await;
             return Err(e.into());
@@ -898,7 +1032,7 @@ impl Routing for FallbackRouter {
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         // wg-quick down first
-        wg_tooling::down(self.state_home.clone(), logs).await?;
+        wg_tooling::down((*self.state_home).clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
         // then remove bypass routes

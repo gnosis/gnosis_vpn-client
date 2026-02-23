@@ -1,3 +1,19 @@
+//! # Routing Modes
+//!
+//! This module provides split-tunnel VPN routing implementations for different platforms.
+//!
+//! ## Dynamic Routing (Linux only, default)
+//! Uses rtnetlink + iptables for policy-based routing with firewall marks.
+//! Most reliable but requires root and iptables availability.
+//!
+//! ## Static Routing (all platforms)
+//! Uses direct route commands (`ip route` on Linux, `route` on macOS).
+//! Simpler but may have reduced reliability during network changes.
+//!
+//! **Note:** There is no automatic fallback from dynamic to static routing.
+//! If dynamic routing fails (e.g., missing iptables), the connection attempt fails.
+//! Use `--force-static-routing` CLI flag to explicitly use static routing.
+
 use async_trait::async_trait;
 use thiserror::Error;
 
@@ -63,8 +79,9 @@ pub(crate) fn parse_key_value_output(
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    FwmarkInfrastructure, WanInfo, dynamic_router, setup_fwmark_infrastructure,
-    static_fallback_router as static_router, teardown_fwmark_infrastructure,
+    FwmarkInfrastructure, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
+    setup_fwmark_infrastructure, static_fallback_router as static_router,
+    teardown_fwmark_infrastructure,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{WanInfo, dynamic_router, static_router};
@@ -75,8 +92,14 @@ pub type RouterHandle = rtnetlink::Handle;
 pub type RouterHandle = ();
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
-/// These are more specific than the VPN routes (0.0.0.0/1, 128.0.0.0/1)
+/// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)
 /// so they take precedence in the routing table.
+///
+/// **Limitation:** If your VPN server uses an IP in a non-standard 10.x range
+/// (e.g., 10.1.0.0/16), traffic may be misrouted because 10.0.0.0/8 bypass
+/// takes precedence over the more specific VPN server IP. The VPN_TUNNEL_SUBNET
+/// (10.128.0.0/9) is designed to override this for the standard HOPR VPN range,
+/// but custom VPN configurations may require adjustment.
 pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
     ("10.0.0.0", 8),     // RFC1918 Class A private
     ("172.16.0.0", 12),  // RFC1918 Class B private

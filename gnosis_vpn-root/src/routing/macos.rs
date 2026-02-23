@@ -40,6 +40,7 @@ use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
 
@@ -51,7 +52,7 @@ pub struct WanInfo;
 
 /// Dynamic routing not available on macOS.
 pub fn dynamic_router(
-    _state_home: PathBuf,
+    _state_home: Arc<PathBuf>,
     _wg_data: event::WireGuardData,
     _wan_info: WanInfo,
 ) -> Result<DynamicRouter, Error> {
@@ -61,7 +62,7 @@ pub fn dynamic_router(
 pub struct DynamicRouter {}
 
 /// Builds a static macOS router without a worker handle.
-pub fn static_router(state_home: PathBuf, wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
+pub fn static_router(state_home: Arc<PathBuf>, wg_data: event::WireGuardData, peer_ips: Vec<Ipv4Addr>) -> StaticRouter {
     StaticRouter {
         state_home,
         wg_data,
@@ -72,7 +73,7 @@ pub fn static_router(state_home: PathBuf, wg_data: event::WireGuardData, peer_ip
 
 /// macOS routing implementation that programs host routes directly before wg-quick up.
 pub struct StaticRouter {
-    state_home: PathBuf,
+    state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
     bypass_manager: Option<super::BypassRouteManager>,
@@ -148,7 +149,7 @@ impl Routing for StaticRouter {
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = wg_tooling::up(self.state_home.clone(), wg_quick_content).await {
+        if let Err(e) = wg_tooling::up((*self.state_home).clone(), wg_quick_content).await {
             tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
             bypass_manager.rollback().await;
             return Err(e.into());
@@ -168,7 +169,7 @@ impl Routing for StaticRouter {
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         // wg-quick down removes the interface and its associated routes (including RFC1918 PostUp routes)
-        wg_tooling::down(self.state_home.clone(), logs).await?;
+        wg_tooling::down((*self.state_home).clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
         // Remove peer IP bypass routes using the bypass manager

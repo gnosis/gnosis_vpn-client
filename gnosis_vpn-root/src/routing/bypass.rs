@@ -109,12 +109,15 @@ impl BypassRouteManager {
     #[cfg(target_os = "linux")]
     pub async fn teardown(&mut self) {
         // Remove peer IP bypass routes
-        for ip in &self.peer_ips {
+        for ip in &self.added_peer_routes.clone() {
             if let Err(e) = self.delete_peer_route(ip).await {
                 tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route, continuing anyway");
             }
         }
-        tracing::debug!(count = self.peer_ips.len(), "peer IP bypass routes cleanup attempted");
+        tracing::debug!(
+            count = self.added_peer_routes.len(),
+            "peer IP bypass routes cleanup attempted"
+        );
 
         // Remove RFC1918 bypass routes
         for cidr in &self.added_rfc1918_routes.clone() {
@@ -242,5 +245,72 @@ impl BypassRouteManager {
             .await?;
         tracing::debug!(cidr = %cidr, "deleted RFC1918 bypass route");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bypass_manager_creation() {
+        let wan = WanInterface {
+            device: "eth0".to_string(),
+            gateway: Some("192.168.1.1".to_string()),
+        };
+        let peer_ips = vec!["1.2.3.4".parse().unwrap(), "5.6.7.8".parse().unwrap()];
+
+        let manager = BypassRouteManager::new(wan.clone(), peer_ips.clone());
+
+        assert_eq!(manager.wan.device, "eth0");
+        assert_eq!(manager.wan.gateway, Some("192.168.1.1".to_string()));
+        assert_eq!(manager.peer_ips.len(), 2);
+        assert!(manager.added_peer_routes.is_empty());
+        assert!(manager.added_rfc1918_routes.is_empty());
+    }
+
+    #[test]
+    fn test_wan_interface_without_gateway() {
+        let wan = WanInterface {
+            device: "wlan0".to_string(),
+            gateway: None,
+        };
+
+        assert!(wan.gateway.is_none());
+        assert_eq!(wan.device, "wlan0");
+    }
+
+    #[test]
+    fn test_bypass_manager_empty_peer_ips() {
+        let wan = WanInterface {
+            device: "eth0".to_string(),
+            gateway: Some("10.0.0.1".to_string()),
+        };
+        let manager = BypassRouteManager::new(wan, vec![]);
+
+        assert!(manager.peer_ips.is_empty());
+        assert!(manager.added_peer_routes.is_empty());
+    }
+
+    #[test]
+    fn test_bypass_manager_state_tracking() {
+        let wan = WanInterface {
+            device: "eth0".to_string(),
+            gateway: Some("10.0.0.1".to_string()),
+        };
+        let mut manager = BypassRouteManager::new(wan, vec![]);
+
+        // Simulate adding routes by directly modifying
+        manager.added_peer_routes.push("1.1.1.1".parse().unwrap());
+        manager.added_peer_routes.push("8.8.8.8".parse().unwrap());
+        manager.added_rfc1918_routes.push("10.0.0.0/8".to_string());
+        manager.added_rfc1918_routes.push("192.168.0.0/16".to_string());
+
+        assert_eq!(manager.added_peer_routes.len(), 2);
+        assert_eq!(manager.added_rfc1918_routes.len(), 2);
+
+        // Verify specific entries
+        assert!(manager.added_peer_routes.contains(&"1.1.1.1".parse().unwrap()));
+        assert!(manager.added_rfc1918_routes.contains(&"10.0.0.0/8".to_string()));
     }
 }

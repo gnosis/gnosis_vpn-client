@@ -229,6 +229,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         log_path,
     };
 
+    // Clean up any stale fwmark infrastructure from a previous crash (Linux only)
+    #[cfg(target_os = "linux")]
+    routing::cleanup_stale_fwmark_rules().await;
+
     // Set up fwmark infrastructure at daemon startup (Linux only, dynamic routing only)
     // Static routing uses per-peer IP bypass routes instead, so no fwmark needed
     #[cfg(target_os = "linux")]
@@ -348,8 +352,8 @@ async fn loop_daemon(
     let mut socket_lines_reader = reader.lines();
     let mut socket_writer = BufWriter::new(writer_half);
 
-    // safe state_home for usage later
-    let state_home = setup.worker_params.state_home();
+    // safe state_home for usage later, wrapped in Arc to avoid cloning the PathBuf
+    let state_home = std::sync::Arc::new(setup.worker_params.state_home());
 
     // provide initial resources to worker
     send_to_worker(
