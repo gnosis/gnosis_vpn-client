@@ -23,9 +23,19 @@ use gnosis_vpn_lib::{dirs, wireguard};
 mod bypass;
 
 #[cfg(target_os = "linux")]
+pub(crate) mod iptables_ops;
+#[cfg(target_os = "linux")]
+pub(crate) mod netlink_ops;
+#[cfg(target_os = "linux")]
+pub(crate) mod shell_ops;
+
+#[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(test)]
+pub(crate) mod mocks;
 
 pub(crate) use bypass::{BypassRouteManager, WanInterface};
 
@@ -79,7 +89,7 @@ pub(crate) fn parse_key_value_output(
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    FwmarkInfrastructure, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
+    FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
     setup_fwmark_infrastructure, static_fallback_router as static_router,
     teardown_fwmark_infrastructure,
 };

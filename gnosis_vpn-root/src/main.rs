@@ -236,7 +236,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up fwmark infrastructure at daemon startup (Linux only, dynamic routing only)
     // Static routing uses per-peer IP bypass routes instead, so no fwmark needed
     #[cfg(target_os = "linux")]
-    let fwmark_infra: Option<routing::FwmarkInfrastructure> = if force_static_routing {
+    let fwmark_infra: Option<routing::FwmarkInfra> = if force_static_routing {
         tracing::info!("static routing enabled via CLI flag - skipping fwmark infrastructure");
         None
     } else {
@@ -258,7 +258,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     #[cfg(target_os = "linux")]
     let wan_info: Option<routing::WanInfo> = fwmark_infra.as_ref().map(|i| i.wan_info.clone());
     #[cfg(target_os = "linux")]
-    let rtnetlink_handle: Option<routing::RouterHandle> = fwmark_infra.as_ref().map(|i| i.handle.clone());
+    let rtnetlink_handle: Option<routing::RouterHandle> = fwmark_infra.as_ref().map(|i| i.netlink.handle().clone());
 
     #[cfg(not(target_os = "linux"))]
     let wan_info: Option<routing::WanInfo> = None;
