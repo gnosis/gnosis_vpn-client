@@ -185,7 +185,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     if let Some(ref pid_file) = args.pid_file {
         tracing::debug!(path = ?pid_file, "writing pidfile");
         let pid = process::id().to_string();
-        fs::write(pid_file, pid).await.expect("failed to write pidfile");
+        fs::write(pid_file, pid).await.map_err(|e| {
+            tracing::error!(error = ?e, "error writing pid file");
+            exitcode::IOERR
+        })?;
     }
 
     let mut signal_receiver = signal_channel().await?;
