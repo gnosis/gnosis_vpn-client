@@ -1,33 +1,20 @@
 //! macOS routing implementation for split-tunnel VPN behavior.
 //!
 //! Provides a [`StaticRouter`] that:
-//! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
+//! 1. Adds bypass routes for peer IPs and RFC1918 networks BEFORE bringing up WireGuard
+//!    (avoids race condition for both HOPR traffic and LAN access)
 //! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
-//! 3. Uses PostUp hooks to add:
+//! 3. Uses PostUp hooks to add VPN-specific routes:
 //!    - Default routes (0.0.0.0/1 and 128.0.0.0/1) through VPN
 //!    - VPN subnet route (10.128.0.0/9) through VPN - overrides the 10.0.0.0/8 bypass
 //!      so VPN server traffic (e.g. 10.128.0.1) uses the tunnel
-//!    - RFC1918 bypass routes (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16)
-//!      through WAN gateway for LAN access
-//! 4. On teardown, brings down WireGuard first, then cleans up peer IP bypass routes
+//! 4. On teardown, brings down WireGuard first, then cleans up all bypass routes
 //!
 //! ## Route Precedence (most specific wins)
 //!
 //! - 10.128.0.0/9 → VPN interface (VPN server subnet)
 //! - 10.0.0.0/8 → WAN gateway (other RFC1918 Class A)
 //! - 0.0.0.0/1, 128.0.0.0/1 → VPN interface (catch-all)
-//!
-//! ## Race Condition Window
-//!
-//! Peer IP bypass routes are added before `wg-quick up`, eliminating the race condition
-//! for HOPR traffic. However, RFC1918 routes are added via PostUp hooks (after interface
-//! is up), so there is a brief window where RFC1918 traffic could be routed incorrectly
-//! if the VPN captures those routes before PostUp runs. This is acceptable because:
-//!
-//! - RFC1918 traffic (LAN access) is less time-sensitive than peer traffic
-//! - The window is very short (milliseconds during wg-quick startup)
-//! - PostUp hooks cannot reference the WAN gateway captured before wg-quick up
-//!   without adding complexity (the gateway may change when VPN becomes active)
 //!
 //! ## Platform Notes
 //!
@@ -42,7 +29,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
+use super::{Error, Routing, VPN_TUNNEL_SUBNET};
 
 use crate::wg_tooling;
 
@@ -89,9 +76,10 @@ impl Routing for StaticRouter {
     /// Phase 1 (before wg-quick up):
     ///   1. Get WAN interface info
     ///   2. Add bypass routes for all peer IPs directly via WAN
+    ///   3. Add RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
     ///
     /// Phase 2:
-    ///   3. Run wg-quick up (safe now - bypass routes are already in place)
+    ///   4. Run wg-quick up with PostUp hooks for VPN routes (default + subnet)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         if self.bypass_manager.is_some() {
@@ -110,39 +98,24 @@ impl Routing for StaticRouter {
             self.peer_ips.clone(),
         );
 
-        // Only add peer IP bypass routes (RFC1918 done via PostUp hooks)
+        // Add peer IP and RFC1918 bypass routes (auto-rollback on failure)
         bypass_manager.setup_peer_routes().await?;
+        bypass_manager.setup_rfc1918_routes().await?;
 
-        // Phase 2: wg-quick up with PostUp hooks for VPN and RFC1918 routes
+        // Phase 2: wg-quick up with PostUp hooks for VPN routes only
         // Table = off prevents wg-quick from managing routes automatically
-        // PostUp hooks add routes AFTER interface is established (critical for persistence)
-        let mut extra = vec![
+        // PostUp hooks add VPN-specific routes AFTER interface is established
+        let extra = vec![
             "Table = off".to_string(),
             // VPN default routes (catch-all via tunnel)
             "PostUp = route -n add -inet 0.0.0.0/1 -interface %i".to_string(),
             "PostUp = route -n add -inet 128.0.0.0/1 -interface %i".to_string(),
-            // VPN internal subnet (more specific than 10.0.0.0/8 bypass below)
+            // VPN internal subnet (more specific than 10.0.0.0/8 bypass)
             format!(
                 "PostUp = route -n add -inet {}/{} -interface %i",
                 VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1
             ),
         ];
-
-        // RFC1918 bypass routes via PostUp (using captured WAN gateway)
-        // These are more specific than 0/1 and 128/1, so they take precedence
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let cidr = format!("{}/{}", net, prefix);
-            let route_cmd = if let Some(ref gw) = gateway {
-                format!("PostUp = route -n add -inet {} {}", cidr, gw)
-            } else {
-                format!("PostUp = route -n add -inet {} -interface {}", cidr, device)
-            };
-            extra.push(route_cmd);
-        }
-        tracing::debug!(
-            rfc1918_routes = RFC1918_BYPASS_NETS.len(),
-            "RFC1918 bypass routes configured as PostUp commands"
-        );
 
         let wg_quick_content =
             self.wg_data
@@ -163,23 +136,25 @@ impl Routing for StaticRouter {
 
     /// Teardown split-tunnel routing for macOS StaticRouter.
     ///
-    /// Teardown order is important: wg-quick down first, then remove peer IP bypass routes.
+    /// Teardown order is important: wg-quick down first, then remove bypass routes.
     /// This ensures HOPR traffic continues to flow via WAN while VPN is being torn down.
-    /// RFC1918 routes are cleaned up automatically when the WireGuard interface goes down.
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        // wg-quick down removes the interface and its associated routes (including RFC1918 PostUp routes)
-        wg_tooling::down((*self.state_home).clone(), logs).await?;
-        tracing::debug!("wg-quick down");
+        // wg-quick down first
+        let wg_result = wg_tooling::down((*self.state_home).clone(), logs).await;
+        if let Err(ref e) = wg_result {
+            tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
+        } else {
+            tracing::debug!("wg-quick down");
+        }
 
-        // Remove peer IP bypass routes using the bypass manager
+        // Remove bypass routes (always, even if wg-quick down failed)
         if let Some(ref mut bypass_manager) = self.bypass_manager {
-            bypass_manager.rollback().await; // Use rollback for silent cleanup
+            bypass_manager.teardown().await;
         }
         self.bypass_manager = None;
-        tracing::debug!("Peer IP bypass routes cleanup attempted after wg-quick down");
 
-        Ok(())
+        wg_result.map_err(Into::into)
     }
 }
 

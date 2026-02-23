@@ -14,7 +14,6 @@ use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
 use super::Error;
 
-#[cfg(target_os = "linux")]
 use super::RFC1918_BYPASS_NETS;
 
 /// WAN interface information for bypass routing.
@@ -71,7 +70,6 @@ impl BypassRouteManager {
     ///
     /// On error, automatically rolls back any routes that were successfully added
     /// (both RFC1918 and peer IP routes).
-    #[cfg(target_os = "linux")]
     pub async fn setup_rfc1918_routes(&mut self) -> Result<(), Error> {
         for (net, prefix) in RFC1918_BYPASS_NETS {
             let cidr = format!("{}/{}", net, prefix);
@@ -106,7 +104,6 @@ impl BypassRouteManager {
     ///
     /// Unlike rollback, this logs warnings for any failures and is intended
     /// for normal shutdown rather than error recovery.
-    #[cfg(target_os = "linux")]
     pub async fn teardown(&mut self) {
         // Remove peer IP bypass routes
         for ip in &self.added_peer_routes.clone() {
@@ -231,6 +228,23 @@ impl BypassRouteManager {
             .run_stdout(Logs::Suppress)
             .await?;
         tracing::debug!(peer_ip = %peer_ip, "deleted bypass route");
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn add_subnet_route(&self, cidr: &str) -> Result<(), Error> {
+        // Delete any existing route first (make idempotent)
+        let _ = self.delete_subnet_route(cidr).await;
+
+        let mut cmd = Command::new("route");
+        cmd.arg("-n").arg("add").arg("-inet").arg(cidr);
+        if let Some(ref gw) = self.wan.gateway {
+            cmd.arg(gw);
+        } else {
+            cmd.arg("-interface").arg(&self.wan.device);
+        }
+        cmd.run_stdout(Logs::Print).await?;
+        tracing::debug!(cidr = %cidr, device = %self.wan.device, gateway = ?self.wan.gateway, "added RFC1918 bypass route");
         Ok(())
     }
 

@@ -1003,16 +1003,20 @@ impl Routing for FallbackRouter {
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         // wg-quick down first
-        wg_tooling::down((*self.state_home).clone(), logs).await?;
-        tracing::debug!("wg-quick down");
+        let wg_result = wg_tooling::down((*self.state_home).clone(), logs).await;
+        if let Err(ref e) = wg_result {
+            tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
+        } else {
+            tracing::debug!("wg-quick down");
+        }
 
-        // then remove bypass routes
+        // then remove bypass routes (always, even if wg-quick down failed)
         if let Some(ref mut bypass_manager) = self.bypass_manager {
             bypass_manager.teardown().await;
         }
         self.bypass_manager = None;
 
-        Ok(())
+        wg_result.map_err(Into::into)
     }
 }
 
