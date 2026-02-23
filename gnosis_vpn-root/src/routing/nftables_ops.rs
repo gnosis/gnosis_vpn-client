@@ -1,79 +1,122 @@
 //! Firewall rule management abstraction for fwmark-based routing bypass.
 //!
-//! Defines [`NfTablesOps`] trait with a higher-level API than the old `IptablesOps`,
-//! focusing on the logical operations (setup fwmark rules, teardown, check existence)
-//! rather than individual chain/rule manipulation.
+//! Defines [`NfTablesOps`] trait for logical firewall operations
+//! (setup fwmark rules, teardown, cleanup stale rules).
 //!
-//! The current production implementation uses `iptables` under the hood.
-//! A future iteration will use native nftables via netlink for CLI-free operation.
+//! The production implementation uses native nftables via `nftnl` + `mnl`
+//! for CLI-free, atomic batch operations through netlink.
 //!
 //! Production code uses [`RealNfTablesOps`].
 //! Tests use stateful mocks (see `mocks` module).
 
+use std::ffi::CString;
 use std::net::Ipv4Addr;
+
+use nftnl::expr::{self, Immediate, Nat, NatType, Register};
+use nftnl::nft_expr;
+use nftnl::{Batch, Chain, ChainType, Hook, MsgType, ProtoFamily, Rule, Table};
 
 use super::Error;
 
 /// Firewall mark used to identify HOPR traffic for bypass routing.
 pub(crate) const FW_MARK: u32 = 0xFEED_CAFE;
 
-/// Custom chain name for HOPR traffic marking.
-pub(crate) const CUSTOM_CHAIN: &str = "GNOSIS_VPN";
+/// nftables table name for all gnosis_vpn rules.
+const TABLE_NAME: &std::ffi::CStr = c"gnosis_vpn";
 
-/// iptables table for packet modification.
-const IP_TABLE: &str = "mangle";
-/// iptables chain for locally-generated outbound packets.
-const IP_CHAIN: &str = "OUTPUT";
-/// iptables table for NAT rules.
-const NAT_TABLE: &str = "nat";
-/// iptables chain for source address translation.
-const NAT_CHAIN: &str = "POSTROUTING";
+/// Chain name for output mangle (fwmark setting).
+const MANGLE_CHAIN_NAME: &std::ffi::CStr = c"GNOSIS_VPN";
+
+/// Chain name for NAT (SNAT).
+const NAT_CHAIN_NAME: &std::ffi::CStr = c"GNOSIS_VPN_NAT";
 
 /// Higher-level abstraction over firewall rule management for fwmark bypass.
 ///
-/// Compared to the low-level `IptablesOps` it replaces, this trait operates
-/// at the logical level: "set up all fwmark rules" / "tear down everything"
+/// Operates at the logical level: "set up all fwmark rules" / "tear down everything"
 /// rather than individual chain and rule manipulation.
 pub trait NfTablesOps: Send + Sync {
     /// Set up all firewall rules needed for fwmark-based routing bypass.
     ///
-    /// Creates:
-    /// - Mangle rules to mark traffic from `vpn_uid` with `fw_mark`
-    /// - NAT SNAT rule to rewrite source address for marked traffic
-    fn setup_fwmark_rules(
-        &self,
-        vpn_uid: u32,
-        wan_if_name: &str,
-        fw_mark: u32,
-        snat_ip: Ipv4Addr,
-    ) -> Result<(), Error>;
+    /// Creates a single nftables table with:
+    /// - A route chain to mark traffic from `vpn_uid` with `fw_mark`
+    /// - A NAT chain with SNAT rule to rewrite source address for marked traffic
+    fn setup_fwmark_rules(&self, vpn_uid: u32, wan_if_name: &str, fw_mark: u32, snat_ip: Ipv4Addr)
+    -> Result<(), Error>;
 
     /// Tear down all firewall rules for fwmark bypass.
-    fn teardown_rules(
-        &self,
-        wan_if_name: &str,
-        fw_mark: u32,
-        snat_ip: Ipv4Addr,
-    ) -> Result<(), Error>;
+    ///
+    /// Deletes the entire nftables table, which cascades to all chains and rules.
+    fn teardown_rules(&self, wan_if_name: &str, fw_mark: u32, snat_ip: Ipv4Addr) -> Result<(), Error>;
 
     /// Clean up stale fwmark rules from a previous crash.
+    ///
+    /// Attempts to delete the nftables table, ignoring ENOENT if it doesn't exist.
     fn cleanup_stale_rules(&self, fw_mark: u32) -> Result<(), Error>;
 }
 
-/// Production [`NfTablesOps`] backed by the `iptables` crate.
+/// Production [`NfTablesOps`] backed by native nftables via `nftnl` + `mnl`.
 ///
-/// Uses iptables as the backend. A future migration to native nftables
-/// via netlink would only require replacing this implementation while
-/// keeping the same trait interface.
-pub struct RealNfTablesOps {
-    inner: iptables::IPTables,
-}
+/// Uses a single `gnosis_vpn` nftables table with atomic batch operations.
+/// Table-level deletion cascades to all chains and rules, simplifying teardown.
+pub struct RealNfTablesOps;
 
 impl RealNfTablesOps {
     pub fn new() -> Result<Self, Error> {
-        Ok(Self {
-            inner: iptables::new(false).map_err(Error::iptables)?,
-        })
+        Ok(Self)
+    }
+}
+
+/// Sends a finalized nftnl batch over a netlink socket and processes ACKs.
+fn send_batch(batch: &nftnl::FinalizedBatch) -> Result<(), Error> {
+    let socket = mnl::Socket::new(mnl::Bus::Netfilter)
+        .map_err(|e| Error::NfTables(format!("failed to open netlink socket: {e}")))?;
+    let portid = socket.portid();
+
+    socket
+        .send_all(batch)
+        .map_err(|e| Error::NfTables(format!("failed to send batch: {e}")))?;
+
+    let mut buffer = vec![0; nftnl::nft_nlmsg_maxsize() as usize];
+    let mut expected_seqs = batch.sequence_numbers();
+
+    while !expected_seqs.is_empty() {
+        let messages = socket
+            .recv(&mut buffer[..])
+            .map_err(|e| Error::NfTables(format!("failed to receive netlink response: {e}")))?;
+        for message in messages {
+            let message = message.map_err(|e| Error::NfTables(format!("netlink message error: {e}")))?;
+            let expected_seq = expected_seqs
+                .next()
+                .ok_or_else(|| Error::NfTables("unexpected ACK from netfilter".into()))?;
+            mnl::cb_run(message, expected_seq, portid)
+                .map_err(|e| Error::NfTables(format!("netlink ACK error: {e}")))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sends a batch that deletes the gnosis_vpn table (cascading all rules).
+/// If `ignore_enoent` is true, ENOENT errors are silently ignored.
+fn delete_table(ignore_enoent: bool) -> Result<(), Error> {
+    let table = Table::new(TABLE_NAME, ProtoFamily::Ipv4);
+    let mut batch = Batch::new();
+    batch.add(&table, MsgType::Del);
+    let finalized = batch.finalize();
+
+    match send_batch(&finalized) {
+        Ok(()) => Ok(()),
+        Err(ref e) if ignore_enoent => {
+            let msg = format!("{e}");
+            // ENOENT manifests as "No such file or directory" in the error message
+            if msg.contains("No such file or directory") || msg.contains("ENOENT") {
+                tracing::debug!("gnosis_vpn table does not exist, nothing to delete");
+                Ok(())
+            } else {
+                Err(Error::NfTables(msg))
+            }
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -85,144 +128,85 @@ impl NfTablesOps for RealNfTablesOps {
         fw_mark: u32,
         snat_ip: Ipv4Addr,
     ) -> Result<(), Error> {
-        let ipt = &self.inner;
+        // Delete existing table first (idempotent for crash recovery)
+        let _ = delete_table(true);
 
-        // Step 1: Create or flush custom chain (idempotent for crash recovery)
-        if ipt
-            .chain_exists(IP_TABLE, CUSTOM_CHAIN)
-            .map_err(Error::iptables)?
-        {
-            ipt.flush_chain(IP_TABLE, CUSTOM_CHAIN)
-                .map_err(Error::iptables)?;
-        } else {
-            ipt.new_chain(IP_TABLE, CUSTOM_CHAIN)
-                .map_err(Error::iptables)?;
-        }
+        let mut batch = Batch::new();
 
-        // Step 2: Ensure a single jump rule from OUTPUT -> GNOSIS_VPN
-        let jump_rule = format!("-j {CUSTOM_CHAIN}");
-        if ipt
-            .exists(IP_TABLE, IP_CHAIN, &jump_rule)
-            .map_err(Error::iptables)?
-        {
-            ipt.delete(IP_TABLE, IP_CHAIN, &jump_rule)
-                .map_err(Error::iptables)?;
-        }
-        ipt.append(IP_TABLE, IP_CHAIN, &jump_rule)
-            .map_err(Error::iptables)?;
+        // Create table
+        let table = Table::new(TABLE_NAME, ProtoFamily::Ipv4);
+        batch.add(&table, MsgType::Add);
 
-        // Step 3: Keep loopback traffic unmarked
-        ipt.append(IP_TABLE, CUSTOM_CHAIN, "-o lo -j RETURN")
-            .map_err(Error::iptables)?;
+        // Create mangle chain (Route type, Output hook)
+        // Route type is used to reroute packets when marks are modified
+        let mut mangle_chain = Chain::new(MANGLE_CHAIN_NAME, &table);
+        mangle_chain.set_hook(Hook::Out, 0);
+        mangle_chain.set_type(ChainType::Route);
+        batch.add(&mangle_chain, MsgType::Add);
 
-        // Step 4: Mark ALL traffic from VPN user
-        ipt.append(
-            IP_TABLE,
-            CUSTOM_CHAIN,
-            &format!("-m owner --uid-owner {vpn_uid} -j MARK --set-mark {fw_mark}"),
-        )
-        .map_err(Error::iptables)?;
+        // Rule 1: loopback return — skip marking for loopback traffic
+        let mut lo_rule = Rule::new(&mangle_chain);
+        lo_rule.add_expr(&nft_expr!(meta oifname));
+        lo_rule.add_expr(&nft_expr!(
+            cmp == expr::InterfaceName::Exact(CString::new("lo").unwrap())
+        ));
+        lo_rule.add_expr(&nft_expr!(verdict return));
+        batch.add(&lo_rule, MsgType::Add);
 
-        // Step 5: SNAT for bypassed traffic
-        let nat_rule =
-            format!("-m mark --mark {fw_mark} -o {wan_if_name} -j SNAT --to-source {snat_ip}");
-        if ipt
-            .exists(NAT_TABLE, NAT_CHAIN, &nat_rule)
-            .map_err(Error::iptables)?
-        {
-            ipt.delete(NAT_TABLE, NAT_CHAIN, &nat_rule)
-                .map_err(Error::iptables)?;
-        }
-        ipt.append(NAT_TABLE, NAT_CHAIN, &nat_rule)
-            .map_err(Error::iptables)?;
+        // Rule 2: uid match + set mark
+        // Match packets from the VPN worker UID, then set the firewall mark
+        let mut uid_rule = Rule::new(&mangle_chain);
+        uid_rule.add_expr(&nft_expr!(meta skuid));
+        uid_rule.add_expr(&nft_expr!(cmp == vpn_uid));
+        // Load the mark value into register 1, then apply it via meta mark set
+        uid_rule.add_expr(&Immediate::new(fw_mark, Register::Reg1));
+        uid_rule.add_expr(&nft_expr!(meta mark set));
+        batch.add(&uid_rule, MsgType::Add);
+
+        // Create NAT chain (PostRouting hook)
+        let mut nat_chain = Chain::new(NAT_CHAIN_NAME, &table);
+        nat_chain.set_hook(Hook::PostRouting, 100);
+        nat_chain.set_type(ChainType::Nat);
+        batch.add(&nat_chain, MsgType::Add);
+
+        // Rule 3: mark match + oifname match + SNAT
+        // For marked traffic going out the WAN interface, rewrite the source address
+        let wan_if_cstr =
+            CString::new(wan_if_name).map_err(|e| Error::NfTables(format!("invalid WAN interface name: {e}")))?;
+
+        let mut snat_rule = Rule::new(&nat_chain);
+        snat_rule.add_expr(&nft_expr!(meta mark));
+        snat_rule.add_expr(&nft_expr!(cmp == fw_mark));
+        snat_rule.add_expr(&nft_expr!(meta oifname));
+        snat_rule.add_expr(&nft_expr!(cmp == expr::InterfaceName::Exact(wan_if_cstr)));
+        // Load the SNAT IP into register 1, then apply NAT
+        snat_rule.add_expr(&Immediate::new(snat_ip, Register::Reg1));
+        snat_rule.add_expr(&Nat {
+            nat_type: NatType::SNat,
+            family: ProtoFamily::Ipv4,
+            ip_register: Register::Reg1,
+            port_register: None,
+        });
+        batch.add(&snat_rule, MsgType::Add);
+
+        let finalized = batch.finalize();
+        send_batch(&finalized)?;
+
+        tracing::debug!(
+            "nftables rules set up: table={}, uid={vpn_uid}, mark={fw_mark:#x}, snat={snat_ip}, wan={wan_if_name}",
+            TABLE_NAME.to_string_lossy()
+        );
 
         Ok(())
     }
 
-    fn teardown_rules(
-        &self,
-        wan_if_name: &str,
-        fw_mark: u32,
-        snat_ip: Ipv4Addr,
-    ) -> Result<(), Error> {
-        let ipt = &self.inner;
-        let mut errors: Vec<String> = Vec::new();
-
-        // Flush chain -> delete jump from OUTPUT -> delete chain
-        if ipt
-            .chain_exists(IP_TABLE, CUSTOM_CHAIN)
-            .unwrap_or(false)
-        {
-            if let Err(e) = ipt.flush_chain(IP_TABLE, CUSTOM_CHAIN) {
-                errors.push(format!("flush chain: {e}"));
-            }
-        }
-
-        let jump_rule = format!("-j {CUSTOM_CHAIN}");
-        if ipt
-            .exists(IP_TABLE, IP_CHAIN, &jump_rule)
-            .unwrap_or(false)
-        {
-            if let Err(e) = ipt.delete(IP_TABLE, IP_CHAIN, &jump_rule) {
-                errors.push(format!("delete jump rule: {e}"));
-            }
-        }
-
-        if ipt
-            .chain_exists(IP_TABLE, CUSTOM_CHAIN)
-            .unwrap_or(false)
-        {
-            if let Err(e) = ipt.delete_chain(IP_TABLE, CUSTOM_CHAIN) {
-                errors.push(format!("delete chain: {e}"));
-            }
-        }
-
-        // NAT cleanup
-        let nat_rule =
-            format!("-m mark --mark {fw_mark} -o {wan_if_name} -j SNAT --to-source {snat_ip}");
-        if ipt
-            .exists(NAT_TABLE, NAT_CHAIN, &nat_rule)
-            .unwrap_or(false)
-        {
-            if let Err(e) = ipt.delete(NAT_TABLE, NAT_CHAIN, &nat_rule) {
-                errors.push(format!("delete NAT SNAT rule: {e}"));
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::IpTables(errors.join("; ")))
-        }
+    fn teardown_rules(&self, _wan_if_name: &str, _fw_mark: u32, _snat_ip: Ipv4Addr) -> Result<(), Error> {
+        // Deleting the table cascades to all chains and rules
+        delete_table(false)
     }
 
-    fn cleanup_stale_rules(&self, fw_mark: u32) -> Result<(), Error> {
-        let ipt = &self.inner;
-
-        // Clean up stale mangle chain
-        if ipt
-            .chain_exists(IP_TABLE, CUSTOM_CHAIN)
-            .unwrap_or(false)
-        {
-            tracing::info!("found stale {} chain - cleaning up", CUSTOM_CHAIN);
-            let _ = ipt.flush_chain(IP_TABLE, CUSTOM_CHAIN);
-            let jump_rule = format!("-j {CUSTOM_CHAIN}");
-            let _ = ipt.delete(IP_TABLE, IP_CHAIN, &jump_rule);
-            let _ = ipt.delete_chain(IP_TABLE, CUSTOM_CHAIN);
-        }
-
-        // Clean up stale NAT rules by scanning for our mark pattern
-        if let Ok(rules) = ipt.list(NAT_TABLE, NAT_CHAIN) {
-            let mark_pattern = format!("--mark {fw_mark:#x}");
-            let mark_pattern_alt = format!("--mark {fw_mark}");
-            for rule in rules {
-                if rule.contains(&mark_pattern) || rule.contains(&mark_pattern_alt) {
-                    tracing::info!("found stale NAT rule - cleaning up: {}", rule);
-                    let _ = ipt.delete(NAT_TABLE, NAT_CHAIN, &rule);
-                }
-            }
-        }
-
-        Ok(())
+    fn cleanup_stale_rules(&self, _fw_mark: u32) -> Result<(), Error> {
+        // Attempt to delete table, ignore if it doesn't exist
+        delete_table(true)
     }
 }

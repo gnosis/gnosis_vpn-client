@@ -73,9 +73,7 @@ impl NetlinkOps for MockNetlinkOps {
 
         // Check for duplicate (same dest+prefix+table)
         let exists = s.routes.iter().any(|r| {
-            r.destination == route.destination
-                && r.prefix_len == route.prefix_len
-                && r.table_id == route.table_id
+            r.destination == route.destination && r.prefix_len == route.prefix_len && r.table_id == route.table_id
         });
         if exists {
             return Err(Error::General(format!(
@@ -93,9 +91,7 @@ impl NetlinkOps for MockNetlinkOps {
 
         // Remove existing route with same dest+prefix+table, then add
         s.routes.retain(|r| {
-            !(r.destination == route.destination
-                && r.prefix_len == route.prefix_len
-                && r.table_id == route.table_id)
+            !(r.destination == route.destination && r.prefix_len == route.prefix_len && r.table_id == route.table_id)
         });
         s.routes.push(route.clone());
         Ok(())
@@ -107,9 +103,7 @@ impl NetlinkOps for MockNetlinkOps {
 
         let before = s.routes.len();
         s.routes.retain(|r| {
-            !(r.destination == route.destination
-                && r.prefix_len == route.prefix_len
-                && r.table_id == route.table_id)
+            !(r.destination == route.destination && r.prefix_len == route.prefix_len && r.table_id == route.table_id)
         });
         if s.routes.len() == before {
             return Err(Error::General("route not found".into()));
@@ -122,12 +116,7 @@ impl NetlinkOps for MockNetlinkOps {
         s.check_fail("route_list")?;
 
         Ok(match table_id {
-            Some(id) => s
-                .routes
-                .iter()
-                .filter(|r| r.table_id == Some(id))
-                .cloned()
-                .collect(),
+            Some(id) => s.routes.iter().filter(|r| r.table_id == Some(id)).cloned().collect(),
             None => s.routes.clone(),
         })
     }
@@ -187,7 +176,7 @@ pub struct NfTablesState {
 impl NfTablesState {
     fn check_fail(&self, op: &str) -> Result<(), Error> {
         if let Some(msg) = self.fail_on.get(op) {
-            Err(Error::IpTables(msg.clone()))
+            Err(Error::NfTables(msg.clone()))
         } else {
             Ok(())
         }
@@ -227,12 +216,7 @@ impl NfTablesOps for MockNfTablesOps {
         Ok(())
     }
 
-    fn teardown_rules(
-        &self,
-        _wan_if_name: &str,
-        _fw_mark: u32,
-        _snat_ip: Ipv4Addr,
-    ) -> Result<(), Error> {
+    fn teardown_rules(&self, _wan_if_name: &str, _fw_mark: u32, _snat_ip: Ipv4Addr) -> Result<(), Error> {
         let mut s = self.state.lock().unwrap();
         s.check_fail("teardown_rules")?;
         s.rules_active = false;
@@ -259,6 +243,8 @@ pub struct RouteOpsState {
     pub default_iface: Option<(String, Option<String>)>,     // (device, gateway)
     pub cache_flush_count: u32,
     pub fail_on: HashMap<String, String>,
+    /// Destinations that should fail on route_add (for targeted failure injection).
+    pub fail_on_route_dest: HashMap<String, String>,
 }
 
 impl RouteOpsState {
@@ -300,14 +286,12 @@ impl RouteOps for MockRouteOps {
             .ok_or_else(|| Error::General("no default interface configured in mock".into()))
     }
 
-    async fn route_add(
-        &self,
-        dest: &str,
-        gateway: Option<&str>,
-        device: &str,
-    ) -> Result<(), Error> {
+    async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut s = self.state.lock().unwrap();
         s.check_fail("route_add")?;
+        if let Some(msg) = s.fail_on_route_dest.get(dest) {
+            return Err(Error::General(msg.clone()));
+        }
         s.added_routes
             .push((dest.into(), gateway.map(Into::into), device.into()));
         Ok(())
@@ -319,9 +303,7 @@ impl RouteOps for MockRouteOps {
         let before = s.added_routes.len();
         s.added_routes.retain(|r| !(r.0 == dest && r.2 == device));
         if s.added_routes.len() == before {
-            return Err(Error::General(format!(
-                "route not found: {dest} dev {device}"
-            )));
+            return Err(Error::General(format!("route not found: {dest} dev {device}")));
         }
         Ok(())
     }

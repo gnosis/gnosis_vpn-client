@@ -14,8 +14,9 @@
 //! Simpler implementation using route operations via netlink:
 //! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
 //! 2. Adds RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
-//! 3. Runs `wg-quick up` with PostUp hook for VPN subnet route (10.128.0.0/9)
-//! 4. On teardown, brings down WireGuard first, then cleans up bypass routes
+//! 3. Runs `wg-quick up` with `Table = off` to prevent automatic routing
+//! 4. Adds VPN subnet route (10.128.0.0/9) programmatically after wg-quick up
+//! 5. On teardown, removes VPN subnet route, brings down WireGuard, then cleans up bypass routes
 //!
 //! Both implementations use a phased approach to avoid race conditions during VPN setup.
 //!
@@ -33,8 +34,8 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
 use super::netlink_ops::{NetlinkOps, RealNetlinkOps, RouteSpec, RuleSpec};
+use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
 use super::route_ops::RouteOps;
 use super::route_ops_linux::NetlinkRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
@@ -98,6 +99,7 @@ pub fn static_fallback_router(
         route_ops,
         wg,
         bypass_manager: None,
+        vpn_subnet_route_added: false,
     })
 }
 
@@ -147,9 +149,7 @@ pub async fn cleanup_stale_fwmark_rules() {
 /// 3. Setting up firewall rules to mark HOPR traffic with FW_MARK
 /// 4. Creating TABLE_ID routing table with WAN as default gateway
 /// 5. Adding fwmark rule: marked traffic uses TABLE_ID (bypasses VPN)
-pub async fn setup_fwmark_infrastructure(
-    worker: &worker::Worker,
-) -> Result<FwmarkInfra, Error> {
+pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkInfra, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
     let netlink = RealNetlinkOps::new(handle);
@@ -170,9 +170,7 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
     let nft = match RealNfTablesOps::new() {
         Ok(nft) => nft,
         Err(e) => {
-            tracing::warn!(
-                "cannot create firewall ops for teardown, cleanup will happen at next startup: {e}"
-            );
+            tracing::warn!("cannot create firewall ops for teardown, cleanup will happen at next startup: {e}");
             return;
         }
     };
@@ -184,10 +182,7 @@ pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
 // ============================================================================
 
 /// Testable version of `cleanup_stale_fwmark_rules`.
-pub(crate) async fn cleanup_stale_fwmark_rules_with<N: NetlinkOps, F: NfTablesOps>(
-    netlink: &N,
-    nft: &F,
-) {
+pub(crate) async fn cleanup_stale_fwmark_rules_with<N: NetlinkOps, F: NfTablesOps>(netlink: &N, nft: &F) {
     // Try to remove stale firewall rules (ignore errors - they may not exist)
     if let Err(e) = nft.cleanup_stale_rules(FW_MARK) {
         tracing::debug!("stale firewall cleanup error (may be benign): {e}");
@@ -241,9 +236,7 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesO
     };
     if let Err(e) = netlink.route_add(&no_vpn_route).await {
         // Rollback firewall rules on failure
-        if let Err(rollback_err) =
-            nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr)
-        {
+        if let Err(rollback_err) = nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr) {
             tracing::warn!(%rollback_err, "rollback failed: could not teardown firewall rules");
         }
         return Err(e);
@@ -265,9 +258,7 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesO
         if let Err(rollback_err) = netlink.route_del(&no_vpn_route).await {
             tracing::warn!(%rollback_err, "rollback failed: could not delete TABLE_ID default route");
         }
-        if let Err(rollback_err) =
-            nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr)
-        {
+        if let Err(rollback_err) = nft.teardown_rules(&wan_info.if_name, FW_MARK, wan_info.ip_addr) {
             tracing::warn!(%rollback_err, "rollback failed: could not teardown firewall rules");
         }
         return Err(e);
@@ -295,10 +286,7 @@ pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, F: NfTabl
     // Delete the fwmark routing table rule
     match netlink.rule_list_v4().await {
         Ok(rules) => {
-            for rule in rules
-                .iter()
-                .filter(|r| r.fw_mark == FW_MARK && r.table_id == TABLE_ID)
-            {
+            for rule in rules.iter().filter(|r| r.fw_mark == FW_MARK && r.table_id == TABLE_ID) {
                 if let Err(error) = netlink.rule_del(rule).await {
                     tracing::warn!(%error, "failed to delete fwmark routing table rule, continuing anyway");
                 } else {
@@ -448,6 +436,8 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     route_ops: R,
     wg: W,
     bypass_manager: Option<super::BypassRouteManager<R>>,
+    /// Whether the VPN subnet route (10.128.0.0/9) was successfully added.
+    vpn_subnet_route_added: bool,
 }
 
 // ============================================================================
@@ -487,10 +477,7 @@ const RULE_PRIORITY: u32 = 1;
 async fn get_wan_info<N: NetlinkOps>(netlink: &N) -> Result<WanInfo, Error> {
     // The default route is the one with the longest prefix match (= smallest prefix length)
     let routes = netlink.route_list(None).await?;
-    let default_route = routes
-        .iter()
-        .min_by_key(|r| r.prefix_len)
-        .ok_or(Error::NoInterface)?;
+    let default_route = routes.iter().min_by_key(|r| r.prefix_len).ok_or(Error::NoInterface)?;
 
     let if_index = default_route.if_index;
     let gateway = default_route.gateway.ok_or(Error::NoInterface)?;
@@ -520,16 +507,11 @@ async fn get_wan_info<N: NetlinkOps>(netlink: &N) -> Result<WanInfo, Error> {
 
 /// Get VPN interface info via netlink.
 /// Must be called after `wg-quick up` creates the VPN interface.
-async fn get_vpn_info<N: NetlinkOps>(
-    netlink: &N,
-    vpn_ip: &str,
-    vpn_prefix: u8,
-) -> Result<VpnInfo, Error> {
+async fn get_vpn_info<N: NetlinkOps>(netlink: &N, vpn_ip: &str, vpn_prefix: u8) -> Result<VpnInfo, Error> {
     use std::str::FromStr;
 
-    let vpn_client_ip_cidr: cidr::Ipv4Cidr =
-        cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
-            .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
+    let vpn_client_ip_cidr: cidr::Ipv4Cidr = cidr::parsers::parse_cidr_ignore_hostbits(vpn_ip, Ipv4Addr::from_str)
+        .map_err(|e| Error::General(format!("invalid wg interface address {e}")))?;
 
     // This must be a unique VPN client address, not a block of addresses
     if !vpn_client_ip_cidr.is_host_address() {
@@ -628,26 +610,17 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         // Phase 2: Complete routing with VPN interface info
 
         // Step 2: Get VPN interface info
-        let vpn_info = match get_vpn_info(
-            &self.netlink,
-            &self.wg_data.interface_info.address,
-            VPN_TUNNEL_SUBNET.1,
-        )
-        .await
-        {
-            Ok(info) => info,
-            Err(e) => {
-                // Rollback: bring down WG
-                if let Err(rollback_err) = self
-                    .wg
-                    .wg_quick_down((*self.state_home).clone(), Logs::Suppress)
-                    .await
-                {
-                    tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
+        let vpn_info =
+            match get_vpn_info(&self.netlink, &self.wg_data.interface_info.address, VPN_TUNNEL_SUBNET.1).await {
+                Ok(info) => info,
+                Err(e) => {
+                    // Rollback: bring down WG
+                    if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+                        tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
+                    }
+                    return Err(e);
                 }
-                return Err(e);
-            }
-        };
+            };
         tracing::debug!(?vpn_info, "VPN interface data");
 
         // Store combined info for teardown
@@ -665,11 +638,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         if let Err(e) = self.netlink.route_add(&vpn_table_route).await {
             // Rollback: bring down WG
             self.if_indices = None;
-            if let Err(rollback_err) = self
-                .wg
-                .wg_quick_down((*self.state_home).clone(), Logs::Suppress)
-                .await
-            {
+            if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
             return Err(e);
@@ -716,11 +685,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 tracing::warn!(%rollback_err, "rollback failed: could not delete VPN subnet route from TABLE_ID");
             }
             self.if_indices = None;
-            if let Err(rollback_err) = self
-                .wg
-                .wg_quick_down((*self.state_home).clone(), Logs::Suppress)
-                .await
-            {
+            if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
             return Err(e);
@@ -796,9 +761,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
 
         // Step 3: Run wg-quick down while bypass infrastructure is still active
         // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
-        self.wg
-            .wg_quick_down((*self.state_home).clone(), logs)
-            .await?;
+        self.wg.wg_quick_down((*self.state_home).clone(), logs).await?;
         tracing::debug!("wg-quick down");
 
         // Step 4: Delete the TABLE_ID routing table VPN route
@@ -839,7 +802,10 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     ///   3. Add RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
     ///
     /// Phase 2:
-    ///   4. Run wg-quick up with PostUp hook for VPN subnet route (10.128.0.0/9)
+    ///   4. Run wg-quick up with Table = off (no automatic routing)
+    ///
+    /// Phase 3 (after wg-quick up):
+    ///   5. Add VPN subnet route (10.128.0.0/9) programmatically
     ///      The VPN subnet route overrides the 10.0.0.0/8 bypass for VPN server traffic
     ///
     async fn setup(&mut self) -> Result<(), Error> {
@@ -861,30 +827,36 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         bypass_manager.setup_peer_routes().await?;
         bypass_manager.setup_rfc1918_routes().await?;
 
-        // Phase 2: wg-quick up with PostUp for VPN subnet route
-        let extra = vec![
-            "Table = off".to_string(),
-            // VPN internal subnet (more specific than 10.0.0.0/8 bypass)
-            format!(
-                "PostUp = ip route add {}/{} dev %i",
-                VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1
-            ),
-        ];
+        // Phase 2: wg-quick up with Table = off only (no PostUp hooks)
+        let extra = vec!["Table = off".to_string()];
         let wg_quick_content =
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = self
-            .wg
-            .wg_quick_up((*self.state_home).clone(), wg_quick_content)
-            .await
-        {
+        if let Err(e) = self.wg.wg_quick_up((*self.state_home).clone(), wg_quick_content).await {
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
             bypass_manager.rollback().await;
             return Err(e);
         }
         tracing::debug!("wg-quick up");
+
+        // Phase 3: Add VPN subnet route programmatically
+        let vpn_subnet = format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1);
+        if let Err(e) = self
+            .route_ops
+            .route_add(&vpn_subnet, None, wireguard::WG_INTERFACE)
+            .await
+        {
+            tracing::warn!(%e, "VPN subnet route failed, rolling back");
+            if let Err(wg_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+                tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
+            }
+            bypass_manager.rollback().await;
+            return Err(e);
+        }
+        self.vpn_subnet_route_added = true;
+        tracing::debug!(subnet = %vpn_subnet, "VPN subnet route added");
 
         self.bypass_manager = Some(bypass_manager);
         tracing::info!("routing is ready (fallback)");
@@ -893,22 +865,30 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
 
     /// Teardown split-tunnel routing for FallbackRouter.
     ///
-    /// Teardown order is important: wg-quick down first, then remove bypass routes.
-    /// This ensures HOPR traffic continues to flow via WAN while VPN is being torn down.
+    /// Teardown order:
+    /// 1. Remove VPN subnet route (best-effort)
+    /// 2. wg-quick down
+    /// 3. Remove bypass routes
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        // wg-quick down first
-        let wg_result = self
-            .wg
-            .wg_quick_down((*self.state_home).clone(), logs)
-            .await;
+        // Remove VPN subnet route (best-effort)
+        if self.vpn_subnet_route_added {
+            let vpn_subnet = format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1);
+            if let Err(e) = self.route_ops.route_del(&vpn_subnet, wireguard::WG_INTERFACE).await {
+                tracing::warn!(%e, "failed to remove VPN subnet route during teardown");
+            }
+            self.vpn_subnet_route_added = false;
+        }
+
+        // wg-quick down
+        let wg_result = self.wg.wg_quick_down((*self.state_home).clone(), logs).await;
         if let Err(ref e) = wg_result {
             tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
         } else {
             tracing::debug!("wg-quick down");
         }
 
-        // then remove bypass routes (always, even if wg-quick down failed)
+        // Remove bypass routes (always, even if wg-quick down failed)
         if let Some(ref mut bypass_manager) = self.bypass_manager {
             bypass_manager.teardown().await;
         }
@@ -1150,9 +1130,7 @@ mod tests {
         let netlink = mock_netlink_with_wan();
         {
             let mut state = netlink.state.lock().unwrap();
-            state
-                .fail_on
-                .insert("rule_add".into(), "simulated rule failure".into());
+            state.fail_on.insert("rule_add".into(), "simulated rule failure".into());
         }
         let nft = mock_nft();
         let worker = mock_worker();
@@ -1403,9 +1381,7 @@ mod tests {
         let table_vpn: Vec<_> = nl_state
             .routes
             .iter()
-            .filter(|r| {
-                r.table_id == Some(TABLE_ID) && r.destination == Ipv4Addr::new(10, 128, 0, 0)
-            })
+            .filter(|r| r.table_id == Some(TABLE_ID) && r.destination == Ipv4Addr::new(10, 128, 0, 0))
             .collect();
         assert_eq!(table_vpn.len(), 1);
 
@@ -1440,9 +1416,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         {
             let mut state = netlink.state.lock().unwrap();
-            state
-                .fail_on
-                .insert("route_add".into(), "simulated failure".into());
+            state.fail_on.insert("route_add".into(), "simulated failure".into());
         }
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
@@ -1519,20 +1493,15 @@ mod tests {
     // FallbackRouter lifecycle tests
     // ====================================================================
 
-    fn make_fallback_router(
-        route_ops: MockRouteOps,
-        wg: MockWgOps,
-    ) -> FallbackRouter<MockRouteOps, MockWgOps> {
+    fn make_fallback_router(route_ops: MockRouteOps, wg: MockWgOps) -> FallbackRouter<MockRouteOps, MockWgOps> {
         FallbackRouter {
             state_home: Arc::new(PathBuf::from("/tmp/test")),
             wg_data: test_wg_data(),
-            peer_ips: vec![
-                Ipv4Addr::new(1, 2, 3, 4),
-                Ipv4Addr::new(5, 6, 7, 8),
-            ],
+            peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
             wg,
             bypass_manager: None,
+            vpn_subnet_route_added: false,
         }
     }
 
@@ -1549,9 +1518,8 @@ mod tests {
 
         let state = route_ops.state.lock().unwrap();
 
-        // Peer IP routes should be added (2 peers)
-        // RFC1918 routes should be added (4 networks)
-        assert_eq!(state.added_routes.len(), 6);
+        // 2 peer IP + 4 RFC1918 bypass + 1 VPN subnet = 7 total
+        assert_eq!(state.added_routes.len(), 7);
 
         // First two are peer IPs
         assert_eq!(state.added_routes[0].0, "1.2.3.4");
@@ -1560,6 +1528,10 @@ mod tests {
         // Then RFC1918
         assert_eq!(state.added_routes[2].0, "10.0.0.0/8");
         assert_eq!(state.added_routes[3].0, "172.16.0.0/12");
+
+        // VPN subnet route (last)
+        assert_eq!(state.added_routes[6].0, "10.128.0.0/9");
+        assert_eq!(state.added_routes[6].2, wireguard::WG_INTERFACE);
 
         // WG should be up
         let wg_state = wg.state.lock().unwrap();
@@ -1636,5 +1608,163 @@ mod tests {
         // But bypass routes should still be cleaned up
         let state = route_ops.state.lock().unwrap();
         assert!(state.added_routes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fallback_setup_wg_config_has_no_routing_postup() {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+
+        let mut router = make_fallback_router(route_ops, wg.clone());
+        router.setup().await.unwrap();
+
+        let wg_state = wg.state.lock().unwrap();
+        let config = wg_state.last_wg_config.as_ref().unwrap();
+        // IPv6 blackhole PostUp for leak prevention is expected,
+        // but routing-related PostUp hooks should not be present
+        assert!(
+            !config.contains("PostUp = ip route"),
+            "wg config should not contain routing PostUp hooks, got:\n{config}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_setup_rolls_back_on_vpn_route_failure() {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            fail_on_route_dest: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("10.128.0.0/9".into(), "simulated VPN subnet route failure".into());
+                m
+            },
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
+        let result = router.setup().await;
+        assert!(result.is_err(), "setup should fail when VPN subnet route fails");
+
+        // WG should be brought back down (rollback)
+        let wg_state = wg.state.lock().unwrap();
+        assert!(!wg_state.wg_up, "WG should be down after rollback");
+
+        // Bypass routes should be rolled back
+        let state = route_ops.state.lock().unwrap();
+        assert!(state.added_routes.is_empty(), "bypass routes should be rolled back");
+    }
+
+    #[tokio::test]
+    async fn fallback_teardown_removes_vpn_subnet_route() {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
+        router.setup().await.unwrap();
+
+        // Verify VPN subnet route exists before teardown
+        {
+            let state = route_ops.state.lock().unwrap();
+            let vpn_count = state
+                .added_routes
+                .iter()
+                .filter(|(dest, _, dev)| dest == "10.128.0.0/9" && dev == wireguard::WG_INTERFACE)
+                .count();
+            assert_eq!(vpn_count, 1, "VPN subnet route should exist before teardown");
+        }
+
+        router.teardown(Logs::Suppress).await.unwrap();
+
+        // VPN subnet route should be removed
+        let state = route_ops.state.lock().unwrap();
+        let vpn_count = state
+            .added_routes
+            .iter()
+            .filter(|(dest, _, dev)| dest == "10.128.0.0/9" && dev == wireguard::WG_INTERFACE)
+            .count();
+        assert_eq!(vpn_count, 0, "VPN subnet route should be removed after teardown");
+
+        // Flag should be cleared
+        assert!(!router.vpn_subnet_route_added);
+    }
+
+    // ====================================================================
+    // Router (dynamic) rollback and resilience tests
+    // ====================================================================
+
+    #[tokio::test]
+    async fn router_setup_rolls_back_on_default_route_failure() {
+        let netlink = mock_netlink_with_wan_and_wg();
+        {
+            let mut state = netlink.state.lock().unwrap();
+            // Allow route_add to succeed but fail route_replace (used for default route)
+            state
+                .fail_on
+                .insert("route_replace".into(), "simulated route_replace failure".into());
+        }
+        let route_ops = MockRouteOps::new();
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink.clone(), route_ops, wg.clone());
+
+        let result = router.setup().await;
+        assert!(result.is_err());
+
+        // WG should be brought down (rollback)
+        let wg_state = wg.state.lock().unwrap();
+        assert!(!wg_state.wg_up, "WG should be down after rollback");
+
+        // VPN TABLE_ID route should be cleaned up
+        let nl_state = netlink.state.lock().unwrap();
+        let table_vpn: Vec<_> = nl_state
+            .routes
+            .iter()
+            .filter(|r| r.table_id == Some(TABLE_ID) && r.destination == Ipv4Addr::new(10, 128, 0, 0))
+            .collect();
+        assert!(table_vpn.is_empty(), "VPN TABLE_ID route should be rolled back");
+    }
+
+    #[tokio::test]
+    async fn router_teardown_continues_on_partial_failure() {
+        let netlink = mock_netlink_with_wan_and_wg();
+        let route_ops = MockRouteOps::new();
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+
+        router.setup().await.unwrap();
+
+        // Make route_replace fail (used to restore default route)
+        {
+            let mut state = netlink.state.lock().unwrap();
+            state
+                .fail_on
+                .insert("route_replace".into(), "simulated restore-default failure".into());
+        }
+
+        // Teardown should still succeed overall (wg-quick down succeeds)
+        // even though restoring the default route fails
+        router.teardown(Logs::Suppress).await.unwrap();
+
+        // WG should be down despite partial failure
+        let wg_state = wg.state.lock().unwrap();
+        assert!(!wg_state.wg_up, "WG should be down after teardown");
+
+        // TABLE_ID VPN route should still be cleaned up
+        let nl_state = netlink.state.lock().unwrap();
+        let table_vpn: Vec<_> = nl_state
+            .routes
+            .iter()
+            .filter(|r| r.table_id == Some(TABLE_ID) && r.destination == Ipv4Addr::new(10, 128, 0, 0))
+            .collect();
+        assert!(table_vpn.is_empty(), "VPN TABLE_ID route should be cleaned up");
+
+        // Cache should have been flushed
+        let route_state = route_ops.state.lock().unwrap();
+        assert!(route_state.cache_flush_count >= 1, "cache should be flushed");
     }
 }

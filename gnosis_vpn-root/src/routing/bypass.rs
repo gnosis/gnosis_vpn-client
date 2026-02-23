@@ -11,8 +11,8 @@ use std::net::Ipv4Addr;
 
 use super::Error;
 
-use super::route_ops::RouteOps;
 use super::RFC1918_BYPASS_NETS;
+use super::route_ops::RouteOps;
 
 /// WAN interface information for bypass routing.
 #[derive(Debug, Clone)]
@@ -144,11 +144,7 @@ impl<R: RouteOps> BypassRouteManager<R> {
         let _ = self.delete_peer_route(peer_ip).await;
 
         self.route_ops
-            .route_add(
-                &peer_ip.to_string(),
-                self.wan.gateway.as_deref(),
-                &self.wan.device,
-            )
+            .route_add(&peer_ip.to_string(), self.wan.gateway.as_deref(), &self.wan.device)
             .await?;
         tracing::debug!(peer_ip = %peer_ip, device = %self.wan.device, gateway = ?self.wan.gateway, "added bypass route");
         Ok(())
@@ -157,9 +153,7 @@ impl<R: RouteOps> BypassRouteManager<R> {
     async fn delete_peer_route(&self, peer_ip: &Ipv4Addr) -> Result<(), Error> {
         // Omit gateway from deletion - the gateway may have changed since the route was added,
         // and route del can match by destination + device alone
-        self.route_ops
-            .route_del(&peer_ip.to_string(), &self.wan.device)
-            .await?;
+        self.route_ops.route_del(&peer_ip.to_string(), &self.wan.device).await?;
         tracing::debug!(peer_ip = %peer_ip, "deleted bypass route");
         Ok(())
     }

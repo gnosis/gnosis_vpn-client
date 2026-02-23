@@ -9,8 +9,8 @@ use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
-use super::route_ops::RouteOps;
 use super::Error;
+use super::route_ops::RouteOps;
 
 /// Production [`RouteOps`] for macOS backed by the `route` command.
 #[derive(Clone)]
@@ -31,12 +31,7 @@ impl RouteOps for DarwinRouteOps {
         super::parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
     }
 
-    async fn route_add(
-        &self,
-        dest: &str,
-        gateway: Option<&str>,
-        device: &str,
-    ) -> Result<(), Error> {
+    async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
         cmd.arg("-n").arg("add").arg("-inet").arg(dest);
 

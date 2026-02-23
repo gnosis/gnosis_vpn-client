@@ -10,8 +10,8 @@ use rtnetlink::packet_route::route::{RouteAddress, RouteAttribute};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
-use super::route_ops::RouteOps;
 use super::Error;
+use super::route_ops::RouteOps;
 
 /// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
 ///
@@ -37,8 +37,8 @@ impl NetlinkRouteOps {
                 .map_err(|e| Error::General(format!("invalid route prefix length: {e}")))?;
             Ok((addr, prefix_len))
         } else {
-            let addr = Ipv4Addr::from_str(dest)
-                .map_err(|e| Error::General(format!("invalid route destination: {e}")))?;
+            let addr =
+                Ipv4Addr::from_str(dest).map_err(|e| Error::General(format!("invalid route destination: {e}")))?;
             // Host route
             Ok((addr, 32))
         }
@@ -81,10 +81,13 @@ impl RouteOps for NetlinkRouteOps {
             .filter(|r| r.header.destination_prefix_length == 0)
             .min_by_key(|r| {
                 // Prefer routes with lower metric
-                r.attributes.iter().find_map(|a| match a {
-                    RouteAttribute::Priority(p) => Some(*p),
-                    _ => None,
-                }).unwrap_or(0)
+                r.attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Priority(p) => Some(*p),
+                        _ => None,
+                    })
+                    .unwrap_or(0)
             })
             .ok_or(Error::NoInterface)?;
 
@@ -105,13 +108,7 @@ impl RouteOps for NetlinkRouteOps {
         });
 
         // Resolve ifindex to name
-        let links: Vec<_> = self
-            .handle
-            .link()
-            .get()
-            .execute()
-            .try_collect()
-            .await?;
+        let links: Vec<_> = self.handle.link().get().execute().try_collect().await?;
 
         let if_name = links
             .iter()
@@ -122,19 +119,12 @@ impl RouteOps for NetlinkRouteOps {
                     _ => None,
                 })
             })
-            .ok_or_else(|| {
-                Error::General(format!("interface name not found for index {if_index}"))
-            })?;
+            .ok_or_else(|| Error::General(format!("interface name not found for index {if_index}")))?;
 
         Ok((if_name, gateway))
     }
 
-    async fn route_add(
-        &self,
-        dest: &str,
-        gateway: Option<&str>,
-        device: &str,
-    ) -> Result<(), Error> {
+    async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let (addr, prefix_len) = Self::parse_dest(dest)?;
         let if_index = self.resolve_ifindex(device).await?;
 
@@ -143,16 +133,11 @@ impl RouteOps for NetlinkRouteOps {
             .output_interface(if_index);
 
         if let Some(gw_str) = gateway {
-            let gw = Ipv4Addr::from_str(gw_str)
-                .map_err(|e| Error::General(format!("invalid gateway address: {e}")))?;
+            let gw = Ipv4Addr::from_str(gw_str).map_err(|e| Error::General(format!("invalid gateway address: {e}")))?;
             builder = builder.gateway(gw);
         }
 
-        self.handle
-            .route()
-            .add(builder.build())
-            .execute()
-            .await?;
+        self.handle.route().add(builder.build()).execute().await?;
         Ok(())
     }
 

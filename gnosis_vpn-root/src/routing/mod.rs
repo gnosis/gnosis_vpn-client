@@ -4,14 +4,14 @@
 //!
 //! ## Dynamic Routing (Linux only, default)
 //! Uses rtnetlink + firewall rules for policy-based routing with firewall marks.
-//! Most reliable but requires root and iptables availability.
+//! Most reliable but requires root and nftables availability.
 //!
 //! ## Static Routing (all platforms)
 //! Uses route operations via platform-native APIs.
 //! Simpler but may have reduced reliability during network changes.
 //!
 //! **Note:** There is no automatic fallback from dynamic to static routing.
-//! If dynamic routing fails (e.g., missing iptables), the connection attempt fails.
+//! If dynamic routing fails (e.g., missing nftables), the connection attempt fails.
 //! Use `--force-static-routing` CLI flag to explicitly use static routing.
 
 use async_trait::async_trait;
@@ -25,9 +25,9 @@ pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
 #[cfg(target_os = "linux")]
-pub(crate) mod nftables_ops;
-#[cfg(target_os = "linux")]
 pub(crate) mod netlink_ops;
+#[cfg(target_os = "linux")]
+pub(crate) mod nftables_ops;
 #[cfg(target_os = "linux")]
 pub(crate) mod route_ops_linux;
 
@@ -96,9 +96,8 @@ pub(crate) fn parse_key_value_output(
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
-    setup_fwmark_infrastructure, static_fallback_router as static_router,
-    teardown_fwmark_infrastructure,
+    FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router, setup_fwmark_infrastructure,
+    static_fallback_router as static_router, teardown_fwmark_infrastructure,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{WanInfo, dynamic_router, static_router};
@@ -155,15 +154,8 @@ pub enum Error {
     Rtnetlink(#[from] rtnetlink::Error),
 
     #[cfg(target_os = "linux")]
-    #[error("iptables error: {0} ")]
-    IpTables(String),
-}
-
-impl Error {
-    #[cfg(target_os = "linux")]
-    pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
-        Self::IpTables(e.into().to_string())
-    }
+    #[error("nftables error: {0} ")]
+    NfTables(String),
 }
 
 #[async_trait]

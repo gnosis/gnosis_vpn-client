@@ -247,7 +247,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
                     ?e,
                     "Dynamic routing is unavailable. VPN connections must use static routing which \
                      may have reduced reliability during network changes. This typically occurs due to \
-                     insufficient permissions or missing iptables. Use the CLI flag --force-static-routing"
+                     insufficient permissions or missing nftables. Use the CLI flag --force-static-routing"
                 );
                 None
             }

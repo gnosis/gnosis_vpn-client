@@ -21,12 +21,7 @@ pub trait RouteOps: Send + Sync + Clone {
     async fn get_default_interface(&self) -> Result<(String, Option<String>), Error>;
 
     /// Add a route: destination via optional gateway through device.
-    async fn route_add(
-        &self,
-        dest: &str,
-        gateway: Option<&str>,
-        device: &str,
-    ) -> Result<(), Error>;
+    async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error>;
 
     /// Delete a route by destination and device.
     async fn route_del(&self, dest: &str, device: &str) -> Result<(), Error>;

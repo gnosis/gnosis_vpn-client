@@ -106,7 +106,7 @@
               CXX_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
 
               # poing pkg-config to static libraries
-              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-unknown-linux-musl" = {
               CARGO_PROFILE = "release";
@@ -126,7 +126,7 @@
               CXX_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
 
               # poing pkg-config to static libraries
-              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "x86_64-apple-darwin" = {
               CARGO_PROFILE = "intelmac";
@@ -197,6 +197,8 @@
                 [
                   staticPkgs.openssl
                   staticPkgs.sqlite
+                  staticPkgs.libmnl
+                  staticPkgs.libnftnl
                 ]
               else
                 [
