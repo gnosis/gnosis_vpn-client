@@ -30,5 +30,6 @@ pub trait RouteOps: Send + Sync + Clone {
 
     /// Flush the kernel routing cache.
     /// No-op on modern Linux kernels (>= 3.6) and macOS.
+    #[cfg(target_os = "linux")]
     async fn flush_routing_cache(&self) -> Result<(), Error>;
 }

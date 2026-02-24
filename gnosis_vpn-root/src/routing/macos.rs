@@ -35,10 +35,11 @@ use super::route_ops_macos::DarwinRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
 use super::{Error, Routing, VPN_TUNNEL_SUBNET};
 
-/// VPN routes added after wg-quick up.
-/// Default routes (0.0.0.0/1, 128.0.0.0/1) catch all traffic through VPN.
-/// VPN subnet (10.128.0.0/9) overrides the RFC1918 10.0.0.0/8 bypass.
-const VPN_ROUTES: &[&str] = &["0.0.0.0/1", "128.0.0.0/1", "10.128.0.0/9"];
+const DEFAULT_VPN_ROUTES: &[&str] = &["0.0.0.0/1", "128.0.0.0/1"];
+
+fn vpn_subnet_route() -> String {
+    format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1)
+}
 
 /// WAN interface information stub for macOS (never used since dynamic routing is not available).
 #[derive(Debug, Clone)]
@@ -60,8 +61,8 @@ pub fn static_router(
     state_home: Arc<PathBuf>,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-) -> StaticRouter<DarwinRouteOps, RealWgOps> {
-    StaticRouter {
+) -> Result<impl Routing, Error> {
+    Ok(StaticRouter {
         state_home,
         wg_data,
         peer_ips,
@@ -69,7 +70,7 @@ pub fn static_router(
         wg: RealWgOps,
         bypass_manager: None,
         vpn_routes_added: Vec::new(),
-    }
+    })
 }
 
 /// macOS routing implementation that programs host routes directly before wg-quick up.
@@ -142,7 +143,12 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         tracing::debug!("wg-quick up");
 
         // Phase 3: Add VPN routes programmatically
-        for route_dest in VPN_ROUTES {
+        let vpn_subnet_route = vpn_subnet_route();
+        for route_dest in DEFAULT_VPN_ROUTES
+            .iter()
+            .copied()
+            .chain(std::iter::once(vpn_subnet_route.as_str()))
+        {
             if let Err(e) = self
                 .route_ops
                 .route_add(route_dest, None, wireguard::WG_INTERFACE)

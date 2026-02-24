@@ -56,6 +56,7 @@ impl RouteOps for DarwinRouteOps {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
     async fn flush_routing_cache(&self) -> Result<(), Error> {
         // macOS does not have a routing cache to flush
         Ok(())
