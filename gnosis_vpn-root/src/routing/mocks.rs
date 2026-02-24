@@ -300,11 +300,10 @@ impl RouteOps for MockRouteOps {
     async fn route_del(&self, dest: &str, device: &str) -> Result<(), Error> {
         let mut s = self.state.lock().unwrap();
         s.check_fail("route_del")?;
-        let before = s.added_routes.len();
+        // Silently succeed if route doesn't exist, matching macOS DarwinRouteOps
+        // behavior (Logs::Suppress) and Linux usage patterns where route_del is
+        // called defensively before route_add for idempotency.
         s.added_routes.retain(|r| !(r.0 == dest && r.2 == device));
-        if s.added_routes.len() == before {
-            return Err(Error::General(format!("route not found: {dest} dev {device}")));
-        }
         Ok(())
     }
 

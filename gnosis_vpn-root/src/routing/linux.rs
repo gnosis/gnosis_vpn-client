@@ -75,7 +75,7 @@ pub fn dynamic_router(
         route_ops,
         wg,
         wan_info,
-        if_indices: None,
+        network_device_info: None,
     })
 }
 
@@ -99,7 +99,7 @@ pub fn static_fallback_router(
         route_ops,
         wg,
         bypass_manager: None,
-        vpn_subnet_route_added: false,
+        vpn_subnet_route: VpnSubnetRouteStatus::Absent,
     })
 }
 
@@ -422,7 +422,16 @@ pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
     wg: W,
     /// WAN interface info, obtained from FwmarkInfrastructure
     wan_info: WanInfo,
-    if_indices: Option<NetworkDeviceInfo>,
+    network_device_info: Option<NetworkDeviceInfo>,
+}
+
+/// Tracks whether the VPN subnet route has been added to the routing table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VpnSubnetRouteStatus {
+    /// No VPN subnet route exists in the routing table.
+    Absent,
+    /// The VPN subnet route (10.128.0.0/9) was successfully added.
+    Active,
 }
 
 /// Static fallback router using route operations via netlink.
@@ -436,8 +445,7 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     route_ops: R,
     wg: W,
     bypass_manager: Option<super::BypassRouteManager<R>>,
-    /// Whether the VPN subnet route (10.128.0.0/9) was successfully added.
-    vpn_subnet_route_added: bool,
+    vpn_subnet_route: VpnSubnetRouteStatus,
 }
 
 // ============================================================================
@@ -585,7 +593,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
     ///   7. Flush routing cache (ensure all traffic uses new routes)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
-        if self.if_indices.is_some() {
+        if self.network_device_info.is_some() {
             return Err(Error::General("invalid state: already set up".into()));
         }
 
@@ -624,7 +632,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         tracing::debug!(?vpn_info, "VPN interface data");
 
         // Store combined info for teardown
-        self.if_indices = Some(NetworkDeviceInfo::from_parts(wan_info.clone(), vpn_info.clone()));
+        self.network_device_info = Some(NetworkDeviceInfo::from_parts(wan_info.clone(), vpn_info.clone()));
 
         // Step 3: Add VPN subnet route to TABLE_ID
         // This allows bypassed traffic to still reach VPN addresses
@@ -637,7 +645,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         };
         if let Err(e) = self.netlink.route_add(&vpn_table_route).await {
             // Rollback: bring down WG
-            self.if_indices = None;
+            self.network_device_info = None;
             if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
@@ -684,7 +692,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             if let Err(rollback_err) = self.netlink.route_del(&vpn_table_route).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not delete VPN subnet route from TABLE_ID");
             }
-            self.if_indices = None;
+            self.network_device_info = None;
             if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
@@ -724,7 +732,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             vpn_cidr,
             wan_gw,
         } = self
-            .if_indices
+            .network_device_info
             .take()
             .ok_or(Error::General("invalid state: not set up".into()))?;
 
@@ -855,7 +863,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
             bypass_manager.rollback().await;
             return Err(e);
         }
-        self.vpn_subnet_route_added = true;
+        self.vpn_subnet_route = VpnSubnetRouteStatus::Active;
         tracing::debug!(subnet = %vpn_subnet, "VPN subnet route added");
 
         self.bypass_manager = Some(bypass_manager);
@@ -872,12 +880,12 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
         // Remove VPN subnet route (best-effort)
-        if self.vpn_subnet_route_added {
+        if self.vpn_subnet_route == VpnSubnetRouteStatus::Active {
             let vpn_subnet = format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1);
             if let Err(e) = self.route_ops.route_del(&vpn_subnet, wireguard::WG_INTERFACE).await {
                 tracing::warn!(%e, "failed to remove VPN subnet route during teardown");
             }
-            self.vpn_subnet_route_added = false;
+            self.vpn_subnet_route = VpnSubnetRouteStatus::Absent;
         }
 
         // wg-quick down
@@ -1310,7 +1318,7 @@ mod tests {
             route_ops,
             wg,
             wan_info: wan_info(),
-            if_indices: None,
+            network_device_info: None,
         }
     }
 
@@ -1501,7 +1509,7 @@ mod tests {
             route_ops,
             wg,
             bypass_manager: None,
-            vpn_subnet_route_added: false,
+            vpn_subnet_route: VpnSubnetRouteStatus::Absent,
         }
     }
 
@@ -1691,7 +1699,7 @@ mod tests {
         assert_eq!(vpn_count, 0, "VPN subnet route should be removed after teardown");
 
         // Flag should be cleared
-        assert!(!router.vpn_subnet_route_added);
+        assert_eq!(router.vpn_subnet_route, VpnSubnetRouteStatus::Absent);
     }
 
     // ====================================================================

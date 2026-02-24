@@ -3,6 +3,8 @@
 //! Defines [`RouteOps`] trait for basic routing operations used by
 //! [`BypassRouteManager`](super::BypassRouteManager) and [`FallbackRouter`](super::linux::FallbackRouter).
 //!
+//! **Limitation:** All operations are IPv4-only. IPv6 routing is not supported.
+//!
 //! Platform-specific implementations:
 //! - Linux: [`NetlinkRouteOps`](super::route_ops_linux::NetlinkRouteOps) via rtnetlink
 //! - macOS: [`DarwinRouteOps`](super::route_ops_macos::DarwinRouteOps) via route commands

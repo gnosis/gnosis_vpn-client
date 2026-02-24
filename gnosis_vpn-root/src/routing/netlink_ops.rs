@@ -3,6 +3,8 @@
 //! Defines [`NetlinkOps`] trait and domain types ([`RouteSpec`], [`RuleSpec`], etc.)
 //! that decouple routing logic from the raw netlink wire format.
 //!
+//! **Limitation:** All operations are IPv4-only. IPv6 routing is not supported.
+//!
 //! Production code uses [`RealNetlinkOps`] which wraps `rtnetlink::Handle`.
 //! Tests use stateful mocks (see `mocks` module).
 
@@ -113,10 +115,16 @@ impl RealNetlinkOps {
     }
 
     fn route_message_to_spec(msg: &rtnetlink::packet_route::route::RouteMessage) -> Option<RouteSpec> {
-        let if_index = msg.attributes.iter().find_map(|a| match a {
+        let if_index = match msg.attributes.iter().find_map(|a| match a {
             RouteAttribute::Oif(idx) => Some(*idx),
             _ => None,
-        })?;
+        }) {
+            Some(idx) => idx,
+            None => {
+                tracing::debug!(?msg.header, "skipping route without output interface (Oif)");
+                return None;
+            }
+        };
 
         let destination = msg
             .attributes

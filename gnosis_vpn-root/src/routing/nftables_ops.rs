@@ -108,11 +108,18 @@ fn delete_table(ignore_enoent: bool) -> Result<(), Error> {
         Ok(()) => Ok(()),
         Err(ref e) if ignore_enoent => {
             let msg = format!("{e}");
-            // ENOENT manifests as "No such file or directory" in the error message
+            // ENOENT manifests as "No such file or directory" in the error message.
+            // This string matching is fragile — it may fail on systems with different
+            // libc versions or non-English locales. If the error doesn't match known
+            // ENOENT patterns, we log a warning so unexpected failures are visible.
             if msg.contains("No such file or directory") || msg.contains("ENOENT") {
                 tracing::debug!("gnosis_vpn table does not exist, nothing to delete");
                 Ok(())
             } else {
+                tracing::warn!(
+                    error = %msg,
+                    "nftables table deletion failed with unexpected error while expecting ENOENT"
+                );
                 Err(Error::NfTables(msg))
             }
         }
