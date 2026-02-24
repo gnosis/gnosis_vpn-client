@@ -24,6 +24,18 @@ mod init;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+struct State {
+    core_task: JoinSet<()>,
+    core_sender: mpsc::Sender<WorkerToCore>,
+    reload_handle: logging::LogReloadHandle,
+    log_path: std::path::PathBuf,
+}
+
+enum SustainLoop {
+    Shutdown(exitcode::ExitCode),
+    Continue,
+}
+
 async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
     let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
         tracing::error!(error = ?e, "error setting up SIGINT handler");
@@ -66,44 +78,110 @@ async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
     Ok(owned_cancel)
 }
 
-async fn
+async fn incoming_socket() -> Result<
+    (
+        CancellationToken,
+        mpsc::Receiver<RootToWorker>,
+        WriteHalf<TokioUnixStream>,
+    ),
+    exitcode::ExitCode,
+> {
     // accessing unix socket from fd
-    let fd: i32 = env::var(socket::worker::env_var)
+    let fd: i32 = env::var(socket::worker::ENV_VAR)
         .map_err(|err| {
-            tracing::error!(error = %err, env = %socket::worker::env_var, "missing worker env var");
-            exitcode::noinput
+            tracing::error!(error = %err, env = %socket::worker::ENV_VAR, "missing worker env var");
+            exitcode::NOINPUT
         })?
         .parse()
         .map_err(|err| {
             tracing::error!(error = %err, "invalid worker socket fd env var");
-            exitcode::noinput
+            exitcode::NOINPUT
         })?;
 
-    let child_socket = unsafe { unixstream::from_raw_fd(fd) };
+    let child_socket = unsafe { UnixStream::from_raw_fd(fd) };
     child_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
-        exitcode::ioerr
+        exitcode::IOERR
     })?;
-    let child_stream = tokiounixstream::from_std(child_socket).map_err(|err| {
+    let child_stream = TokioUnixStream::from_std(child_socket).map_err(|err| {
         tracing::error!(error = %err, "failed to create unix stream from socket");
-        exitcode::ioerr
+        exitcode::IOERR
     })?;
 
     // splitting unix stream into reader and writer halves
     let (reader_half, writer_half) = io::split(child_stream);
-    let reader = bufreader::new(reader_half);
+    let reader = BufReader::new(reader_half);
     let mut lines_reader = reader.lines();
-    let mut writer = bufwriter::new(writer_half);
 
-    let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
-    let (outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    let (sender, receiver) = mpsc::channel(32);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+            Ok(Some(line)) = lines_reader.next_line() => {
+                tracing::debug!(line = %line, "incoming from root service");
+                let res_cmd = serde_json::from_str::<RootToWorker>(&line);
+                match res_cmd {
+                    Ok(cmd) => {
+                        let _ = sender.send(cmd).await;
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed parsing incoming worker command - ignoring");
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
+                tracing::debug!("socket reader received cancellation");
+                break;
+            }
+            else => {
+                tracing::warn!("socket reader stream closed");
+                break;
+            }
+            }
+        }
+    });
+    Ok((owned_cancel, receiver, writer_half))
+}
 
-    // enter main loop
-    let mut shutdown_ongoing = false;
-    let mut core_task = joinset::new();
-    let mut init_opt = some(init::init::new());
-    let mut incoming_event_receiver_opt = some(incoming_event_receiver);
-    let mut outoing_event_sender_opt = some(outgoing_event_sender);
+async fn incoming_command(cmd: RootToWorker, state: &State) -> SustainLoop {
+    match cmd {
+        RootToWorker::Shutdown => {
+            tracing::info!("received shutdown command from root");
+            if state.core_task.is_empty() {
+                tracing::debug!("core not yet started");
+                return SustainLoop::Shutdown(exitcode::OK);
+            }
+            let _ = state.core_sender.send(WorkerToCore::Shutdown).await;
+            return SustainLoop::Continue;
+        }
+        RootToWorker::RotateLogs => {
+            tracing::info!("received rotate logs command from root");
+            let res = logging::use_file_fmt_layer(&state.log_path.to_string_lossy())
+                .map(|new_layer| state.reload_handle.reload(new_layer));
+            match res {
+                Ok(_) => {
+                    tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                    return SustainLoop::Continue;
+                }
+                Err(e) => {
+                    eprintln!("failed to reopen log file {:?}: {}", state.log_path, e);
+                    return SustainLoop::Shutdown(exitcode::IOERR);
+                }
+            }
+        }
+        RootToWorker::StartupParams { .. } => {
+            tracing::warn!("received startup params command from root after initialization - ignoring");
+        }
+        RootToWorker::Command { .. } => {
+            tracing::warn!("received socket command from root before initialization - ignoring");
+        }
+        RootToWorker::ResponseFromRoot(_) => {
+            tracing::warn!("received response from root before initialization - ignoring");
+        }
+    }
+}
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
@@ -118,33 +196,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // set up signal swallower
     let cancel_signal_swallower = signal_swallower().await?;
 
-    // accessing unix socket from fd
-    let fd: i32 = env::var(socket::worker::env_var)
-        .map_err(|err| {
-            tracing::error!(error = %err, env = %socket::worker::env_var, "missing worker env var");
-            exitcode::noinput
-        })?
-        .parse()
-        .map_err(|err| {
-            tracing::error!(error = %err, "invalid worker socket fd env var");
-            exitcode::noinput
-        })?;
+    // setup socket communication with root process
+    let (cancel_socket_reader, mut socket_receiver, writer_half) = incoming_socket().await?;
 
-    let child_socket = unsafe { unixstream::from_raw_fd(fd) };
-    child_socket.set_nonblocking(true).map_err(|err| {
-        tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
-        exitcode::ioerr
-    })?;
-    let child_stream = tokiounixstream::from_std(child_socket).map_err(|err| {
-        tracing::error!(error = %err, "failed to create unix stream from socket");
-        exitcode::ioerr
-    })?;
-
-    // splitting unix stream into reader and writer halves
-    let (reader_half, writer_half) = io::split(child_stream);
-    let reader = bufreader::new(reader_half);
-    let mut lines_reader = reader.lines();
-    let mut writer = bufwriter::new(writer_half);
+    let mut writer = BufWriter::new(writer_half);
 
     let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
     let (outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
@@ -158,43 +213,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
-            Some(signal) = signal_receiver.recv() => match signal {
-                SignalMessage::Shutdown => {
-                if shutdown_ongoing {
-                    tracing::info!("force shutdown immediately");
-                    return Ok(());
-                }
-                tracing::info!("initiate shutdown");
-                if core_task.is_empty() {
-                    tracing::debug!("core not yet started");
-                    return Ok(());
-                }
-                shutdown_ongoing = true;
-                incoming_event_sender.send(WorkerToCore::Shutdown).await.map_err(|_| {
-                    tracing::error!("command receiver already closed");
-                    exitcode::IOERR
-                })?;
-                }
-                SignalMessage::RotateLogs => {
-                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
-                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    if let (Some(handle), Some(path)) = (&reload_handle, &log_path) {
-                        let res =  logging::use_file_fmt_layer(&path.to_string_lossy())
-                            .map(|new_layer| handle.reload(new_layer));
-                        match res {
-                            Ok(_) => {
-                                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            }
-                            Err(e) => {
-                                eprintln!("failed to reopen log file {:?}: {}", path, e);
-                                return Err(exitcode::IOERR);
-                            }
-                        }
-                    } else {
-                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
-                    }
-                },
-            },
+            Some(cmd) = socket_receiver.recv() => incoming_command(cmd, state).await,
             Ok(Some(line)) = lines_reader.next_line() => {
                 tracing::debug!(line = %line, "incoming from root service");
                 let wcmd = parse_incoming_worker(line)?;
