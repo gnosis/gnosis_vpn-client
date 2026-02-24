@@ -37,10 +37,15 @@ pub enum CoreToWorker {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
-    /// Startup parameters for hoprd
-    WorkerParams { worker_params: WorkerParams },
-    /// Configuration file
-    Config { config: Config },
+    /// Wrap up and tear down any resources before worker process exits
+    Shutdown,
+    /// Rotate logs
+    RotateLogs,
+    /// Startup parameters
+    StartupParams {
+        worker_params: WorkerParams,
+        config: Config,
+    },
     /// Socket command received by root
     Command { cmd: Command, id: u64 },
     /// Result of a request to root

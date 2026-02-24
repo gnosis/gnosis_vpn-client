@@ -1,12 +1,13 @@
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
-use tokio::net::UnixStream;
+use tokio::net::UnixStream as TokioUnixStream;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use std::env;
 use std::os::unix::io::FromRawFd;
-use std::os::unix::net::UnixStream as StdUnixStream;
+use std::os::unix::net::UnixStream;
 use std::process;
 
 use gnosis_vpn_lib::core::Core;
@@ -23,13 +24,7 @@ mod init;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-enum SignalMessage {
-    Shutdown,
-    RotateLogs,
-}
-
-async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
-    let (sender, receiver) = mpsc::channel(32);
+async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
     let mut sigint = signal(SignalKind::interrupt()).map_err(|e| {
         tracing::error!(error = ?e, "error setting up SIGINT handler");
         exitcode::IOERR
@@ -43,39 +38,72 @@ async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::Exi
         exitcode::IOERR
     })?;
 
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
-                    tracing::debug!("received SIGINT");
-                    if sender.send(SignalMessage::Shutdown).await.is_err() {
-                        tracing::warn!("SIGINT: receiver closed");
-                        break;
-                    }
+                    tracing::debug!("swallowed SIGINT");
                 },
                 Some(_) = sigterm.recv() => {
-                    tracing::debug!("received SIGTERM");
-                    if sender.send(SignalMessage::Shutdown).await.is_err() {
-                        tracing::warn!("SIGTERM: receiver closed");
-                        break;
-                    }
+                    tracing::debug!("swallowed SIGTERM");
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::debug!("received SIGHUP");
-                    if sender.send(SignalMessage::RotateLogs).await.is_err() {
-                        tracing::warn!("SIGHUP: receiver closed");
-                        break;
-                    }
+                    tracing::debug!("swallowed SIGTERM");
+                }
+                _ = cancel.cancelled() => {
+                    tracing::debug!("signal swallower received cancellation");
+                    break;
                 }
                 else => {
-                    tracing::warn!("signal streams closed");
+                    tracing::warn!("signal swallower streams closed");
                     break;
                 }
             }
         }
     });
-    Ok(receiver)
+    Ok(owned_cancel)
 }
+
+async fn
+    // accessing unix socket from fd
+    let fd: i32 = env::var(socket::worker::env_var)
+        .map_err(|err| {
+            tracing::error!(error = %err, env = %socket::worker::env_var, "missing worker env var");
+            exitcode::noinput
+        })?
+        .parse()
+        .map_err(|err| {
+            tracing::error!(error = %err, "invalid worker socket fd env var");
+            exitcode::noinput
+        })?;
+
+    let child_socket = unsafe { unixstream::from_raw_fd(fd) };
+    child_socket.set_nonblocking(true).map_err(|err| {
+        tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
+        exitcode::ioerr
+    })?;
+    let child_stream = tokiounixstream::from_std(child_socket).map_err(|err| {
+        tracing::error!(error = %err, "failed to create unix stream from socket");
+        exitcode::ioerr
+    })?;
+
+    // splitting unix stream into reader and writer halves
+    let (reader_half, writer_half) = io::split(child_stream);
+    let reader = bufreader::new(reader_half);
+    let mut lines_reader = reader.lines();
+    let mut writer = bufwriter::new(writer_half);
+
+    let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
+    let (outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
+
+    // enter main loop
+    let mut shutdown_ongoing = false;
+    let mut core_task = joinset::new();
+    let mut init_opt = some(init::init::new());
+    let mut incoming_event_receiver_opt = some(incoming_event_receiver);
+    let mut outoing_event_sender_opt = some(outgoing_event_sender);
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
@@ -87,46 +115,46 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_NAME")
     );
 
-    // set up signal handler
-    let mut signal_receiver = signal_channel().await?;
+    // set up signal swallower
+    let cancel_signal_swallower = signal_swallower().await?;
 
-    tracing::debug!("accessing unix socket from fd");
-    let fd: i32 = env::var(socket::worker::ENV_VAR)
+    // accessing unix socket from fd
+    let fd: i32 = env::var(socket::worker::env_var)
         .map_err(|err| {
-            tracing::error!(error = %err, env = %socket::worker::ENV_VAR, "missing worker env var");
-            exitcode::NOINPUT
+            tracing::error!(error = %err, env = %socket::worker::env_var, "missing worker env var");
+            exitcode::noinput
         })?
         .parse()
         .map_err(|err| {
             tracing::error!(error = %err, "invalid worker socket fd env var");
-            exitcode::NOINPUT
+            exitcode::noinput
         })?;
 
-    let child_socket = unsafe { StdUnixStream::from_raw_fd(fd) };
+    let child_socket = unsafe { unixstream::from_raw_fd(fd) };
     child_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
-        exitcode::IOERR
+        exitcode::ioerr
     })?;
-    let child_stream = UnixStream::from_std(child_socket).map_err(|err| {
+    let child_stream = tokiounixstream::from_std(child_socket).map_err(|err| {
         tracing::error!(error = %err, "failed to create unix stream from socket");
-        exitcode::IOERR
+        exitcode::ioerr
     })?;
 
-    tracing::debug!("splitting unix stream into reader and writer halves");
+    // splitting unix stream into reader and writer halves
     let (reader_half, writer_half) = io::split(child_stream);
-    let reader = BufReader::new(reader_half);
+    let reader = bufreader::new(reader_half);
     let mut lines_reader = reader.lines();
-    let mut writer = BufWriter::new(writer_half);
+    let mut writer = bufwriter::new(writer_half);
 
     let (mut incoming_event_sender, incoming_event_receiver) = mpsc::channel(32);
     let (outgoing_event_sender, mut outgoing_event_receiver) = mpsc::channel(32);
 
     // enter main loop
     let mut shutdown_ongoing = false;
-    let mut core_task = JoinSet::new();
-    let mut init_opt = Some(init::Init::new());
-    let mut incoming_event_receiver_opt = Some(incoming_event_receiver);
-    let mut outoing_event_sender_opt = Some(outgoing_event_sender);
+    let mut core_task = joinset::new();
+    let mut init_opt = some(init::init::new());
+    let mut incoming_event_receiver_opt = some(incoming_event_receiver);
+    let mut outoing_event_sender_opt = some(outgoing_event_sender);
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {

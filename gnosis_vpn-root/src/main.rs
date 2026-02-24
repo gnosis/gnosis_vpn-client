@@ -2,8 +2,8 @@ use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::net::{UnixListener, UnixStream};
-use tokio::process::Command;
+use tokio::net::{UnixListener, UnixStream as TokioUnixStream};
+use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
-use std::os::unix::net::UnixStream as StdUnixStream;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Duration;
@@ -56,6 +56,12 @@ enum SignalMessage {
 struct SocketCmd {
     cmd: LibCommand,
     resp: oneshot::Sender<Response>,
+}
+
+struct WorkerChild {
+    child: tokio::process::Child,
+    pid: i32,
+    parent_stream: TokioUnixStream,
 }
 
 async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
@@ -241,13 +247,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     res
 }
 
-async fn loop_daemon(
-    setup: DaemonSetup,
-    signal_receiver: &mut mpsc::Receiver<SignalMessage>,
-    socket: UnixListener,
-    maybe_router: &mut Option<Box<dyn Routing>>,
-) -> Result<(), exitcode::ExitCode> {
-    let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
+async fn setup_worker(setup: &DaemonSetup) -> Result<WorkerChild, exitcode::ExitCode> {
+    let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
         exitcode::IOERR
     })?;
@@ -259,13 +260,13 @@ async fn loop_daemon(
         libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
     }
 
-    let mut worker_command = Command::new(setup.worker_user.binary.clone());
+    let mut worker_command = TokioCommand::new(setup.worker_user.binary.clone());
     if let Some(log_file) = &setup.args.log_file {
         worker_command
             .arg("--log-file")
             .arg(log_file.to_string_lossy().to_string());
     }
-    let mut worker_child = worker_command
+    let child = worker_command
         .current_dir(&setup.worker_user.home)
         .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
         .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
@@ -278,7 +279,7 @@ async fn loop_daemon(
             exitcode::IOERR
         })?;
 
-    let worker_pid: i32 = worker_child.id().map(|id| id as i32).ok_or_else(|| {
+    let pid: i32 = child.id().map(|id| id as i32).ok_or_else(|| {
         tracing::error!("unable to get worker PID");
         exitcode::IOERR
     })?;
@@ -288,30 +289,40 @@ async fn loop_daemon(
         exitcode::IOERR
     })?;
 
-    let parent_stream = UnixStream::from_std(parent_socket).map_err(|err| {
+    let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
         tracing::error!(error = ?err, "unable to create unix stream from socket");
         exitcode::IOERR
     })?;
 
     // root <-> worker communication setup
     tracing::debug!("splitting unix stream into reader and writer halves");
+
+    Ok(WorkerChild {
+        child,
+        pid,
+        parent_stream,
+    })
+}
+
+async fn loop_daemon(
+    setup: DaemonSetup,
+    signal_receiver: &mut mpsc::Receiver<SignalMessage>,
+    socket: UnixListener,
+    maybe_router: &mut Option<Box<dyn Routing>>,
+) -> Result<(), exitcode::ExitCode> {
+    // safe state_home for usage later
+    let state_home = setup.worker_params.state_home();
+
+    /*
     let (reader_half, writer_half) = io::split(parent_stream);
     let reader = BufReader::new(reader_half);
     let mut socket_lines_reader = reader.lines();
     let mut socket_writer = BufWriter::new(writer_half);
 
-    // safe state_home for usage later
-    let state_home = setup.worker_params.state_home();
-
     // provide initial resources to worker
-    send_to_worker(
-        RootToWorker::WorkerParams {
-            worker_params: setup.worker_params,
-        },
-        &mut socket_writer,
-    )
-    .await?;
+    send_to_worker( RootToWorker::WorkerParams { worker_params: setup.worker_params, }, &mut socket_writer,) .await?;
     send_to_worker(RootToWorker::Config { config: setup.config }, &mut socket_writer).await?;
+    */
 
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
@@ -325,6 +336,8 @@ async fn loop_daemon(
     let cancel_token = CancellationToken::new();
     let (ping_sender, mut ping_receiver) = mpsc::channel(32);
     let (socket_cmd_sender, mut socket_cmd_receiver) = mpsc::channel(32);
+
+    let mut worker_child: Option<WorkerChild> = None;
 
     tracing::info!("entering main daemon loop");
 
@@ -346,8 +359,7 @@ async fn loop_daemon(
                     // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
                     // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
                     if let (Some(handle), Some(path)) = (&setup.reload_handle, &setup.log_path) {
-                        let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &setup.worker_user)
-                            .map(|new_layer| handle.reload(new_layer));
+                        let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &setup.worker_user).map(|new_layer| handle.reload(new_layer));
                         match res {
                             Ok(_) => {
                                 tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
@@ -357,9 +369,11 @@ async fn loop_daemon(
                                 return Err(exitcode::IOERR);
                             }
                         };
-                        tracing::debug!("forwarding SIGHUP to worker process {}", worker_pid);
+                        if let Some(pid) = worker_child.as_ref().map(|child| child.pid) {
+                        tracing::debug!("forwarding SIGHUP to worker process {}", pid);
                         unsafe {
-                            libc::kill(worker_pid, libc::SIGHUP);
+                            libc::kill(pid, libc::SIGHUP);
+                        }
                         }
                     } else {
                         tracing::debug!("no log file configured, skipping log reload on SIGHUP");
@@ -474,7 +488,7 @@ async fn loop_daemon(
 }
 
 async fn incoming_on_root_socket(
-    stream: UnixStream,
+    stream: TokioUnixStream,
     socket_cmd_sender: &mpsc::Sender<SocketCmd>,
 ) -> Option<JoinHandle<()>> {
     let (socket_reader_half, socket_writer_half) = stream.into_split();
