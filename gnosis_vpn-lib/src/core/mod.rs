@@ -67,7 +67,7 @@ pub struct Core {
     // cancellation tokens
     cancel_balances: CancellationToken,
     cancel_connection: CancellationToken,
-    cancel_for_shutdown: CancellationToken,
+    cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
 
     // user provided data
@@ -158,7 +158,7 @@ impl Core {
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
             cancel_connection: CancellationToken::new(),
-            cancel_for_shutdown: CancellationToken::new(),
+            cancel_on_shutdown: CancellationToken::new(),
             cancel_presafe_queries: CancellationToken::new(),
 
             // user provided data
@@ -216,9 +216,10 @@ impl Core {
             WorkerToCore::Shutdown => {
                 tracing::debug!("incoming shutdown request");
                 self.phase = Phase::ShuttingDown;
+                // no need to recreate cancellation tokens after shutdown
                 self.cancel_balances.cancel();
                 self.cancel_connection.cancel();
-                self.cancel_for_shutdown.cancel();
+                self.cancel_on_shutdown.cancel();
                 self.cancel_presafe_queries.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
@@ -796,8 +797,8 @@ impl Core {
         match (res, self.phase.clone()) {
             (Ok(Some(safe_module)), Phase::CreatingSafe { .. }) => {
                 tracing::info!(?safe_module, "found safe module");
-                // we got our safe module - cancel presafe balance checks
                 self.cancel_presafe_queries.cancel();
+                self.cancel_presafe_queries = CancellationToken::new();
                 // start edge client with queried safe module
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
@@ -893,6 +894,7 @@ impl Core {
                     query_safe: Querying::Success(None),
                 };
                 self.cancel_presafe_queries.cancel();
+                self.cancel_presafe_queries = CancellationToken::new();
                 self.spawn_safe_deployment_runner(&presafe, results_sender);
             }
         }
@@ -955,7 +957,7 @@ impl Core {
     }
 
     fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -966,7 +968,7 @@ impl Core {
     }
 
     fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let safeless_interactor = self.safeless_interactor.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
@@ -980,7 +982,7 @@ impl Core {
     }
 
     fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let state_home = self.worker_params.state_home();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -995,7 +997,7 @@ impl Core {
 
     fn spawn_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         self.phase = Phase::Starting(None);
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
         let results_sender = results_sender.clone();
@@ -1010,7 +1012,7 @@ impl Core {
     }
 
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -1040,7 +1042,7 @@ impl Core {
 
     fn spawn_wait_for_running(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1062,7 +1064,7 @@ impl Core {
         self.ongoing_channel_fundings.push(address);
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1077,7 +1079,7 @@ impl Core {
 
     fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1097,7 +1099,7 @@ impl Core {
         delay: Duration,
     ) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             let config_connection = self.config.connection.clone();
             let old_health = self
@@ -1150,7 +1152,7 @@ impl Core {
 
     fn spawn_disconnection_runner(&mut self, disconn: &connection::down::Down, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let config_connection = self.config.connection.clone();
             let hopr = hopr.clone();
             let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
