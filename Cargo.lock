@@ -3138,6 +3138,7 @@ dependencies = [
  "mimalloc",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
