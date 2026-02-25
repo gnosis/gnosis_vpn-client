@@ -1,0 +1,89 @@
+name: Cleanup Old Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      actually_delete:
+        description: 'Check this box to ACTUALLY delete. Leave unchecked for a DRY RUN.'
+        required: true
+        type: boolean
+        default: false
+      keep_releases:
+        description: 'Comma-separated list of release tags to keep (e.g., v1.0.0, v2.1.3)'
+        required: false
+        type: string
+
+jobs:
+  delete-old-releases:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Process and Delete Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTUALLY_DELETE: ${{ inputs.actually_delete }}
+          KEEP_RELEASES: ${{ inputs.keep_releases }}
+        # Setting the shell explicitly to bash is good practice when relying on bash-specific features like [[ ]]
+        shell: bash
+        run: |
+          echo "--- Starting Release Cleanup ---"
+          if [[ "$ACTUALLY_DELETE" == "false" ]]; then
+            echo "MODE: DRY RUN (Nothing will be deleted)"
+          else
+            echo "MODE: DELETION (Releases will be permanently removed)"
+          fi
+          echo "--------------------------------"
+
+          # 1. Get the latest release tag
+          LATEST_RELEASE=$(gh release list --json tagName,isLatest --jq '.[] | select(.isLatest == true) | .tagName')
+          if [[ -z "$LATEST_RELEASE" ]]; then
+            echo "No latest release found. Exiting."
+            exit 0
+          fi
+          echo "Latest release identified as: $LATEST_RELEASE"
+
+          # 2. Get all releases (up to 1000)
+          ALL_RELEASES=$(gh release list --limit 1000 --json tagName --jq '.[].tagName')
+
+          # 3. Convert the comma-separated keep list into a bash array
+          IFS=',' read -r -a KEEP_ARRAY <<< "$KEEP_RELEASES"
+
+          # 4. Loop through all fetched releases
+          for TAG in $ALL_RELEASES; do
+
+            # Skip the latest release automatically
+            if [[ "$TAG" == "$LATEST_RELEASE" ]]; then
+              echo "⏭️ Skipping latest release: $TAG"
+              continue
+            fi
+
+            # Check if the current tag is in the user's keep list
+            SKIP=false
+            for KEEP_TAG in "${KEEP_ARRAY[@]}"; do
+              # Trim any accidental whitespace from the input
+              KEEP_TAG=$(echo "$KEEP_TAG" | xargs)
+              if [[ "$TAG" == "$KEEP_TAG" ]]; then
+                SKIP=true
+                break
+              fi
+            done
+
+            if [[ "$SKIP" == true ]]; then
+              echo "⏭️ Skipping protected release: $TAG"
+              continue
+            fi
+
+            # 5. Delete or perform dry run
+            if [[ "$ACTUALLY_DELETE" == "false" ]]; then
+              echo "🔍 [DRY RUN] Would delete release: $TAG"
+            else
+              echo "🗑️ Deleting release: $TAG"
+              gh release delete "$TAG" --cleanup-tag -y
+            fi
+          done
+
+          echo "--- Cleanup Complete ---"
