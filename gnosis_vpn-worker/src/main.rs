@@ -171,7 +171,15 @@ async fn incoming_command(cmd: RootToWorker, state: &State) -> SustainLoop {
                 }
             }
         }
-        RootToWorker::StartupParams { .. } => {
+        RootToWorker::StartupParams { config, worker_params } => {
+            let core = Core::init(config, worker_params, outgoing_event_sender)
+                .await
+                .map_err(|err| {
+                    tracing::error!(error = ?err, "failed to initialize core logic");
+                    exitcode::OSERR
+                })?;
+            core_task.spawn(async move { core.start(&mut incoming_event_receiver).await });
+
             tracing::warn!("received startup params command from root after initialization - ignoring");
         }
         RootToWorker::Command { .. } => {

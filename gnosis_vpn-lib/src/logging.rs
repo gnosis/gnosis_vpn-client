@@ -15,7 +15,7 @@ const DEFAULT_LOG_FILTER: &str = "info";
 pub const ENV_VAR_LOG_FILE: &str = "GNOSISVPN_LOG_FILE";
 #[cfg(target_os = "macos")]
 pub const DEFAULT_LOG_FILE: &str = "/Library/Logs/GnosisVPN/gnosisvpn.log";
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 
 /// Creates a [`FileFmtLayer`] for structured logging to a file.
