@@ -105,6 +105,11 @@
               CC_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
               CXX_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
 
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+
               # poing pkg-config to static libraries
               PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
@@ -124,6 +129,11 @@
               # Variables for cc-rs (C compilations)
               CC_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
               CXX_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
+
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
 
               # poing pkg-config to static libraries
               PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
@@ -389,7 +399,7 @@
             inherit generate-lockfile;
           };
 
-          devShells.default = craneLib.devShell {
+          devShells.default = craneLib.devShell ({
             inherit pre-commit-check;
             checks = self.checks.${system};
 
@@ -400,7 +410,13 @@
             ];
 
             VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
-          };
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
+            # Point mnl-sys and nftnl-sys directly to static library dirs,
+            # bypassing pkg-config which can fail in cross-compilation contexts
+            LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+            LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+          });
 
           formatter = config.treefmt.build.wrapper;
         };
