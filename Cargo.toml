@@ -41,7 +41,7 @@ thiserror = "2.0.18"
 toml = "1.0.2"
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "0.3.22"
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f2011e466f48d96a68e2aef0531f269dd81b1a29", features = [
   "prometheus",
