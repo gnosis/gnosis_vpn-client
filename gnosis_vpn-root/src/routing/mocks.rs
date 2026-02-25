@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,15 +18,20 @@ use std::sync::{Arc, Mutex};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 
 use super::Error;
+#[cfg(target_os = "linux")]
 use super::netlink_ops::{AddrInfo, LinkInfo, NetlinkOps, RouteSpec, RuleSpec};
+#[cfg(target_os = "linux")]
 use super::nftables_ops::NfTablesOps;
+use gnosis_vpn_lib::wireguard;
+
 use super::route_ops::RouteOps;
 use super::wg_ops::WgOps;
 
 // ============================================================================
-// MockNetlinkOps
+// MockNetlinkOps (Linux only)
 // ============================================================================
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, Default)]
 pub struct NetlinkState {
     pub routes: Vec<RouteSpec>,
@@ -36,6 +42,7 @@ pub struct NetlinkState {
     pub fail_on: HashMap<String, String>,
 }
 
+#[cfg(target_os = "linux")]
 impl NetlinkState {
     fn check_fail(&self, op: &str) -> Result<(), Error> {
         if let Some(msg) = self.fail_on.get(op) {
@@ -46,11 +53,13 @@ impl NetlinkState {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub struct MockNetlinkOps {
     pub state: Arc<Mutex<NetlinkState>>,
 }
 
+#[cfg(target_os = "linux")]
 impl MockNetlinkOps {
     pub fn new() -> Self {
         Self {
@@ -65,6 +74,7 @@ impl MockNetlinkOps {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[async_trait]
 impl NetlinkOps for MockNetlinkOps {
     async fn route_add(&self, route: &RouteSpec) -> Result<(), Error> {
@@ -161,9 +171,10 @@ impl NetlinkOps for MockNetlinkOps {
 }
 
 // ============================================================================
-// MockNfTablesOps
+// MockNfTablesOps (Linux only)
 // ============================================================================
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, Default, Clone)]
 pub struct NfTablesState {
     /// Whether fwmark rules are currently set up
@@ -173,6 +184,7 @@ pub struct NfTablesState {
     pub fail_on: HashMap<String, String>,
 }
 
+#[cfg(target_os = "linux")]
 impl NfTablesState {
     fn check_fail(&self, op: &str) -> Result<(), Error> {
         if let Some(msg) = self.fail_on.get(op) {
@@ -183,10 +195,12 @@ impl NfTablesState {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub struct MockNfTablesOps {
     pub state: Arc<Mutex<NfTablesState>>,
 }
 
+#[cfg(target_os = "linux")]
 impl MockNfTablesOps {
     pub fn new() -> Self {
         Self {
@@ -201,6 +215,7 @@ impl MockNfTablesOps {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl NfTablesOps for MockNfTablesOps {
     fn setup_fwmark_rules(
         &self,
@@ -307,6 +322,7 @@ impl RouteOps for MockRouteOps {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
     async fn flush_routing_cache(&self) -> Result<(), Error> {
         let mut s = self.state.lock().unwrap();
         s.check_fail("flush_routing_cache")?;
@@ -358,12 +374,12 @@ impl MockWgOps {
 
 #[async_trait]
 impl WgOps for MockWgOps {
-    async fn wg_quick_up(&self, _state_home: PathBuf, config: String) -> Result<(), Error> {
+    async fn wg_quick_up(&self, _state_home: PathBuf, config: String) -> Result<String, Error> {
         let mut s = self.state.lock().unwrap();
         s.check_fail("wg_quick_up")?;
         s.wg_up = true;
         s.last_wg_config = Some(config);
-        Ok(())
+        Ok(wireguard::WG_INTERFACE.to_string())
     }
 
     async fn wg_quick_down(&self, _state_home: PathBuf, _logs: Logs) -> Result<(), Error> {

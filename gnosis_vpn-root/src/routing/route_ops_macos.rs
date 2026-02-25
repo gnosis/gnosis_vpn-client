@@ -12,6 +12,24 @@ use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 use super::Error;
 use super::route_ops::RouteOps;
 
+/// Build the argument list for a `route add` invocation.
+///
+/// When a gateway is present, `-ifp` pins the route to the named interface.
+/// Without a gateway, `-interface` marks the destination as directly reachable
+/// via the named interface.
+fn route_add_args(dest: &str, gateway: Option<&str>, device: &str) -> Vec<String> {
+    let mut args = vec!["-n".into(), "add".into(), "-inet".into(), dest.into()];
+    if let Some(gw) = gateway {
+        args.push(gw.into());
+        args.push("-ifp".into());
+        args.push(device.into());
+    } else {
+        args.push("-interface".into());
+        args.push(device.into());
+    }
+    args
+}
+
 /// Production [`RouteOps`] for macOS backed by the `route` command.
 #[derive(Clone)]
 pub struct DarwinRouteOps;
@@ -33,14 +51,9 @@ impl RouteOps for DarwinRouteOps {
 
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
-        cmd.arg("-n").arg("add").arg("-inet").arg(dest);
-
-        if let Some(gw) = gateway {
-            cmd.arg(gw);
+        for arg in route_add_args(dest, gateway, device) {
+            cmd.arg(arg);
         }
-
-        // macOS uses -interface for device specification
-        cmd.arg("-interface").arg(device);
         cmd.run_stdout(Logs::Print).await?;
         Ok(())
     }
@@ -60,5 +73,25 @@ impl RouteOps for DarwinRouteOps {
     async fn flush_routing_cache(&self) -> Result<(), Error> {
         // macOS does not have a routing cache to flush
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_add_args_with_gateway() {
+        let args = route_add_args("35.213.7.172", Some("192.168.88.1"), "en0");
+        assert_eq!(
+            args,
+            vec!["-n", "add", "-inet", "35.213.7.172", "192.168.88.1", "-ifp", "en0"]
+        );
+    }
+
+    #[test]
+    fn route_add_args_without_gateway() {
+        let args = route_add_args("10.0.0.0/8", None, "utun5");
+        assert_eq!(args, vec!["-n", "add", "-inet", "10.0.0.0/8", "-interface", "utun5"]);
     }
 }

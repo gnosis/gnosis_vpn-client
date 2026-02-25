@@ -21,8 +21,8 @@ use crate::wg_tooling;
 /// Implementors must be cheaply cloneable (for sharing between router types).
 #[async_trait]
 pub trait WgOps: Send + Sync + Clone {
-    /// Bring up WireGuard via wg-quick.
-    async fn wg_quick_up(&self, state_home: PathBuf, config: String) -> Result<(), Error>;
+    /// Bring up WireGuard via wg-quick. Returns the resolved interface name.
+    async fn wg_quick_up(&self, state_home: PathBuf, config: String) -> Result<String, Error>;
 
     /// Bring down WireGuard via wg-quick.
     async fn wg_quick_down(&self, state_home: PathBuf, logs: Logs) -> Result<(), Error>;
@@ -34,9 +34,9 @@ pub struct RealWgOps;
 
 #[async_trait]
 impl WgOps for RealWgOps {
-    async fn wg_quick_up(&self, state_home: PathBuf, config: String) -> Result<(), Error> {
-        wg_tooling::up(state_home, config).await?;
-        Ok(())
+    async fn wg_quick_up(&self, state_home: PathBuf, config: String) -> Result<String, Error> {
+        let iface = wg_tooling::up(state_home, config).await?;
+        Ok(iface)
     }
 
     async fn wg_quick_down(&self, state_home: PathBuf, logs: Logs) -> Result<(), Error> {

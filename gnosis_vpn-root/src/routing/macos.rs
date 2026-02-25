@@ -70,6 +70,7 @@ pub fn static_router(
         wg: RealWgOps,
         bypass_manager: None,
         vpn_routes_added: Vec::new(),
+        wg_interface_name: None,
     })
 }
 
@@ -85,6 +86,9 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     bypass_manager: Option<super::BypassRouteManager<R>>,
     /// VPN routes successfully added after wg-quick up (for rollback/teardown).
     vpn_routes_added: Vec<String>,
+    /// Resolved WireGuard interface name (e.g. "utun8" on macOS, "wg0_gnosisvpn" on Linux).
+    /// Populated after wg_quick_up; None before setup.
+    wg_interface_name: Option<String>,
 }
 
 #[async_trait]
@@ -135,12 +139,17 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = self.wg.wg_quick_up((*self.state_home).clone(), wg_quick_content).await {
-            tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
-            bypass_manager.rollback().await;
-            return Err(e);
-        }
-        tracing::debug!("wg-quick up");
+        let iface_name = match self.wg.wg_quick_up((*self.state_home).clone(), wg_quick_content).await {
+            Ok(name) => name,
+            Err(e) => {
+                tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
+                bypass_manager.rollback().await;
+                return Err(e);
+            }
+        };
+        self.wg_interface_name = Some(iface_name);
+        let iface = self.wg_interface_name.as_deref().unwrap_or(wireguard::WG_INTERFACE);
+        tracing::debug!(interface = %iface, "wg-quick up");
 
         // Phase 3: Add VPN routes programmatically
         let vpn_subnet_route = vpn_subnet_route();
@@ -149,15 +158,11 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             .copied()
             .chain(std::iter::once(vpn_subnet_route.as_str()))
         {
-            if let Err(e) = self
-                .route_ops
-                .route_add(route_dest, None, wireguard::WG_INTERFACE)
-                .await
-            {
+            if let Err(e) = self.route_ops.route_add(route_dest, None, iface).await {
                 tracing::warn!(route = route_dest, %e, "VPN route failed, rolling back");
                 // Rollback VPN routes added so far
                 for added in self.vpn_routes_added.drain(..).rev() {
-                    if let Err(del_err) = self.route_ops.route_del(&added, wireguard::WG_INTERFACE).await {
+                    if let Err(del_err) = self.route_ops.route_del(&added, iface).await {
                         tracing::warn!(route = %added, %del_err, "failed to rollback VPN route");
                     }
                 }
@@ -186,9 +191,11 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     /// 3. Remove bypass routes
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        let iface = self.wg_interface_name.as_deref().unwrap_or(wireguard::WG_INTERFACE);
+
         // Remove VPN routes (best-effort, warn on failure)
         for route in self.vpn_routes_added.drain(..) {
-            if let Err(e) = self.route_ops.route_del(&route, wireguard::WG_INTERFACE).await {
+            if let Err(e) = self.route_ops.route_del(&route, iface).await {
                 tracing::warn!(route = %route, %e, "failed to remove VPN route during teardown");
             }
         }
@@ -237,6 +244,7 @@ mod tests {
             wg,
             bypass_manager: None,
             vpn_routes_added: Vec::new(),
+            wg_interface_name: None,
         }
     }
 
