@@ -213,7 +213,15 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     tracing::info!("enter listening mode");
     loop {
         tokio::select! {
-            Some(cmd) = socket_receiver.recv() => incoming_command(cmd, state).await,
+            Some(cmd) = socket_receiver.recv() => match incoming_command(cmd, state).await {
+                SustainLoop::Shutdown(code) => {
+                    tracing::info!(?code, "shutting down worker daemon");
+                    cancel_signal_swallower.cancel();
+                    cancel_socket_reader.cancel();
+                    return Err(code);
+                }
+                SustainLoop::Continue => (),
+            }
             Ok(Some(line)) = lines_reader.next_line() => {
                 tracing::debug!(line = %line, "incoming from root service");
                 let wcmd = parse_incoming_worker(line)?;
