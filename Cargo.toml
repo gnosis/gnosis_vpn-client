@@ -12,7 +12,7 @@ name = "gnosis_vpn"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
-anyhow = { version = "1.0.100" }
+anyhow = { version = "1.0.101" }
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
 cidr = "0.3.2"
