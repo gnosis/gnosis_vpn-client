@@ -51,7 +51,7 @@ hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "b6eb92
 ] }
 serde_with = "3.16.1"
 serde_yaml = "0.9.34"
-tokio-util = { version = "0.7.17", features = ["rt"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
 uzers = "0.12.2"
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
