@@ -399,24 +399,26 @@
             inherit generate-lockfile;
           };
 
-          devShells.default = craneLib.devShell ({
-            inherit pre-commit-check;
-            checks = self.checks.${system};
+          devShells.default = craneLib.devShell (
+            {
+              inherit pre-commit-check;
+              checks = self.checks.${system};
 
-            packages = [
-              pkgs.cargo-machete
-              pkgs.cargo-shear
-              pkgs.rust-analyzer
-            ];
+              packages = [
+                pkgs.cargo-machete
+                pkgs.cargo-shear
+                pkgs.rust-analyzer
+              ];
 
-            VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
-          }
-          // lib.optionalAttrs pkgs.stdenv.isLinux {
-            # Point mnl-sys and nftnl-sys directly to static library dirs,
-            # bypassing pkg-config which can fail in cross-compilation contexts
-            LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
-            LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
-          });
+              VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
+            }
+            // lib.optionalAttrs pkgs.stdenv.isLinux {
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+            }
+          );
 
           formatter = config.treefmt.build.wrapper;
         };

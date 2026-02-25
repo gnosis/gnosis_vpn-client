@@ -39,7 +39,7 @@ use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
 use super::route_ops::RouteOps;
 use super::route_ops_linux::NetlinkRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
-use super::{Error, Routing, VPN_TUNNEL_SUBNET};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
 
 // ============================================================================
 // Type Aliases for Production Use
@@ -581,16 +581,19 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
     /// This method requires that fwmark infrastructure has been established via
     /// `setup_fwmark_infrastructure`. It only handles VPN-specific routing:
     ///
-    /// Phase 1 (wg-quick up):
-    ///   1. Generate wg-quick config and run wg-quick up
+    /// Phase 1 (before wg-quick up):
+    ///   1. Add RFC1918 bypass routes to main table (via WAN) for LAN access
     ///
-    /// Phase 2 (after wg-quick up):
-    ///   2. Get VPN interface info
-    ///   3. Add VPN subnet route to TABLE_ID (so bypassed traffic can reach VPN peers)
-    ///   4. Add VPN subnet route to main table (overrides RFC1918 bypass for VPN server)
-    ///   5. Flush routing cache (clear stale cached routes before default route change)
-    ///   6. Replace main default route to VPN interface (atomic replace)
-    ///   7. Flush routing cache (ensure all traffic uses new routes)
+    /// Phase 2 (wg-quick up):
+    ///   2. Generate wg-quick config and run wg-quick up
+    ///
+    /// Phase 3 (after wg-quick up):
+    ///   3. Get VPN interface info
+    ///   4. Add VPN subnet route to TABLE_ID (so bypassed traffic can reach VPN peers)
+    ///   5. Add VPN subnet route to main table (overrides RFC1918 bypass for VPN server)
+    ///   6. Flush routing cache (clear stale cached routes before default route change)
+    ///   7. Replace main default route to VPN interface (atomic replace)
+    ///   8. Flush routing cache (ensure all traffic uses new routes)
     ///
     async fn setup(&mut self) -> Result<(), Error> {
         if self.network_device_info.is_some() {
@@ -601,10 +604,37 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         let wan_info = &self.wan_info;
         tracing::debug!(?wan_info, "using WAN interface from fwmark infrastructure");
 
-        // Phase 1: Bring up WireGuard
+        // Phase 1: Add RFC1918 bypass routes BEFORE wg-quick up
+        // These routes ensure non-HOPR processes can still access private networks
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let destination: Ipv4Addr = net
+                .parse()
+                .map_err(|_| Error::General(format!("invalid RFC1918 network: {}", net)))?;
+            let route = RouteSpec {
+                destination,
+                prefix_len: *prefix,
+                gateway: Some(wan_info.gateway),
+                if_index: wan_info.if_index,
+                table_id: None,
+            };
+            if let Err(e) = self.netlink.route_add(&route).await {
+                tracing::warn!(%e, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
+                // Don't fail the whole setup for a single RFC1918 route, as these are best-effort
+            } else {
+                tracing::debug!(
+                    "ip route add {}/{} via {} dev {}",
+                    net,
+                    prefix,
+                    wan_info.gateway,
+                    wan_info.if_index
+                );
+            }
+        }
+
+        // Phase 2: Bring up WireGuard
         // HOPR traffic is already protected by the fwmark infrastructure.
 
-        // Step 1: Generate wg-quick config and run wg-quick up
+        // Step 2: Generate wg-quick config and run wg-quick up
         let wg_quick_content = self.wg_data.wg.to_file_string(
             &self.wg_data.interface_info,
             &self.wg_data.peer_info,
@@ -615,9 +645,9 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             .await?;
         tracing::debug!("wg-quick up");
 
-        // Phase 2: Complete routing with VPN interface info
+        // Phase 3: Complete routing with VPN interface info
 
-        // Step 2: Get VPN interface info
+        // Step 3: Get VPN interface info
         let vpn_info =
             match get_vpn_info(&self.netlink, &self.wg_data.interface_info.address, VPN_TUNNEL_SUBNET.1).await {
                 Ok(info) => info,
@@ -634,7 +664,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         // Store combined info for teardown
         self.network_device_info = Some(NetworkDeviceInfo::from_parts(wan_info.clone(), vpn_info.clone()));
 
-        // Step 3: Add VPN subnet route to TABLE_ID
+        // Step 4: Add VPN subnet route to TABLE_ID
         // This allows bypassed traffic to still reach VPN addresses
         let vpn_table_route = RouteSpec {
             destination: vpn_info.cidr.first_address(),
@@ -657,7 +687,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             vpn_info.if_index
         );
 
-        // Step 4: Add VPN subnet route to main table
+        // Step 5: Add VPN subnet route to main table
         // This ensures VPN subnet traffic uses tunnel, overriding any pre-existing RFC1918 routes
         let vpn_main_route = RouteSpec {
             destination: vpn_info.cidr.first_address(),
@@ -672,12 +702,12 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         }
         tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
 
-        // Step 5: Flush routing cache BEFORE changing default route
+        // Step 6: Flush routing cache BEFORE changing default route
         // This ensures any cached route decisions are cleared before the switch
         self.route_ops.flush_routing_cache().await?;
         tracing::debug!("flushed routing cache before default route change");
 
-        // Step 6: Replace main default route to VPN interface
+        // Step 7: Replace main default route to VPN interface
         // All non-bypassed traffic now goes through VPN
         // Use replace() for atomic replacement - avoids brief window with two default routes
         let vpn_default_route = RouteSpec {
@@ -700,7 +730,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         }
         tracing::debug!("ip route add default dev {}", vpn_info.if_index);
 
-        // Step 7: Flush routing cache
+        // Step 8: Flush routing cache
         self.route_ops.flush_routing_cache().await?;
         tracing::debug!("flushed routing cache");
 
@@ -722,7 +752,9 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
     ///   3. Run `wg-quick down` (while bypass is still active for HOPR traffic)
     ///   4. Delete the VPN subnet route from TABLE_ID
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
-    ///   5. Flush the routing table cache
+    ///   5. Delete RFC1918 bypass routes (added during setup)
+    ///      Equivalent command: `ip route del $RFC1918_NET dev $IF_WAN`
+    ///   6. Flush the routing table cache
     ///      Equivalent command: `ip route flush cache`
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
@@ -788,7 +820,25 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         )
         .await;
 
-        // Step 5: Flush routing cache
+        // Step 5: Delete RFC1918 bypass routes that were added during setup
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let destination: Ipv4Addr = net.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
+            let route = RouteSpec {
+                destination,
+                prefix_len: *prefix,
+                gateway: Some(wan_gw),
+                if_index: wan_if_index,
+                table_id: None,
+            };
+            teardown_op(
+                &format!("delete RFC1918 bypass route {}/{}", net, prefix),
+                &format!("ip route del {}/{} via {wan_gw} dev {wan_if_index}", net, prefix),
+                || self.netlink.route_del(&route),
+            )
+            .await;
+        }
+
+        // Step 6: Flush routing cache
         self.route_ops.flush_routing_cache().await?;
         tracing::debug!("ip route flush cache");
 
