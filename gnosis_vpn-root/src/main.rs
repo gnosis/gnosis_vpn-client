@@ -228,7 +228,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         log_path,
     };
 
-    // Clean up any stale fwmark infrastructure from a previous crash (Linux only)
+    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     #[cfg(target_os = "linux")]
     routing::cleanup_stale_fwmark_rules().await;
 

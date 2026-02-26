@@ -61,11 +61,17 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
 pub fn dynamic_router(
     state_home: Arc<PathBuf>,
+    worker: &worker::Worker,
     wg_data: event::WireGuardData,
-    wan_info: WanInfo,
-    handle: rtnetlink::Handle,
 ) -> Result<impl Routing, Error> {
-    let netlink = RealNetlinkOps::new(handle.clone());
+    let infra = setup_fwmark_infrastructure(&worker_user).map_err(|error| {
+        tracing::error!(?error, "Unable to setup fwmark infrastructure for dynamic routing");
+        error
+    })?;
+
+    let wan_info = infra.wan_info;
+    let handle = infra.netlink.handle();
+    let netlink = RealNetlinkOps::new(infra.netlink.handle());
     let route_ops = NetlinkRouteOps::new(handle);
     let wg = RealWgOps;
     Ok(Router {
@@ -142,7 +148,7 @@ pub async fn cleanup_stale_fwmark_rules() {
 /// 3. Setting up firewall rules to mark HOPR traffic with FW_MARK
 /// 4. Creating TABLE_ID routing table with WAN as default gateway
 /// 5. Adding fwmark rule: marked traffic uses TABLE_ID (bypasses VPN)
-pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkInfra, Error> {
+async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkInfra, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
     let netlink = RealNetlinkOps::new(handle);
@@ -410,6 +416,7 @@ pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
     /// WAN interface info, obtained from FwmarkInfrastructure
     wan_info: WanInfo,
     network_device_info: Option<NetworkDeviceInfo>,
+    added_routes: Vec<RouteSpec>,
 }
 
 /// Tracks whether the VPN subnet route has been added to the routing table.
@@ -601,17 +608,22 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 if_index: wan_info.if_index,
                 table_id: None,
             };
-            if let Err(e) = self.netlink.route_add(&route).await {
-                tracing::warn!(%e, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
-                // Don't fail the whole setup for a single RFC1918 route, as these are best-effort
-            } else {
-                tracing::debug!(
-                    "ip route add {}/{} via {} dev {}",
-                    net,
-                    prefix,
-                    wan_info.gateway,
-                    wan_info.if_index
-                );
+            let res = self.netlink.route_add(&route).await;
+            match res {
+                Ok(_) => {
+                    tracing::debug!(
+                        "ip route add {}/{} via {} dev {}",
+                        net,
+                        prefix,
+                        wan_info.gateway,
+                        wan_info.if_index
+                    );
+                    self.added_routes.push(route);
+                }
+                Err(error) => {
+                    tracing::warn!(?error, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
+                    // Don't fail the whole setup for a single RFC1918 route, as these are best-effort
+                }
             }
         }
 
@@ -747,10 +759,21 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             vpn_if_index,
             vpn_cidr,
             wan_gw,
-        } = self
-            .network_device_info
-            .take()
-            .ok_or(Error::General("invalid state: not set up".into()))?;
+        } = match self.network_device_info {
+            Some(info) => info,
+            None => {
+                if self.added_routes.is_empty() {
+                    return Err(Error::General("invalid state: not set up".into()));
+                }
+                tracing::warn!("Found added routes but no network device info - setup seems to have failed partway");
+                for route in &self.added_routes {
+                    if let Err(error) = self.netlink.route_del(route).await {
+                        tracing::error!(?error, route = %format!("{}/{}", route.destination, route.prefix_len), "failed to delete RFC1918 bypass route during partial teardown");
+                    }
+                }
+                return Ok(());
+            }
+        };
 
         // Step 1: Set the default route back to the WAN interface
         // Use replace() to handle case where VPN route still exists
@@ -805,19 +828,14 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         .await;
 
         // Step 5: Delete RFC1918 bypass routes that were added during setup
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let destination: Ipv4Addr = net.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
-            let route = RouteSpec {
-                destination,
-                prefix_len: *prefix,
-                gateway: Some(wan_gw),
-                if_index: wan_if_index,
-                table_id: None,
-            };
+        for route in &self.added_routes {
             teardown_op(
-                &format!("delete RFC1918 bypass route {}/{}", net, prefix),
-                &format!("ip route del {}/{} via {wan_gw} dev {wan_if_index}", net, prefix),
-                || self.netlink.route_del(&route),
+                &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
+                &format!(
+                    "ip route del {}/{} via {wan_gw} dev {wan_if_index}",
+                    route.destination, route.prefix_len
+                ),
+                || self.netlink.route_del(route),
             )
             .await;
         }
