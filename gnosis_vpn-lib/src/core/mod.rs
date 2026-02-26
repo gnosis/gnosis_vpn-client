@@ -63,6 +63,7 @@ pub struct Core {
     node_address: Address,
     safeless_interactor: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
+    incoming_receiver: mpsc::Receiver<WorkerToCore>,
 
     // cancellation tokens
     cancel_balances: CancellationToken,
@@ -122,7 +123,7 @@ impl Core {
         config: Config,
         worker_params: WorkerParams,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
-    ) -> Result<Core, Error> {
+    ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         wireguard::available().await?;
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
@@ -146,7 +147,8 @@ impl Core {
             destination_healths.insert(id, DestinationHealth::Init);
         }
 
-        Ok(Core {
+        let (incoming_sender, incoming_receiver) = mpsc::channel(32);
+        let core = Core {
             // config data
             config,
 
@@ -154,6 +156,7 @@ impl Core {
             worker_params,
             node_address,
             outgoing_sender,
+            incoming_receiver,
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
@@ -178,17 +181,18 @@ impl Core {
             destination_healths,
             responder_unit: None,
             responder_duration: None,
-        })
+        };
+        Ok((core, incoming_sender))
     }
 
-    pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<WorkerToCore>) {
+    pub async fn start(mut self) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.initial_runner(&results_sender).await;
         loop {
             tokio::select! {
 
                 // React to an incoming worker events
-                Some(event) = incoming_receiver.recv() => {
+                Some(event) = self.incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
                     } else {
