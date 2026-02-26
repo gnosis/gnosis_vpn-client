@@ -2,7 +2,7 @@ use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::net::{UnixListener, UnixStream as TokioUnixStream};
+use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
@@ -137,15 +137,7 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
         }
     };
 
-    let socket_dir = socket_path.parent().ok_or_else(|| {
-        tracing::error!("socket path has no parent");
-        exitcode::UNAVAILABLE
-    })?;
-    fs::create_dir_all(socket_dir).await.map_err(|e| {
-        tracing::error!(error = %e, "error creating socket directory");
-        exitcode::IOERR
-    })?;
-
+    // socket folder creation is outside of the service responsibilities
     let listener = UnixListener::bind(socket_path).map_err(|e| {
         tracing::error!(error = ?e, "error binding socket");
         exitcode::OSFILE
