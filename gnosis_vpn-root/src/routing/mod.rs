@@ -15,7 +15,6 @@
 //! Use `--force-static-routing` CLI flag to explicitly use static routing.
 
 use async_trait::async_trait;
-use cfg_if::cfg_if;
 use thiserror::Error;
 
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
@@ -25,17 +24,19 @@ mod bypass;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
-cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        pub(crate) mod netlink_ops;
-        pub(crate) mod nftables_ops;
-        pub(crate) mod route_ops_linux;
-        mod linux;
-    } else if #[cfg(target_os = "macos")] {
-        pub(crate) mod route_ops_macos;
-        mod macos;
-    }
-}
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod netlink_ops;
+#[cfg(target_os = "linux")]
+pub(crate) mod nftables_ops;
+#[cfg(target_os = "linux")]
+pub(crate) mod route_ops_linux;
+#[cfg(target_os = "macos")]
+pub(crate) mod route_ops_macos;
 
 #[cfg(test)]
 pub(crate) mod mocks;
@@ -92,21 +93,17 @@ pub(crate) fn parse_key_value_output(
     Ok((device, gateway))
 }
 
-cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        pub use linux::{
-            FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
-            setup_fwmark_infrastructure, static_fallback_router as static_router,
-            teardown_fwmark_infrastructure,
-        };
-        pub type RouterHandle = rtnetlink::Handle;
-    } else if #[cfg(target_os = "macos")] {
-        pub use macos::{WanInfo, dynamic_router, static_router};
-        pub type RouterHandle = ();
-    } else {
-        pub type RouterHandle = ();
-    }
-}
+#[cfg(target_os = "linux")]
+pub use linux::{
+    FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router, setup_fwmark_infrastructure,
+    static_fallback_router as static_router, teardown_fwmark_infrastructure,
+};
+#[cfg(target_os = "linux")]
+pub type RouterHandle = rtnetlink::Handle;
+#[cfg(target_os = "macos")]
+pub use macos::{WanInfo, dynamic_router, static_router};
+#[cfg(target_os = "macos")]
+pub type RouterHandle = ();
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)

@@ -218,7 +218,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
     let log_path = args.log_file.clone();
-    #[cfg(target_os = "linux")]
     let force_static_routing = args.force_static_routing;
     let setup = DaemonSetup {
         args,

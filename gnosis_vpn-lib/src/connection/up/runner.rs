@@ -108,23 +108,26 @@ impl Runner {
         {
             let force_static = false;
         }
-        #[cfg(target_os = "macos"))]
+        #[cfg(target_os = "macos")]
         {
-             let force_static = true;
+            let force_static = true;
         }
 
         if force_static || self.worker_params.force_static_routing() {
             tracing::info!("using static routing");
-            self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender) .await
+            self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+                .await
         } else {
             let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
             match res {
                 Ok(()) => {
-                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender) .await
+                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
+                        .await
                 }
                 Err(err) => {
                     tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                    self.run_fallback_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender).await
+                    self.run_fallback_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+                        .await
                 }
             }
         }
@@ -198,19 +201,6 @@ impl Runner {
 
     async fn run_check_dynamic_routing(
         &self,
-        session: &SessionClientMetadata,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 7a. request ping from root to check if dynamic routing works
-        let _ = results_sender.send(progress(Progress::Ping)).await;
-        // Multiple retries since dynamic routing should work and ping failures may be transient
-        let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
-        self.run_after_verified_working(round_trip_time, session, results_sender)
-            .await
-    }
-
-    async fn run_check_dynamic_routing(
-        &self,
         wg: &WireGuard,
         registration: &Registration,
         session: &SessionClientMetadata,
@@ -229,7 +219,8 @@ impl Runner {
 
             Err(err) => {
                 tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(wg, registration, session, peer_ips, results_sender) .await
+                self.run_fallback_to_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
+                    .await
             }
         }
     }
