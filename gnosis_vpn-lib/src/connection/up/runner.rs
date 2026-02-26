@@ -104,13 +104,12 @@ impl Runner {
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
 
         // dynamic routing is only available on Linux
-        #[cfg(target_os = "linux")]
-        {
-            let force_static = false;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let force_static = true;
+        cfg_if::cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let force_static = false;
+            } else if #[cfg(target_os = "macos")] {
+                let force_static = true;
+            }
         }
 
         if force_static || self.worker_params.force_static_routing() {
