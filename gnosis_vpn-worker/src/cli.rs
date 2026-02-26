@@ -11,7 +11,7 @@ pub struct Cli {
         long,
         env = logging::ENV_VAR_LOG_FILE,
     )]
-    pub log_file: Option<PathBuf>,
+    pub log_file: PathBuf,
 }
 
 pub fn parse() -> Cli {
