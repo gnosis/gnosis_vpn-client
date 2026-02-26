@@ -10,7 +10,6 @@ license = { workspace = true }
 anyhow.workspace = true
 backon.workspace = true
 bytesize = { workspace = true, features = ["serde"] }
-cfg-if.workspace = true
 edgli.workspace = true
 futures-util.workspace = true
 hopr-utils-session.workspace = true
