@@ -28,7 +28,7 @@ struct State {
     core_task: JoinSet<()>,
     sender_to_core: Option<mpsc::Sender<WorkerToCore>>,
     reload_handle: logging::LogReloadHandle,
-    log_path: std::path::PathBuf,
+    log_path: Option<std::path::PathBuf>,
 }
 
 enum IncomingResolution {
@@ -161,18 +161,23 @@ async fn incoming_command(cmd: RootToWorker, state: &State) -> IncomingResolutio
             return IncomingResolution::ShutdownWaitingForCore;
         }
         RootToWorker::RotateLogs => {
-            tracing::info!("received rotate logs command from root");
-            let res = logging::use_file_fmt_layer(&state.log_path.to_string_lossy())
-                .map(|new_layer| state.reload_handle.reload(new_layer));
-            match res {
-                Ok(_) => {
-                    tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                    return IncomingResolution::Continue;
+            if let Some(log_path) = &state.log_path {
+                tracing::info!("received rotate logs command from root");
+                let res = logging::use_file_fmt_layer(&log_path.to_string_lossy())
+                    .map(|new_layer| state.reload_handle.reload(new_layer));
+                match res {
+                    Ok(_) => {
+                        tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                        return IncomingResolution::Continue;
+                    }
+                    Err(e) => {
+                        eprintln!("failed to reopen log file {:?}: {}", state.log_path, e);
+                        return IncomingResolution::Shutdown(exitcode::IOERR);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("failed to reopen log file {:?}: {}", state.log_path, e);
-                    return IncomingResolution::Shutdown(exitcode::IOERR);
-                }
+            } else {
+                tracing::warn!("received rotate logs command from root but no log file configured - ignoring");
+                return IncomingResolution::Continue;
             }
         }
         RootToWorker::StartupParams { config, worker_params } => {
@@ -276,7 +281,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
                 }
                 SustainLoop::Continue => (),
             }
-            Some(()) = core_task.join_next() => {
+            Some(_) = core_task.join_next() => {
                 tracing::info!("shutting down worker daemon after core loop completion");
                 return Ok(());
             }
