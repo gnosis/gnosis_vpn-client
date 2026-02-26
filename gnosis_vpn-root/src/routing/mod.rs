@@ -9,10 +9,6 @@
 //! ## Static Routing (all platforms)
 //! Uses route operations via platform-native APIs.
 //! Simpler but may have reduced reliability during network changes.
-//!
-//! **Note:** There is no automatic fallback from dynamic to static routing.
-//! If dynamic routing fails (e.g., missing nftables), the connection attempt fails.
-//! Use `--force-static-routing` CLI flag to explicitly use static routing.
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -24,19 +20,17 @@ mod bypass;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
-
-#[cfg(target_os = "linux")]
-pub(crate) mod netlink_ops;
-#[cfg(target_os = "linux")]
-pub(crate) mod nftables_ops;
-#[cfg(target_os = "linux")]
-pub(crate) mod route_ops_linux;
-#[cfg(target_os = "macos")]
-pub(crate) mod route_ops_macos;
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        pub(crate) mod netlink_ops;
+        pub(crate) mod nftables_ops;
+        pub(crate) mod route_ops_linux;
+        mod linux;
+    } else if #[cfg(target_os = "macos")] {
+        pub(crate) mod route_ops_macos;
+        mod macos;
+    }
+}
 
 #[cfg(test)]
 pub(crate) mod mocks;
@@ -62,7 +56,6 @@ pub(crate) use bypass::{BypassRouteManager, WanInterface};
 /// # Returns
 /// A tuple of (device_name, Option<gateway_ip>)
 // Used on macOS (route_ops_macos.rs) and in tests
-#[allow(dead_code)]
 pub(crate) fn parse_key_value_output(
     output: &str,
     device_key: &str,
@@ -93,17 +86,19 @@ pub(crate) fn parse_key_value_output(
     Ok((device, gateway))
 }
 
-#[cfg(target_os = "linux")]
-pub use linux::{
-    FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router, setup_fwmark_infrastructure,
-    static_fallback_router as static_router, teardown_fwmark_infrastructure,
-};
-#[cfg(target_os = "linux")]
-pub type RouterHandle = rtnetlink::Handle;
-#[cfg(target_os = "macos")]
-pub use macos::{WanInfo, dynamic_router, static_router};
-#[cfg(target_os = "macos")]
-pub type RouterHandle = ();
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        pub use linux::{
+            FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
+            setup_fwmark_infrastructure, static_fallback_router as static_router,
+            teardown_fwmark_infrastructure,
+        };
+        pub type RouterHandle = rtnetlink::Handle;
+    } else if #[cfg(target_os = "macos")] {
+        pub use macos::{WanInfo, dynamic_router, static_router};
+        pub type RouterHandle = ();
+    }
+}
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)
