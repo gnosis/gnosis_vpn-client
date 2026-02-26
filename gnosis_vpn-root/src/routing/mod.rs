@@ -20,9 +20,6 @@ mod bypass;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
-mod macos;
-pub(crate) mod route_ops_macos;
-
 mod linux;
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {

@@ -14,13 +14,10 @@ pub type LogReloadHandle = reload::Handle<FileFmtLayer, tracing_subscriber::Regi
 const DEFAULT_LOG_FILTER: &str = "info";
 pub const ENV_VAR_LOG_FILE: &str = "GNOSISVPN_LOG_FILE";
 
-pub const DEFAULT_LOG_FILE: &str = cfg_if::cfg_if! {
-    if #[cfg(target_os = "macos")] {
-        "/Library/Logs/GnosisVPN/gnosisvpn.log"
-    } else if #[cfg(target_os = "linux")] {
-        "/var/log/gnosisvpn.log"
-    }
-};
+#[cfg(target_os = "linux")]
+pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_LOG_FILE: &str = "/Library/Logs/GnosisVPN/gnosisvpn.log";
 
 /// Creates a [`FileFmtLayer`] for structured logging to a file.
 ///
