@@ -195,7 +195,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         })?;
     }
 
-    let mut signal_receiver = signal_channel().await?;
+    // set up signal handlers
+    let (cancel_signal_handlers, signal_receiver) = signal_channel().await?;
 
     // check wireguard tooling
     wg_tooling::available()
@@ -214,6 +215,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             return Err(exitcode::IOERR);
         }
     };
+
     let config = config::read(config_path.as_path()).await.map_err(|err| {
         tracing::error!(error = ?err, "unable to read initial configuration file");
         exitcode::NOINPUT
