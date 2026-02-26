@@ -1,6 +1,6 @@
 use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream as TokioUnixStream};
 use tokio::process::Command as TokioCommand;
@@ -64,7 +64,7 @@ struct WorkerChild {
     parent_stream: TokioUnixStream,
 }
 
-async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
+async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMessage>), exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
         tracing::error!(?error, "error setting up SIGINT handler");
@@ -79,39 +79,37 @@ async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::Exi
         exitcode::IOERR
     })?;
 
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
                     tracing::debug!("received SIGINT");
-                    if sender.send(SignalMessage::Shutdown).await.is_err() {
-                        tracing::warn!("SIGINT: receiver closed");
-                        break;
-                    }
+                    let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sigterm.recv() => {
                     tracing::debug!("received SIGTERM");
-                    if sender.send(SignalMessage::Shutdown).await.is_err() {
-                        tracing::warn!("SIGTERM: receiver closed");
-                        break;
-                    }
+                    let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sighup.recv() => {
                     tracing::debug!("received SIGHUP");
-                    if sender.send(SignalMessage::RotateLogs).await.is_err() {
-                        tracing::warn!("SIGHUP: receiver closed");
-                        break;
-                    }
+                    let _ =  sender.send(SignalMessage::RotateLogs).await;
+                }
+                _ = cancel.cancelled() => {
+                    tracing::debug!("signal channel received cancellation");
+                    break;
                 }
                 else => {
-                    tracing::warn!("signal streams closed");
+                    tracing::warn!("signal channel streams closed");
                     break;
                 }
             }
         }
     });
 
-    Ok(receiver)
+    tracing::info!("signal handlers set up for SIGINT, SIGTERM and SIGHUP");
+    Ok((owned_cancel, receiver))
 }
 
 async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::ExitCode> {
