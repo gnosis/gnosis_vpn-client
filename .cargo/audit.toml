@@ -1,0 +1,25 @@
+# Cargo audit configuration for gnosis_vpn-client
+# This file allows security vulnerabilities and unmaintained warnings to be exempted.
+
+[advisories]
+# RUSTSEC-2025-0142: Segmentation fault and invalid memory read in `mnl::cb_run`
+# This is used by gnosis_vpn-root for netlink operations.
+# No fixed upgrade is available.
+deny = [
+    { name = "mnl", id = "RUSTSEC-2025-0142" },
+]
+
+# Allow unmaintained crate warnings - these are dependencies we cannot easily replace
+allow = [
+    # RUSTSEC-2024-0388: derivative is unmaintained
+    # Transitive dependency from ruint -> ark-ff -> alloy ecosystem
+    { name = "derivative", id = "RUSTSEC-2024-0388" },
+    
+    # RUSTSEC-2024-0436: paste is unmaintained
+    # Transitive dependency from alloy-sol-macro
+    { name = "paste", id = "RUSTSEC-2024-0436" },
+    
+    # RUSTSEC-2025-0134: rustls-pemfile is unmaintained
+    # Transitive dependency through hopr-chain-connector -> eventsource-client
+    { name = "rustls-pemfile", id = "RUSTSEC-2025-0134" },
+]
