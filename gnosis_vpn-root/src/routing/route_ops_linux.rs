@@ -1,7 +1,6 @@
 //! Linux route operations using rtnetlink.
 //!
-//! [`NetlinkRouteOps`] implements [`RouteOps`] by converting string-based
-//! route operations into typed netlink messages via `rtnetlink::Handle`.
+//! [`NetlinkRouteOps`] implements [`RouteOps`] using typed netlink messages via `rtnetlink::Handle`.
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
@@ -15,8 +14,7 @@ use super::route_ops::RouteOps;
 
 /// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
 ///
-/// Reuses the same netlink connection as [`RealNetlinkOps`](super::netlink_ops::RealNetlinkOps)
-/// since `rtnetlink::Handle` is cheaply cloneable.
+/// Reuses the same netlink connection as [`RealNetlinkOps`](super::netlink_ops::RealNetlinkOps).
 #[derive(Clone)]
 pub struct NetlinkRouteOps {
     handle: rtnetlink::Handle,

@@ -14,9 +14,6 @@ use async_trait::async_trait;
 use super::Error;
 
 /// Abstraction over platform routing table operations.
-///
-/// Implementors must be cheaply cloneable (for sharing between
-/// `FallbackRouter` and `BypassRouteManager`).
 #[async_trait]
 pub trait RouteOps: Send + Sync + Clone {
     /// Get the default WAN interface name and optional gateway.

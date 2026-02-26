@@ -352,7 +352,7 @@ async fn loop_daemon(
     let mut socket_lines_reader = reader.lines();
     let mut socket_writer = BufWriter::new(writer_half);
 
-    // safe state_home for usage later, wrapped in Arc to avoid cloning the PathBuf
+    // safe state_home for usage later
     let state_home = std::sync::Arc::new(setup.worker_params.state_home());
 
     // provide initial resources to worker

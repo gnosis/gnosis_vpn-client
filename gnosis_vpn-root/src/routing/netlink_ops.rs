@@ -60,9 +60,6 @@ pub struct AddrInfo {
 // ============================================================================
 
 /// Abstraction over netlink route/rule/link/address operations.
-///
-/// Implementors must be cheaply cloneable (e.g. via `Arc` or because the
-/// underlying handle is already reference-counted).
 #[async_trait]
 pub trait NetlinkOps: Send + Sync + Clone {
     async fn route_add(&self, route: &RouteSpec) -> Result<(), Error>;

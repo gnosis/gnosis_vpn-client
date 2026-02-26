@@ -2,7 +2,7 @@
 //!
 //! Defines [`WgOps`] trait for wg-quick operations.
 //! This is the only routing abstraction that still uses an external CLI tool
-//! (wg-quick), as there is no Rust-native equivalent for WireGuard interface management.
+//! (wg-quick).
 //!
 //! Production code uses [`RealWgOps`].
 //! Tests use stateful mocks (see `mocks` module).
@@ -17,8 +17,6 @@ use super::Error;
 use crate::wg_tooling;
 
 /// Abstraction over WireGuard interface management.
-///
-/// Implementors must be cheaply cloneable (for sharing between router types).
 #[async_trait]
 pub trait WgOps: Send + Sync + Clone {
     /// Bring up WireGuard via wg-quick. Returns the resolved interface name.
