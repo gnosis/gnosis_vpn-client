@@ -15,6 +15,7 @@ async-trait = "0.1.89"
 anyhow = { version = "1.0.100" }
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
+cfg-if = "1.0.4"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
 exitcode = "1.1.2"

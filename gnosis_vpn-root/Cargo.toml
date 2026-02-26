@@ -9,6 +9,7 @@ license = { workspace = true }
 [dependencies]
 async-trait.workspace = true
 clap.workspace = true
+cfgif.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
 humantime.workspace = true

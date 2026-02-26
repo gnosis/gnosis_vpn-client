@@ -3081,6 +3081,7 @@ dependencies = [
  "anyhow",
  "backon",
  "bytesize",
+ "cfg-if",
  "edgli",
  "futures-util",
  "hopr-utils-session",
