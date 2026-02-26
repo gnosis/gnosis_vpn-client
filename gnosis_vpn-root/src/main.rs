@@ -255,15 +255,16 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     };
 
     // Extract WanInfo and rtnetlink handle for dynamic routing (Linux only)
-    #[cfg(target_os = "linux")]
-    let wan_info: Option<routing::WanInfo> = fwmark_infra.as_ref().map(|i| i.wan_info.clone());
-    #[cfg(target_os = "linux")]
-    let rtnetlink_handle: Option<routing::RouterHandle> = fwmark_infra.as_ref().map(|i| i.netlink.handle().clone());
-
-    #[cfg(not(target_os = "linux"))]
-    let wan_info: Option<routing::WanInfo> = None;
-    #[cfg(not(target_os = "linux"))]
-    let rtnetlink_handle: Option<routing::RouterHandle> = None;
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "linux")] {
+            let wan_info: Option<routing::WanInfo> = fwmark_infra.as_ref().map(|i| i.wan_info.clone());
+            let rtnetlink_handle: Option<routing::RouterHandle> =
+                fwmark_infra.as_ref().map(|i| i.netlink.handle().clone());
+        } else {
+            let wan_info: Option<routing::WanInfo> = None;
+            let rtnetlink_handle: Option<routing::RouterHandle> = None;
+        }
+    }
 
     let res = loop_daemon(
         setup,

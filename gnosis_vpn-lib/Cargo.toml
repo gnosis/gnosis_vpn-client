@@ -8,6 +8,7 @@ license = { workspace = true }
 
 [dependencies]
 anyhow.workspace = true
+cfg-if.workspace = true
 backon.workspace = true
 bytesize = { workspace = true, features = ["serde"] }
 edgli.workspace = true

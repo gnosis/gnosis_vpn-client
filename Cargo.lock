@@ -3081,6 +3081,7 @@ dependencies = [
  "anyhow",
  "backon",
  "bytesize",
+ "cfg-if",
  "edgli",
  "futures-util",
  "hopr-utils-session",
@@ -3112,6 +3113,7 @@ version = "0.73.3"
 dependencies = [
  "anyhow",
  "async-trait",
+ "cfg-if",
  "cidr",
  "clap",
  "exitcode",

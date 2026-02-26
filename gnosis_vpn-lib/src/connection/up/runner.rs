@@ -104,10 +104,13 @@ impl Runner {
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
         // Dynamic routing is only available on Linux; other platforms always use static routing
-        #[cfg(target_os = "linux")]
-        let use_static = self.worker_params.force_static_routing();
-        #[cfg(not(target_os = "linux"))]
-        let use_static = true;
+        cfg_if::cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let use_static = self.worker_params.force_static_routing();
+            } else {
+                let use_static = true;
+            }
+        }
 
         if use_static {
             tracing::info!("using static routing");

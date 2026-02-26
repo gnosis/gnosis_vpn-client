@@ -8,10 +8,13 @@ use std::path::PathBuf;
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
 
-#[cfg(target_os = "linux")]
-pub const DEFAULT_STATE_HOME: &str = "/var/lib/gnosisvpn";
-#[cfg(target_os = "macos")]
-pub const DEFAULT_STATE_HOME: &str = "/Library/Application Support/GnosisVPN";
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        pub const DEFAULT_STATE_HOME: &str = "/var/lib/gnosisvpn";
+    } else if #[cfg(target_os = "macos")] {
+        pub const DEFAULT_STATE_HOME: &str = "/Library/Application Support/GnosisVPN";
+    }
+}
 
 const CONFIG_DIRECTORY: &str = ".config";
 const CACHE_DIRECTORY: &str = ".cache";
