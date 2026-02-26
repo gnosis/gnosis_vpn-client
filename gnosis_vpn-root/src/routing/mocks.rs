@@ -6,8 +6,6 @@
 //!
 //! All mocks use `Arc<Mutex<_>>` for interior mutability in async contexts.
 
-#![cfg(test)]
-
 use async_trait::async_trait;
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]

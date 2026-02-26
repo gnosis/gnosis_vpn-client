@@ -169,6 +169,7 @@
             root = ./.;
             fileset = lib.fileset.unions [
               ./.cargo/config.toml
+              ./.cargo/audit.toml
               ./Cargo.toml
               ./Cargo.lock
               ./deny.toml
@@ -361,11 +362,13 @@
             );
 
             # Audit dependencies
+            # Vulnerabilities are exempted because they are either:
+            # - From transitive dependencies we cannot control
+            # - Unmaintained crates with no viable alternatives
+            # - Lack a fixed version
             audit = craneLib.cargoAudit {
               src = srcFiles;
               inherit advisory-db;
-              # Ignore RSA vulnerability (RUSTSEC-2023-0071) - comes from hopr-lib transitive dependency
-              cargoAuditExtraArgs = "--ignore RUSTSEC-2023-0071";
             };
 
             # Audit licenses

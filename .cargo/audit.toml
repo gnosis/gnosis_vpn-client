@@ -1,25 +1,24 @@
 # Cargo audit configuration for gnosis_vpn-client
-# This file allows security vulnerabilities and unmaintained warnings to be exempted.
+#
+# Vulnerabilities are exempted here because they are either:
+# - From transitive dependencies we cannot control
+# - Unmaintained crates with no viable alternatives
+# - Lack a fixed version
 
 [advisories]
-# RUSTSEC-2025-0142: Segmentation fault and invalid memory read in `mnl::cb_run`
-# This is used by gnosis_vpn-root for netlink operations.
-# No fixed upgrade is available.
-deny = [
-    { name = "mnl", id = "RUSTSEC-2025-0142" },
+# Advisory IDs to ignore
+ignore = [
+  "RUSTSEC-2025-0142", # mnl: segmentation fault and invalid memory read - no fixed version available
+  "RUSTSEC-2024-0388", # derivative: unmaintained - transitive from alloy ecosystem
+  "RUSTSEC-2024-0436", # paste: unmaintained - transitive from alloy-sol-macro
+  "RUSTSEC-2025-0134", # rustls-pemfile: unmaintained - transitive from hopr-chain-connector
 ]
 
-# Allow unmaintained crate warnings - these are dependencies we cannot easily replace
-allow = [
-    # RUSTSEC-2024-0388: derivative is unmaintained
-    # Transitive dependency from ruint -> ark-ff -> alloy ecosystem
-    { name = "derivative", id = "RUSTSEC-2024-0388" },
-    
-    # RUSTSEC-2024-0436: paste is unmaintained
-    # Transitive dependency from alloy-sol-macro
-    { name = "paste", id = "RUSTSEC-2024-0436" },
-    
-    # RUSTSEC-2025-0134: rustls-pemfile is unmaintained
-    # Transitive dependency through hopr-chain-connector -> eventsource-client
-    { name = "rustls-pemfile", id = "RUSTSEC-2025-0134" },
-]
+# Treat unmaintained warnings as informational only (not errors)
+informational_warnings = ["unmaintained"]
+
+# Output configuration
+[output]
+deny = []
+quiet = false
+show_tree = true
