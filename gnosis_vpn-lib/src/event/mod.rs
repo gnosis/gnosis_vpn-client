@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use crate::command::{Command, Response};
+use crate::command::{Response, WorkerCommand};
 use crate::config::Config;
 use crate::ping;
 use crate::wireguard::{self, WireGuard};
@@ -16,8 +16,8 @@ use crate::worker_params::WorkerParams;
 #[derive(Debug)]
 pub enum WorkerToCore {
     /// Socket command avaiting response
-    Command {
-        cmd: Command,
+    WorkerCommand {
+        cmd: WorkerCommand,
         resp: oneshot::Sender<Response>,
     },
     Shutdown,
@@ -47,7 +47,7 @@ pub enum RootToWorker {
         config: Config,
     },
     /// Socket command received by root
-    Command { cmd: Command, id: u64 },
+    WorkerCommand { cmd: WorkerCommand, id: u64 },
     /// Result of a request to root
     ResponseFromRoot(ResponseFromRoot),
 }

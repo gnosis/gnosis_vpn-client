@@ -31,6 +31,22 @@ pub enum Command {
     RefreshNode,
     FundingTool(String),
     Telemetry,
+    Info,
+    StartClient,
+    StopClient,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum WorkerCommand {
+    Status,
+    NerdStats,
+    Connect(String),
+    Metrics,
+    Disconnect,
+    Balance,
+    RefreshNode,
+    FundingTool(String),
+    Telemetry,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -278,6 +294,13 @@ impl Response {
 }
 
 impl Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = log_output::serialize(self);
+        write!(f, "{s}")
+    }
+}
+
+impl Display for WorkerCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = log_output::serialize(self);
         write!(f, "{s}")

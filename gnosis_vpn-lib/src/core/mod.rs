@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::command::{self, Command, Response, RunMode};
+use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
@@ -284,10 +284,10 @@ impl Core {
                 true
             }
 
-            WorkerToCore::Command { cmd, resp } => {
+            WorkerToCore::WorkerCommand { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
-                    Command::NerdStats => {
+                    WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
                         match &self.phase {
                             Phase::Connecting(conn) => {
@@ -309,7 +309,7 @@ impl Core {
                         }
                     }
 
-                    Command::Status => {
+                    WorkerCommand::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
                             Phase::CheckingSafe {
@@ -403,7 +403,7 @@ impl Core {
                         let _ = resp.send(res);
                     }
 
-                    Command::Connect(id) => match self.config.destinations.clone().get(&id) {
+                    WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
                             if let Some(connectivity) = self.connectivity_health.get(&dest.id) {
                                 if connectivity.is_ready_to_connect() {
@@ -434,7 +434,7 @@ impl Core {
                         }
                     },
 
-                    Command::Disconnect => {
+                    WorkerCommand::Disconnect => {
                         self.target_destination = None;
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -451,7 +451,7 @@ impl Core {
                         self.act_on_target(results_sender);
                     }
 
-                    Command::Balance => {
+                    WorkerCommand::Balance => {
                         if let (Some(hopr), Some(balances), Some(ticket_value)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_value)
                         {
@@ -469,11 +469,7 @@ impl Core {
                         }
                     }
 
-                    Command::Ping => {
-                        let _ = resp.send(Response::Pong);
-                    }
-
-                    Command::Telemetry => {
+                    WorkerCommand::Telemetry => {
                         let res = match hopr::telemetry() {
                             Ok(t) => Some(t),
                             Err(err) => {
@@ -484,7 +480,7 @@ impl Core {
                         let _ = resp.send(Response::Telemetry(res));
                     }
 
-                    Command::RefreshNode => {
+                    WorkerCommand::RefreshNode => {
                         // immediately request balances and cancel existing balance loop
                         self.cancel_balances.cancel();
                         self.cancel_balances = CancellationToken::new();
@@ -492,7 +488,7 @@ impl Core {
                         let _ = resp.send(Response::Empty);
                     }
 
-                    Command::FundingTool(secret) => match self.phase.clone() {
+                    WorkerCommand::FundingTool(secret) => match self.phase.clone() {
                         Phase::CheckingSafe {
                             node_balance,
                             query_safe,
@@ -521,7 +517,7 @@ impl Core {
                         }
                     },
 
-                    Command::Metrics => {
+                    WorkerCommand::Metrics => {
                         let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
                             Ok(m) => m,
                             Err(err) => {
