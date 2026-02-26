@@ -116,14 +116,7 @@ pub fn static_fallback_router(
 pub async fn cleanup_stale_fwmark_rules() {
     tracing::debug!("checking for stale fwmark infrastructure from previous crash");
 
-    let nft = match RealNfTablesOps::new() {
-        Ok(nft) => nft,
-        Err(e) => {
-            tracing::debug!("cannot create firewall ops for stale cleanup: {e}");
-            return;
-        }
-    };
-
+    let nft = RealNfTablesOps {};
     let (conn, handle, _) = match rtnetlink::new_connection() {
         Ok(c) => c,
         Err(e) => {
@@ -153,7 +146,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
     let netlink = RealNetlinkOps::new(handle);
-    let nft = RealNfTablesOps::new()?;
+    let nft = RealNfTablesOps {};
     setup_fwmark_infrastructure_with(worker, netlink, &nft).await
 }
 
@@ -167,13 +160,7 @@ pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<Fwma
 /// 2. Deleting the TABLE_ID default route
 /// 3. Removing firewall mangle and NAT rules
 pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
-    let nft = match RealNfTablesOps::new() {
-        Ok(nft) => nft,
-        Err(e) => {
-            tracing::warn!("cannot create firewall ops for teardown, cleanup will happen at next startup: {e}");
-            return;
-        }
-    };
+    let nft = RealNfTablesOps {};
     teardown_fwmark_infrastructure_with(infra, &nft).await;
 }
 
@@ -456,9 +443,6 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
 ///
 /// This mark is applied by firewall rules to packets owned by the worker process (UID-based),
 /// allowing policy-based routing to send them via WAN instead of VPN tunnel.
-///
-/// Value 0xFEED_CAFE is arbitrary but memorable and unlikely to conflict with
-/// other fwmark users (Docker uses 0x1, etc.).
 const FW_MARK: u32 = nftables_ops::FW_MARK;
 
 /// Routing table ID for fwmark-based bypass traffic.
