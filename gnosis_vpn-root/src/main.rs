@@ -2,7 +2,7 @@ use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::net::{UnixListener, UnixStream as TokioUnixStream};
+use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
@@ -113,7 +113,7 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
     Ok((owned_cancel, receiver))
 }
 
-async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::ExitCode> {
+async fn socket_listener(socket_path: &Path) -> Result<TokioUnixListener, exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -145,7 +145,7 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
         })?;
     }
 
-    let listener = UnixListener::bind(socket_path).map_err(|e| {
+    let listener = TokioUnixListener::bind(socket_path).map_err(|e| {
         tracing::error!(error = ?e, "error binding socket");
         exitcode::OSFILE
     })?;
@@ -318,7 +318,7 @@ async fn setup_worker(setup: &DaemonSetup) -> Result<WorkerChild, exitcode::Exit
 async fn loop_daemon(
     setup: DaemonSetup,
     signal_receiver: &mut mpsc::Receiver<SignalMessage>,
-    socket: UnixListener,
+    socket: TokioUnixListener,
     maybe_router: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     // safe state_home for usage later
