@@ -82,6 +82,7 @@ pub fn dynamic_router(
         wg,
         wan_info,
         network_device_info: None,
+        added_routes: Vec::new(),
     })
 }
 
@@ -754,6 +755,14 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
     ///      Equivalent command: `ip route flush cache`
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+        let res = self.best_effort_teardown(logs).await;
+        teardown_fwmark_infrastructure(self.infra.clone()).await;
+        res
+    }
+}
+
+impl Router {
+    async fn best_effort_teardown(router: &Router, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
             wan_if_index,
             vpn_if_index,
@@ -1371,6 +1380,7 @@ mod tests {
             wg,
             wan_info: wan_info(),
             network_device_info: None,
+            added_routes: Vec::new(),
         }
     }
 

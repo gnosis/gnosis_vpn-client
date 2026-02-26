@@ -253,36 +253,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         }
     };
 
-    // Extract WanInfo and rtnetlink handle for dynamic routing (Linux only)
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            let wan_info: Option<routing::WanInfo> = fwmark_infra.as_ref().map(|i| i.wan_info.clone());
-            let rtnetlink_handle: Option<routing::RouterHandle> =
-                fwmark_infra.as_ref().map(|i| i.netlink.handle().clone());
-        } else {
-            let wan_info: Option<routing::WanInfo> = None;
-            let rtnetlink_handle: Option<routing::RouterHandle> = None;
-        }
-    }
-
-    let res = loop_daemon(
-        setup,
-        &mut signal_receiver,
-        socket,
-        &mut maybe_router,
-        wan_info,
-        rtnetlink_handle,
-    )
-    .await;
+    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
-
-    // Teardown fwmark infrastructure (Linux only)
-    #[cfg(target_os = "linux")]
-    if let Some(infra) = fwmark_infra {
-        routing::teardown_fwmark_infrastructure(infra).await;
-    }
 
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
@@ -296,8 +270,6 @@ async fn loop_daemon(
     signal_receiver: &mut mpsc::Receiver<SignalMessage>,
     socket: UnixListener,
     maybe_router: &mut Option<Box<dyn Routing>>,
-    wan_info: Option<routing::WanInfo>,
-    rtnetlink_handle: Option<routing::RouterHandle>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -464,19 +436,8 @@ async fn loop_daemon(
                                 teardown_any_routing(maybe_router, false).await;
 
                                 // Dynamic routing requires WAN info (from fwmark infrastructure on Linux)
-                                let router_result = match (&wan_info, &rtnetlink_handle) {
-                                    #[cfg(target_os = "linux")]
-                                    (Some(info), Some(handle)) => routing::dynamic_router(state_home.clone(), wg_data, info.clone(), handle.clone()),
-                                    #[cfg(not(target_os = "linux"))]
-                                    (Some(info), _) => routing::dynamic_router(state_home.clone(), wg_data, info.clone()),
-                                    _ => {
-                                        let res = Err("WAN interface detection failed during startup - dynamic routing unavailable".to_string());
-                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
-                                        continue;
-                                    }
-                                };
-
-                                match router_result {
+                                let res_router = routing::dynamic_router(state_home.clone(), worker, wg_data);
+                                match res_router {
                                     Ok(mut router) => {
                                         let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));
                                         *maybe_router = Some(Box::new(router));

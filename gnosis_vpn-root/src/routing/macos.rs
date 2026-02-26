@@ -48,8 +48,8 @@ pub struct WanInfo;
 /// Dynamic routing not available on macOS.
 pub fn dynamic_router(
     _state_home: Arc<PathBuf>,
+    _worker: &worker::Worker,
     _wg_data: event::WireGuardData,
-    _wan_info: WanInfo,
 ) -> Result<DynamicRouter, Error> {
     Err(Error::NotAvailable)
 }
