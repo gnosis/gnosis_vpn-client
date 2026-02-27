@@ -140,8 +140,8 @@ mod tests {
     }
 
     #[test]
-        fn parses_interface_gateway() -> anyhow::Result<()> {
-               let output = r#"
+    fn parses_interface_gateway() -> anyhow::Result<()> {
+        let output = r#"
                       route to: default
                    destination: default
                           mask: default
@@ -152,17 +152,17 @@ mod tests {
                           0         0         0         0         0         0      1500         0
                    "#;
 
-                   let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
+        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
 
-                   assert_eq!(device, "en1");
-               assert_eq!(gateway, Some("192.168.178.1".to_string()));
-               Ok(())
-               }
+        assert_eq!(device, "en1");
+        assert_eq!(gateway, Some("192.168.178.1".to_string()));
+        Ok(())
+    }
 
-        #[test]
-        fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
-            // When VPN is active, gateway may show as "index: N" instead of an IP
-                              let output = r#"
+    #[test]
+    fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
+        // When VPN is active, gateway may show as "index: N" instead of an IP
+        let output = r#"
                                  route to: default
                               destination: default
                                      mask: default
@@ -171,12 +171,10 @@ mod tests {
                                     flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
                               "#;
 
-                              let (device, gateway) =
-                       super::super::parse_key_value_output(output, "interface:", "gateway:",
-                       Some(":"))?;
+        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
 
-                               assert_eq!(device, "utun8");
-                               assert_eq!(gateway, None); // Should be None, not "index:"
-                               Ok(())
-                           }
+        assert_eq!(device, "utun8");
+        assert_eq!(gateway, None); // Should be None, not "index:"
+        Ok(())
+    }
 }

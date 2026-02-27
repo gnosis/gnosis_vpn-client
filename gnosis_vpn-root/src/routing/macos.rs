@@ -23,7 +23,7 @@
 use async_trait::async_trait;
 
 use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::{event, worker, wireguard};
+use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -39,7 +39,6 @@ const DEFAULT_VPN_ROUTES: &[&str] = &["0.0.0.0/1", "128.0.0.0/1"];
 fn vpn_subnet_route() -> String {
     format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1)
 }
-
 
 /// Dynamic routing not available on macOS.
 pub async fn dynamic_router(

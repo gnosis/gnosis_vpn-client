@@ -8,8 +8,8 @@ license = { workspace = true }
 
 [dependencies]
 async-trait.workspace = true
-clap.workspace = true
 cfg-if.workspace = true
+clap.workspace = true
 exitcode.workspace = true
 gnosis_vpn-lib.workspace = true
 humantime.workspace = true
