@@ -960,12 +960,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     }
 }
 
-/// Parses the output of `ip route show default` to extract interface and gateway.
-#[cfg(test)]
-fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
-    super::parse_key_value_output(output, "dev", "via", None)
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
