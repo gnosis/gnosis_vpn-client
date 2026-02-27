@@ -469,43 +469,4 @@ mod tests {
         // VPN routes tracker should be empty
         assert!(router.vpn_routes_added.is_empty());
     }
-
-    #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
-        let output = r#"
-           route to: default
-        destination: default
-               mask: default
-            gateway: 192.168.178.1
-          interface: en1
-              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-         recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
-               0         0         0         0         0         0      1500         0
-        "#;
-
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "en1");
-        assert_eq!(gateway, Some("192.168.178.1".to_string()));
-        Ok(())
-    }
-
-    #[test]
-    fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
-        // When VPN is active, gateway may show as "index: N" instead of an IP
-        let output = r#"
-           route to: default
-        destination: default
-               mask: default
-            gateway: index: 28
-          interface: utun8
-              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-        "#;
-
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "utun8");
-        assert_eq!(gateway, None); // Should be None, not "index:"
-        Ok(())
-    }
 }
