@@ -70,7 +70,10 @@ impl Worker {
     pub async fn from_system(input: Input) -> Result<Self, Error> {
         let worker_user = uzers::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
         let path = input.binary.canonicalize().map_err(|error| {
-            eprintln!("Worker binary {} at invalid path for {worker_user:?}: {error:?}", input.binary.display());
+            eprintln!(
+                "Worker binary {} at invalid path for {worker_user:?}: {error:?}",
+                input.binary.display()
+            );
             Error::InvalidBinaryPath
         })?;
         let binary = path.to_str().ok_or(Error::InvalidBinaryPath)?;
@@ -94,7 +97,10 @@ impl Worker {
             .ok_or(Error::PrimaryGroupMissing)?;
         let group_name = group.name().to_string_lossy().to_string();
 
-        println!("Verifying worker binary {} executable permissions for {:?}", binary, worker_user);
+        println!(
+            "Verifying worker binary {} executable permissions for {:?}",
+            binary, worker_user
+        );
         let version_output = Command::new(binary)
             .arg("--version")
             .uid(uid)
@@ -117,7 +123,11 @@ impl Worker {
                 home,
             })
         } else {
-            eprintln!("Worker binary {binary} version mismatch: expected {expected} - found {found} for {worker_user:?}", expected = input.version, found = version);
+            eprintln!(
+                "Worker binary {binary} version mismatch: expected {expected} - found {found} for {worker_user:?}",
+                expected = input.version,
+                found = version
+            );
             Err(Error::VersionMismatch)
         }
     }

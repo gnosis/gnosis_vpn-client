@@ -29,10 +29,16 @@ pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, String
     let cache_path = home.join(CACHE_DIRECTORY);
     let config_path = home.join(CONFIG_DIRECTORY);
     ensure_dir_with_owner(&cache_path, uid, gid).map_err(|error| {
-        format!("Failed to create cache directory at {cache}: {error:?}", cache = cache_path.display())
+        format!(
+            "Failed to create cache directory at {cache}: {error:?}",
+            cache = cache_path.display()
+        )
     })?;
     ensure_dir_with_owner(&config_path, uid, gid).map_err(|error| {
-        format!("Failed to create config directory at {config}: {error:?}", config = config_path.display())
+        format!(
+            "Failed to create config directory at {config}: {error:?}",
+            config = config_path.display()
+        )
     })?;
     Ok(home)
 }
