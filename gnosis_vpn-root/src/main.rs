@@ -218,10 +218,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
     let log_path = args.log_file.clone();
-    let force_static_routing = args.force_static_routing;
     let setup = DaemonSetup {
         args,
-        worker_user: worker_user.clone(),
+        worker_user,
         config,
         worker_params,
         reload_handle,
@@ -231,27 +230,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     #[cfg(target_os = "linux")]
     routing::cleanup_stale_fwmark_rules().await;
-
-    // Set up fwmark infrastructure at daemon startup (Linux only, dynamic routing only)
-    // Static routing uses per-peer IP bypass routes instead, so no fwmark needed
-    #[cfg(target_os = "linux")]
-    let fwmark_infra: Option<routing::FwmarkInfra> = if force_static_routing {
-        tracing::info!("static routing enabled via CLI flag - skipping fwmark infrastructure");
-        None
-    } else {
-        match routing::setup_fwmark_infrastructure(&worker_user).await {
-            Ok(infra) => Some(infra),
-            Err(e) => {
-                tracing::error!(
-                    ?e,
-                    "Dynamic routing is unavailable. VPN connections must use static routing which \
-                     may have reduced reliability during network changes. This typically occurs due to \
-                     insufficient permissions or missing nftables. Use the CLI flag --force-static-routing"
-                );
-                None
-            }
-        }
-    };
 
     let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
 
@@ -436,7 +414,7 @@ async fn loop_daemon(
                                 teardown_any_routing(maybe_router, false).await;
 
                                 // Dynamic routing requires WAN info (from fwmark infrastructure on Linux)
-                                let res_router = routing::dynamic_router(state_home.clone(), worker, wg_data);
+                                let res_router = routing::dynamic_router(state_home.clone(), setup.worker_user.clone(), wg_data).await;
                                 match res_router {
                                     Ok(mut router) => {
                                         let res = router.setup().await.map_err(|e| format!("routing setup error: {}", e));

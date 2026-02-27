@@ -61,7 +61,7 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
 pub async fn dynamic_router(
     state_home: Arc<PathBuf>,
-    worker: &worker::Worker,
+    worker: worker::Worker,
     wg_data: event::WireGuardData,
 ) -> Result<impl Routing, Error> {
     let infra = setup_fwmark_infrastructure(&worker).await.map_err(|error| {
@@ -154,20 +154,6 @@ async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkIn
     let netlink = RealNetlinkOps::new(handle);
     let nft = RealNfTablesOps {};
     setup_fwmark_infrastructure_with(worker, netlink, &nft).await
-}
-
-/// Tears down the persistent fwmark infrastructure at daemon shutdown.
-///
-/// This removes the firewall rules and routing table entries that were
-/// set up by `setup_fwmark_infrastructure`.
-///
-/// The teardown includes:
-/// 1. Deleting the fwmark routing rule
-/// 2. Deleting the TABLE_ID default route
-/// 3. Removing firewall mangle and NAT rules
-pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
-    let nft = RealNfTablesOps {};
-    teardown_fwmark_infrastructure_with(infra, &nft).await;
 }
 
 // ============================================================================
@@ -266,7 +252,15 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesO
     })
 }
 
-/// Testable version of `teardown_fwmark_infrastructure`.
+/// Tears down the persistent fwmark infrastructure at daemon shutdown.
+///
+/// This removes the firewall rules and routing table entries that were
+/// set up by `setup_fwmark_infrastructure`.
+///
+/// The teardown includes:
+/// 1. Deleting the fwmark routing rule
+/// 2. Deleting the TABLE_ID default route
+/// 3. Removing firewall mangle and NAT rules
 pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesOps>(
     mut infra: FwmarkInfrastructure<N>,
     nft: &F,
@@ -1056,15 +1050,6 @@ mod tests {
             group_name: "test".into(),
             binary: "/bin/test".into(),
             home: PathBuf::from("/tmp/test"),
-        }
-    }
-
-    fn wan_info() -> WanInfo {
-        WanInfo {
-            if_index: 2,
-            if_name: "eth0".into(),
-            gateway: Ipv4Addr::new(192, 168, 1, 1),
-            ip_addr: Ipv4Addr::new(192, 168, 1, 100),
         }
     }
 

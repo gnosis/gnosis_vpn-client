@@ -22,9 +22,8 @@
 
 use async_trait::async_trait;
 
-use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::{event, wireguard};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -44,17 +43,6 @@ fn vpn_subnet_route() -> String {
 /// WAN interface information stub for macOS (never used since dynamic routing is not available).
 #[derive(Debug, Clone)]
 pub struct WanInfo;
-
-/// Dynamic routing not available on macOS.
-pub fn dynamic_router(
-    _state_home: Arc<PathBuf>,
-    _worker: &worker::Worker,
-    _wg_data: event::WireGuardData,
-) -> Result<DynamicRouter, Error> {
-    Err(Error::NotAvailable)
-}
-
-pub struct DynamicRouter {}
 
 /// Builds a static macOS router.
 pub fn static_router(
@@ -215,18 +203,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         self.bypass_manager = None;
 
         wg_result
-    }
-}
-
-/// Dynamic routing not available on macOS.
-#[async_trait]
-impl Routing for DynamicRouter {
-    async fn setup(&mut self) -> Result<(), Error> {
-        Err(Error::NotAvailable)
-    }
-
-    async fn teardown(&mut self, _logs: Logs) -> Result<(), Error> {
-        Err(Error::NotAvailable)
     }
 }
 
