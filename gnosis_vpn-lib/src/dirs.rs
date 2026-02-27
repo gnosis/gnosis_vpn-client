@@ -23,18 +23,16 @@ pub enum Error {
 }
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
-pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
-    tracing::debug!("Using gnosisvpn home directory: {}", home.display());
+// tracing is not yet enabled so we avoid it
+pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, String> {
     // home folder will be created by installer
     let cache_path = home.join(CACHE_DIRECTORY);
     let config_path = home.join(CONFIG_DIRECTORY);
     ensure_dir_with_owner(&cache_path, uid, gid).map_err(|error| {
-        tracing::error!(?error, path = %cache_path.display(), uid, gid, "Failed to create cache directory");
-        error
+        format!("Failed to create cache directory at {cache}: {error:?}", cache = cache_path.display())
     })?;
     ensure_dir_with_owner(&config_path, uid, gid).map_err(|error| {
-        tracing::error!(?error, path = %config_path.display(), uid, gid, "Failed to create config directory");
-        error
+        format!("Failed to create config directory at {config}: {error:?}", config = config_path.display())
     })?;
     Ok(home)
 }
