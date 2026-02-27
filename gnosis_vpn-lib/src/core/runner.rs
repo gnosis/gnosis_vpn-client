@@ -389,10 +389,9 @@ async fn run_fund_channel(
     ticket_value: Balance<WxHOPR>,
 ) -> Result<(), hopr_api::ChannelError> {
     let amount = balance::funding_amount(ticket_value);
-    let threshold = balance::min_stake_threshold(ticket_value);
-    tracing::debug!(%address, %amount, %threshold, "starting fund channel runner");
+    tracing::debug!(%address, %amount, "starting fund channel runner");
     (|| async {
-        hopr.ensure_channel_open(address, amount, threshold).await?;
+        hopr.ensure_channel_open(address, amount).await?;
         Ok(())
     })
     .retry(remote_data::backoff_expo_long_delay())

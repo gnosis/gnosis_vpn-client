@@ -86,7 +86,6 @@ impl Hopr {
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
-        threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
     ) -> Result<(), ChannelError> {
         tracing::debug!("ensure hopr channel open");
         let channels_from_me = self.edgli.channels_from(&self.edgli.me_onchain()).await?;
