@@ -76,7 +76,7 @@ impl Hopr {
     }
 
     // --- channel management ---
-    /// Ensure a channel to the specified target is open and funded with the specified amount.
+    /// Ensure a channel to the specified target is open with the specified amount.
     ///
     /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
