@@ -46,7 +46,7 @@ impl RouteOps for DarwinRouteOps {
 
         // Use shared parser with macOS-specific keys and suffix filter
         // (filters out "index:" when gateway shows "gateway: index: 28")
-        super::parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
+        parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
     }
 
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
@@ -76,6 +76,50 @@ impl RouteOps for DarwinRouteOps {
     }
 }
 
+/// Parses key-value pairs from command output to extract device and gateway.
+///
+/// This utility works for both Linux (`ip route show default`) and macOS
+/// (`route -n get 0.0.0.0`) command outputs by parameterizing the key names.
+///
+/// # Arguments
+/// * `output` - The command output to parse
+/// * `device_key` - Key for device name (e.g., "dev" on Linux, "interface:" on macOS)
+/// * `gateway_key` - Key for gateway IP (e.g., "via" on Linux, "gateway:" on macOS)
+/// * `filter_suffix` - Optional suffix to filter out (e.g., Some(":") for macOS
+///   to handle "gateway: index: 28" cases)
+///
+/// # Returns
+/// A tuple of (device_name, Option<gateway_ip>)
+pub(crate) fn parse_key_value_output(
+    output: &str,
+    device_key: &str,
+    gateway_key: &str,
+    filter_suffix: Option<&str>,
+) -> Result<(String, Option<String>), Error> {
+    let parts: Vec<&str> = output.split_whitespace().collect();
+
+    let device_index = parts.iter().position(|&x| x == device_key);
+    let gateway_index = parts.iter().position(|&x| x == gateway_key);
+
+    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
+        Some(dev) => dev.to_string(),
+        None => {
+            tracing::error!(%output, "Unable to determine default interface");
+            return Err(Error::NoInterface);
+        }
+    };
+
+    let gateway = gateway_index
+        .and_then(|idx| parts.get(idx + 1))
+        .filter(|gw| {
+            // Filter out values matching the suffix (e.g., "index:" on macOS)
+            filter_suffix.is_none_or(|suffix| !gw.ends_with(suffix))
+        })
+        .map(|gw| gw.to_string());
+
+    Ok((device, gateway))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,4 +138,45 @@ mod tests {
         let args = route_add_args("10.0.0.0/8", None, "utun5");
         assert_eq!(args, vec!["-n", "add", "-inet", "10.0.0.0/8", "-interface", "utun5"]);
     }
+
+    #[test]
+        fn parses_interface_gateway() -> anyhow::Result<()> {
+               let output = r#"
+                      route to: default
+                   destination: default
+                          mask: default
+                       gateway: 192.168.178.1
+                     interface: en1
+                         flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+                    recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
+                          0         0         0         0         0         0      1500         0
+                   "#;
+
+                   let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
+
+                   assert_eq!(device, "en1");
+               assert_eq!(gateway, Some("192.168.178.1".to_string()));
+               Ok(())
+               }
+
+        #[test]
+        fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
+            // When VPN is active, gateway may show as "index: N" instead of an IP
+                              let output = r#"
+                                 route to: default
+                              destination: default
+                                     mask: default
+                                  gateway: index: 28
+                                interface: utun8
+                                    flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+                              "#;
+
+                              let (device, gateway) =
+                       super::super::parse_key_value_output(output, "interface:", "gateway:",
+                       Some(":"))?;
+
+                               assert_eq!(device, "utun8");
+                               assert_eq!(gateway, None); // Should be None, not "index:"
+                               Ok(())
+                           }
 }
