@@ -59,20 +59,19 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 ///
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
-pub fn dynamic_router(
+pub async fn dynamic_router(
     state_home: Arc<PathBuf>,
     worker: &worker::Worker,
     wg_data: event::WireGuardData,
 ) -> Result<impl Routing, Error> {
-    let infra = setup_fwmark_infrastructure(&worker_user).map_err(|error| {
+    let infra = setup_fwmark_infrastructure(&worker).await.map_err(|error| {
         tracing::error!(?error, "Unable to setup fwmark infrastructure for dynamic routing");
         error
     })?;
 
-    let wan_info = infra.wan_info;
     let handle = infra.netlink.handle();
-    let netlink = RealNetlinkOps::new(infra.netlink.handle());
-    let route_ops = NetlinkRouteOps::new(handle);
+    let netlink = RealNetlinkOps::new(handle.clone());
+    let route_ops = NetlinkRouteOps::new(handle.clone());
     let wg = RealWgOps;
     Ok(Router {
         state_home,
@@ -80,7 +79,7 @@ pub fn dynamic_router(
         netlink,
         route_ops,
         wg,
-        wan_info,
+        infra,
         network_device_info: None,
         added_routes: Vec::new(),
     })
@@ -362,6 +361,7 @@ pub struct WanInfo {
 /// **Important**: Must be explicitly torn down via `teardown_fwmark_infrastructure()`
 /// to clean up firewall rules and routing table entries. Dropping without teardown
 /// will log a warning and may leave the system in an inconsistent state.
+#[derive(Clone, Debug)]
 pub struct FwmarkInfrastructure<N: NetlinkOps> {
     pub netlink: N,
     pub wan_info: WanInfo,
@@ -414,8 +414,7 @@ pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
     netlink: N,
     route_ops: R,
     wg: W,
-    /// WAN interface info, obtained from FwmarkInfrastructure
-    wan_info: WanInfo,
+    infra: FwmarkInfrastructure<N>,
     network_device_info: Option<NetworkDeviceInfo>,
     added_routes: Vec<RouteSpec>,
 }
@@ -593,7 +592,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         }
 
         // Use pre-existing WAN info from FwmarkInfrastructure
-        let wan_info = &self.wan_info;
+        let wan_info = &self.infra.wan_info;
         tracing::debug!(?wan_info, "using WAN interface from fwmark infrastructure");
 
         // Phase 1: Add RFC1918 bypass routes BEFORE wg-quick up
@@ -755,23 +754,17 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
     ///      Equivalent command: `ip route flush cache`
     ///
     async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        let res = self.best_effort_teardown(logs).await;
-        teardown_fwmark_infrastructure(self.infra.clone()).await;
-        res
-    }
-}
-
-impl Router {
-    async fn best_effort_teardown(router: &Router, logs: Logs) -> Result<(), Error> {
         let NetworkDeviceInfo {
             wan_if_index,
             vpn_if_index,
             vpn_cidr,
             wan_gw,
-        } = match self.network_device_info {
+        } = match self.network_device_info.take() {
             Some(info) => info,
             None => {
                 if self.added_routes.is_empty() {
+                    let nft = RealNfTablesOps {};
+                    teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
                     return Err(Error::General("invalid state: not set up".into()));
                 }
                 tracing::warn!("Found added routes but no network device info - setup seems to have failed partway");
@@ -780,6 +773,9 @@ impl Router {
                         tracing::error!(?error, route = %format!("{}/{}", route.destination, route.prefix_len), "failed to delete RFC1918 bypass route during partial teardown");
                     }
                 }
+                self.added_routes.clear();
+                let nft = RealNfTablesOps {};
+                teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
                 return Ok(());
             }
         };
@@ -848,12 +844,15 @@ impl Router {
             )
             .await;
         }
+        self.added_routes.clear();
 
         // Step 6: Flush routing cache
         self.route_ops.flush_routing_cache().await?;
         tracing::debug!("ip route flush cache");
 
         tracing::info!("VPN routing teardown complete (fwmark infrastructure remains active)");
+        let nft = RealNfTablesOps {};
+        teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
         Ok(())
     }
 }
@@ -1367,18 +1366,24 @@ mod tests {
     // Router lifecycle tests
     // ====================================================================
 
-    fn make_router(
+    async fn make_router(
         netlink: MockNetlinkOps,
         route_ops: MockRouteOps,
         wg: MockWgOps,
     ) -> Router<MockNetlinkOps, MockRouteOps, MockWgOps> {
+        let nft = mock_nft();
+        let worker = mock_worker();
+
+        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
+            .await
+            .unwrap();
         Router {
             state_home: Arc::new(PathBuf::from("/tmp/test")),
             wg_data: test_wg_data(),
             netlink,
             route_ops,
             wg,
-            wan_info: wan_info(),
+            infra,
             network_device_info: None,
             added_routes: Vec::new(),
         }
@@ -1441,7 +1446,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
         router.setup().await.unwrap();
 
@@ -1490,7 +1495,7 @@ mod tests {
         }
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops, wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops, wg.clone()).await;
 
         let result = router.setup().await;
         assert!(result.is_err());
@@ -1505,7 +1510,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink, route_ops, wg);
+        let mut router = make_router(netlink, route_ops, wg).await;
 
         router.setup().await.unwrap();
         let result = router.setup().await;
@@ -1518,7 +1523,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
         router.setup().await.unwrap();
 
@@ -1780,7 +1785,7 @@ mod tests {
         }
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops, wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops, wg.clone()).await;
 
         let result = router.setup().await;
         assert!(result.is_err());
@@ -1804,7 +1809,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
         router.setup().await.unwrap();
 

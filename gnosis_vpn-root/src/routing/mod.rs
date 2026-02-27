@@ -20,7 +20,6 @@ mod bypass;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
-mod linux;
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
         pub(crate) mod netlink_ops;
@@ -90,9 +89,8 @@ pub(crate) fn parse_key_value_output(
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
         pub use linux::{
-            FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
-            setup_fwmark_infrastructure, static_fallback_router as static_router,
-            teardown_fwmark_infrastructure,
+            FwmarkInfra, cleanup_stale_fwmark_rules, dynamic_router,
+            static_fallback_router as static_router,
         };
         pub type RouterHandle = rtnetlink::Handle;
     } else if #[cfg(target_os = "macos")] {
