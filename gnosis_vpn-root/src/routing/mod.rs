@@ -1,18 +1,133 @@
+//! # Routing Modes
+//!
+//! This module provides split-tunnel VPN routing implementations for different platforms.
+//!
+//! ## Dynamic Routing (Linux only, default)
+//! Uses rtnetlink + firewall rules for policy-based routing with firewall marks.
+//! Most reliable but requires root and nftables availability.
+//!
+//! ## Static Routing (all platforms)
+//! Uses route operations via platform-native APIs.
+//! Simpler but may have reduced reliability during network changes.
+//!
+//! **Note:** There is no automatic fallback from dynamic to static routing.
+//! If dynamic routing fails (e.g., missing nftables), the connection attempt fails.
+//! Use `--force-static-routing` CLI flag to explicitly use static routing.
+
 use async_trait::async_trait;
+use cfg_if::cfg_if;
 use thiserror::Error;
 
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use gnosis_vpn_lib::{dirs, wireguard};
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
+mod bypass;
+pub(crate) mod route_ops;
+pub(crate) mod wg_ops;
 
-#[cfg(target_os = "linux")]
-pub use linux::{dynamic_router, static_fallback_router as static_router};
-#[cfg(target_os = "macos")]
-pub use macos::{dynamic_router, static_router};
+cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        pub(crate) mod netlink_ops;
+        pub(crate) mod nftables_ops;
+        pub(crate) mod route_ops_linux;
+        mod linux;
+    } else if #[cfg(target_os = "macos")] {
+        pub(crate) mod route_ops_macos;
+        mod macos;
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod mocks;
+
+pub(crate) use bypass::{BypassRouteManager, WanInterface};
+
+// ============================================================================
+// Shared Utilities
+// ============================================================================
+
+/// Parses key-value pairs from command output to extract device and gateway.
+///
+/// This utility works for both Linux (`ip route show default`) and macOS
+/// (`route -n get 0.0.0.0`) command outputs by parameterizing the key names.
+///
+/// # Arguments
+/// * `output` - The command output to parse
+/// * `device_key` - Key for device name (e.g., "dev" on Linux, "interface:" on macOS)
+/// * `gateway_key` - Key for gateway IP (e.g., "via" on Linux, "gateway:" on macOS)
+/// * `filter_suffix` - Optional suffix to filter out (e.g., Some(":") for macOS
+///   to handle "gateway: index: 28" cases)
+///
+/// # Returns
+/// A tuple of (device_name, Option<gateway_ip>)
+// Used on macOS (route_ops_macos.rs) and in tests
+#[allow(dead_code)]
+pub(crate) fn parse_key_value_output(
+    output: &str,
+    device_key: &str,
+    gateway_key: &str,
+    filter_suffix: Option<&str>,
+) -> Result<(String, Option<String>), Error> {
+    let parts: Vec<&str> = output.split_whitespace().collect();
+
+    let device_index = parts.iter().position(|&x| x == device_key);
+    let gateway_index = parts.iter().position(|&x| x == gateway_key);
+
+    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
+        Some(dev) => dev.to_string(),
+        None => {
+            tracing::error!(%output, "Unable to determine default interface");
+            return Err(Error::NoInterface);
+        }
+    };
+
+    let gateway = gateway_index
+        .and_then(|idx| parts.get(idx + 1))
+        .filter(|gw| {
+            // Filter out values matching the suffix (e.g., "index:" on macOS)
+            filter_suffix.is_none_or(|suffix| !gw.ends_with(suffix))
+        })
+        .map(|gw| gw.to_string());
+
+    Ok((device, gateway))
+}
+
+cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        pub use linux::{
+            FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
+            setup_fwmark_infrastructure, static_fallback_router as static_router,
+            teardown_fwmark_infrastructure,
+        };
+        pub type RouterHandle = rtnetlink::Handle;
+    } else if #[cfg(target_os = "macos")] {
+        pub use macos::{WanInfo, dynamic_router, static_router};
+        pub type RouterHandle = ();
+    } else {
+        pub type RouterHandle = ();
+    }
+}
+
+/// RFC1918 + link-local networks that should bypass VPN tunnel.
+/// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)
+/// so they take precedence in the routing table.
+///
+/// **Limitation:** If your VPN server uses an IP in a non-standard 10.x range
+/// (e.g., 10.1.0.0/16), traffic may be misrouted because 10.0.0.0/8 bypass
+/// takes precedence over the more specific VPN server IP. The VPN_TUNNEL_SUBNET
+/// (10.128.0.0/9) is designed to override this for the standard HOPR VPN range,
+/// but custom VPN configurations may require adjustment.
+pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
+    ("10.0.0.0", 8),     // RFC1918 Class A private
+    ("172.16.0.0", 12),  // RFC1918 Class B private
+    ("192.168.0.0", 16), // RFC1918 Class C private
+    ("169.254.0.0", 16), // Link-local (APIPA)
+];
+
+/// VPN internal subnet that must be routed through the tunnel.
+/// This is more specific than the RFC1918 bypass (10.0.0.0/8),
+/// so it takes precedence and ensures VPN server traffic uses the tunnel.
+pub(crate) const VPN_TUNNEL_SUBNET: (&str, u8) = ("10.128.0.0", 9);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -32,7 +147,6 @@ pub enum Error {
     #[allow(dead_code)]
     NotAvailable,
 
-    #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
     General(String),
 
@@ -41,19 +155,8 @@ pub enum Error {
     Rtnetlink(#[from] rtnetlink::Error),
 
     #[cfg(target_os = "linux")]
-    #[error("iptables error: {0} ")]
-    IpTables(String),
-}
-
-impl Error {
-    #[cfg(target_os = "linux")]
-    pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
-        Self::IpTables(e.into().to_string())
-    }
-
-    pub fn is_not_available(&self) -> bool {
-        matches!(self, Self::NotAvailable)
-    }
+    #[error("nftables error: {0} ")]
+    NfTables(String),
 }
 
 #[async_trait]

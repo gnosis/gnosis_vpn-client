@@ -1,0 +1,25 @@
+# Cargo audit configuration for gnosis_vpn-client
+#
+# Vulnerabilities are exempted here because they are either:
+# - From transitive dependencies we cannot control
+# - Unmaintained crates with no viable alternatives
+# - Lack a fixed version
+
+[advisories]
+# Advisory IDs to ignore
+ignore = [
+  "RUSTSEC-2023-0071", # rsa: Marvin Attack timing sidechannel - transitive from sqlx-mysql, no fixed version available
+  "RUSTSEC-2025-0142", # mnl: segmentation fault and invalid memory read - no fixed version available
+  "RUSTSEC-2024-0388", # derivative: unmaintained - transitive from alloy ecosystem
+  "RUSTSEC-2024-0436", # paste: unmaintained - transitive from alloy-sol-macro
+  "RUSTSEC-2025-0134", # rustls-pemfile: unmaintained - transitive from hopr-chain-connector
+]
+
+# Treat unmaintained warnings as informational only (not errors)
+informational_warnings = ["unmaintained"]
+
+# Output configuration
+[output]
+deny = []
+quiet = false
+show_tree = true

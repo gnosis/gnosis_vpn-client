@@ -218,18 +218,72 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let mut maybe_router: Option<Box<dyn Routing>> = None;
     let log_path = args.log_file.clone();
+    #[cfg(target_os = "linux")]
+    let force_static_routing = args.force_static_routing;
     let setup = DaemonSetup {
         args,
-        worker_user,
+        worker_user: worker_user.clone(),
         config,
         worker_params,
         reload_handle,
         log_path,
     };
-    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
+
+    // Clean up any stale fwmark infrastructure from a previous crash (Linux only)
+    #[cfg(target_os = "linux")]
+    routing::cleanup_stale_fwmark_rules().await;
+
+    // Set up fwmark infrastructure at daemon startup (Linux only, dynamic routing only)
+    // Static routing uses per-peer IP bypass routes instead, so no fwmark needed
+    #[cfg(target_os = "linux")]
+    let fwmark_infra: Option<routing::FwmarkInfra> = if force_static_routing {
+        tracing::info!("static routing enabled via CLI flag - skipping fwmark infrastructure");
+        None
+    } else {
+        match routing::setup_fwmark_infrastructure(&worker_user).await {
+            Ok(infra) => Some(infra),
+            Err(e) => {
+                tracing::error!(
+                    ?e,
+                    "Dynamic routing is unavailable. VPN connections must use static routing which \
+                     may have reduced reliability during network changes. This typically occurs due to \
+                     insufficient permissions or missing nftables. Use the CLI flag --force-static-routing"
+                );
+                None
+            }
+        }
+    };
+
+    // Extract WanInfo and rtnetlink handle for dynamic routing (Linux only)
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "linux")] {
+            let wan_info: Option<routing::WanInfo> = fwmark_infra.as_ref().map(|i| i.wan_info.clone());
+            let rtnetlink_handle: Option<routing::RouterHandle> =
+                fwmark_infra.as_ref().map(|i| i.netlink.handle().clone());
+        } else {
+            let wan_info: Option<routing::WanInfo> = None;
+            let rtnetlink_handle: Option<routing::RouterHandle> = None;
+        }
+    }
+
+    let res = loop_daemon(
+        setup,
+        &mut signal_receiver,
+        socket,
+        &mut maybe_router,
+        wan_info,
+        rtnetlink_handle,
+    )
+    .await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, true).await;
+
+    // Teardown fwmark infrastructure (Linux only)
+    #[cfg(target_os = "linux")]
+    if let Some(infra) = fwmark_infra {
+        routing::teardown_fwmark_infrastructure(infra).await;
+    }
 
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
@@ -243,6 +297,8 @@ async fn loop_daemon(
     signal_receiver: &mut mpsc::Receiver<SignalMessage>,
     socket: UnixListener,
     maybe_router: &mut Option<Box<dyn Routing>>,
+    wan_info: Option<routing::WanInfo>,
+    rtnetlink_handle: Option<routing::RouterHandle>,
 ) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
@@ -298,7 +354,7 @@ async fn loop_daemon(
     let mut socket_writer = BufWriter::new(writer_half);
 
     // safe state_home for usage later
-    let state_home = setup.worker_params.state_home();
+    let state_home = std::sync::Arc::new(setup.worker_params.state_home());
 
     // provide initial resources to worker
     send_to_worker(
@@ -408,7 +464,18 @@ async fn loop_daemon(
                                 // ensure we run down before going up to ensure clean slate
                                 teardown_any_routing(maybe_router, false).await;
 
-                                let router_result = routing::dynamic_router(state_home.clone(), setup.worker_user.clone(), wg_data);
+                                // Dynamic routing requires WAN info (from fwmark infrastructure on Linux)
+                                let router_result = match (&wan_info, &rtnetlink_handle) {
+                                    #[cfg(target_os = "linux")]
+                                    (Some(info), Some(handle)) => routing::dynamic_router(state_home.clone(), wg_data, info.clone(), handle.clone()),
+                                    #[cfg(not(target_os = "linux"))]
+                                    (Some(info), _) => routing::dynamic_router(state_home.clone(), wg_data, info.clone()),
+                                    _ => {
+                                        let res = Err("WAN interface detection failed during startup - dynamic routing unavailable".to_string());
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
+                                        continue;
+                                    }
+                                };
 
                                 match router_result {
                                     Ok(mut router) => {
@@ -417,27 +484,30 @@ async fn loop_daemon(
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
                                     },
                                     Err(error) => {
-                                        if error.is_not_available() {
-                                            tracing::debug!(?error, "dynamic routing not available on this platform");
-                                        } else {
-                                            tracing::error!(?error, "failed to build dynamic router");
-                                        }
+                                        tracing::error!(?error, "failed to build dynamic router");
                                         let res = Err(error.to_string());
                                         send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
                                     }
                                 }
                             },
                             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                                let mut new_routing = routing::static_router(state_home.clone(), wg_data, peer_ips);
+                                match routing::static_router(state_home.clone(), wg_data, peer_ips) {
+                                    Ok(mut new_routing) => {
+                                        // ensure we run down before going up to ensure clean slate
+                                        teardown_any_routing(maybe_router, true).await;
+                                        let _ = new_routing.teardown(Logs::Suppress).await;
 
-                                // ensure we run down before going up to ensure clean slate
-                                teardown_any_routing(maybe_router, true).await;
-                                let _ = new_routing.teardown(Logs::Suppress).await;
-
-                                // bring up new static routing
-                                let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
-                                *maybe_router = Some(Box::new(new_routing));
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+                                        // bring up new static routing
+                                        let res = new_routing.setup().await.map_err(|e| format!("routing setup error: {}", e));
+                                        *maybe_router = Some(Box::new(new_routing));
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+                                    }
+                                    Err(error) => {
+                                        tracing::error!(?error, "failed to build static router");
+                                        let res = Err(error.to_string());
+                                        send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+                                    }
+                                }
                             }
                             RequestToRoot::TearDownWg => {
                                 teardown_any_routing(maybe_router, true).await;

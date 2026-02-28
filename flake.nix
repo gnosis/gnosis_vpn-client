@@ -105,8 +105,13 @@
               CC_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
               CXX_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
 
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+
               # poing pkg-config to static libraries
-              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-unknown-linux-musl" = {
               CARGO_PROFILE = "release";
@@ -125,8 +130,13 @@
               CC_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
               CXX_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
 
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+
               # poing pkg-config to static libraries
-              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "x86_64-apple-darwin" = {
               CARGO_PROFILE = "intelmac";
@@ -159,6 +169,7 @@
             root = ./.;
             fileset = lib.fileset.unions [
               ./.cargo/config.toml
+              ./.cargo/audit.toml
               ./Cargo.toml
               ./Cargo.lock
               ./deny.toml
@@ -197,6 +208,8 @@
                 [
                   staticPkgs.openssl
                   staticPkgs.sqlite
+                  staticPkgs.libmnl
+                  staticPkgs.libnftnl
                 ]
               else
                 [
@@ -349,11 +362,13 @@
             );
 
             # Audit dependencies
+            # Vulnerabilities are exempted because they are either:
+            # - From transitive dependencies we cannot control
+            # - Unmaintained crates with no viable alternatives
+            # - Lack a fixed version
             audit = craneLib.cargoAudit {
               src = srcFiles;
               inherit advisory-db;
-              # Ignore RSA vulnerability (RUSTSEC-2023-0071) - comes from hopr-lib transitive dependency
-              cargoAuditExtraArgs = "--ignore RUSTSEC-2023-0071";
             };
 
             # Audit licenses
@@ -387,18 +402,26 @@
             inherit generate-lockfile;
           };
 
-          devShells.default = craneLib.devShell {
-            inherit pre-commit-check;
-            checks = self.checks.${system};
+          devShells.default = craneLib.devShell (
+            {
+              inherit pre-commit-check;
+              checks = self.checks.${system};
 
-            packages = [
-              pkgs.cargo-machete
-              pkgs.cargo-shear
-              pkgs.rust-analyzer
-            ];
+              packages = [
+                pkgs.cargo-machete
+                pkgs.cargo-shear
+                pkgs.rust-analyzer
+              ];
 
-            VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
-          };
+              VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
+            }
+            // lib.optionalAttrs pkgs.stdenv.isLinux {
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+            }
+          );
 
           formatter = config.treefmt.build.wrapper;
         };

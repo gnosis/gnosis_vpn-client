@@ -15,6 +15,7 @@ async-trait = "0.1.89"
 anyhow = { version = "1.0.100" }
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
+cfg-if = "1.0"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
 exitcode = "1.1.2"
@@ -23,8 +24,9 @@ humantime = "2.3.0"
 futures-util = "0.3.31"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
-iptables = "0.6.0"
 libc = "0.2.177"
+mnl = "0.3"
+nftnl = "0.9"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }

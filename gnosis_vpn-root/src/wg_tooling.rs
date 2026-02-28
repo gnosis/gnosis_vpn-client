@@ -25,7 +25,7 @@ pub async fn executable() -> Result<(), wireguard::Error> {
         .map_err(wireguard::Error::from)
 }
 
-pub async fn up(state_home: PathBuf, config_content: String) -> Result<(), wireguard::Error> {
+pub async fn up(state_home: PathBuf, config_content: String) -> Result<String, wireguard::Error> {
     let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)?;
     let content = config_content.as_bytes();
 
@@ -47,7 +47,34 @@ pub async fn up(state_home: PathBuf, config_content: String) -> Result<(), wireg
         .arg(conf_file)
         .run(Logs::Print)
         .await?;
-    Ok(())
+
+    Ok(resolve_interface_name().await)
+}
+
+/// Resolve the real WireGuard interface name.
+///
+/// On macOS, `wg-quick` creates `utunN` interfaces and stores the mapping in
+/// `/var/run/wireguard/<config>.name`. On Linux, the interface name matches the
+/// config name directly.
+async fn resolve_interface_name() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let name_file = format!("/var/run/wireguard/{}.name", wireguard::WG_INTERFACE);
+        match fs::read_to_string(&name_file).await {
+            Ok(name) => {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    tracing::debug!(interface = %name, "resolved WireGuard interface name");
+                    return name;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(%e, path = %name_file,
+                    "could not read WG interface name file, using default");
+            }
+        }
+    }
+    wireguard::WG_INTERFACE.to_string()
 }
 
 pub async fn down(state_home: PathBuf, logs: Logs) -> Result<(), wireguard::Error> {
