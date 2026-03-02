@@ -110,7 +110,7 @@ impl Balances {
 
         if self.node_xdai < min_funds_threshold() {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if self.node_xdai < (min_funds_threshold() + 2) {
+        } else if self.node_xdai < (min_funds_threshold() * 2) {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
