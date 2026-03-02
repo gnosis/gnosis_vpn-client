@@ -17,7 +17,7 @@ use crate::core::runner::{self, Results};
 use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError};
+use crate::hopr::{self, Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 use crate::{ping, remote_data};
@@ -101,7 +101,9 @@ impl Runner {
         // gather peers before we start any routing attempt to ensure static routing might still work
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
+        peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
 
         // dynamic routing is only available on Linux
         cfg_if::cfg_if! {
@@ -489,14 +491,6 @@ async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr
     let peers = hopr.announced_peers(minimum_score).await?;
     let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
     Ok(peer_ips)
-}
-
-async fn resolve_blokli_ips(worker_params: &WorkerParams) -> Result<Vec<Ipv4Addr>, Error> {
-    let provided_url = worker_params.blokli_url();
-    let url = hopr::blokli_url(provided_url);
-
-    let res = edgli::blokli::resolve_blokli(worker_params.blokli_url()).await;
-    res.map_err(|e| Error::Runtime(format!("Failed to resolve Blokli IPs: {}", e)))
 }
 
 async fn request_ping(
