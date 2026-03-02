@@ -630,10 +630,11 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
-        self.wg
+        let interface_name = self
+            .wg
             .wg_quick_up((*self.state_home).clone(), wg_quick_content)
             .await?;
-        tracing::debug!("wg-quick up");
+        tracing::debug!(%interface_name, "wg-quick up");
 
         // Phase 3: Complete routing with VPN interface info
 

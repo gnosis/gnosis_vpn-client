@@ -25,7 +25,9 @@ pub async fn executable() -> Result<(), wireguard::Error> {
         .map_err(wireguard::Error::from)
 }
 
-pub async fn up(state_home: PathBuf, config_content: String) -> Result<(), wireguard::Error> {
+/// Write the WireGuard config to a file and bring up the interface using `wg-quick`.
+/// Returns created interface name on success.
+pub async fn up(state_home: PathBuf, config_content: String) -> Result<String, wireguard::Error> {
     let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)?;
     let content = config_content.as_bytes();
 
@@ -48,7 +50,8 @@ pub async fn up(state_home: PathBuf, config_content: String) -> Result<(), wireg
         .run(Logs::Print)
         .await?;
 
-    Ok(())
+    let iface_name = resolve_interface_name().await;
+    Ok(iface_name)
 }
 
 /// Resolve the real WireGuard interface name.
