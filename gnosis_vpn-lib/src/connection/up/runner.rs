@@ -1,7 +1,7 @@
 //! The runner module for `core::connection::up` struct.
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use backon::{ExponentialBuilder, FibonacciBuilder, Retryable};
+use backon::{FibonacciBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
 use edgli::hopr_lib::SurbBalancerConfig;
 use tokio::sync::{mpsc, oneshot};
@@ -18,9 +18,9 @@ use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
-use crate::ping;
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
+use crate::{ping, remote_data};
 
 use super::{Error, Event, Progress, Setback};
 
@@ -302,7 +302,7 @@ async fn open_bridge_session(
         )
         .await
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {
         tracing::warn!(error = ?err, "error opening bridge session - will retry after {:?}", dur);
         let tx = results_sender.clone();
@@ -326,7 +326,7 @@ async fn register(
         let client = reqwest::Client::new();
         gvpn_client::register(&client, &input).await
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &gvpn_client::Error, dur: Duration| {
         tracing::warn!(error = ?err, "register wg pubkey failed - will retry after {:?}", dur);
         let tx = results_sender.clone();
@@ -381,7 +381,7 @@ async fn open_ping_session(
         )
         .await
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {
         tracing::warn!(error = ?err, "error opening ping session - will retry after {:?}", dur);
         let tx = results_sender.clone();

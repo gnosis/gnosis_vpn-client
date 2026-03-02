@@ -20,21 +20,31 @@ const CACHE_DIRECTORY: &str = ".cache";
 pub enum Error {
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
+    #[error("Cannot create cache directory: {0}")]
+    CacheDirCreation(String),
+    #[error("Cannot create config directory: {0}")]
+    ConfigDirCreation(String),
 }
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
+// tracing is not yet enabled so we cannot use it
 pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
-    tracing::debug!("Using gnosisvpn home directory: {}", home.display());
     // home folder will be created by installer
     let cache_path = home.join(CACHE_DIRECTORY);
     let config_path = home.join(CONFIG_DIRECTORY);
     ensure_dir_with_owner(&cache_path, uid, gid).map_err(|error| {
-        tracing::error!(?error, path = %cache_path.display(), uid, gid, "Failed to create cache directory");
-        error
+        let msg = format!(
+            "Failed to create cache directory at {cache}: {error:?}",
+            cache = cache_path.display()
+        );
+        Error::CacheDirCreation(msg)
     })?;
     ensure_dir_with_owner(&config_path, uid, gid).map_err(|error| {
-        tracing::error!(?error, path = %config_path.display(), uid, gid, "Failed to create config directory");
-        error
+        let msg = format!(
+            "Failed to create config directory at {config}: {error:?}",
+            config = config_path.display()
+        );
+        Error::ConfigDirCreation(msg)
     })?;
     Ok(home)
 }

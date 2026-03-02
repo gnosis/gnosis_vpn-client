@@ -168,8 +168,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_VERSION"),
         worker_params.state_home(),
     );
-    let worker_user = worker::Worker::from_system(input).await.map_err(|err| {
-        tracing::error!(error = ?err, "error determining worker user");
+    let worker_user = worker::Worker::from_system(input).await.map_err(|error| {
+        eprintln!("error determining worker user: {:?}", error);
         exitcode::NOUSER
     })?;
 
