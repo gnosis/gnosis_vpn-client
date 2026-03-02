@@ -23,7 +23,7 @@ pub enum Error {
 }
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
-// tracing is not yet enabled so we avoid it
+// tracing is not yet enabled so we rely on string errors
 pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, String> {
     // home folder will be created by installer
     let cache_path = home.join(CACHE_DIRECTORY);
