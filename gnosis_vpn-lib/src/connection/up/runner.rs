@@ -491,6 +491,14 @@ async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr
     Ok(peer_ips)
 }
 
+async fn resolve_blokli_ips(worker_params: &WorkerParams) -> Result<Vec<Ipv4Addr>, Error> {
+    let provided_url = worker_params.blokli_url();
+    let url = hopr::blokli_url(provided_url);
+
+    let res = edgli::blokli::resolve_blokli(worker_params.blokli_url()).await;
+    res.map_err(|e| Error::Runtime(format!("Failed to resolve Blokli IPs: {}", e)))
+}
+
 async fn request_ping(
     options: &ping::Options,
     max_backoff: usize,
