@@ -96,11 +96,6 @@ impl Worker {
             .find(|g| g.gid() == gid)
             .ok_or(Error::PrimaryGroupMissing)?;
         let group_name = group.name().to_string_lossy().to_string();
-
-        println!(
-            "Verifying worker binary {} executable permissions for {:?}",
-            binary, worker_user
-        );
         let version_output = Command::new(binary)
             .arg("--version")
             .uid(uid)
