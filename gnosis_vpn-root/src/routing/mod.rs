@@ -9,13 +9,8 @@
 //! ## Static Routing (all platforms)
 //! Uses route operations via platform-native APIs.
 //! Simpler but may have reduced reliability during network changes.
-//!
-//! **Note:** There is no automatic fallback from dynamic to static routing.
-//! If dynamic routing fails (e.g., missing nftables), the connection attempt fails.
-//! Use `--force-static-routing` CLI flag to explicitly use static routing.
 
 use async_trait::async_trait;
-use cfg_if::cfg_if;
 use thiserror::Error;
 
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
@@ -25,7 +20,7 @@ mod bypass;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
-cfg_if! {
+cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
         pub(crate) mod netlink_ops;
         pub(crate) mod nftables_ops;
@@ -46,67 +41,10 @@ pub(crate) use bypass::{BypassRouteManager, WanInterface};
 // Shared Utilities
 // ============================================================================
 
-/// Parses key-value pairs from command output to extract device and gateway.
-///
-/// This utility works for both Linux (`ip route show default`) and macOS
-/// (`route -n get 0.0.0.0`) command outputs by parameterizing the key names.
-///
-/// # Arguments
-/// * `output` - The command output to parse
-/// * `device_key` - Key for device name (e.g., "dev" on Linux, "interface:" on macOS)
-/// * `gateway_key` - Key for gateway IP (e.g., "via" on Linux, "gateway:" on macOS)
-/// * `filter_suffix` - Optional suffix to filter out (e.g., Some(":") for macOS
-///   to handle "gateway: index: 28" cases)
-///
-/// # Returns
-/// A tuple of (device_name, Option<gateway_ip>)
-// Used on macOS (route_ops_macos.rs) and in tests
-#[allow(dead_code)]
-pub(crate) fn parse_key_value_output(
-    output: &str,
-    device_key: &str,
-    gateway_key: &str,
-    filter_suffix: Option<&str>,
-) -> Result<(String, Option<String>), Error> {
-    let parts: Vec<&str> = output.split_whitespace().collect();
-
-    let device_index = parts.iter().position(|&x| x == device_key);
-    let gateway_index = parts.iter().position(|&x| x == gateway_key);
-
-    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
-        Some(dev) => dev.to_string(),
-        None => {
-            tracing::error!(%output, "Unable to determine default interface");
-            return Err(Error::NoInterface);
-        }
-    };
-
-    let gateway = gateway_index
-        .and_then(|idx| parts.get(idx + 1))
-        .filter(|gw| {
-            // Filter out values matching the suffix (e.g., "index:" on macOS)
-            filter_suffix.is_none_or(|suffix| !gw.ends_with(suffix))
-        })
-        .map(|gw| gw.to_string());
-
-    Ok((device, gateway))
-}
-
-cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        pub use linux::{
-            FwmarkInfra, WanInfo, cleanup_stale_fwmark_rules, dynamic_router,
-            setup_fwmark_infrastructure, static_fallback_router as static_router,
-            teardown_fwmark_infrastructure,
-        };
-        pub type RouterHandle = rtnetlink::Handle;
-    } else if #[cfg(target_os = "macos")] {
-        pub use macos::{WanInfo, dynamic_router, static_router};
-        pub type RouterHandle = ();
-    } else {
-        pub type RouterHandle = ();
-    }
-}
+#[cfg(target_os = "linux")]
+pub use linux::{cleanup_stale_fwmark_rules, dynamic_router, static_fallback_router as static_router};
+#[cfg(target_os = "macos")]
+pub use macos::{dynamic_router, static_router};
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)

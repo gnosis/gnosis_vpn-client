@@ -59,14 +59,19 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 ///
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
-pub fn dynamic_router(
+pub async fn dynamic_router(
     state_home: Arc<PathBuf>,
+    worker: worker::Worker,
     wg_data: event::WireGuardData,
-    wan_info: WanInfo,
-    handle: rtnetlink::Handle,
 ) -> Result<impl Routing, Error> {
+    let infra = setup_fwmark_infrastructure(&worker).await.map_err(|error| {
+        tracing::error!(?error, "Unable to setup fwmark infrastructure for dynamic routing");
+        error
+    })?;
+
+    let handle = infra.netlink.handle();
     let netlink = RealNetlinkOps::new(handle.clone());
-    let route_ops = NetlinkRouteOps::new(handle);
+    let route_ops = NetlinkRouteOps::new(handle.clone());
     let wg = RealWgOps;
     Ok(Router {
         state_home,
@@ -74,8 +79,9 @@ pub fn dynamic_router(
         netlink,
         route_ops,
         wg,
-        wan_info,
+        infra,
         network_device_info: None,
+        added_routes: Vec::new(),
     })
 }
 
@@ -116,14 +122,7 @@ pub fn static_fallback_router(
 pub async fn cleanup_stale_fwmark_rules() {
     tracing::debug!("checking for stale fwmark infrastructure from previous crash");
 
-    let nft = match RealNfTablesOps::new() {
-        Ok(nft) => nft,
-        Err(e) => {
-            tracing::debug!("cannot create firewall ops for stale cleanup: {e}");
-            return;
-        }
-    };
-
+    let nft = RealNfTablesOps {};
     let (conn, handle, _) = match rtnetlink::new_connection() {
         Ok(c) => c,
         Err(e) => {
@@ -149,32 +148,12 @@ pub async fn cleanup_stale_fwmark_rules() {
 /// 3. Setting up firewall rules to mark HOPR traffic with FW_MARK
 /// 4. Creating TABLE_ID routing table with WAN as default gateway
 /// 5. Adding fwmark rule: marked traffic uses TABLE_ID (bypasses VPN)
-pub async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkInfra, Error> {
+async fn setup_fwmark_infrastructure(worker: &worker::Worker) -> Result<FwmarkInfra, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
     let netlink = RealNetlinkOps::new(handle);
-    let nft = RealNfTablesOps::new()?;
+    let nft = RealNfTablesOps {};
     setup_fwmark_infrastructure_with(worker, netlink, &nft).await
-}
-
-/// Tears down the persistent fwmark infrastructure at daemon shutdown.
-///
-/// This removes the firewall rules and routing table entries that were
-/// set up by `setup_fwmark_infrastructure`.
-///
-/// The teardown includes:
-/// 1. Deleting the fwmark routing rule
-/// 2. Deleting the TABLE_ID default route
-/// 3. Removing firewall mangle and NAT rules
-pub async fn teardown_fwmark_infrastructure(infra: FwmarkInfra) {
-    let nft = match RealNfTablesOps::new() {
-        Ok(nft) => nft,
-        Err(e) => {
-            tracing::warn!("cannot create firewall ops for teardown, cleanup will happen at next startup: {e}");
-            return;
-        }
-    };
-    teardown_fwmark_infrastructure_with(infra, &nft).await;
 }
 
 // ============================================================================
@@ -273,7 +252,15 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesO
     })
 }
 
-/// Testable version of `teardown_fwmark_infrastructure`.
+/// Tears down the persistent fwmark infrastructure at daemon shutdown.
+///
+/// This removes the firewall rules and routing table entries that were
+/// set up by `setup_fwmark_infrastructure`.
+///
+/// The teardown includes:
+/// 1. Deleting the fwmark routing rule
+/// 2. Deleting the TABLE_ID default route
+/// 3. Removing firewall mangle and NAT rules
 pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesOps>(
     mut infra: FwmarkInfrastructure<N>,
     nft: &F,
@@ -368,6 +355,7 @@ pub struct WanInfo {
 /// **Important**: Must be explicitly torn down via `teardown_fwmark_infrastructure()`
 /// to clean up firewall rules and routing table entries. Dropping without teardown
 /// will log a warning and may leave the system in an inconsistent state.
+#[derive(Clone, Debug)]
 pub struct FwmarkInfrastructure<N: NetlinkOps> {
     pub netlink: N,
     pub wan_info: WanInfo,
@@ -420,9 +408,9 @@ pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
     netlink: N,
     route_ops: R,
     wg: W,
-    /// WAN interface info, obtained from FwmarkInfrastructure
-    wan_info: WanInfo,
+    infra: FwmarkInfrastructure<N>,
     network_device_info: Option<NetworkDeviceInfo>,
+    added_routes: Vec<RouteSpec>,
 }
 
 /// Tracks whether the VPN subnet route has been added to the routing table.
@@ -456,9 +444,6 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
 ///
 /// This mark is applied by firewall rules to packets owned by the worker process (UID-based),
 /// allowing policy-based routing to send them via WAN instead of VPN tunnel.
-///
-/// Value 0xFEED_CAFE is arbitrary but memorable and unlikely to conflict with
-/// other fwmark users (Docker uses 0x1, etc.).
 const FW_MARK: u32 = nftables_ops::FW_MARK;
 
 /// Routing table ID for fwmark-based bypass traffic.
@@ -601,7 +586,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         }
 
         // Use pre-existing WAN info from FwmarkInfrastructure
-        let wan_info = &self.wan_info;
+        let wan_info = &self.infra.wan_info;
         tracing::debug!(?wan_info, "using WAN interface from fwmark infrastructure");
 
         // Phase 1: Add RFC1918 bypass routes BEFORE wg-quick up
@@ -617,17 +602,22 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 if_index: wan_info.if_index,
                 table_id: None,
             };
-            if let Err(e) = self.netlink.route_add(&route).await {
-                tracing::warn!(%e, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
-                // Don't fail the whole setup for a single RFC1918 route, as these are best-effort
-            } else {
-                tracing::debug!(
-                    "ip route add {}/{} via {} dev {}",
-                    net,
-                    prefix,
-                    wan_info.gateway,
-                    wan_info.if_index
-                );
+            let res = self.netlink.route_add(&route).await;
+            match res {
+                Ok(_) => {
+                    tracing::debug!(
+                        "ip route add {}/{} via {} dev {}",
+                        net,
+                        prefix,
+                        wan_info.gateway,
+                        wan_info.if_index
+                    );
+                    self.added_routes.push(route);
+                }
+                Err(error) => {
+                    tracing::warn!(?error, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
+                    // Don't fail the whole setup for a single RFC1918 route, as these are best-effort
+                }
             }
         }
 
@@ -763,10 +753,26 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             vpn_if_index,
             vpn_cidr,
             wan_gw,
-        } = self
-            .network_device_info
-            .take()
-            .ok_or(Error::General("invalid state: not set up".into()))?;
+        } = match self.network_device_info.take() {
+            Some(info) => info,
+            None => {
+                if self.added_routes.is_empty() {
+                    let nft = RealNfTablesOps {};
+                    teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
+                    return Err(Error::General("invalid state: not set up".into()));
+                }
+                tracing::warn!("Found added routes but no network device info - setup seems to have failed partway");
+                for route in &self.added_routes {
+                    if let Err(error) = self.netlink.route_del(route).await {
+                        tracing::error!(?error, route = %format!("{}/{}", route.destination, route.prefix_len), "failed to delete RFC1918 bypass route during partial teardown");
+                    }
+                }
+                self.added_routes.clear();
+                let nft = RealNfTablesOps {};
+                teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
+                return Ok(());
+            }
+        };
 
         // Step 1: Set the default route back to the WAN interface
         // Use replace() to handle case where VPN route still exists
@@ -821,28 +827,26 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         .await;
 
         // Step 5: Delete RFC1918 bypass routes that were added during setup
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let destination: Ipv4Addr = net.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
-            let route = RouteSpec {
-                destination,
-                prefix_len: *prefix,
-                gateway: Some(wan_gw),
-                if_index: wan_if_index,
-                table_id: None,
-            };
+        for route in &self.added_routes {
             teardown_op(
-                &format!("delete RFC1918 bypass route {}/{}", net, prefix),
-                &format!("ip route del {}/{} via {wan_gw} dev {wan_if_index}", net, prefix),
-                || self.netlink.route_del(&route),
+                &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
+                &format!(
+                    "ip route del {}/{} via {wan_gw} dev {wan_if_index}",
+                    route.destination, route.prefix_len
+                ),
+                || self.netlink.route_del(route),
             )
             .await;
         }
+        self.added_routes.clear();
 
         // Step 6: Flush routing cache
         self.route_ops.flush_routing_cache().await?;
         tracing::debug!("ip route flush cache");
 
         tracing::info!("VPN routing teardown complete (fwmark infrastructure remains active)");
+        let nft = RealNfTablesOps {};
+        teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
         Ok(())
     }
 }
@@ -956,12 +960,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     }
 }
 
-/// Parses the output of `ip route show default` to extract interface and gateway.
-#[cfg(test)]
-fn parse_interface(output: &str) -> Result<(String, Option<String>), Error> {
-    super::parse_key_value_output(output, "dev", "via", None)
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -978,17 +976,6 @@ mod tests {
     // ====================================================================
     // Parse tests (preserved from original)
     // ====================================================================
-
-    #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
-        let output = "default via 192.168.101.1 dev wlp2s0 proto dhcp src 192.168.101.202 metric 600 ";
-
-        let (device, gateway) = parse_interface(output)?;
-
-        assert_eq!(device, "wlp2s0");
-        assert_eq!(gateway, Some("192.168.101.1".to_string()));
-        Ok(())
-    }
 
     #[test]
     fn test_parse_cidr() -> anyhow::Result<()> {
@@ -1046,15 +1033,6 @@ mod tests {
             group_name: "test".into(),
             binary: "/bin/test".into(),
             home: PathBuf::from("/tmp/test"),
-        }
-    }
-
-    fn wan_info() -> WanInfo {
-        WanInfo {
-            if_index: 2,
-            if_name: "eth0".into(),
-            gateway: Ipv4Addr::new(192, 168, 1, 1),
-            ip_addr: Ipv4Addr::new(192, 168, 1, 100),
         }
     }
 
@@ -1356,19 +1334,26 @@ mod tests {
     // Router lifecycle tests
     // ====================================================================
 
-    fn make_router(
+    async fn make_router(
         netlink: MockNetlinkOps,
         route_ops: MockRouteOps,
         wg: MockWgOps,
     ) -> Router<MockNetlinkOps, MockRouteOps, MockWgOps> {
+        let nft = mock_nft();
+        let worker = mock_worker();
+
+        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
+            .await
+            .unwrap();
         Router {
             state_home: Arc::new(PathBuf::from("/tmp/test")),
             wg_data: test_wg_data(),
             netlink,
             route_ops,
             wg,
-            wan_info: wan_info(),
+            infra,
             network_device_info: None,
+            added_routes: Vec::new(),
         }
     }
 
@@ -1429,7 +1414,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
         router.setup().await.unwrap();
 
@@ -1478,7 +1463,7 @@ mod tests {
         }
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops, wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops, wg.clone()).await;
 
         let result = router.setup().await;
         assert!(result.is_err());
@@ -1493,7 +1478,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink, route_ops, wg);
+        let mut router = make_router(netlink, route_ops, wg).await;
 
         router.setup().await.unwrap();
         let result = router.setup().await;
@@ -1506,7 +1491,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
         router.setup().await.unwrap();
 
@@ -1768,7 +1753,7 @@ mod tests {
         }
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops, wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops, wg.clone()).await;
 
         let result = router.setup().await;
         assert!(result.is_err());
@@ -1792,7 +1777,7 @@ mod tests {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone());
+        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
         router.setup().await.unwrap();
 

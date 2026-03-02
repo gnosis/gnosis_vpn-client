@@ -1,7 +1,7 @@
 //! The runner module for `core::connection::up` struct.
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use backon::{ExponentialBuilder, FibonacciBuilder, Retryable};
+use backon::{FibonacciBuilder, Retryable};
 use edgli::hopr_lib::SessionClientConfig;
 use edgli::hopr_lib::SurbBalancerConfig;
 use tokio::sync::{mpsc, oneshot};
@@ -17,10 +17,10 @@ use crate::core::runner::{self, Results};
 use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError};
-use crate::ping;
+use crate::hopr::{self, Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
+use crate::{ping, remote_data};
 
 use super::{Error, Event, Progress, Setback};
 
@@ -29,7 +29,6 @@ pub struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
-    #[cfg_attr(not(target_os = "linux"), allow(unused))]
     worker_params: WorkerParams,
 }
 
@@ -102,24 +101,36 @@ impl Runner {
         // gather peers before we start any routing attempt to ensure static routing might still work
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        // Dynamic routing is only available on Linux; other platforms always use static routing
+        let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
+        peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
+
+        // dynamic routing is only available on Linux
         cfg_if::cfg_if! {
             if #[cfg(target_os = "linux")] {
-                let use_static = self.worker_params.force_static_routing();
-            } else {
-                let use_static = true;
+                let force_static = false;
+            } else if #[cfg(target_os = "macos")] {
+                let force_static = true;
             }
         }
 
-        if use_static {
+        if force_static || self.worker_params.force_static_routing() {
             tracing::info!("using static routing");
             self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                 .await
         } else {
-            // Dynamic routing (Linux only) - no automatic fallback to static
-            request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await?;
-            self.run_check_dynamic_routing(&session, &results_sender).await
+            let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
+            match res {
+                Ok(()) => {
+                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
+                        .await
+                }
+                Err(err) => {
+                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
+                    self.run_fallback_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+                        .await
+                }
+            }
         }
     }
 
@@ -127,7 +138,7 @@ impl Runner {
         &self,
         wg: &WireGuard,
         registration: &Registration,
-        old_session: &SessionClientMetadata,
+        session: &SessionClientMetadata,
         peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
@@ -136,18 +147,38 @@ impl Runner {
             .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
             .await;
 
-        // teardown any existing routing
+        // setup static routing
+        request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
+
+        // and verify it works
+        self.run_check_static_routing(session, results_sender).await
+    }
+
+    async fn run_fallback_static_wg_tunnel(
+        &self,
+        wg: &WireGuard,
+        registration: &Registration,
+        old_session: &SessionClientMetadata,
+        peer_ips: Vec<Ipv4Addr>,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> Result<SessionClientMetadata, Error> {
+        // 6b. dismantle dynamic routing and request static wg tunnel from root
+        let _ = results_sender
+            .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
+            .await;
+
+        // teardown any existing dynamic routing
         let _ = results_sender
             .send(Results::ConnectionRequestToRoot(RunnerToRoot::TearDownWg))
             .await;
 
-        // static routing needs to first close the existing session
+        // static routing needs to first close the session already used for dynamic routing
         if let Err(err) = self
             .hopr
             .close_session(old_session.bound_host, old_session.protocol)
             .await
         {
-            tracing::warn!(error = ?err, "failed to close ping session - attempting to continue with static routing setup");
+            tracing::warn!(error = ?err, "failed to close ping session used for dynamic routing - attempting to continue with static routing setup");
         }
 
         // open a new ping session
@@ -171,15 +202,28 @@ impl Runner {
 
     async fn run_check_dynamic_routing(
         &self,
+        wg: &WireGuard,
+        registration: &Registration,
         session: &SessionClientMetadata,
+        peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
         // 7a. request ping from root to check if dynamic routing works
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        // Multiple retries since dynamic routing should work and ping failures may be transient
-        let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
-        self.run_after_verified_working(round_trip_time, session, results_sender)
-            .await
+        // only one retry to avoid long fallback time in case dynamic routing doesn't work
+        let res = request_ping(&self.options.ping_options, 1, results_sender).await;
+        match res {
+            Ok(round_trip_time) => {
+                self.run_after_verified_working(round_trip_time, session, results_sender)
+                    .await
+            }
+
+            Err(err) => {
+                tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
+                self.run_fallback_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
+                    .await
+            }
+        }
     }
 
     async fn run_check_static_routing(
@@ -260,7 +304,7 @@ async fn open_bridge_session(
         )
         .await
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {
         tracing::warn!(error = ?err, "error opening bridge session - will retry after {:?}", dur);
         let tx = results_sender.clone();
@@ -284,7 +328,7 @@ async fn register(
         let client = reqwest::Client::new();
         gvpn_client::register(&client, &input).await
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &gvpn_client::Error, dur: Duration| {
         tracing::warn!(error = ?err, "register wg pubkey failed - will retry after {:?}", dur);
         let tx = results_sender.clone();
@@ -339,7 +383,7 @@ async fn open_ping_session(
         )
         .await
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {
         tracing::warn!(error = ?err, "error opening ping session - will retry after {:?}", dur);
         let tx = results_sender.clone();

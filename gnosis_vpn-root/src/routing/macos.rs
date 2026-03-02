@@ -22,9 +22,8 @@
 
 use async_trait::async_trait;
 
-use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -41,15 +40,11 @@ fn vpn_subnet_route() -> String {
     format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1)
 }
 
-/// WAN interface information stub for macOS (never used since dynamic routing is not available).
-#[derive(Debug, Clone)]
-pub struct WanInfo;
-
 /// Dynamic routing not available on macOS.
-pub fn dynamic_router(
+pub async fn dynamic_router(
     _state_home: Arc<PathBuf>,
+    _worker: worker::Worker,
     _wg_data: event::WireGuardData,
-    _wan_info: WanInfo,
 ) -> Result<DynamicRouter, Error> {
     Err(Error::NotAvailable)
 }
@@ -218,7 +213,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     }
 }
 
-/// Dynamic routing not available on macOS.
 #[async_trait]
 impl Routing for DynamicRouter {
     async fn setup(&mut self) -> Result<(), Error> {
@@ -492,44 +486,5 @@ mod tests {
 
         // VPN routes tracker should be empty
         assert!(router.vpn_routes_added.is_empty());
-    }
-
-    #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
-        let output = r#"
-           route to: default
-        destination: default
-               mask: default
-            gateway: 192.168.178.1
-          interface: en1
-              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-         recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
-               0         0         0         0         0         0      1500         0
-        "#;
-
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "en1");
-        assert_eq!(gateway, Some("192.168.178.1".to_string()));
-        Ok(())
-    }
-
-    #[test]
-    fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
-        // When VPN is active, gateway may show as "index: N" instead of an IP
-        let output = r#"
-           route to: default
-        destination: default
-               mask: default
-            gateway: index: 28
-          interface: utun8
-              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-        "#;
-
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "utun8");
-        assert_eq!(gateway, None); // Should be None, not "index:"
-        Ok(())
     }
 }

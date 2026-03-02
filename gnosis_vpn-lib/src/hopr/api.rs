@@ -33,8 +33,6 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum ChannelError {
-    #[error("failed to fund channel: {0}")]
-    Fund(HoprError),
     #[error("channel is pending to close")]
     PendingToClose,
     #[error("failed to open channel: {0}")]
@@ -78,37 +76,23 @@ impl Hopr {
     }
 
     // --- channel management ---
-    /// Ensure a channel to the specified target is open and funded with the specified amount.
+    /// Ensure a channel to the specified target is open with the specified amount.
     ///
     /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
     /// 2. AutoFunding making sure that once a channel is open, it will stay funded
     #[instrument(skip(self), level = "debug", ret, err)]
-    pub async fn ensure_channel_open_and_funded(
+    pub async fn ensure_channel_open(
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
-        threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
     ) -> Result<(), ChannelError> {
-        tracing::debug!("ensure hopr channel funding");
+        tracing::debug!("ensure hopr channel open");
         let channels_from_me = self.edgli.channels_from(&self.edgli.me_onchain()).await?;
 
         if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
             match channel.status {
-                edgli::hopr_lib::ChannelStatus::Open => {
-                    // mirror AutoFunding strategy behaviour on startup (fund if less than or equal to threshold)
-                    if channel.balance.le(&threshold) {
-                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
-                        self.edgli
-                            .fund_channel(channel.get_id(), amount)
-                            .await
-                            .map(|_| ())
-                            .map_err(HoprError::HoprLib)
-                            .map_err(ChannelError::Fund)
-                    } else {
-                        Ok(())
-                    }
-                }
+                edgli::hopr_lib::ChannelStatus::Open => Ok(()),
                 edgli::hopr_lib::ChannelStatus::PendingToClose(_) => {
                     tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is pending to close, cannot fund or open a new one");
                     Err(ChannelError::PendingToClose)
