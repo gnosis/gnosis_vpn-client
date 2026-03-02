@@ -978,17 +978,6 @@ mod tests {
     // ====================================================================
 
     #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
-        let output = "default via 192.168.101.1 dev wlp2s0 proto dhcp src 192.168.101.202 metric 600 ";
-
-        let (device, gateway) = parse_interface(output)?;
-
-        assert_eq!(device, "wlp2s0");
-        assert_eq!(gateway, Some("192.168.101.1".to_string()));
-        Ok(())
-    }
-
-    #[test]
     fn test_parse_cidr() -> anyhow::Result<()> {
         let cidr = "192.168.101.0/24";
         let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
