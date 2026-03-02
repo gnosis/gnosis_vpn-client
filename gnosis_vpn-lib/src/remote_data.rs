@@ -45,8 +45,8 @@ pub fn backoff_expo_short_delay() -> ExponentialBuilder {
 
 /// Resolves the IPv4 addresses for the host and port specified in the provided URL.
 pub async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
-    let host = url.host_str().ok_or_else(|| Error::NoHost)?;
-    let port = url.port_or_known_default().ok_or_else(|| Error::UnknownPort)?;
+    let host = url.host_str().ok_or(Error::NoHost)?;
+    let port = url.port_or_known_default().ok_or(Error::UnknownPort)?;
     let addr_str = format!("{}:{}", host, port);
     let mut ips = Vec::new();
     for addr in net::lookup_host(addr_str).await? {

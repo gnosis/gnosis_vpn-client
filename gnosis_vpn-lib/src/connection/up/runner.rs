@@ -148,10 +148,10 @@ impl Runner {
             .await;
 
         // setup static routing
-        request_static_wg_tunnel(wg, registration, &session, peer_ips, results_sender).await?;
+        request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
 
         // and verify it works
-        self.run_check_static_routing(&session, results_sender).await
+        self.run_check_static_routing(session, results_sender).await
     }
 
     async fn run_fallback_static_wg_tunnel(
