@@ -1,12 +1,12 @@
 pub mod api;
 pub mod errors;
 pub mod types;
-use edgli::DEFAULT_BLOKLI_URL;
 pub use edgli::EdgliInitState;
 pub use edgli::hopr_lib;
 pub use edgli::hopr_lib::state::HoprState;
 pub use {api::Hopr, errors::HoprError};
 
+pub mod blokli;
 pub mod blokli_config;
 pub mod config;
 pub mod identity;
@@ -21,6 +21,6 @@ pub fn telemetry() -> Result<String, HoprError> {
     edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
 }
 
-pub fn blokli_url(blokli_url: Option<url::Url>) -> url::Url {
-    blokli_url.unwrap_or(DEFAULT_BLOKLI_URL.clone())
+pub fn blokli_url(provided_blokli_url: Option<url::Url>) -> url::Url {
+    provided_blokli_url.unwrap_or(edgli::DEFAULT_BLOKLI_URL.clone())
 }
