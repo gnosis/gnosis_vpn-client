@@ -750,16 +750,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 )
                 .await;
 
-                // Step 3: Run wg-quick down while bypass infrastructure is still active
-                // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
-                match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
-                    Ok(_) => tracing::debug!("wg-quick down"),
-                    Err(error) => {
-                        tracing::warn!(?error, "wg-quick down failed during teardown");
-                    }
-                }
-
-                // Step 4: Delete the TABLE_ID routing table VPN route
+                // Step 3: Delete the TABLE_ID routing table VPN route
                 // (fwmark rule and TABLE_ID default route stay active for the daemon's lifetime)
                 let vpn_table_route = RouteSpec {
                     destination: vpn_cidr.first_address(),
@@ -775,7 +766,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 )
                 .await;
 
-                // Step 5: Delete RFC1918 bypass routes that were added during setup
+                // Step 4: Delete RFC1918 bypass routes that were added during setup
                 for route in self.added_routes.drain(..) {
                     teardown_op(
                         &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
@@ -786,6 +777,15 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                         || self.netlink.route_del(&route),
                     )
                     .await;
+                }
+
+                // Step 5: Run wg-quick down while bypass infrastructure is still active
+                // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
+                match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+                    Ok(_) => tracing::debug!("wg-quick down"),
+                    Err(error) => {
+                        tracing::warn!(?error, "wg-quick down failed during teardown");
+                    }
                 }
             }
             None => {
