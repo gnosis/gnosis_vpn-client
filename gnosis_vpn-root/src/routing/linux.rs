@@ -70,13 +70,11 @@ pub async fn dynamic_router(
 
     let handle = infra.netlink.handle();
     let netlink = RealNetlinkOps::new(handle.clone());
-    let route_ops = NetlinkRouteOps::new(handle.clone());
     let wg = RealWgOps;
     Ok(Router {
         state_home,
         wg_data,
         netlink,
-        route_ops,
         wg,
         infra,
         network_device_info: None,
@@ -103,8 +101,6 @@ pub fn static_fallback_router(
         peer_ips,
         route_ops,
         wg,
-        bypass_manager: None,
-        vpn_subnet_route: VpnSubnetRouteStatus::Absent,
     })
 }
 
@@ -401,24 +397,14 @@ impl NetworkDeviceInfo {
 /// - wg-quick up/down
 /// - VPN subnet routes
 /// - Default route through VPN
-pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
+pub struct Router<N: NetlinkOps, W: WgOps> {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     netlink: N,
-    route_ops: R,
     wg: W,
     infra: FwmarkInfrastructure<N>,
     network_device_info: Option<NetworkDeviceInfo>,
     added_routes: Vec<RouteSpec>,
-}
-
-/// Tracks whether the VPN subnet route has been added to the routing table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VpnSubnetRouteStatus {
-    /// No VPN subnet route exists in the routing table.
-    Absent,
-    /// The VPN subnet route (10.128.0.0/9) was successfully added.
-    Active,
 }
 
 /// Static fallback router using route operations via netlink.
@@ -431,8 +417,6 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
-    bypass_manager: Option<super::BypassRouteManager<R>>,
-    vpn_subnet_route: VpnSubnetRouteStatus,
 }
 
 // ============================================================================
@@ -559,7 +543,7 @@ where
 
 /// Linux-specific implementation of [`Routing`] for split-tunnel routing.
 #[async_trait]
-impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing for Router<N, R, W> {
+impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     /// Install VPN-specific routing (assumes fwmark infrastructure is already set up).
     ///
     /// This method requires that fwmark infrastructure has been established via
@@ -947,42 +931,63 @@ mod tests {
     #[test]
     fn test_parse_cidr() -> anyhow::Result<()> {
         let cidr = "192.168.101.0/24";
-        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, std::net::Ipv4Addr::from_str)?;
 
-        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 0));
+        assert_eq!(ip.first_address(), std::net::Ipv4Addr::new(192, 168, 101, 0));
         assert_eq!(ip.first_address().to_string(), "192.168.101.0");
-        assert_eq!(ip.iter().addresses().nth(1).unwrap().to_string(), "192.168.101.1");
+        assert_eq!(
+            ip.iter()
+                .addresses()
+                .nth(1)
+                .ok_or_else(|| anyhow::anyhow!("no address"))? // Fixed Warning
+                .to_string(),
+            "192.168.101.1"
+        );
         assert_eq!(ip.network_length(), 24);
         assert_eq!("192.168.101.0/24", ip.to_string());
 
         let cidr = "192.168.101.32/24";
-        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, std::net::Ipv4Addr::from_str)?;
 
-        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 0));
-        assert_eq!(ip.iter().addresses().nth(1).unwrap().to_string(), "192.168.101.1");
+        assert_eq!(ip.first_address(), std::net::Ipv4Addr::new(192, 168, 101, 0));
+        assert_eq!(
+            ip.iter()
+                .addresses()
+                .nth(1)
+                .ok_or_else(|| anyhow::anyhow!("no address"))? // Fixed Error
+                .to_string(),
+            "192.168.101.1"
+        );
         assert_eq!(ip.network_length(), 24);
         assert_eq!("192.168.101.0/24", ip.to_string());
 
         let cidr = "192.168.101.32/32";
-        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, std::net::Ipv4Addr::from_str)?;
 
-        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 32));
+        assert_eq!(ip.first_address(), std::net::Ipv4Addr::new(192, 168, 101, 32));
         assert_eq!(ip.network_length(), 32);
         assert!(ip.is_host_address());
         assert_eq!("192.168.101.32", ip.to_string());
 
         let cidr = "192.168.101.1";
-        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, std::net::Ipv4Addr::from_str)?;
 
-        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 168, 101, 1));
+        assert_eq!(ip.first_address(), std::net::Ipv4Addr::new(192, 168, 101, 1));
         assert_eq!(ip.network_length(), 32);
         assert_eq!("192.168.101.1", ip.to_string());
 
         let cidr = "192.128.101.33/9";
-        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, Ipv4Addr::from_str)?;
+        let ip = cidr::parsers::parse_cidr_ignore_hostbits::<cidr::Ipv4Cidr, _>(cidr, std::net::Ipv4Addr::from_str)?;
 
-        assert_eq!(ip.first_address(), Ipv4Addr::new(192, 128, 0, 0));
-        assert_eq!(ip.iter().addresses().nth(1).unwrap().to_string(), "192.128.0.1");
+        assert_eq!(ip.first_address(), std::net::Ipv4Addr::new(192, 128, 0, 0));
+        assert_eq!(
+            ip.iter()
+                .addresses()
+                .nth(1)
+                .ok_or_else(|| anyhow::anyhow!("no address"))? // Fixed Error
+                .to_string(),
+            "192.128.0.1"
+        );
         assert_eq!(ip.network_length(), 9);
         assert_eq!("192.128.0.0/9", ip.to_string());
 
@@ -1033,36 +1038,44 @@ mod tests {
     // ====================================================================
 
     #[test]
-    fn setup_nft_creates_rules() {
+    fn setup_nft_creates_rules() -> anyhow::Result<()> {
         let nft = mock_nft();
 
-        nft.setup_fwmark_rules(1000, "eth0", FW_MARK, Ipv4Addr::new(192, 168, 1, 100))
-            .unwrap();
+        nft.setup_fwmark_rules(1000, "eth0", FW_MARK, std::net::Ipv4Addr::new(192, 168, 1, 100))?;
 
-        let state = nft.state.lock().unwrap();
+        let state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+
         assert!(state.rules_active);
-        let params = state.setup_params.as_ref().unwrap();
+
+        let params = state
+            .setup_params
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing setup params"))?;
+
         assert_eq!(params.0, 1000);
         assert_eq!(params.1, "eth0");
         assert_eq!(params.2, FW_MARK);
-        assert_eq!(params.3, Ipv4Addr::new(192, 168, 1, 100));
+        assert_eq!(params.3, std::net::Ipv4Addr::new(192, 168, 1, 100));
+
+        Ok(())
     }
 
     #[test]
-    fn teardown_nft_removes_rules() {
+    fn teardown_nft_removes_rules() -> anyhow::Result<()> {
         let nft = mock_nft();
 
         // Setup first
-        nft.setup_fwmark_rules(1000, "eth0", FW_MARK, Ipv4Addr::new(192, 168, 1, 100))
-            .unwrap();
+        nft.setup_fwmark_rules(1000, "eth0", FW_MARK, std::net::Ipv4Addr::new(192, 168, 1, 100))?;
 
         // Teardown
-        nft.teardown_rules("eth0", FW_MARK, Ipv4Addr::new(192, 168, 1, 100))
-            .unwrap();
+        nft.teardown_rules("eth0", FW_MARK, std::net::Ipv4Addr::new(192, 168, 1, 100))?;
 
-        let state = nft.state.lock().unwrap();
+        let state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+
         assert!(!state.rules_active);
         assert!(state.setup_params.is_none());
+
+        Ok(())
     }
 
     // ====================================================================
@@ -1070,17 +1083,17 @@ mod tests {
     // ====================================================================
 
     #[tokio::test]
-    async fn setup_fwmark_creates_route_and_rule() {
+    async fn setup_fwmark_creates_route_and_rule() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan();
         let nft = mock_nft();
         let worker = mock_worker();
 
         let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
             .await
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("setup_fwmark_infrastructure failed: {e}"))?;
 
         // Verify TABLE_ID default route was added
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         let table_routes: Vec<_> = nl_state
             .routes
             .iter()
@@ -1101,18 +1114,19 @@ mod tests {
         assert_eq!(infra.wan_info.gateway, Ipv4Addr::new(192, 168, 1, 1));
 
         // Verify firewall rules were set up
-        let nft_state = nft.state.lock().unwrap();
+        let nft_state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(nft_state.rules_active);
 
         // Mark as torn down to suppress Drop warning
         drop(infra);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn setup_fwmark_rolls_back_nft_on_route_failure() {
+    async fn setup_fwmark_rolls_back_nft_on_route_failure() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan();
         {
-            let mut state = netlink.state.lock().unwrap();
+            let mut state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
             state
                 .fail_on
                 .insert("route_add".into(), "simulated route failure".into());
@@ -1124,15 +1138,16 @@ mod tests {
         assert!(result.is_err());
 
         // Firewall rules should be rolled back
-        let nft_state = nft.state.lock().unwrap();
+        let nft_state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!nft_state.rules_active);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn setup_fwmark_rolls_back_route_and_nft_on_rule_failure() {
+    async fn setup_fwmark_rolls_back_route_and_nft_on_rule_failure() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan();
         {
-            let mut state = netlink.state.lock().unwrap();
+            let mut state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
             state.fail_on.insert("rule_add".into(), "simulated rule failure".into());
         }
         let nft = mock_nft();
@@ -1142,7 +1157,7 @@ mod tests {
         assert!(result.is_err());
 
         // TABLE_ID route should be rolled back
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         let table_routes: Vec<_> = nl_state
             .routes
             .iter()
@@ -1151,24 +1166,25 @@ mod tests {
         assert!(table_routes.is_empty());
 
         // Firewall rules should be rolled back
-        let nft_state = nft.state.lock().unwrap();
+        let nft_state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!nft_state.rules_active);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn teardown_fwmark_removes_all_resources() {
+    async fn teardown_fwmark_removes_all_resources() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan();
         let nft = mock_nft();
         let worker = mock_worker();
 
         let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
             .await
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("setup_fwmark_infrastructure failed: {e}"))?;
 
         teardown_fwmark_infrastructure_with(infra, &nft).await;
 
         // Verify rule was removed
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(nl_state.rules.is_empty());
 
         // Verify TABLE_ID route was removed
@@ -1180,12 +1196,13 @@ mod tests {
         assert!(table_routes.is_empty());
 
         // Verify firewall rules were torn down
-        let nft_state = nft.state.lock().unwrap();
+        let nft_state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!nft_state.rules_active);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn cleanup_stale_removes_stale_entries() {
+    async fn cleanup_stale_removes_stale_entries() -> anyhow::Result<()> {
         let netlink = MockNetlinkOps::with_state(NetlinkState {
             routes: vec![RouteSpec {
                 destination: Ipv4Addr::UNSPECIFIED,
@@ -1210,7 +1227,7 @@ mod tests {
         cleanup_stale_fwmark_rules_with(&netlink, &nft).await;
 
         // Verify stale rule was removed
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(nl_state.rules.is_empty());
 
         // Verify stale route was removed
@@ -1222,8 +1239,9 @@ mod tests {
         assert!(table_routes.is_empty());
 
         // Verify stale firewall rules were cleaned up
-        let nft_state = nft.state.lock().unwrap();
+        let nft_state = nft.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!nft_state.rules_active);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1240,14 +1258,17 @@ mod tests {
     // ====================================================================
 
     #[tokio::test]
-    async fn get_wan_info_finds_default_route() {
+    async fn get_wan_info_finds_default_route() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan();
-        let info = get_wan_info(&netlink).await.unwrap();
+        let info = get_wan_info(&netlink)
+            .await
+            .map_err(|e| anyhow::anyhow!("get_wan_info failed: {e}"))?;
 
         assert_eq!(info.if_index, 2);
         assert_eq!(info.if_name, "eth0");
         assert_eq!(info.gateway, Ipv4Addr::new(192, 168, 1, 1));
         assert_eq!(info.ip_addr, Ipv4Addr::new(192, 168, 1, 100));
+        Ok(())
     }
 
     #[tokio::test]
@@ -1277,7 +1298,7 @@ mod tests {
             ..Default::default()
         });
 
-        let info = get_vpn_info(&netlink, "10.128.0.5/32", 9).await.unwrap();
+        let info = get_vpn_info(&netlink, "10.128.0.5/32", 9).await?;
         assert_eq!(info.if_index, 5);
         assert_eq!(info.cidr.first_address(), Ipv4Addr::new(10, 128, 0, 0));
         assert_eq!(info.cidr.network_length(), 9);
@@ -1301,27 +1322,20 @@ mod tests {
     // Router lifecycle tests
     // ====================================================================
 
-    async fn make_router(
-        netlink: MockNetlinkOps,
-        route_ops: MockRouteOps,
-        wg: MockWgOps,
-    ) -> Router<MockNetlinkOps, MockRouteOps, MockWgOps> {
+    async fn make_router(netlink: MockNetlinkOps, wg: MockWgOps) -> anyhow::Result<Router<MockNetlinkOps, MockWgOps>> {
         let nft = mock_nft();
         let worker = mock_worker();
 
-        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft)
-            .await
-            .unwrap();
-        Router {
+        let infra = setup_fwmark_infrastructure_with(&worker, netlink.clone(), &nft).await?;
+        Ok(Router {
             state_home: PathBuf::from("/tmp/test"),
             wg_data: test_wg_data(),
             netlink,
-            route_ops,
             wg,
             infra,
             network_device_info: None,
             added_routes: Vec::new(),
-        }
+        })
     }
 
     fn test_wg_data() -> event::WireGuardData {
@@ -1377,15 +1391,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_setup_creates_routes() {
+    async fn router_setup_creates_routes() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
+        let mut router = make_router(netlink.clone(), wg.clone()).await?;
 
-        router.setup().await.unwrap();
+        router.setup().await?;
 
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock()?;
 
         // VPN subnet route in TABLE_ID
         let table_vpn: Vec<_> = nl_state
@@ -1413,64 +1427,66 @@ mod tests {
         assert_eq!(defaults[0].if_index, 5); // VPN interface
 
         // WG was brought up
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(wg_state.wg_up);
 
         // Cache was flushed (at least twice - before and after default route change)
-        let route_state = route_ops.state.lock().unwrap();
+        let route_state = route_ops.state.lock()?;
         assert!(route_state.cache_flush_count >= 2);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn router_setup_rolls_back_on_vpn_route_failure() {
+    async fn router_setup_rolls_back_on_vpn_route_failure() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan_and_wg();
         {
-            let mut state = netlink.state.lock().unwrap();
+            let mut state = netlink.state.lock()?;
             state.fail_on.insert("route_add".into(), "simulated failure".into());
         }
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops, wg.clone()).await;
+        let mut router = make_router(netlink.clone(), wg.clone()).await?;
 
         let result = router.setup().await;
         assert!(result.is_err());
 
         // WG should be brought down (rollback)
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(!wg_state.wg_up);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn router_setup_rejects_double_setup() {
+    async fn router_setup_rejects_double_setup() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink, route_ops, wg).await;
+        let mut router = make_router(netlink, wg).await?;
 
-        router.setup().await.unwrap();
+        router.setup().await?;
         let result = router.setup().await;
         assert!(result.is_err());
         assert!(format!("{:?}", result.unwrap_err()).contains("already set up"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn router_teardown_restores_routes() {
+    async fn router_teardown_restores_routes() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan_and_wg();
-        let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
-        let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
+        let mut router = make_router(netlink.clone(), wg.clone()).await?;
 
-        router.setup().await.unwrap();
+        router.setup().await?;
 
         // Reset flush count to isolate teardown flushes
         {
-            let mut s = route_ops.state.lock().unwrap();
+            let mut s = route_ops.state.lock()?;
             s.cache_flush_count = 0;
         }
 
-        router.teardown(Logs::Suppress).await.unwrap();
+        router.teardown(Logs::Suppress).await?;
 
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock()?;
 
         // Default route should be back to WAN
         let defaults: Vec<_> = nl_state
@@ -1491,12 +1507,13 @@ mod tests {
         assert!(vpn_routes.is_empty());
 
         // WG should be down
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(!wg_state.wg_up);
 
         // Cache should be flushed
-        let route_state = route_ops.state.lock().unwrap();
+        let route_state = route_ops.state.lock()?;
         assert!(route_state.cache_flush_count >= 1);
+        Ok(())
     }
 
     // ====================================================================
@@ -1510,8 +1527,6 @@ mod tests {
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
             wg,
-            bypass_manager: None,
-            vpn_subnet_route: VpnSubnetRouteStatus::Absent,
         }
     }
 
@@ -1524,9 +1539,9 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await?;
 
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock()?;
 
         // 2 peer IP + 4 RFC1918 bypass + 1 VPN subnet = 7 total
         assert_eq!(state.added_routes.len(), 7);
@@ -1544,7 +1559,7 @@ mod tests {
         assert_eq!(state.added_routes[6].2, wireguard::WG_INTERFACE);
 
         // WG should be up
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(wg_state.wg_up);
     }
 
@@ -1568,7 +1583,7 @@ mod tests {
         assert!(result.is_err());
 
         // Bypass routes should be rolled back
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock()?;
         assert!(state.added_routes.is_empty());
     }
 
@@ -1581,15 +1596,15 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
-        router.teardown(Logs::Suppress).await.unwrap();
+        router.setup().await?;
+        router.teardown(Logs::Suppress).await?;
 
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock()?;
         // Bypass routes should be cleaned up
         assert!(state.added_routes.is_empty());
 
         // WG should be down
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(!wg_state.wg_up);
     }
 
@@ -1602,11 +1617,11 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await?;
 
         // Make wg_quick_down fail
         {
-            let mut s = wg.state.lock().unwrap();
+            let mut s = wg.state.lock()?;
             s.fail_on
                 .insert("wg_quick_down".into(), "simulated wg down failure".into());
         }
@@ -1616,7 +1631,7 @@ mod tests {
         assert!(result.is_err());
 
         // But bypass routes should still be cleaned up
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock()?;
         assert!(state.added_routes.is_empty());
     }
 
@@ -1629,10 +1644,10 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_fallback_router(route_ops, wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await?;
 
-        let wg_state = wg.state.lock().unwrap();
-        let config = wg_state.last_wg_config.as_ref().unwrap();
+        let wg_state = wg.state.lock()?;
+        let config = wg_state.last_wg_config.as_ref()?;
         // IPv6 blackhole PostUp for leak prevention is expected,
         // but routing-related PostUp hooks should not be present
         assert!(
@@ -1659,11 +1674,11 @@ mod tests {
         assert!(result.is_err(), "setup should fail when VPN subnet route fails");
 
         // WG should be brought back down (rollback)
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(!wg_state.wg_up, "WG should be down after rollback");
 
         // Bypass routes should be rolled back
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock()?;
         assert!(state.added_routes.is_empty(), "bypass routes should be rolled back");
     }
 
@@ -1676,11 +1691,11 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await?;
 
         // Verify VPN subnet route exists before teardown
         {
-            let state = route_ops.state.lock().unwrap();
+            let state = route_ops.state.lock()?;
             let vpn_count = state
                 .added_routes
                 .iter()
@@ -1689,10 +1704,10 @@ mod tests {
             assert_eq!(vpn_count, 1, "VPN subnet route should exist before teardown");
         }
 
-        router.teardown(Logs::Suppress).await.unwrap();
+        router.teardown(Logs::Suppress).await?;
 
         // VPN subnet route should be removed
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock()?;
         let vpn_count = state
             .added_routes
             .iter()
@@ -1712,7 +1727,7 @@ mod tests {
     async fn router_setup_rolls_back_on_default_route_failure() {
         let netlink = mock_netlink_with_wan_and_wg();
         {
-            let mut state = netlink.state.lock().unwrap();
+            let mut state = netlink.state.lock()?;
             // Allow route_add to succeed but fail route_replace (used for default route)
             state
                 .fail_on
@@ -1726,11 +1741,11 @@ mod tests {
         assert!(result.is_err());
 
         // WG should be brought down (rollback)
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(!wg_state.wg_up, "WG should be down after rollback");
 
         // VPN TABLE_ID route should be cleaned up
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock()?;
         let table_vpn: Vec<_> = nl_state
             .routes
             .iter()
@@ -1740,17 +1755,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_teardown_continues_on_partial_failure() {
+    async fn router_teardown_continues_on_partial_failure() -> anyhow::Result<()> {
         let netlink = mock_netlink_with_wan_and_wg();
         let route_ops = MockRouteOps::new();
         let wg = MockWgOps::new();
         let mut router = make_router(netlink.clone(), route_ops.clone(), wg.clone()).await;
 
-        router.setup().await.unwrap();
+        router.setup().await?;
 
         // Make route_replace fail (used to restore default route)
         {
-            let mut state = netlink.state.lock().unwrap();
+            let mut state = netlink.state.lock()?;
             state
                 .fail_on
                 .insert("route_replace".into(), "simulated restore-default failure".into());
@@ -1758,14 +1773,14 @@ mod tests {
 
         // Teardown should still succeed overall (wg-quick down succeeds)
         // even though restoring the default route fails
-        router.teardown(Logs::Suppress).await.unwrap();
+        router.teardown(Logs::Suppress).await;
 
         // WG should be down despite partial failure
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock()?;
         assert!(!wg_state.wg_up, "WG should be down after teardown");
 
         // TABLE_ID VPN route should still be cleaned up
-        let nl_state = netlink.state.lock().unwrap();
+        let nl_state = netlink.state.lock()?;
         let table_vpn: Vec<_> = nl_state
             .routes
             .iter()
@@ -1774,7 +1789,7 @@ mod tests {
         assert!(table_vpn.is_empty(), "VPN TABLE_ID route should be cleaned up");
 
         // Cache should have been flushed
-        let route_state = route_ops.state.lock().unwrap();
+        let route_state = route_ops.state.lock()?;
         assert!(route_state.cache_flush_count >= 1, "cache should be flushed");
     }
 }
