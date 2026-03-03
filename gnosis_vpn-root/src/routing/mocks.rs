@@ -318,14 +318,6 @@ impl RouteOps for MockRouteOps {
         s.added_routes.retain(|r| !(r.0 == dest && r.2 == device));
         Ok(())
     }
-
-    #[cfg(target_os = "linux")]
-    async fn flush_routing_cache(&self) -> Result<(), Error> {
-        let mut s = self.state.lock().unwrap();
-        s.check_fail("flush_routing_cache")?;
-        s.cache_flush_count += 1;
-        Ok(())
-    }
 }
 
 // ============================================================================
