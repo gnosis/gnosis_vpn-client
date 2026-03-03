@@ -28,6 +28,7 @@ use gnosis_vpn_lib::{event, wireguard, worker};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
+use super::bypass;
 use super::route_ops::RouteOps;
 use super::route_ops_macos::DarwinRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
@@ -77,7 +78,7 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
-    bypass_manager: Option<super::BypassRouteManager<R>>,
+    bypass_manager: Option<bypass::BypassRouteManager<R>>,
     /// VPN routes successfully added after wg-quick up (for rollback/teardown).
     vpn_routes_added: Vec<String>,
     /// Resolved WireGuard interface name (e.g. "utun8" on macOS, "wg0_gnosisvpn" on Linux).
@@ -112,8 +113,8 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         let (device, gateway) = self.route_ops.get_default_interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
-        let mut bypass_manager = super::BypassRouteManager::new(
-            super::WanInterface {
+        let mut bypass_manager = bypass::BypassRouteManager::new(
+            bypass::WanInterface {
                 device: device.clone(),
                 gateway: gateway.clone(),
             },

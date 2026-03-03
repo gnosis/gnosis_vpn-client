@@ -254,7 +254,6 @@ impl NfTablesOps for MockNfTablesOps {
 pub struct RouteOpsState {
     pub added_routes: Vec<(String, Option<String>, String)>, // (dest, gateway, device)
     pub default_iface: Option<(String, Option<String>)>,     // (device, gateway)
-    pub cache_flush_count: u32,
     pub fail_on: HashMap<String, String>,
     /// Destinations that should fail on route_add (for targeted failure injection).
     pub fail_on_route_dest: HashMap<String, String>,
