@@ -834,57 +834,38 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     ///      The VPN subnet route overrides the 10.0.0.0/8 bypass for VPN server traffic
     ///
     async fn setup(&mut self) -> Result<(), Error> {
-        if self.bypass_manager.is_some() {
-            return Err(Error::General("invalid state: already set up".into()));
-        }
-
-        // Phase 1: Add bypass routes BEFORE wg-quick up
+        // Phase 1: Add bypass routes to wg-quick up
         let (device, gateway) = self.route_ops.get_default_interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
+        let mut extra = vec![];
 
-        let mut bypass_manager = super::BypassRouteManager::new(
-            super::WanInterface { device, gateway },
-            self.peer_ips.clone(),
-            self.route_ops.clone(),
-        );
+        // exclude static peer IPs from tunnel
+        for ip in &self.peer_ips {
+            extra.extend(pre_up_routing(ip.to_string(), device.clone(), gateway.clone()));
+        }
+        // exclude local networks from tunnel
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            extra.extend(pre_up_routing(cidr, device.clone(), gateway.clone()));
+        }
 
-        // Add peer IP and RFC1918 bypass routes (auto-rollback on failure)
-        bypass_manager.setup_peer_routes().await?;
-        bypass_manager.setup_rfc1918_routes().await?;
+        // restore on down
+        for ip in &self.peer_ips {
+            extra.push(post_down_routing(ip.to_string(), device.clone(), gateway.clone()));
+        }
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            extra.push(post_down_routing(cidr, device.clone(), gateway.clone()));
+        }
 
-        // Phase 2: wg-quick up with Table = off only (no PostUp hooks)
-        let extra = vec!["Table = off".to_string()];
+        // Phase 2: wg-quick up
         let wg_quick_content =
             self.wg_data
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await {
-            tracing::warn!("wg-quick up failed, rolling back bypass routes");
-            bypass_manager.rollback().await;
-            return Err(e);
-        }
+        self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
         tracing::debug!("wg-quick up");
-
-        // Phase 3: Add VPN subnet route programmatically
-        let vpn_subnet = format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1);
-        if let Err(e) = self
-            .route_ops
-            .route_add(&vpn_subnet, None, wireguard::WG_INTERFACE)
-            .await
-        {
-            tracing::warn!(%e, "VPN subnet route failed, rolling back");
-            if let Err(wg_err) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
-                tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
-            }
-            bypass_manager.rollback().await;
-            return Err(e);
-        }
-        self.vpn_subnet_route = VpnSubnetRouteStatus::Active;
-        tracing::debug!(subnet = %vpn_subnet, "VPN subnet route added");
-
-        self.bypass_manager = Some(bypass_manager);
-        tracing::info!("routing is ready (fallback)");
         Ok(())
     }
 
@@ -896,28 +877,64 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     /// 3. Remove bypass routes
     ///
     async fn teardown(&mut self, logs: Logs) {
-        // Remove VPN subnet route (best-effort)
-        if self.vpn_subnet_route == VpnSubnetRouteStatus::Active {
-            let vpn_subnet = format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1);
-            if let Err(e) = self.route_ops.route_del(&vpn_subnet, wireguard::WG_INTERFACE).await {
-                tracing::warn!(%e, "failed to remove VPN subnet route during teardown");
-            }
-            self.vpn_subnet_route = VpnSubnetRouteStatus::Absent;
-        }
-
         // wg-quick down
-        let wg_result = self.wg.wg_quick_down(self.state_home.clone(), logs).await;
-        if let Err(ref e) = wg_result {
-            tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
-        } else {
-            tracing::debug!("wg-quick down");
+        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+            Ok(_) => tracing::debug!("wg-quick down"),
+            Err(error) => {
+                tracing::error!(?error, "wg-quick down failed during teardown");
+            }
         }
+    }
+}
 
-        // Remove bypass routes (always, even if wg-quick down failed)
-        if let Some(ref mut bypass_manager) = self.bypass_manager {
-            bypass_manager.teardown().await;
-        }
-        self.bypass_manager = None;
+fn pre_up_routing(route_addr: String, device: String, gateway: Option<String>) -> Vec<String> {
+    match gateway {
+        Some(gw) => vec![
+            // make routing idempotent by deleting routes before adding them ignoring errors
+            format!(
+                "PreUp = ip route del {route_addr} via {gateway} dev {device} || true",
+                route_addr = route_addr,
+                gateway = gw,
+                device = device
+            ),
+            format!(
+                "PreUp = ip route add {route_addr} via {gateway} dev {device}",
+                route_addr = route_addr,
+                gateway = gw,
+                device = device
+            ),
+        ],
+        None => vec![
+            // make routing idempotent by deleting routes before adding them ignoring errors
+            format!(
+                "PreUp = ip route del {route_addr} dev {device} || true",
+                route_addr = route_addr,
+                device = device
+            ),
+            format!(
+                "PreUp = ip route add {route_addr} dev {device}",
+                route_addr = route_addr,
+                device = device
+            ),
+        ],
+    }
+}
+
+fn post_down_routing(route_addr: String, device: String, gateway: Option<String>) -> String {
+    match gateway {
+        Some(gw) => format!(
+            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
+            "PostDown = ip route del {route_addr} via {gateway} dev {device} || true",
+            route_addr = route_addr,
+            gateway = gw,
+            device = device,
+        ),
+        None => format!(
+            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
+            "PostDown = ip route del {route_addr} dev {device} || true",
+            route_addr = route_addr,
+            device = device,
+        ),
     }
 }
 
