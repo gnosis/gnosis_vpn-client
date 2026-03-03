@@ -235,7 +235,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
 
     // restore routing if connected
-    teardown_any_routing(&mut maybe_router, true).await;
+    teardown_any_routing(&mut maybe_router, false).await;
 
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
