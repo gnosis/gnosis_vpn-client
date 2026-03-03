@@ -151,10 +151,4 @@ impl RouteOps for NetlinkRouteOps {
         self.handle.route().del(msg).execute().await?;
         Ok(())
     }
-
-    async fn flush_routing_cache(&self) -> Result<(), Error> {
-        // The routing cache was removed in Linux 3.6.
-        // `ip route flush cache` is a no-op on modern kernels.
-        Ok(())
-    }
 }

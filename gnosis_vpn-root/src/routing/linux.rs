@@ -32,7 +32,6 @@ use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use super::netlink_ops::{NetlinkOps, RealNetlinkOps, RouteSpec, RuleSpec};
 use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
@@ -60,7 +59,7 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
 pub async fn dynamic_router(
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     worker: worker::Worker,
     wg_data: event::WireGuardData,
 ) -> Result<impl Routing, Error> {
@@ -90,7 +89,7 @@ pub async fn dynamic_router(
 /// Used when dynamic routing is not available. Provides simpler routing
 /// by adding explicit host routes for peer IPs before bringing up WireGuard.
 pub fn static_fallback_router(
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 ) -> Result<impl Routing, Error> {
@@ -403,7 +402,7 @@ impl NetworkDeviceInfo {
 /// - VPN subnet routes
 /// - Default route through VPN
 pub struct Router<N: NetlinkOps, R: RouteOps, W: WgOps> {
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     netlink: N,
     route_ops: R,
@@ -427,7 +426,7 @@ enum VpnSubnetRouteStatus {
 /// Used when dynamic routing (rtnetlink + firewall rules) is not available or not desired.
 /// Simpler than [`Router`] but provides the same phased setup to avoid race conditions.
 pub struct FallbackRouter<R: RouteOps, W: WgOps> {
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
@@ -602,6 +601,9 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 if_index: wan_info.if_index,
                 table_id: None,
             };
+
+            // always add routes for cleanup
+            self.added_routes.push(route);
             let res = self.netlink.route_add(&route).await;
             match res {
                 Ok(_) => {
@@ -612,28 +614,22 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                         wan_info.gateway,
                         wan_info.if_index
                     );
-                    self.added_routes.push(route);
                 }
                 Err(error) => {
-                    tracing::warn!(?error, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
                     // Don't fail the whole setup for a single RFC1918 route, as these are best-effort
+                    tracing::warn!(?error, net = %net, "failed to add RFC1918 bypass route, attempting to continue");
                 }
             }
         }
 
         // Phase 2: Bring up WireGuard
         // HOPR traffic is already protected by the fwmark infrastructure.
-
-        // Step 2: Generate wg-quick config and run wg-quick up
         let wg_quick_content = self.wg_data.wg.to_file_string(
             &self.wg_data.interface_info,
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
-        let interface_name = self
-            .wg
-            .wg_quick_up((*self.state_home).clone(), wg_quick_content)
-            .await?;
+        let interface_name = self.wg.wg_quick_up(self.state_home, wg_quick_content).await?;
         tracing::debug!(%interface_name, "wg-quick up");
 
         // Phase 3: Complete routing with VPN interface info
@@ -644,7 +640,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 Ok(info) => info,
                 Err(e) => {
                     // Rollback: bring down WG
-                    if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+                    if let Err(rollback_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
                         tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
                     }
                     return Err(e);
@@ -667,7 +663,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         if let Err(e) = self.netlink.route_add(&vpn_table_route).await {
             // Rollback: bring down WG
             self.network_device_info = None;
-            if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+            if let Err(rollback_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
             return Err(e);
@@ -714,7 +710,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 tracing::warn!(%rollback_err, "rollback failed: could not delete VPN subnet route from TABLE_ID");
             }
             self.network_device_info = None;
-            if let Err(rollback_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+            if let Err(rollback_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
                 tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
             }
             return Err(e);
@@ -808,7 +804,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
 
         // Step 3: Run wg-quick down while bypass infrastructure is still active
         // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
-        self.wg.wg_quick_down((*self.state_home).clone(), logs).await?;
+        self.wg.wg_quick_down(self.state_home, logs).await?;
         tracing::debug!("wg-quick down");
 
         // Step 4: Delete the TABLE_ID routing table VPN route
@@ -841,13 +837,9 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         }
         self.added_routes.clear();
 
-        // Step 6: Flush routing cache
-        self.route_ops.flush_routing_cache().await?;
-        tracing::debug!("ip route flush cache");
-
-        tracing::info!("VPN routing teardown complete (fwmark infrastructure remains active)");
         let nft = RealNfTablesOps {};
         teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
+        tracing::info!("VPN routing teardown complete");
         Ok(())
     }
 }
@@ -897,7 +889,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = self.wg.wg_quick_up((*self.state_home).clone(), wg_quick_content).await {
+        if let Err(e) = self.wg.wg_quick_up(self.state_home, wg_quick_content).await {
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
             bypass_manager.rollback().await;
             return Err(e);
@@ -912,7 +904,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
             .await
         {
             tracing::warn!(%e, "VPN subnet route failed, rolling back");
-            if let Err(wg_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+            if let Err(wg_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
                 tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
             }
             bypass_manager.rollback().await;
@@ -944,7 +936,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         }
 
         // wg-quick down
-        let wg_result = self.wg.wg_quick_down((*self.state_home).clone(), logs).await;
+        let wg_result = self.wg.wg_quick_down(self.state_home, logs).await;
         if let Err(ref e) = wg_result {
             tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
         } else {
@@ -1347,7 +1339,7 @@ mod tests {
             .await
             .unwrap();
         Router {
-            state_home: Arc::new(PathBuf::from("/tmp/test")),
+            state_home: PathBuf::from("/tmp/test"),
             wg_data: test_wg_data(),
             netlink,
             route_ops,
@@ -1539,7 +1531,7 @@ mod tests {
 
     fn make_fallback_router(route_ops: MockRouteOps, wg: MockWgOps) -> FallbackRouter<MockRouteOps, MockWgOps> {
         FallbackRouter {
-            state_home: Arc::new(PathBuf::from("/tmp/test")),
+            state_home: PathBuf::from("/tmp/test"),
             wg_data: test_wg_data(),
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,

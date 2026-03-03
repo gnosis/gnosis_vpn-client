@@ -24,9 +24,4 @@ pub trait RouteOps: Send + Sync + Clone {
 
     /// Delete a route by destination and device.
     async fn route_del(&self, dest: &str, device: &str) -> Result<(), Error>;
-
-    /// Flush the kernel routing cache.
-    /// No-op on modern Linux kernels (>= 3.6) and macOS.
-    #[cfg(target_os = "linux")]
-    async fn flush_routing_cache(&self) -> Result<(), Error>;
 }
