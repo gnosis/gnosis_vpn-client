@@ -27,7 +27,6 @@ use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use super::route_ops::RouteOps;
 use super::route_ops_macos::DarwinRouteOps;
@@ -42,7 +41,7 @@ fn vpn_subnet_route() -> String {
 
 /// Dynamic routing not available on macOS.
 pub async fn dynamic_router(
-    _state_home: Arc<PathBuf>,
+    _state_home: PathBuf,
     _worker: worker::Worker,
     _wg_data: event::WireGuardData,
 ) -> Result<DynamicRouter, Error> {
@@ -53,7 +52,7 @@ pub struct DynamicRouter {}
 
 /// Builds a static macOS router.
 pub fn static_router(
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 ) -> Result<impl Routing, Error> {
@@ -73,7 +72,7 @@ pub fn static_router(
 ///
 /// Generic over `R: RouteOps` and `W: WgOps` so tests can inject mock implementations.
 pub struct StaticRouter<R: RouteOps, W: WgOps> {
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
@@ -134,7 +133,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        let iface_name = match self.wg.wg_quick_up((*self.state_home).clone(), wg_quick_content).await {
+        let iface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await {
             Ok(name) => name,
             Err(e) => {
                 tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
@@ -162,7 +161,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                     }
                 }
                 // Bring down WireGuard
-                if let Err(wg_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+                if let Err(wg_err) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
                     tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
                 }
                 // Rollback bypass routes
@@ -196,7 +195,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         }
 
         // wg-quick down
-        match self.wg.wg_quick_down((*self.state_home).clone(), logs).await {
+        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
             Err(error) => tracing::warn!(?error, "wg-quick down failed, continuing with bypass route cleanup"),
         }
@@ -215,8 +214,7 @@ impl Routing for DynamicRouter {
         Err(Error::NotAvailable)
     }
 
-    async fn teardown(&mut self, _logs: Logs) -> Result<(), Error> {
-        Err(Error::NotAvailable)
+    async fn teardown(&mut self, _logs: Logs) {
     }
 }
 
@@ -227,7 +225,7 @@ mod tests {
 
     fn make_static_router(route_ops: MockRouteOps, wg: MockWgOps) -> StaticRouter<MockRouteOps, MockWgOps> {
         StaticRouter {
-            state_home: Arc::new(PathBuf::from("/tmp/test")),
+            state_home: PathBuf::from("/tmp/test"),
             wg_data: test_wg_data(),
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
