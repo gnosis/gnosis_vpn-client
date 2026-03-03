@@ -215,8 +215,7 @@ impl Routing for DynamicRouter {
         Err(Error::NotAvailable)
     }
 
-    async fn teardown(&mut self, _logs: Logs) {
-    }
+    async fn teardown(&mut self, _logs: Logs) {}
 }
 
 #[cfg(test)]
@@ -380,7 +379,10 @@ mod tests {
         router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
 
         let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        let config = wg_state.last_wg_config.as_ref().ok_or_else(|| anyhow::anyhow!("Expected wg config to be set"))?;
+        let config = wg_state
+            .last_wg_config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Expected wg config to be set"))?;
         // IPv6 blackhole PostUp for leak prevention is expected,
         // but routing-related PostUp hooks should not be present
         assert!(

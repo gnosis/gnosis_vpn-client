@@ -30,15 +30,16 @@
   };
 
   outputs =
-    inputs@{ self
-    , flake-parts
-    , nixpkgs
-    , rust-overlay
-    , crane
-    , advisory-db
-    , treefmt-nix
-    , pre-commit
-    , ...
+    inputs@{
+      self,
+      flake-parts,
+      nixpkgs,
+      rust-overlay,
+      crane,
+      advisory-db,
+      treefmt-nix,
+      pre-commit,
+      ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [ treefmt-nix.flakeModule ];
@@ -49,12 +50,13 @@
         "x86_64-darwin"
       ];
       perSystem =
-        { config
-        , self'
-        , inputs'
-        , lib
-        , system
-        , ...
+        {
+          config,
+          self',
+          inputs',
+          lib,
+          system,
+          ...
         }:
         let
           pkgs = (
