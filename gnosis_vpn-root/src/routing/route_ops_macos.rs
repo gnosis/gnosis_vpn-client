@@ -146,7 +146,7 @@ mod tests {
                           0         0         0         0         0         0      1500         0
                    "#;
 
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
+        let (device, gateway) = super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
 
         assert_eq!(device, "en1");
         assert_eq!(gateway, Some("192.168.178.1".to_string()));
@@ -165,7 +165,7 @@ mod tests {
                                     flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
                               "#;
 
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
+        let (device, gateway) = super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
 
         assert_eq!(device, "utun8");
         assert_eq!(gateway, None); // Should be None, not "index:"
