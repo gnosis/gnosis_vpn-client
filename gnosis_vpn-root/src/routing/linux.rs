@@ -843,19 +843,9 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         for ip in &self.peer_ips {
             extra.extend(pre_up_routing(ip.to_string(), device.clone(), gateway.clone()));
         }
-        // exclude local networks from tunnel
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let cidr = format!("{}/{}", net, prefix);
-            extra.extend(pre_up_routing(cidr, device.clone(), gateway.clone()));
-        }
-
         // restore on down
         for ip in &self.peer_ips {
             extra.push(post_down_routing(ip.to_string(), device.clone(), gateway.clone()));
-        }
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let cidr = format!("{}/{}", net, prefix);
-            extra.push(post_down_routing(cidr, device.clone(), gateway.clone()));
         }
 
         // Phase 2: wg-quick up
