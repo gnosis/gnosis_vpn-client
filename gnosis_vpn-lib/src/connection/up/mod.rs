@@ -10,7 +10,7 @@ use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wireguard::WireGuard;
-use crate::{gvpn_client, log_output, wireguard};
+use crate::{gvpn_client, log_output, remote_data, wireguard};
 
 pub mod runner;
 
@@ -58,6 +58,8 @@ pub enum Error {
     Routing(String),
     #[error("WireGuard error: {0}")]
     WireGuard(#[from] wireguard::Error),
+    #[error("Remote data error: {0}")]
+    RemoteData(#[from] remote_data::Error),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.

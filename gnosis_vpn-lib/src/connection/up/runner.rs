@@ -17,7 +17,7 @@ use crate::core::runner::{self, Results};
 use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError};
+use crate::hopr::{self, Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 use crate::{ping, remote_data};
@@ -101,10 +101,22 @@ impl Runner {
         // gather peers before we start any routing attempt to ensure static routing might still work
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        if self.worker_params.force_static_routing() {
-            tracing::info!("force static routing enabled - skipping dynamic routing attempt");
-            self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+        let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
+        peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
+
+        // dynamic routing is only available on Linux
+        cfg_if::cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let force_static = false;
+            } else if #[cfg(target_os = "macos")] {
+                let force_static = true;
+            }
+        }
+
+        if force_static || self.worker_params.force_static_routing() {
+            tracing::info!("using static routing");
+            self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                 .await
         } else {
             let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
@@ -114,15 +126,35 @@ impl Runner {
                         .await
                 }
                 Err(err) => {
-                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
-                    self.run_fallback_to_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
+                    tracing::warn!(error = ?err, "failed to establish dynamically routed WireGuard tunnel - fallback to static routing");
+                    self.run_fallback_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                         .await
                 }
             }
         }
     }
 
-    async fn run_fallback_to_static_wg_tunnel(
+    async fn run_static_wg_tunnel(
+        &self,
+        wg: &WireGuard,
+        registration: &Registration,
+        session: &SessionClientMetadata,
+        peer_ips: Vec<Ipv4Addr>,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> Result<SessionClientMetadata, Error> {
+        // 6b. request static wg tunnel from root
+        let _ = results_sender
+            .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
+            .await;
+
+        // setup static routing
+        request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
+
+        // and verify it works
+        self.run_check_static_routing(session, results_sender).await
+    }
+
+    async fn run_fallback_static_wg_tunnel(
         &self,
         wg: &WireGuard,
         registration: &Registration,
@@ -185,9 +217,10 @@ impl Runner {
                 self.run_after_verified_working(round_trip_time, session, results_sender)
                     .await
             }
+
             Err(err) => {
                 tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
-                self.run_fallback_to_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
+                self.run_fallback_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
                     .await
             }
         }
