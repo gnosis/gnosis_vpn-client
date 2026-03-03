@@ -35,8 +35,6 @@ cfg_if::cfg_if! {
 #[cfg(test)]
 pub(crate) mod mocks;
 
-pub(crate) use bypass::{BypassRouteManager, WanInterface};
-
 // ============================================================================
 // Shared Utilities
 // ============================================================================
