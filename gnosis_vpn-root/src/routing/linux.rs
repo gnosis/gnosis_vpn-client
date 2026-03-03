@@ -841,11 +841,11 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
 
         // exclude static peer IPs from tunnel
         for ip in &self.peer_ips {
-            extra.extend(pre_up_routing(ip.to_string(), device.clone(), gateway.clone()));
+            extra.extend(post_up_routing(ip.to_string(), device.clone(), gateway.clone()));
         }
         // restore on down
         for ip in &self.peer_ips {
-            extra.push(post_down_routing(ip.to_string(), device.clone(), gateway.clone()));
+            extra.push(pre_down_routing(ip.to_string(), device.clone(), gateway.clone()));
         }
 
         // Phase 2: wg-quick up
@@ -877,18 +877,18 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     }
 }
 
-fn pre_up_routing(route_addr: String, device: String, gateway: Option<String>) -> Vec<String> {
+fn post_up_routing(route_addr: String, device: String, gateway: Option<String>) -> Vec<String> {
     match gateway {
         Some(gw) => vec![
             // make routing idempotent by deleting routes before adding them ignoring errors
             format!(
-                "PreUp = ip route del {route_addr} via {gateway} dev {device} || true",
+                "PostUp = ip route del {route_addr} via {gateway} dev {device} || true",
                 route_addr = route_addr,
                 gateway = gw,
                 device = device
             ),
             format!(
-                "PreUp = ip route add {route_addr} via {gateway} dev {device}",
+                "PostUp = ip route add {route_addr} via {gateway} dev {device}",
                 route_addr = route_addr,
                 gateway = gw,
                 device = device
@@ -897,12 +897,12 @@ fn pre_up_routing(route_addr: String, device: String, gateway: Option<String>) -
         None => vec![
             // make routing idempotent by deleting routes before adding them ignoring errors
             format!(
-                "PreUp = ip route del {route_addr} dev {device} || true",
+                "PostUp = ip route del {route_addr} dev {device} || true",
                 route_addr = route_addr,
                 device = device
             ),
             format!(
-                "PreUp = ip route add {route_addr} dev {device}",
+                "PostUp = ip route add {route_addr} dev {device}",
                 route_addr = route_addr,
                 device = device
             ),
@@ -910,18 +910,18 @@ fn pre_up_routing(route_addr: String, device: String, gateway: Option<String>) -
     }
 }
 
-fn post_down_routing(route_addr: String, device: String, gateway: Option<String>) -> String {
+fn pre_down_routing(route_addr: String, device: String, gateway: Option<String>) -> String {
     match gateway {
         Some(gw) => format!(
-            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
-            "PostDown = ip route del {route_addr} via {gateway} dev {device} || true",
+            // wg-quick stops execution on error, ignore errors to hit all commands
+            "PreDown = ip route del {route_addr} via {gateway} dev {device} || true",
             route_addr = route_addr,
             gateway = gw,
             device = device,
         ),
         None => format!(
-            // wg-quick stops execution on error, ignore errors to hit all PostDown commands
-            "PostDown = ip route del {route_addr} dev {device} || true",
+            // wg-quick stops execution on error, ignore errors to hit all commands
+            "PreDown = ip route del {route_addr} dev {device} || true",
             route_addr = route_addr,
             device = device,
         ),
