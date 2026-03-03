@@ -160,22 +160,27 @@ impl WireGuard {
         }
         lines.extend(extra_interface_lines);
 
+        // Blackhold Ipv6 traffic for now.
+        // Contrary to routing exceptions this happens in preup and postdown
+        // To avoid leakage and because those are global rules
         #[cfg(target_os = "linux")]
         {
-            // we cannot handle IPv6 yet, so blackhole it for now
-            // on linux there is a metric system for ip route commands
-            // this last command gets the smallest metric so it should take precedence
-            lines.push("PostUp = ip -6 route add blackhole ::/0".to_string());
-            lines.push("PreDown = ip -6 route del blackhole ::/0".to_string());
+            // we cannot handle IPv6 yet, so blackhole it for now, make it idempotent to avoid wg-quick stopping because of errors
+            lines.push("PreUp = ip -6 route del blackhole ::/1 || true".to_string());
+            lines.push("PreUp = ip -6 route del blackhole 8000::/1 || true".to_string());
+            lines.push("PreUp = ip -6 route add blackhole ::/1".to_string());
+            lines.push("PreUp = ip -6 route add blackhole 8000::/1".to_string());
+            lines.push("PostDown = ip -6 route del blackhole ::/1 || true".to_string());
+            lines.push("PostDown = ip -6 route del blackhole 8000::/1 || true".to_string());
         }
         #[cfg(target_os = "macos")]
         {
             // on macos to avoid fighting router specific rules we split the range in two
             // this way the routes are more specific and take precedence over other rules
-            lines.push("PostUp = route -n add -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PostUp = route -n add -blackhole -inet6 8000::/1 ::1".to_string());
-            lines.push("PreDown = route -n delete -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PreDown = route -n delete -blackhole -inet6 8000::/1 ::1".to_string());
+            lines.push("PreUp = route -n add -blackhole -inet6 ::/1 ::1".to_string());
+            lines.push("PreUp = route -n add -blackhole -inet6 8000::/1 ::1".to_string());
+            lines.push("PostDown = route -n delete -blackhole -inet6 ::/1 ::1".to_string());
+            lines.push("PostDown = route -n delete -blackhole -inet6 8000::/1 ::1".to_string());
         }
 
         lines.push("".to_string()); // Empty line for spacing

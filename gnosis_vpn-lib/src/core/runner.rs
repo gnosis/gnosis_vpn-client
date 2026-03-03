@@ -1,7 +1,7 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use backon::{ExponentialBuilder, Retryable};
+use backon::Retryable;
 use bytesize::ByteSize;
 use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
@@ -23,9 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::balance;
 use crate::compat::SafeModule;
-use crate::connection;
 use crate::destination_health::DestinationHealth;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
@@ -33,7 +31,7 @@ use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config}
 use crate::log_output;
 use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
-use crate::{event, remote_data};
+use crate::{balance, connection, event, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -229,7 +227,7 @@ async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<
                 .map(|b| b.map(SafeModule::from))
         }
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "Safe query attempt failed, retrying...");
     })
@@ -248,7 +246,7 @@ async fn run_node_balance(safeless_interactor: Arc<SafelessInteractor>) -> Resul
             })
         }
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "PreSafe attempt failed, retrying...");
     })
@@ -268,7 +266,7 @@ async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Resul
             })
         }
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "Ticket stats attempt failed, retrying...");
     })
@@ -290,7 +288,7 @@ async fn run_safe_deployment(
                 .map(SafeModule::from)
         }
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "Safe deployment attempt failed, retrying...");
     })
@@ -349,7 +347,7 @@ async fn run_funding_tool(worker_params: WorkerParams, code: String) -> Result<O
         let res = result?;
         Ok(res)
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "Funding tool attempt failed, retrying...");
     })
@@ -391,13 +389,12 @@ async fn run_fund_channel(
     ticket_value: Balance<WxHOPR>,
 ) -> Result<(), hopr_api::ChannelError> {
     let amount = balance::funding_amount(ticket_value);
-    let threshold = balance::min_stake_threshold(ticket_value);
-    tracing::debug!(%address, %amount, %threshold, "starting fund channel runner");
+    tracing::debug!(%address, %amount, "starting fund channel runner");
     (|| async {
-        hopr.ensure_channel_open_and_funded(address, amount, threshold).await?;
+        hopr.ensure_channel_open(address, amount).await?;
         Ok(())
     })
-    .retry(ExponentialBuilder::default())
+    .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "Fund channel attempt failed, retrying...");
     })

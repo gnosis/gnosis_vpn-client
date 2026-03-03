@@ -254,7 +254,6 @@ impl NfTablesOps for MockNfTablesOps {
 pub struct RouteOpsState {
     pub added_routes: Vec<(String, Option<String>, String)>, // (dest, gateway, device)
     pub default_iface: Option<(String, Option<String>)>,     // (device, gateway)
-    pub cache_flush_count: u32,
     pub fail_on: HashMap<String, String>,
     /// Destinations that should fail on route_add (for targeted failure injection).
     pub fail_on_route_dest: HashMap<String, String>,
@@ -317,14 +316,6 @@ impl RouteOps for MockRouteOps {
         // behavior (Logs::Suppress) and Linux usage patterns where route_del is
         // called defensively before route_add for idempotency.
         s.added_routes.retain(|r| !(r.0 == dest && r.2 == device));
-        Ok(())
-    }
-
-    #[cfg(target_os = "linux")]
-    async fn flush_routing_cache(&self) -> Result<(), Error> {
-        let mut s = self.state.lock().unwrap();
-        s.check_fail("flush_routing_cache")?;
-        s.cache_flush_count += 1;
         Ok(())
     }
 }

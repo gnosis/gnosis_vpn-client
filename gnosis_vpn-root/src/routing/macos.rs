@@ -22,14 +22,13 @@
 
 use async_trait::async_trait;
 
-use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::wireguard;
+use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
+use super::bypass;
 use super::route_ops::RouteOps;
 use super::route_ops_macos::DarwinRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
@@ -41,15 +40,11 @@ fn vpn_subnet_route() -> String {
     format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1)
 }
 
-/// WAN interface information stub for macOS (never used since dynamic routing is not available).
-#[derive(Debug, Clone)]
-pub struct WanInfo;
-
 /// Dynamic routing not available on macOS.
-pub fn dynamic_router(
-    _state_home: Arc<PathBuf>,
+pub async fn dynamic_router(
+    _state_home: PathBuf,
+    _worker: worker::Worker,
     _wg_data: event::WireGuardData,
-    _wan_info: WanInfo,
 ) -> Result<DynamicRouter, Error> {
     Err(Error::NotAvailable)
 }
@@ -58,7 +53,7 @@ pub struct DynamicRouter {}
 
 /// Builds a static macOS router.
 pub fn static_router(
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 ) -> Result<impl Routing, Error> {
@@ -78,12 +73,12 @@ pub fn static_router(
 ///
 /// Generic over `R: RouteOps` and `W: WgOps` so tests can inject mock implementations.
 pub struct StaticRouter<R: RouteOps, W: WgOps> {
-    state_home: Arc<PathBuf>,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
-    bypass_manager: Option<super::BypassRouteManager<R>>,
+    bypass_manager: Option<bypass::BypassRouteManager<R>>,
     /// VPN routes successfully added after wg-quick up (for rollback/teardown).
     vpn_routes_added: Vec<String>,
     /// Resolved WireGuard interface name (e.g. "utun8" on macOS, "wg0_gnosisvpn" on Linux).
@@ -118,8 +113,8 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         let (device, gateway) = self.route_ops.get_default_interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
 
-        let mut bypass_manager = super::BypassRouteManager::new(
-            super::WanInterface {
+        let mut bypass_manager = bypass::BypassRouteManager::new(
+            bypass::WanInterface {
                 device: device.clone(),
                 gateway: gateway.clone(),
             },
@@ -139,7 +134,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        let iface_name = match self.wg.wg_quick_up((*self.state_home).clone(), wg_quick_content).await {
+        let iface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await {
             Ok(name) => name,
             Err(e) => {
                 tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
@@ -167,7 +162,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                     }
                 }
                 // Bring down WireGuard
-                if let Err(wg_err) = self.wg.wg_quick_down((*self.state_home).clone(), Logs::Suppress).await {
+                if let Err(wg_err) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
                     tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
                 }
                 // Rollback bypass routes
@@ -190,7 +185,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     /// 2. wg-quick down
     /// 3. Remove bypass routes
     ///
-    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+    async fn teardown(&mut self, logs: Logs) {
         let iface = self.wg_interface_name.as_deref().unwrap_or(wireguard::WG_INTERFACE);
 
         // Remove VPN routes (best-effort, warn on failure)
@@ -201,11 +196,9 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         }
 
         // wg-quick down
-        let wg_result = self.wg.wg_quick_down((*self.state_home).clone(), logs).await;
-        if let Err(ref e) = wg_result {
-            tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
-        } else {
-            tracing::debug!("wg-quick down");
+        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+            Ok(_) => tracing::debug!("wg-quick down"),
+            Err(error) => tracing::warn!(?error, "wg-quick down failed, continuing with bypass route cleanup"),
         }
 
         // Remove bypass routes (always, even if wg-quick down failed)
@@ -213,21 +206,16 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             bypass_manager.teardown().await;
         }
         self.bypass_manager = None;
-
-        wg_result
     }
 }
 
-/// Dynamic routing not available on macOS.
 #[async_trait]
 impl Routing for DynamicRouter {
     async fn setup(&mut self) -> Result<(), Error> {
         Err(Error::NotAvailable)
     }
 
-    async fn teardown(&mut self, _logs: Logs) -> Result<(), Error> {
-        Err(Error::NotAvailable)
-    }
+    async fn teardown(&mut self, _logs: Logs) {}
 }
 
 #[cfg(test)]
@@ -237,7 +225,7 @@ mod tests {
 
     fn make_static_router(route_ops: MockRouteOps, wg: MockWgOps) -> StaticRouter<MockRouteOps, MockWgOps> {
         StaticRouter {
-            state_home: Arc::new(PathBuf::from("/tmp/test")),
+            state_home: PathBuf::from("/tmp/test"),
             wg_data: test_wg_data(),
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
@@ -274,7 +262,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn static_router_setup_adds_bypass_routes_then_wg_up() {
+    async fn static_router_setup_adds_bypass_routes_then_wg_up() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -282,9 +270,9 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_static_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
 
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
 
         // 2 peer IP + 4 RFC1918 bypass + 3 VPN routes = 9 total
         assert_eq!(state.added_routes.len(), 9);
@@ -303,12 +291,13 @@ mod tests {
         assert_eq!(state.added_routes[8].2, wireguard::WG_INTERFACE);
 
         // WG should be up
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(wg_state.wg_up);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn static_router_wg_failure_rolls_back_bypass_routes() {
+    async fn static_router_wg_failure_rolls_back_bypass_routes() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -327,12 +316,13 @@ mod tests {
         assert!(result.is_err());
 
         // Bypass routes should be rolled back
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(state.added_routes.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn static_router_teardown_wg_down_then_bypass_cleanup() {
+    async fn static_router_teardown_wg_down_then_bypass_cleanup() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -340,18 +330,19 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_static_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
-        router.teardown(Logs::Suppress).await.unwrap();
+        router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
+        router.teardown(Logs::Suppress).await;
 
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(state.added_routes.is_empty());
 
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!wg_state.wg_up);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn static_router_teardown_cleans_bypass_even_if_wg_down_fails() {
+    async fn static_router_teardown_cleans_bypass_even_if_wg_down_fails() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -359,25 +350,25 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_static_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
 
         // Make wg_quick_down fail
         {
-            let mut s = wg.state.lock().unwrap();
+            let mut s = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
             s.fail_on
                 .insert("wg_quick_down".into(), "simulated wg down failure".into());
         }
 
-        let result = router.teardown(Logs::Suppress).await;
-        assert!(result.is_err());
+        router.teardown(Logs::Suppress).await;
 
         // But bypass routes should still be cleaned up
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(state.added_routes.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn setup_wg_config_has_no_routing_postup() {
+    async fn setup_wg_config_has_no_routing_postup() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -385,20 +376,24 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_static_router(route_ops, wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
 
-        let wg_state = wg.state.lock().unwrap();
-        let config = wg_state.last_wg_config.as_ref().unwrap();
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        let config = wg_state
+            .last_wg_config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Expected wg config to be set"))?;
         // IPv6 blackhole PostUp for leak prevention is expected,
         // but routing-related PostUp hooks should not be present
         assert!(
             !config.contains("PostUp = route"),
             "wg config should not contain routing PostUp hooks, got:\n{config}"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn setup_adds_vpn_routes_after_wg_up() {
+    async fn setup_adds_vpn_routes_after_wg_up() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -406,9 +401,9 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_static_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
 
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
 
         // Check the VPN routes exist
         let vpn_routes: Vec<_> = state
@@ -425,10 +420,11 @@ mod tests {
         assert!(vpn_routes[0].1.is_none());
         assert!(vpn_routes[1].1.is_none());
         assert!(vpn_routes[2].1.is_none());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn setup_rolls_back_vpn_routes_on_failure() {
+    async fn setup_rolls_back_vpn_routes_on_failure() -> anyhow::Result<()> {
         // Fail on the VPN subnet route (third VPN route)
         // Bypass routes and first two VPN routes should succeed
         let route_ops = MockRouteOps::with_state(RouteOpsState {
@@ -447,20 +443,21 @@ mod tests {
         assert!(result.is_err(), "setup should fail when VPN subnet route fails");
 
         // WG should be brought back down (rollback)
-        let wg_state = wg.state.lock().unwrap();
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!wg_state.wg_up, "WG should be down after rollback");
 
         // All routes should be cleaned up (VPN routes rolled back + bypass routes rolled back)
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(
             state.added_routes.is_empty(),
             "all routes should be rolled back, got: {:?}",
             state.added_routes
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn teardown_removes_vpn_routes() {
+    async fn teardown_removes_vpn_routes() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("en0".into(), Some("192.168.1.1".into()))),
             ..Default::default()
@@ -468,11 +465,11 @@ mod tests {
         let wg = MockWgOps::new();
 
         let mut router = make_static_router(route_ops.clone(), wg.clone());
-        router.setup().await.unwrap();
+        router.setup().await.map_err(|_| anyhow::anyhow!("Setup failed"))?;
 
         // Verify VPN routes exist before teardown
         {
-            let state = route_ops.state.lock().unwrap();
+            let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
             let vpn_count = state
                 .added_routes
                 .iter()
@@ -481,10 +478,10 @@ mod tests {
             assert_eq!(vpn_count, 3, "VPN routes should exist before teardown");
         }
 
-        router.teardown(Logs::Suppress).await.unwrap();
+        router.teardown(Logs::Suppress).await;
 
         // All routes should be cleaned up (VPN + bypass)
-        let state = route_ops.state.lock().unwrap();
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(
             state.added_routes.is_empty(),
             "all routes should be removed after teardown"
@@ -492,44 +489,6 @@ mod tests {
 
         // VPN routes tracker should be empty
         assert!(router.vpn_routes_added.is_empty());
-    }
-
-    #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
-        let output = r#"
-           route to: default
-        destination: default
-               mask: default
-            gateway: 192.168.178.1
-          interface: en1
-              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-         recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
-               0         0         0         0         0         0      1500         0
-        "#;
-
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "en1");
-        assert_eq!(gateway, Some("192.168.178.1".to_string()));
-        Ok(())
-    }
-
-    #[test]
-    fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
-        // When VPN is active, gateway may show as "index: N" instead of an IP
-        let output = r#"
-           route to: default
-        destination: default
-               mask: default
-            gateway: index: 28
-          interface: utun8
-              flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-        "#;
-
-        let (device, gateway) = super::super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "utun8");
-        assert_eq!(gateway, None); // Should be None, not "index:"
         Ok(())
     }
 }

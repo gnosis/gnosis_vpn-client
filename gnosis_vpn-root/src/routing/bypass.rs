@@ -16,6 +16,7 @@ use super::route_ops::RouteOps;
 
 /// WAN interface information for bypass routing.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WanInterface {
     pub device: String,
     pub gateway: Option<String>,
@@ -27,6 +28,7 @@ pub struct WanInterface {
 /// if setup fails partway through.
 ///
 /// Generic over `R: RouteOps` so tests can inject mock route operations.
+#[allow(dead_code)]
 pub struct BypassRouteManager<R: RouteOps> {
     wan: WanInterface,
     peer_ips: Vec<Ipv4Addr>,
@@ -37,6 +39,7 @@ pub struct BypassRouteManager<R: RouteOps> {
     added_rfc1918_routes: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl<R: RouteOps> BypassRouteManager<R> {
     /// Creates a new bypass route manager.
     ///

@@ -19,7 +19,8 @@ use nftnl::{Batch, Chain, ChainType, Hook, MsgType, ProtoFamily, Rule, Table};
 use super::Error;
 
 /// Firewall mark used to identify HOPR traffic for bypass routing.
-pub(crate) const FW_MARK: u32 = 0xFEED_CAFE;
+/// Use unique FW_MARK tied to Gnosis VPN: 0x6A0515 ("gnosis" in leetspeak) to minimize risk of collisions with other applications.
+pub(crate) const FW_MARK: u32 = 0x6A0515;
 
 /// nftables table name for all gnosis_vpn rules.
 const TABLE_NAME: &std::ffi::CStr = c"gnosis_vpn";
@@ -59,12 +60,6 @@ pub trait NfTablesOps: Send + Sync {
 /// Uses a single `gnosis_vpn` nftables table with atomic batch operations.
 /// Table-level deletion cascades to all chains and rules, simplifying teardown.
 pub struct RealNfTablesOps;
-
-impl RealNfTablesOps {
-    pub fn new() -> Result<Self, Error> {
-        Ok(Self)
-    }
-}
 
 /// Sends a finalized nftnl batch over a netlink socket and processes ACKs.
 fn send_batch(batch: &nftnl::FinalizedBatch) -> Result<(), Error> {

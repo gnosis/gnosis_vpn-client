@@ -10,9 +10,9 @@ pub enum FundingIssue {
     Unfunded,           // cannot work at all - initial state
     ChannelsOutOfFunds, // less than 1 ticket (10 wxHOPR)
     SafeOutOfFunds,     // less than 1 ticket (10 wxHOPR) - cannot top up channels
-    SafeLowOnFunds,     // lower than min_stake_threshold * channels
+    SafeLowOnFunds,     // lower than min_stake_threshold * 2
     NodeUnderfunded,    // lower than 0.0075 xDai
-    NodeLowOnFunds,     // lower than 0.0075 xDai * channels
+    NodeLowOnFunds,     // lower than 0.0075 xDai * 2
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ impl Display for Balances {
 }
 
 impl Balances {
-    pub fn to_funding_issues(&self, channel_targets_len: usize, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
+    pub fn to_funding_issues(&self, _channel_targets_len: usize, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
         let mut issues = Vec::new();
 
         if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
@@ -104,13 +104,13 @@ impl Balances {
 
         if self.safe_wxhopr < funding_amount(ticket_value) {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < (funding_amount(ticket_value) * channel_targets_len) {
+        } else if self.safe_wxhopr < (funding_amount(ticket_value) * 2) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
         if self.node_xdai < min_funds_threshold() {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if self.node_xdai < (min_funds_threshold() + channel_targets_len) {
+        } else if self.node_xdai < (min_funds_threshold() * 2) {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
