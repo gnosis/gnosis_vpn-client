@@ -602,9 +602,9 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 table_id: None,
             };
 
+            let res = self.netlink.route_add(&route).await;
             // always add routes for cleanup
             self.added_routes.push(route);
-            let res = self.netlink.route_add(&route).await;
             match res {
                 Ok(_) => {
                     tracing::debug!(
@@ -629,23 +629,13 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
-        let interface_name = self.wg.wg_quick_up(self.state_home, wg_quick_content).await?;
+        let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
         tracing::debug!(%interface_name, "wg-quick up");
 
         // Phase 3: Complete routing with VPN interface info
 
         // Step 3: Get VPN interface info
-        let vpn_info =
-            match get_vpn_info(&self.netlink, &self.wg_data.interface_info.address, VPN_TUNNEL_SUBNET.1).await {
-                Ok(info) => info,
-                Err(e) => {
-                    // Rollback: bring down WG
-                    if let Err(rollback_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
-                        tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
-                    }
-                    return Err(e);
-                }
-            };
+        let vpn_info = get_vpn_info(&self.netlink, &self.wg_data.interface_info.address, VPN_TUNNEL_SUBNET.1).await?;
         tracing::debug!(?vpn_info, "VPN interface data");
 
         // Store combined info for teardown
@@ -660,14 +650,7 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             if_index: vpn_info.if_index,
             table_id: Some(TABLE_ID),
         };
-        if let Err(e) = self.netlink.route_add(&vpn_table_route).await {
-            // Rollback: bring down WG
-            self.network_device_info = None;
-            if let Err(rollback_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
-                tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
-            }
-            return Err(e);
-        }
+        self.netlink.route_add(&vpn_table_route).await?;
         tracing::debug!(
             "ip route add {} dev {} table {TABLE_ID}",
             vpn_info.cidr,
@@ -683,18 +666,17 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             if_index: vpn_info.if_index,
             table_id: None,
         };
-        if let Err(e) = self.netlink.route_add(&vpn_main_route).await {
-            // Log warning but continue - default route should still work
-            tracing::warn!(%e, "failed to add VPN subnet route to main table");
+        match self.netlink.route_add(&vpn_main_route).await {
+            Ok(_) => {
+                tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
+            }
+            Err(error) => {
+                // Log warning but continue - default route should still work
+                tracing::warn!(?error, "failed to add VPN subnet route to main table");
+            }
         }
-        tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
 
-        // Step 6: Flush routing cache BEFORE changing default route
-        // This ensures any cached route decisions are cleared before the switch
-        self.route_ops.flush_routing_cache().await?;
-        tracing::debug!("flushed routing cache before default route change");
-
-        // Step 7: Replace main default route to VPN interface
+        // Step 6: Replace main default route to VPN interface
         // All non-bypassed traffic now goes through VPN
         // Use replace() for atomic replacement - avoids brief window with two default routes
         let vpn_default_route = RouteSpec {
@@ -704,22 +686,8 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
             if_index: vpn_info.if_index,
             table_id: None,
         };
-        if let Err(e) = self.netlink.route_replace(&vpn_default_route).await {
-            // Rollback: remove VPN subnet route, bring down WG
-            if let Err(rollback_err) = self.netlink.route_del(&vpn_table_route).await {
-                tracing::warn!(%rollback_err, "rollback failed: could not delete VPN subnet route from TABLE_ID");
-            }
-            self.network_device_info = None;
-            if let Err(rollback_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
-                tracing::warn!(%rollback_err, "rollback failed: could not bring down WireGuard");
-            }
-            return Err(e);
-        }
+        self.netlink.route_replace(&vpn_default_route).await?;
         tracing::debug!("ip route add default dev {}", vpn_info.if_index);
-
-        // Step 8: Flush routing cache
-        self.route_ops.flush_routing_cache().await?;
-        tracing::debug!("flushed routing cache");
 
         tracing::info!("routing is ready");
         Ok(())
@@ -744,103 +712,105 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
     ///   6. Flush the routing table cache
     ///      Equivalent command: `ip route flush cache`
     ///
-    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
-        let NetworkDeviceInfo {
-            wan_if_index,
-            vpn_if_index,
-            vpn_cidr,
-            wan_gw,
-        } = match self.network_device_info.take() {
-            Some(info) => info,
-            None => {
-                if self.added_routes.is_empty() {
-                    let nft = RealNfTablesOps {};
-                    teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
-                    return Err(Error::General("invalid state: not set up".into()));
+    async fn teardown(&mut self, logs: Logs) {
+        match self.network_device_info.take() {
+            Some(NetworkDeviceInfo {
+                wan_if_index,
+                vpn_if_index,
+                vpn_cidr,
+                wan_gw,
+            }) => {
+                // Step 1: Set the default route back to the WAN interface
+                // Use replace() to handle case where VPN route still exists
+                let wan_default = RouteSpec {
+                    destination: Ipv4Addr::UNSPECIFIED,
+                    prefix_len: 0,
+                    gateway: Some(wan_gw),
+                    if_index: wan_if_index,
+                    table_id: None,
+                };
+                teardown_op(
+                    "set default route back to interface",
+                    &format!("ip route replace default via {wan_gw} dev {wan_if_index}"),
+                    || self.netlink.route_replace(&wan_default),
+                )
+                .await;
+
+                // Step 2: Delete the VPN subnet route from the main table
+                let vpn_main_route = RouteSpec {
+                    destination: vpn_cidr.first_address(),
+                    prefix_len: vpn_cidr.network_length(),
+                    gateway: None,
+                    if_index: vpn_if_index,
+                    table_id: None,
+                };
+                teardown_op(
+                    "delete VPN subnet route from main table",
+                    &format!("ip route del {vpn_cidr} dev {vpn_if_index}"),
+                    || self.netlink.route_del(&vpn_main_route),
+                )
+                .await;
+
+                // Step 3: Run wg-quick down while bypass infrastructure is still active
+                // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
+                match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+                    Ok(_) => tracing::debug!("wg-quick down"),
+                    Err(error) => {
+                        tracing::warn!(?error, "wg-quick down failed during teardown");
+                    }
                 }
-                tracing::warn!("Found added routes but no network device info - setup seems to have failed partway");
+
+                // Step 4: Delete the TABLE_ID routing table VPN route
+                // (fwmark rule and TABLE_ID default route stay active for the daemon's lifetime)
+                let vpn_table_route = RouteSpec {
+                    destination: vpn_cidr.first_address(),
+                    prefix_len: vpn_cidr.network_length(),
+                    gateway: None,
+                    if_index: vpn_if_index,
+                    table_id: Some(TABLE_ID),
+                };
+                teardown_op(
+                    &format!("delete VPN subnet route from table {TABLE_ID}"),
+                    &format!("ip route del {vpn_cidr} dev {vpn_if_index} table {TABLE_ID}"),
+                    || self.netlink.route_del(&vpn_table_route),
+                )
+                .await;
+
+                // Step 5: Delete RFC1918 bypass routes that were added during setup
+                for route in self.added_routes.drain(..) {
+                    teardown_op(
+                        &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
+                        &format!(
+                            "ip route del {}/{} via {wan_gw} dev {wan_if_index}",
+                            route.destination, route.prefix_len
+                        ),
+                        || self.netlink.route_del(&route),
+                    )
+                    .await;
+                }
+            }
+            None => {
+                // Attempt wg-quick down even and ignore errors
+                match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+                    Ok(_) => tracing::debug!("wg-quick down"),
+                    Err(error) => {
+                        tracing::warn!(?error, "wg-quick down failed during best-effort teardown");
+                    }
+                }
+
                 for route in &self.added_routes {
                     if let Err(error) = self.netlink.route_del(route).await {
-                        tracing::error!(?error, route = %format!("{}/{}", route.destination, route.prefix_len), "failed to delete RFC1918 bypass route during partial teardown");
+                        tracing::warn!(?error, route = %format!("{}/{}", route.destination, route.prefix_len), "failed to delete RFC1918 bypass route during partial teardown");
                     }
                 }
                 self.added_routes.clear();
-                let nft = RealNfTablesOps {};
-                teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
-                return Ok(());
             }
-        };
-
-        // Step 1: Set the default route back to the WAN interface
-        // Use replace() to handle case where VPN route still exists
-        let wan_default = RouteSpec {
-            destination: Ipv4Addr::UNSPECIFIED,
-            prefix_len: 0,
-            gateway: Some(wan_gw),
-            if_index: wan_if_index,
-            table_id: None,
-        };
-        teardown_op(
-            "set default route back to interface",
-            &format!("ip route replace default via {wan_gw} dev {wan_if_index}"),
-            || self.netlink.route_replace(&wan_default),
-        )
-        .await;
-
-        // Step 2: Delete the VPN subnet route from the main table
-        let vpn_main_route = RouteSpec {
-            destination: vpn_cidr.first_address(),
-            prefix_len: vpn_cidr.network_length(),
-            gateway: None,
-            if_index: vpn_if_index,
-            table_id: None,
-        };
-        teardown_op(
-            "delete VPN subnet route from main table",
-            &format!("ip route del {vpn_cidr} dev {vpn_if_index}"),
-            || self.netlink.route_del(&vpn_main_route),
-        )
-        .await;
-
-        // Step 3: Run wg-quick down while bypass infrastructure is still active
-        // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
-        self.wg.wg_quick_down(self.state_home, logs).await?;
-        tracing::debug!("wg-quick down");
-
-        // Step 4: Delete the TABLE_ID routing table VPN route
-        // (fwmark rule and TABLE_ID default route stay active for the daemon's lifetime)
-        let vpn_table_route = RouteSpec {
-            destination: vpn_cidr.first_address(),
-            prefix_len: vpn_cidr.network_length(),
-            gateway: None,
-            if_index: vpn_if_index,
-            table_id: Some(TABLE_ID),
-        };
-        teardown_op(
-            &format!("delete VPN subnet route from table {TABLE_ID}"),
-            &format!("ip route del {vpn_cidr} dev {vpn_if_index} table {TABLE_ID}"),
-            || self.netlink.route_del(&vpn_table_route),
-        )
-        .await;
-
-        // Step 5: Delete RFC1918 bypass routes that were added during setup
-        for route in &self.added_routes {
-            teardown_op(
-                &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
-                &format!(
-                    "ip route del {}/{} via {wan_gw} dev {wan_if_index}",
-                    route.destination, route.prefix_len
-                ),
-                || self.netlink.route_del(route),
-            )
-            .await;
         }
-        self.added_routes.clear();
 
+        // always teardown fwmark infrastructure
         let nft = RealNfTablesOps {};
         teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
         tracing::info!("VPN routing teardown complete");
-        Ok(())
     }
 }
 
@@ -889,7 +859,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        if let Err(e) = self.wg.wg_quick_up(self.state_home, wg_quick_content).await {
+        if let Err(e) = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await {
             tracing::warn!("wg-quick up failed, rolling back bypass routes");
             bypass_manager.rollback().await;
             return Err(e);
@@ -904,7 +874,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
             .await
         {
             tracing::warn!(%e, "VPN subnet route failed, rolling back");
-            if let Err(wg_err) = self.wg.wg_quick_down(self.state_home, Logs::Suppress).await {
+            if let Err(wg_err) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
                 tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
             }
             bypass_manager.rollback().await;
@@ -925,7 +895,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     /// 2. wg-quick down
     /// 3. Remove bypass routes
     ///
-    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+    async fn teardown(&mut self, logs: Logs) {
         // Remove VPN subnet route (best-effort)
         if self.vpn_subnet_route == VpnSubnetRouteStatus::Active {
             let vpn_subnet = format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1);
@@ -936,7 +906,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         }
 
         // wg-quick down
-        let wg_result = self.wg.wg_quick_down(self.state_home, logs).await;
+        let wg_result = self.wg.wg_quick_down(self.state_home.clone(), logs).await;
         if let Err(ref e) = wg_result {
             tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
         } else {
@@ -948,8 +918,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
             bypass_manager.teardown().await;
         }
         self.bypass_manager = None;
-
-        wg_result
     }
 }
 

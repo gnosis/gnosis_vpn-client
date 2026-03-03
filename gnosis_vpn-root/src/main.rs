@@ -553,20 +553,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
 async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expected_up: bool) {
     if let Some(router) = maybe_router {
         let logs = if expected_up { Logs::Print } else { Logs::Suppress };
-        match router.teardown(logs).await {
-            Ok(_) => {
-                if !expected_up {
-                    tracing::warn!("cleaned up unexpected existing routing");
-                }
-            }
-            Err(err) => {
-                if expected_up {
-                    tracing::error!(error = ?err, "error tearing down routing");
-                } else {
-                    tracing::debug!(error = ?err, "expected error during non existing routing teardown");
-                }
-            }
-        }
+        router.teardown(logs).await;
     }
 }
 

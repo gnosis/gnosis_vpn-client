@@ -185,7 +185,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     /// 2. wg-quick down
     /// 3. Remove bypass routes
     ///
-    async fn teardown(&mut self, logs: Logs) -> Result<(), Error> {
+    async fn teardown(&mut self, logs: Logs) {
         let iface = self.wg_interface_name.as_deref().unwrap_or(wireguard::WG_INTERFACE);
 
         // Remove VPN routes (best-effort, warn on failure)
@@ -196,11 +196,9 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         }
 
         // wg-quick down
-        let wg_result = self.wg.wg_quick_down((*self.state_home).clone(), logs).await;
-        if let Err(ref e) = wg_result {
-            tracing::warn!(%e, "wg-quick down failed, continuing with bypass route cleanup");
-        } else {
-            tracing::debug!("wg-quick down");
+        match self.wg.wg_quick_down((*self.state_home).clone(), logs).await {
+            Ok(_) => tracing::debug!("wg-quick down"),
+            Err(error) => tracing::warn!(?error, "wg-quick down failed, continuing with bypass route cleanup"),
         }
 
         // Remove bypass routes (always, even if wg-quick down failed)
@@ -208,8 +206,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             bypass_manager.teardown().await;
         }
         self.bypass_manager = None;
-
-        wg_result
     }
 }
 

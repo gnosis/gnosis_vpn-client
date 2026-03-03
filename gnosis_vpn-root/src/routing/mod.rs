@@ -100,5 +100,5 @@ pub enum Error {
 #[async_trait]
 pub trait Routing {
     async fn setup(&mut self) -> Result<(), Error>;
-    async fn teardown(&mut self, logs: Logs) -> Result<(), Error>;
+    async fn teardown(&mut self, logs: Logs);
 }
