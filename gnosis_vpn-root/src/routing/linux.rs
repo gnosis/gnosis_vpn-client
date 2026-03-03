@@ -131,11 +131,10 @@ pub async fn cleanup_stale_fwmark_rules() {
     cleanup_stale_fwmark_rules_with(&netlink, &nft).await;
 }
 
-/// Sets up the persistent fwmark infrastructure at daemon startup.
+/// Sets up the persistent fwmark infrastructure.
 ///
 /// This establishes the firewall rules and routing table entries that
-/// allow HOPR traffic to bypass the VPN tunnel. This setup persists
-/// for the lifetime of the daemon, independent of individual VPN connections.
+/// allow HOPR traffic to bypass the VPN tunnel.
 ///
 /// The setup includes:
 /// 1. Creating an rtnetlink connection for route management
@@ -341,7 +340,7 @@ pub struct WanInfo {
     pub ip_addr: Ipv4Addr,
 }
 
-/// Persistent fwmark infrastructure that lives for the daemon's lifetime.
+/// Persistent fwmark infrastructure.
 ///
 /// This struct holds the resources needed for fwmark-based routing bypass.
 /// It is created at daemon startup and destroyed at daemon shutdown,
@@ -679,8 +678,6 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     /// Uninstalls VPN-specific routing (fwmark infrastructure remains active).
     ///
     /// This method only tears down VPN-specific routes and the WireGuard interface.
-    /// The fwmark infrastructure (firewall rules, TABLE_ID default route, fwmark rule)
-    /// remains active for the daemon's lifetime.
     ///
     /// The steps:
     ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace)
@@ -735,7 +732,6 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 .await;
 
                 // Step 3: Delete the TABLE_ID routing table VPN route
-                // (fwmark rule and TABLE_ID default route stay active for the daemon's lifetime)
                 let vpn_table_route = RouteSpec {
                     destination: vpn_cidr.first_address(),
                     prefix_len: vpn_cidr.network_length(),

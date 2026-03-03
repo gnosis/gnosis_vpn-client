@@ -126,7 +126,7 @@ impl Runner {
                         .await
                 }
                 Err(err) => {
-                    tracing::warn!(error = ?err, "failed to establishment dynamically routed WireGuard tunnel - fallback to static routing");
+                    tracing::warn!(error = ?err, "failed to establish dynamically routed WireGuard tunnel - fallback to static routing");
                     self.run_fallback_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
                         .await
                 }
