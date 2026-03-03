@@ -588,7 +588,16 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
         let wan_info = &self.infra.wan_info;
         tracing::debug!(?wan_info, "using WAN interface from fwmark infrastructure");
 
-        // Phase 1: Add RFC1918 bypass routes BEFORE wg-quick up
+        // Phase 1: Bring up WireGuard without routing table
+        let wg_quick_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            vec!["Table = off".to_string()],
+        );
+        let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
+        tracing::debug!(%interface_name, "wg-quick up");
+
+        // Phase 2: Add RFC1918 bypass routes
         // These routes ensure non-HOPR processes can still access private networks
         for (net, prefix) in RFC1918_BYPASS_NETS {
             let destination: Ipv4Addr = net
@@ -621,16 +630,6 @@ impl<N: NetlinkOps + 'static, R: RouteOps + 'static, W: WgOps + 'static> Routing
                 }
             }
         }
-
-        // Phase 2: Bring up WireGuard
-        // HOPR traffic is already protected by the fwmark infrastructure.
-        let wg_quick_content = self.wg_data.wg.to_file_string(
-            &self.wg_data.interface_info,
-            &self.wg_data.peer_info,
-            vec!["Table = off".to_string()],
-        );
-        let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
-        tracing::debug!(%interface_name, "wg-quick up");
 
         // Phase 3: Complete routing with VPN interface info
 
