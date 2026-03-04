@@ -141,6 +141,18 @@ fn pretty_print(resp: &Response) {
         Response::NerdStats(command::NerdStatsResponse::Connected(stats)) => {
             print_connected_stats(stats);
         }
+        Response::FundingTool(command::FundingToolResponse::WrongPhase) => {
+            eprintln!("Already past potential funding phase - no longer possible to fund");
+        }
+        Response::FundingTool(command::FundingToolResponse::Started) => {
+            println!("Started funding");
+        }
+        Response::FundingTool(command::FundingToolResponse::InProgress) => {
+            println!("Funding in progress");
+        }
+        Response::FundingTool(command::FundingToolResponse::Done) => {
+            println!("Funding complete");
+        }
     }
 }
 
@@ -162,6 +174,10 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::NerdStats(command::NerdStatsResponse::NoInfo) => exitcode::UNAVAILABLE,
         Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
         Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
+        Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
     }
 }
 
