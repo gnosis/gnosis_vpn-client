@@ -607,7 +607,7 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
-dns = { overwrite: true, servers: "1.1.1.1,4.4.4.4,8.8.8.8" }
+dns = { overwrite = true, servers = "1.1.1.1,4.4.4.4,8.8.8.8" }
 
 [blokli]
 connection_sync_timeout = "30s"
