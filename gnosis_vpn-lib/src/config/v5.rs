@@ -114,6 +114,7 @@ pub(super) struct WireGuard {
     pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
+    pub(super) dns: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -427,7 +428,8 @@ impl From<Option<WireGuard>> for WireGuardConfig {
         let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key)
+        let dns = value.as_ref().and_then(|wg| wg.dns.clone());
+        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
     }
 }
 
@@ -579,6 +581,7 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
+dns = "1.1.1.1,4.4.4.4,8.8.8.8"
 
 [blokli]
 connection_sync_timeout = "30s"

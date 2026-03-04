@@ -90,6 +90,8 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # allowed_ips = "0.0.0.0/0"
 # If you want to disable WireGuard key rotation, provide a static private key here.
 # force_private_key = "<your WireGuard private key>"
+# override default DNS servers for the WireGuard interface; defaults to Cloudflare and Google DNS
+# dns = "1.1.1.1,4.4.4.4,8.8.8.8"
 
 ###
 ## chain provider section - query blockchain settings
