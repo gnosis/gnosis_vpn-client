@@ -16,7 +16,7 @@ use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::ping;
-use crate::wireguard::Config as WireGuardConfig;
+use crate::wireguard::{Config as WireGuardConfig, DNSConfig as WireGuardDNSConfig};
 
 const MAX_HOPS: u8 = 3;
 
@@ -119,8 +119,8 @@ pub(super) struct WireGuard {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuardDNS {
-    pub override_dns: bool,
-    pub dns_servers: Option<String>,
+    pub overwrite: bool,
+    pub servers: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,7 +147,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "dns" {
                         if let Some(dns) = v.as_table() {
                             for (k2, _v2) in dns.iter() {
-                                if k == "override" || k == "servers" {
+                                if k == "overwrite" || k == "servers" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("wireguard.dns.{k2}"));
@@ -445,7 +445,16 @@ impl From<Option<WireGuard>> for WireGuardConfig {
         let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
-        let dns = value.as_ref().and_then(|wg| wg.dns.clone());
+        let dns_default = WireGuardDNSConfig::default();
+        let dns = value
+            .as_ref()
+            .and_then(|wg| {
+                wg.dns.as_ref().map(|dns| WireGuardDNSConfig {
+                    overwrite: dns.overwrite,
+                    servers: dns.servers.clone().unwrap_or(dns_default.servers.clone()),
+                })
+            })
+            .unwrap_or(dns_default);
         WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
     }
 }
@@ -598,7 +607,7 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
-dns = { override: true, servers: "1.1.1.1,4.4.4.4,8.8.8.8" }
+dns = { overwrite: true, servers: "1.1.1.1,4.4.4.4,8.8.8.8" }
 
 [blokli]
 connection_sync_timeout = "30s"

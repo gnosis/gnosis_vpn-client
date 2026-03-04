@@ -65,7 +65,16 @@ pub struct KeyPair {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DNSConfig {
     pub overwrite: bool,
-    pub dns_servers: String,
+    pub servers: String,
+}
+
+impl Default for DNSConfig {
+    fn default() -> Self {
+        DNSConfig {
+            overwrite: true,
+            servers: "1.1.1.1,4.4.4.4,8.8.8.8".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,7 +86,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub(crate) fn new<L, M, S, T>(
+    pub(crate) fn new<L, M, S>(
         listen_port: Option<L>,
         allowed_ips: Option<M>,
         force_private_key: Option<S>,
@@ -170,10 +179,10 @@ impl WireGuard {
         lines.push(format!("MTU = {WG_MTU}"));
         if let DNSConfig {
             overwrite: true,
-            dns_servers,
+            servers,
         } = &self.config.dns
         {
-            lines.push(format!("DNS = {dns_servers}"));
+            lines.push(format!("DNS = {servers}"));
         }
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));
