@@ -63,44 +63,24 @@ pub struct KeyPair {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DNSConfig {
-    pub overwrite: bool,
-    pub servers: String,
-}
-
-impl Default for DNSConfig {
-    fn default() -> Self {
-        DNSConfig {
-            overwrite: true,
-            servers: "1.1.1.1,4.4.4.4,8.8.8.8".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
     pub allowed_ips: Option<String>,
-    pub dns: DNSConfig,
+    pub dns: Option<String>,
 }
 
 impl Config {
-    pub(crate) fn new<L, M, S>(
-        listen_port: Option<L>,
-        allowed_ips: Option<M>,
-        force_private_key: Option<S>,
-        dns: DNSConfig,
-    ) -> Self
-    where
-        L: Into<u16>,
-        M: Into<String>,
-        S: Into<String>,
-    {
+    pub(crate) fn new(
+        listen_port: Option<u16>,
+        allowed_ips: Option<String>,
+        force_private_key: Option<String>,
+        dns: Option<String>,
+    ) -> Self {
         Config {
-            listen_port: listen_port.map(Into::into),
-            allowed_ips: allowed_ips.map(Into::into),
-            force_private_key: force_private_key.map(Into::into),
+            listen_port,
+            allowed_ips,
+            force_private_key,
             dns,
         }
     }
@@ -177,12 +157,8 @@ impl WireGuard {
         lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
         lines.push(format!("Address = {}", interface.address));
         lines.push(format!("MTU = {WG_MTU}"));
-        if let DNSConfig {
-            overwrite: true,
-            servers,
-        } = &self.config.dns
-        {
-            lines.push(format!("DNS = {servers}"));
+        if let Some(dns) = &self.config.dns {
+            lines.push(format!("DNS = {dns}"));
         }
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));

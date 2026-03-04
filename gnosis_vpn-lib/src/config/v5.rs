@@ -16,7 +16,7 @@ use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::ping;
-use crate::wireguard::{Config as WireGuardConfig, DNSConfig as WireGuardDNSConfig};
+use crate::wireguard::Config as WireGuardConfig;
 
 const MAX_HOPS: u8 = 3;
 
@@ -121,6 +121,12 @@ pub(super) struct WireGuard {
 pub(super) struct WireGuardDNS {
     pub overwrite: bool,
     pub servers: Option<String>,
+}
+
+impl WireGuardDNS {
+    fn default_server() -> String {
+        "1.1.1.1,4.4.4.4,8.8.8.8".to_string()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -445,16 +451,18 @@ impl From<Option<WireGuard>> for WireGuardConfig {
         let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
-        let dns_default = WireGuardDNSConfig::default();
         let dns = value
             .as_ref()
             .and_then(|wg| {
-                wg.dns.as_ref().map(|dns| WireGuardDNSConfig {
-                    overwrite: dns.overwrite,
-                    servers: dns.servers.clone().unwrap_or(dns_default.servers.clone()),
+                wg.dns.as_ref().map(|dns| {
+                    if dns.overwrite {
+                        Some(dns.servers.clone().unwrap_or(WireGuardDNS::default_server()))
+                    } else {
+                        None
+                    }
                 })
             })
-            .unwrap_or(dns_default);
+            .unwrap_or(Some(WireGuardDNS::default_server()));
         WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
     }
 }
