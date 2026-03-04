@@ -63,7 +63,7 @@ pub enum RunMode {
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
-        safe_creation_error: Option<String>,
+        error: Option<String>,
     },
     /// Safe deployment ongoing
     DeployingSafe { node_address: Address },
@@ -194,14 +194,14 @@ impl RunMode {
         node_address: Address,
         pre_safe: &Option<balance::PreSafe>,
         funding_tool: Option<String>,
-        safe_creation_error: Option<String>,
+        error: Option<String>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
             node_xdai: pre_safe.clone().map(|s| s.node_xdai).unwrap_or_default(),
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
-            safe_creation_error,
+            error,
         }
     }
 
@@ -343,15 +343,15 @@ impl Display for RunMode {
                 node_xdai,
                 node_wxhopr,
                 funding_tool,
-                safe_creation_error,
+                error,
             } => {
                 let mut msg = format!("Preparing Safe (node: {node_address}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}");
-                msg = match (funding_tool, safe_creation_error) {
+                msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
-                        format!("{msg}, funding tool: {tool}, safe creation error: {error})")
+                        format!("{msg}, funding tool: {tool}, error: {error})")
                     }
                     (Some(tool), None) => format!("{msg}, funding tool: {tool})"),
-                    (None, Some(error)) => format!("{msg}, safe_creation_error: {error})"),
+                    (None, Some(error)) => format!("{msg}, error: {error})"),
                     (None, None) => format!("{msg})"),
                 };
                 write!(f, "{}", msg)

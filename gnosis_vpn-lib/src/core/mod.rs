@@ -310,15 +310,24 @@ impl Core {
                             Phase::Initial => RunMode::Init,
                             Phase::CheckingSafe {
                                 node_balance,
-                                query_safe: _,
+                                query_safe,
                                 funding_tool,
                                 deploy_safe_error,
                             } => {
-                                let safe_creation_error = deploy_safe_error;
                                 let balance = match node_balance {
-                                    Querying::Success(b) => Some(b),
+                                    Querying::Success(ref b) => Some(b.clone()),
                                     _ => None,
                                 };
+                                let mut errors = "".to_string();
+                                if let Querying::Error(err) = node_balance {
+                                    errors = err
+                                };
+                                if let Querying::Error(err) = query_safe {
+                                    errors = format!("{} {}", errors, err);
+                                }
+                                if let Some(deploy_err) = deploy_safe_error {
+                                    errors = format!("{} {}", errors, deploy_err);
+                                }
                                 let funding_tool = match funding_tool {
                                     balance::FundingTool::NotStarted => None,
                                     balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
@@ -329,7 +338,8 @@ impl Core {
                                         Some(format!("Funding tool error: {error}"))
                                     }
                                 };
-                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, safe_creation_error)
+                                let error = if errors.is_empty() { None } else { Some(errors) };
+                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, error)
                             }
                             Phase::DeployingSafe {
                                 node_balance: _,
