@@ -42,6 +42,7 @@ pub enum Response {
     Balance(Option<BalanceResponse>),
     Metrics(String),
     Telemetry(Option<String>),
+    FundingTool(FundingToolResponse),
     Pong,
     Empty,
 }
@@ -61,7 +62,7 @@ pub enum RunMode {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
-        funding_tool: balance::FundingTool,
+        funding_tool: Option<String>,
         safe_creation_error: Option<String>,
     },
     /// Safe deployment ongoing
@@ -128,6 +129,14 @@ pub enum DisconnectResponse {
     NotConnected,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum FundingToolResponse {
+    WrongPhase,
+    Started,
+    InProgress,
+    Done,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
@@ -184,7 +193,7 @@ impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
         pre_safe: &Option<balance::PreSafe>,
-        funding_tool: balance::FundingTool,
+        funding_tool: Option<String>,
         safe_creation_error: Option<String>,
     ) -> Self {
         RunMode::PreparingSafe {
@@ -262,6 +271,10 @@ impl Response {
     pub fn status(stat: StatusResponse) -> Self {
         Response::Status(stat)
     }
+
+    pub fn funding_tool(funding_tool: FundingToolResponse) -> Self {
+        Response::FundingTool(funding_tool)
+    }
 }
 
 impl Display for Command {
@@ -332,19 +345,16 @@ impl Display for RunMode {
                 funding_tool,
                 safe_creation_error,
             } => {
-                if let Some(error) = safe_creation_error {
-                    write!(
-                        f,
-                        "Preparing Safe (node: {}, xdai: {}, wxHOPR: {}, funding tool: {}, error: {})",
-                        node_address, node_xdai, node_wxhopr, funding_tool, error
-                    )
-                } else {
-                    write!(
-                        f,
-                        "Preparing Safe (node: {}, xdai: {}, wxHOPR: {}, funding tool: {})",
-                        node_address, node_xdai, node_wxhopr, funding_tool
-                    )
-                }
+                let mut msg = format!("Preparing Safe (node: {node_address}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}");
+                msg = match (funding_tool, safe_creation_error) {
+                    (Some(tool), Some(error)) => {
+                        format!("{msg}, funding tool: {tool}, safe creation error: {error})")
+                    }
+                    (Some(tool), None) => format!("{msg}, funding tool: {tool})"),
+                    (None, Some(error)) => format!("{msg}, safe_creation_error: {error})"),
+                    (None, None) => format!("{msg})"),
+                };
+                write!(f, "{}", msg)
             }
             RunMode::DeployingSafe { node_address } => write!(f, "Deploying Safe (node: {})", node_address),
             RunMode::Warmup {

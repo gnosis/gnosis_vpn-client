@@ -76,7 +76,6 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    funding_tool: balance::FundingTool,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
@@ -90,21 +89,31 @@ pub struct Core {
 
 #[derive(Debug, Clone)]
 enum Phase {
+    // initial phase - determine if safe is present
     Initial,
-    CreatingSafe {
+    /// safe absent or safe deployment error - repeatedly query node balance and safe info
+    CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
-        deploy_safe: Querying<SafeModule>,
+        funding_tool: balance::FundingTool,
+        deploy_safe_error: Option<String>,
     },
+    /// enough funds and no deployed safe - run safe deployment
     DeployingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
     },
+    /// construct edge client
     Starting(Option<EdgliInitState>),
+    /// start edge client
     HoprSyncing,
+    /// edge client running normally
     HoprRunning,
+    // connecting to a destination
     Connecting(connection::up::Up),
+    /// connected to a destination
     Connected(connection::up::Up),
+    /// dismantle state
     ShuttingDown,
 }
 
@@ -112,8 +121,6 @@ enum Phase {
 enum Querying<T> {
     Init,
     Success(T),
-    // TODO expose error in status
-    #[allow(dead_code)]
     Error(String),
 }
 
@@ -167,7 +174,6 @@ impl Core {
             // runtime data
             phase: Phase::Initial,
             balances: None,
-            funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             safeless_interactor: Arc::new(safeless_interactor),
             ticket_value: None,
@@ -302,25 +308,28 @@ impl Core {
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
-                            Phase::CreatingSafe {
+                            Phase::CheckingSafe {
                                 node_balance,
                                 query_safe: _,
-                                deploy_safe,
+                                funding_tool,
+                                deploy_safe_error,
                             } => {
-                                let safe_creation_error = match deploy_safe {
-                                    Querying::Error(e) => Some(e.clone()),
-                                    _ => None,
-                                };
+                                let safe_creation_error = deploy_safe_error;
                                 let balance = match node_balance {
                                     Querying::Success(b) => Some(b),
                                     _ => None,
                                 };
-                                RunMode::preparing_safe(
-                                    self.node_address,
-                                    &balance,
-                                    self.funding_tool.clone(),
-                                    safe_creation_error,
-                                )
+                                let funding_tool = match funding_tool {
+                                    balance::FundingTool::NotStarted => None,
+                                    balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
+                                    balance::FundingTool::CompletedSuccess => {
+                                        Some("Funding tool ran successfully".to_string())
+                                    }
+                                    balance::FundingTool::CompletedError(error) => {
+                                        Some(format!("Funding tool error: {error}"))
+                                    }
+                                };
+                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, safe_creation_error)
                             }
                             Phase::DeployingSafe {
                                 node_balance: _,
@@ -469,16 +478,34 @@ impl Core {
                         let _ = resp.send(Response::Empty);
                     }
 
-                    Command::FundingTool(secret) => {
-                        if matches!(self.phase, Phase::CreatingSafe { .. }) {
-                            self.funding_tool = balance::FundingTool::InProgress;
-                            self.spawn_funding_runner(secret, results_sender);
-                            let _ = resp.send(Response::Empty);
-                        } else {
-                            tracing::warn!("cannot start funding tool - safe already deployed");
-                            let _ = resp.send(Response::Empty);
+                    Command::FundingTool(secret) => match self.phase.clone() {
+                        Phase::CheckingSafe {
+                            node_balance,
+                            query_safe,
+                            funding_tool,
+                            deploy_safe_error,
+                        } => match funding_tool {
+                            balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
+                                self.phase = Phase::CheckingSafe {
+                                    node_balance,
+                                    query_safe,
+                                    funding_tool: balance::FundingTool::InProgress,
+                                    deploy_safe_error,
+                                };
+                                self.spawn_funding_runner(secret, results_sender);
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
+                            }
+                            balance::FundingTool::InProgress => {
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
+                            }
+                            balance::FundingTool::CompletedSuccess => {
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Done));
+                            }
+                        },
+                        _ => {
+                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
                         }
-                    }
+                    },
 
                     Command::Metrics => {
                         let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
@@ -519,6 +546,7 @@ impl Core {
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
+            Results::FundingTool { res } => self.on_results_funding_tool(res),
 
             Results::PersistSafe { res, safe_module } => match res {
                 Ok(()) => {
@@ -543,15 +571,6 @@ impl Core {
                 Err(err) => {
                     tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
                     self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
-                }
-            },
-
-            Results::FundingTool { res } => match res {
-                Ok(None) => self.funding_tool = balance::FundingTool::CompletedSuccess,
-                Ok(Some(reason)) => self.funding_tool = balance::FundingTool::CompletedError(reason),
-                Err(err) => {
-                    tracing::error!(?err, "funding runner exited with error");
-                    self.funding_tool = balance::FundingTool::CompletedError(err.to_string());
                 }
             },
 
@@ -773,17 +792,19 @@ impl Core {
         match (res, self.phase.clone()) {
             (
                 Ok(presafe),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::info!(%presafe, "on presafe node balance");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
@@ -791,17 +812,19 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to fetch presafe node balance - retrying");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Error(err.to_string()),
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
@@ -817,7 +840,7 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         match (res, self.phase.clone()) {
-            (Ok(Some(safe_module)), Phase::CreatingSafe { .. }) => {
+            (Ok(Some(safe_module)), Phase::CheckingSafe { .. }) => {
                 tracing::info!(?safe_module, "found safe module");
                 self.cancel_presafe_queries.cancel();
                 self.cancel_presafe_queries = CancellationToken::new();
@@ -828,17 +851,19 @@ impl Core {
             }
             (
                 Ok(None),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::info!("found no deployed safe module");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Success(None),
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -846,17 +871,19 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to query safe module - retrying");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Error(err.to_string()),
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
@@ -887,10 +914,11 @@ impl Core {
                 },
             ) => {
                 tracing::error!(?err, "failed to deploy safe module - retrying from balance check");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe,
-                    deploy_safe: Querying::Error(err.to_string()),
+                    deploy_safe_error: Some(err.to_string()),
+                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -901,11 +929,69 @@ impl Core {
         }
     }
 
+    fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
+        match (res, self.phase.clone()) {
+            (
+                Ok(None),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedSuccess,
+                }
+            }
+            (
+                Ok(Some(reason)),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedError(reason),
+                }
+            }
+            (
+                Err(err),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedError(err.to_string()),
+                }
+            }
+
+            (res, phase) => {
+                tracing::warn!(?res, ?phase, "unexpted funding tool response in wrong phase");
+            }
+        }
+    }
+
     fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
-        if let Phase::CreatingSafe {
+        if let Phase::CheckingSafe {
             node_balance: Querying::Success(presafe),
             query_safe: Querying::Success(None),
-            deploy_safe: _,
+            deploy_safe_error: _,
+            funding_tool: _,
         } = self.phase.clone()
         {
             if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
@@ -939,10 +1025,11 @@ impl Core {
                         "error deserializing existing safe module - querying safeless interactor"
                     );
                 }
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Init,
                     query_safe: Querying::Init,
-                    deploy_safe: Querying::Init,
+                    deploy_safe_error: None,
+                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::ZERO);
                 self.spawn_node_balance_runner(results_sender, Duration::ZERO);
