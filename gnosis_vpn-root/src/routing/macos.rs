@@ -244,6 +244,7 @@ mod tests {
                     listen_port: Some(51820),
                     allowed_ips: Some("0.0.0.0/0".into()),
                     force_private_key: None,
+                    dns: None,
                 },
                 wireguard::KeyPair {
                     priv_key: "test_priv_key".into(),
