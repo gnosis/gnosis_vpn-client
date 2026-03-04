@@ -8,6 +8,7 @@ pub fn create_test_wg_data(interface_addr: &str, peer_endpoint: &str) -> WireGua
         listen_port: None,
         force_private_key: None,
         allowed_ips: None,
+        dns: None,
     };
     let key_pair = KeyPair {
         priv_key: "priv_key".to_string(),
