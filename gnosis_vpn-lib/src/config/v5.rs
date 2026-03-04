@@ -114,7 +114,13 @@ pub(super) struct WireGuard {
     pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
-    pub(super) dns: Option<String>,
+    pub(super) dns: Option<WireGuardDNS>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct WireGuardDNS {
+    pub override_dns: bool,
+    pub dns_servers: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -134,8 +140,19 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // wireguard nested struct
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
-                for (k, _v) in wg.iter() {
+                for (k, v) in wg.iter() {
                     if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                        continue;
+                    }
+                    if k == "dns" {
+                        if let Some(dns) = v.as_table() {
+                            for (k2, _v2) in dns.iter() {
+                                if k == "override" || k == "servers" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("wireguard.dns.{k2}"));
+                            }
+                        }
                         continue;
                     }
                     wrong_keys.push(format!("wireguard.{k}"));
@@ -581,7 +598,7 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
-dns = "1.1.1.1,4.4.4.4,8.8.8.8"
+dns = { override: true, servers: "1.1.1.1,4.4.4.4,8.8.8.8" }
 
 [blokli]
 connection_sync_timeout = "30s"

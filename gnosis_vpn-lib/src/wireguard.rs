@@ -63,11 +63,17 @@ pub struct KeyPair {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DNSConfig {
+    pub overwrite: bool,
+    pub dns_servers: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
     pub allowed_ips: Option<String>,
-    pub dns: Option<String>,
+    pub dns: DNSConfig,
 }
 
 impl Config {
@@ -75,19 +81,18 @@ impl Config {
         listen_port: Option<L>,
         allowed_ips: Option<M>,
         force_private_key: Option<S>,
-        dns: Option<T>,
+        dns: DNSConfig,
     ) -> Self
     where
         L: Into<u16>,
         M: Into<String>,
         S: Into<String>,
-        T: Into<String>,
     {
         Config {
             listen_port: listen_port.map(Into::into),
             allowed_ips: allowed_ips.map(Into::into),
             force_private_key: force_private_key.map(Into::into),
-            dns: dns.map(Into::into),
+            dns,
         }
     }
 }
@@ -156,7 +161,6 @@ impl WireGuard {
         extra_interface_lines: Vec<String>,
     ) -> String {
         let allowed_ips = &self.config.allowed_ips.clone().unwrap_or("0.0.0.0/0".to_string());
-        let dns = &self.config.dns.clone().unwrap_or("1.1.1.1,4.4.4.4,8.8.8.8".to_string());
         let mut lines = Vec::new();
 
         // [Interface] section
@@ -164,7 +168,13 @@ impl WireGuard {
         lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
         lines.push(format!("Address = {}", interface.address));
         lines.push(format!("MTU = {WG_MTU}"));
-        lines.push(format!("DNS = {dns}"));
+        if let DNSConfig {
+            overwrite: true,
+            dns_servers,
+        } = &self.config.dns
+        {
+            lines.push(format!("DNS = {dns_servers}"));
+        }
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));
         }
