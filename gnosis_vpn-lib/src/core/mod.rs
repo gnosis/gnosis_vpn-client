@@ -277,6 +277,18 @@ impl Core {
             WorkerToCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
+                    Command::DebugInfo => {
+                        tracing::debug!("incoming debug info request");
+                        match &self.phase {
+                            Phase::Connecting(conn) => {}
+                            Phase::Connected(conn) => {}
+                            _ => {
+                                let res = Response::debug_info(command::DebugResponse::NoInfo);
+                                let _ = resp.send(res);
+                            }
+                        }
+                    }
+
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,

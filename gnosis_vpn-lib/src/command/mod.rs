@@ -20,6 +20,7 @@ pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
+    DebugInfo,
     Connect(String),
     Metrics,
     Disconnect,
@@ -33,6 +34,7 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
+    DebugInfo(DebugResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
@@ -140,6 +142,27 @@ pub enum ConnectionState {
     Disconnecting(SystemTime, connection::down::Phase),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DebugResponse {
+    NoInfo,
+    Connecting(DebugConnecting),
+    Connected(DebugConnected),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DebugConnecting {
+    pub wireguard: Option<WireGuard>,
+    pub registration: Option<Registration>,
+    pub session: Option<SessionClientMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DebugConnected {
+    pub wireguard: WireGuard,
+    pub registration: Registration,
+    pub session: SessionClientMetadata,
+}
+
 impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
@@ -213,6 +236,10 @@ impl Response {
 
     pub fn disconnect(disc: DisconnectResponse) -> Self {
         Response::Disconnect(disc)
+    }
+
+    pub fn debug_info(info: DebugResponse) -> Self {
+        Response::DebugInfo(info)
     }
 
     pub fn status(stat: StatusResponse) -> Self {
