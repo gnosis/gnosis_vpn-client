@@ -214,24 +214,17 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             stats
                 .wg_pubkey
                 .clone()
-                .unwrap_or("<< pending generation >>".to_string())
-        )
-        .as_str(),
-    );
-    str_resp.push_str(
-        format!(
-            "Exit WireGuard Public Key: {}\n",
-            stats
-                .wg_server_pubkey
-                .clone()
-                .unwrap_or("<< pending registration >>".to_string())
+                .unwrap_or("--- pending generation ---".to_string())
         )
         .as_str(),
     );
     str_resp.push_str(
         format!(
             "Assigned WireGuard IP: {}\n",
-            stats.wg_ip.clone().unwrap_or("<< pending registration >>".to_string())
+            stats
+                .wg_ip
+                .clone()
+                .unwrap_or("--- pending registration ---".to_string())
         )
         .as_str(),
     );
@@ -241,7 +234,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             stats
                 .session_bound_host
                 .map(|h| h.to_string())
-                .unwrap_or("<< pending session creation >>".to_string())
+                .unwrap_or("--- pending session creation ---".to_string())
         )
         .as_str(),
     );
@@ -251,7 +244,17 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             stats
                 .session_id
                 .clone()
-                .unwrap_or("<< pending session creation >>".to_string())
+                .unwrap_or("--- pending session creation ---".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "---\nExit WireGuard Public Key: {}\n",
+            stats
+                .wg_server_pubkey
+                .clone()
+                .unwrap_or("--- pending registration ---".to_string())
         )
         .as_str(),
     );
@@ -300,9 +303,6 @@ fn print_connected_stats(stats: &command::ConnStats) {
     if let Some(ref wg_pubkey) = stats.wg_pubkey {
         str_resp.push_str(format!("WiregGuard Public Key: {}\n", wg_pubkey).as_str());
     }
-    if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
-        str_resp.push_str(format!("Exit WireGuard Public Key: {}\n", wg_pubkey).as_str());
-    }
     if let Some(ref ip) = stats.wg_ip {
         str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
     }
@@ -311,6 +311,10 @@ fn print_connected_stats(stats: &command::ConnStats) {
     }
     if let Some(ref id) = stats.session_id {
         str_resp.push_str(format!("Session ID: {id}\n").as_str());
+    }
+
+    if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
+        str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     println!("{str_resp}");
 }
