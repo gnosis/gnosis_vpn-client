@@ -162,11 +162,6 @@ impl Runner {
         peer_ips: Vec<Ipv4Addr>,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
-        // 6b. dismantle dynamic routing and request static wg tunnel from root
-        let _ = results_sender
-            .send(progress(Progress::StaticWgTunnel(session.clone())))
-            .await;
-
         // teardown any existing dynamic routing
         let _ = results_sender
             .send(Results::ConnectionRequestToRoot(RunnerToRoot::TearDownWg))
@@ -192,6 +187,11 @@ impl Runner {
             results_sender,
         )
         .await?;
+
+        // 6b. dismantle dynamic routing and request static wg tunnel from root
+        let _ = results_sender
+            .send(progress(Progress::StaticWgTunnel(session.clone())))
+            .await;
 
         // setup static routing
         request_static_wg_tunnel(wg, registration, &session, peer_ips, results_sender).await?;
