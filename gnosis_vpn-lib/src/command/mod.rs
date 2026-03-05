@@ -153,25 +153,23 @@ pub enum NerdStatsResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnStats {
+    pub node_address: Address,
     pub destination: Destination,
     pub wg_pubkey: Option<String>,
     pub wg_server_pubkey: Option<String>,
     pub wg_ip: Option<String>,
-    pub session_forward_path: Option<RoutingOptions>,
-    pub session_return_path: Option<RoutingOptions>,
     pub session_bound_host: Option<SocketAddr>,
     pub session_id: Option<String>,
 }
 
-impl From<&connection::up::Up> for ConnStats {
-    fn from(conn: &connection::up::Up) -> Self {
+impl ConnStats {
+    fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
         ConnStats {
+            node_address,
             destination: conn.destination.clone(),
             wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
             wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
-            session_forward_path: conn.session.as_ref().map(|s| s.forward_path.clone()),
-            session_return_path: conn.session.as_ref().map(|s| s.return_path.clone()),
             session_bound_host: conn.session.as_ref().map(|s| s.bound_host),
             session_id: conn
                 .session

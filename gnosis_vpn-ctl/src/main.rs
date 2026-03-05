@@ -131,6 +131,15 @@ fn pretty_print(resp: &Response) {
         Response::Metrics(metrics) => {
             println!("{metrics}");
         }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo) => {
+            eprintln!("No extra stats available. Try connecting to a destination first.");
+        }
+        Response::NerdStats(command::NerdStatsResponse::Connecting(stats)) => {
+            print_connecting_stats(stats);
+        }
+        Response::NerdStats(command::NerdStatsResponse::Connected(stats)) => {
+            print_connected_stats(stats);
+        }
     }
 }
 
@@ -149,5 +158,156 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Metrics(..) => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse::NoInfo) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
     }
+}
+
+fn print_connecting_stats(stats: &command::ConnStats) {
+    let mut str_resp = String::new();
+    match stats.destination.routing {
+        IntermediatePath(nodes) => match nodes {
+            [one] => {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --CONNECTING--VIA--> {one}(relayer) --TO--> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    one = one,
+                    addr = stats.destination.address
+                ));
+            }
+            [one, two] => {
+                str_resp.push_str(&format!("{node_addr}(me) --CONNECTING--VIA--> {one}(relayer_one) --VIA--> {two}(relayer_two) --TO--> {addr}(exit)\n", node_addr = stats.node_address, one = one, two = two, addr = stats.destination.address));
+            }
+            [one, two, three] => {
+                str_resp.push_str(&format!("{node_addr}(me) --CONNECTING--VIA--> {one}(relayer_one) --VIA--> {two}(relayer_two) --VIA--> {three}(relayer_three) --TO--> {addr}(exit)\n", node_addr = stats.node_address, one = one, two = two, three = three, addr = stats.destination.address));
+            }
+        },
+        Hops(nr) => {
+            if nr == 0 {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --CONNECTING--DIRECTLY--> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    addr = stats.destination.address
+                ));
+            } else if nr == 1 {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --CONNECTING--VIA--1HOP--> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    addr = stats.destination.address
+                ));
+            } else {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --CONNECTING--VIA--{nr}HOPS--> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    addr = stats.destination.address,
+                    nr = nr
+                ));
+            }
+        }
+    };
+    str_resp.push_str("---\n");
+    str_resp.push_str(
+        format!(
+            "WiregGuard Public Key: {}\n",
+            stats.wg_pubkey.unwrap_or("<< pending generation >>".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Exit WireGuard Public Key: {}\n",
+            stats
+                .wg_server_pubkey
+                .unwrap_or("<< pending registration >>".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Assigned WireGuard IP: {}\n",
+            stats.wg_ip.unwrap_or("<< pending registration >>".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Session entry: {}\n",
+            stats
+                .session_bound_host
+                .map(|h| h.to_string())
+                .unwrap_or("<< pending session creation >>".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Session ID: {}\n",
+            stats.session_id.unwrap_or("<< pending session creation >>".to_string())
+        )
+        .as_str(),
+    );
+    println!("{str_resp}");
+}
+fn print_connected_stats(stats: &command::ConnStats) {
+    let mut str_resp = String::new();
+    match stats.destination.routing {
+        IntermediatePath(nodes) => {
+            match nodes {
+                [one] => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) --VIA--> {one}(relayer) --TO--> {addr}(exit)\n",
+                        node_addr = stats.node_address,
+                        one = one,
+                        addr = stats.destination.address
+                    ));
+                }
+                [one, two] => {
+                    str_resp.push_str(&format!("{node_addr}(me) --VIA--> {one}(relayer_one) --VIA--> {two}(relayer_two) --TO--> {addr}(exit)\n", node_addr = stats.node_address, one = one, two = two, addr = stats.destination.address));
+                }
+                [one, two, three] => {
+                    str_resp.push_str(&format!("{node_addr}(me) --VIA--> {one}(relayer_one) --VIA--> {two}(relayer_two) --VIA--> {three}(relayer_three) --TO--> {addr}(exit)\n", node_addr = stats.node_address, one = one, two = two, three = three, addr = stats.destination.address));
+                }
+            }
+        }
+        Hops(nr) => {
+            if nr == 0 {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    addr = stats.destination.address
+                ));
+            } else if nr == 1 {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --1HOP--> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    addr = stats.destination.address
+                ));
+            } else {
+                str_resp.push_str(&format!(
+                    "{node_addr}(me) --{nr}HOPS--> {addr}(exit)\n",
+                    node_addr = stats.node_address,
+                    addr = stats.destination.address,
+                    nr = nr
+                ));
+            }
+        }
+    };
+    str_resp.push_str("---\n");
+    if let Some(wg_pubkey) = stats.wg_pubkey {
+        str_resp.push_str(format!("WiregGuard Public Key: {}\n", wg_pubkey).as_str());
+    }
+    if let Some(wg_pubkey) = stats.wg_server_pubkey {
+        str_resp.push_str(format!("Exit WireGuard Public Key: {}\n", wg_pubkey).as_str());
+    }
+    if let Some(ip) = stats.wg_ip {
+        str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
+    }
+    if let Some(bound_host) = stats.session_bound_host {
+        str_resp.push_str(format!("Session entry: {bound_host}\n").as_str());
+    }
+    if let Some(id) = stats.session_id {
+        str_resp.push_str(format!("Session ID: {id}\n").as_str());
+    }
+    println!("{str_resp}");
 }
