@@ -10,7 +10,6 @@ use std::time::SystemTime;
 
 use crate::balance::{self, FundingIssue};
 use crate::connection;
-use crate::connection::destination::RoutingOptions;
 use crate::connection::destination::{Address, Destination};
 use crate::connectivity_health::ConnectivityHealth;
 use crate::destination_health::DestinationHealth;
@@ -163,7 +162,7 @@ pub struct ConnStats {
 }
 
 impl ConnStats {
-    fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
+    pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
         ConnStats {
             node_address,
             destination: conn.destination.clone(),

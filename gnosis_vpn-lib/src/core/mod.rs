@@ -281,11 +281,15 @@ impl Core {
                         tracing::debug!("incoming nerd stats request");
                         match &self.phase {
                             Phase::Connecting(conn) => {
-                                let res = Response::debug_info(command::NerdStatsResponse::Connecting(conn.into()));
+                                let res = Response::debug_info(command::NerdStatsResponse::Connecting(
+                                    command::ConnStats::from_conn(conn, self.node_address),
+                                ));
                                 let _ = resp.send(res);
                             }
                             Phase::Connected(conn) => {
-                                let res = Response::debug_info(command::NerdStatsResponse::Connected(conn.into()));
+                                let res = Response::debug_info(command::NerdStatsResponse::Connected(
+                                    command::ConnStats::from_conn(conn, self.node_address),
+                                ));
                                 let _ = resp.send(res);
                             }
                             _ => {
