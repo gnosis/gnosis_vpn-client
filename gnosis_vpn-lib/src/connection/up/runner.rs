@@ -144,7 +144,7 @@ impl Runner {
     ) -> Result<SessionClientMetadata, Error> {
         // 6b. request static wg tunnel from root
         let _ = results_sender
-            .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
+            .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
 
         // setup static routing
@@ -164,7 +164,7 @@ impl Runner {
     ) -> Result<SessionClientMetadata, Error> {
         // 6b. dismantle dynamic routing and request static wg tunnel from root
         let _ = results_sender
-            .send(progress(Progress::StaticWgTunnel(peer_ips.len())))
+            .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
 
         // teardown any existing dynamic routing

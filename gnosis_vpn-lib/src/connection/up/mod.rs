@@ -29,7 +29,7 @@ pub enum Progress {
     OpenPing,
     PeerIps,
     DynamicWgTunnel(SessionClientMetadata),
-    StaticWgTunnel(usize),
+    StaticWgTunnel(SessionClientMetadata),
     Ping,
     AdjustToMain(Duration),
 }
@@ -127,8 +127,9 @@ impl Up {
                 self.session = Some(session);
             }
             Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
-            Progress::StaticWgTunnel(_announced_peer_count) => {
+            Progress::StaticWgTunnel(session) => {
                 self.phase = (now, Phase::FallbackToStaticWgTunnel);
+                self.session = Some(session);
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
@@ -191,10 +192,7 @@ impl Display for Progress {
             Progress::OpenPing => write!(f, "Opening main connection"),
             Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
-            Progress::StaticWgTunnel(announced_peer_count) => write!(
-                f,
-                "Establishing static WireGuard tunnel with {announced_peer_count} announced peers"
-            ),
+            Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)
