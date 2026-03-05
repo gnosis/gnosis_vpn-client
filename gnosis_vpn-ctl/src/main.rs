@@ -211,20 +211,14 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     str_resp.push_str(
         format!(
             "WiregGuard Public Key: {}\n",
-            stats
-                .wg_pubkey
-                .clone()
-                .unwrap_or("--- pending generation ---".to_string())
+            stats.wg_pubkey.clone().unwrap_or("--pending generation--".to_string())
         )
         .as_str(),
     );
     str_resp.push_str(
         format!(
             "Assigned WireGuard IP: {}\n",
-            stats
-                .wg_ip
-                .clone()
-                .unwrap_or("--- pending registration ---".to_string())
+            stats.wg_ip.clone().unwrap_or("--pending registration--".to_string())
         )
         .as_str(),
     );
@@ -234,7 +228,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             stats
                 .session_bound_host
                 .map(|h| h.to_string())
-                .unwrap_or("--- pending session creation ---".to_string())
+                .unwrap_or("--pending session creation--".to_string())
         )
         .as_str(),
     );
@@ -244,7 +238,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             stats
                 .session_id
                 .clone()
-                .unwrap_or("--- pending session creation ---".to_string())
+                .unwrap_or("--pending session creation--".to_string())
         )
         .as_str(),
     );
@@ -254,7 +248,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             stats
                 .wg_server_pubkey
                 .clone()
-                .unwrap_or("--- pending registration ---".to_string())
+                .unwrap_or("--pending registration--".to_string())
         )
         .as_str(),
     );
