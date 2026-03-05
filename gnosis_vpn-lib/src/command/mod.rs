@@ -4,7 +4,7 @@ use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::SystemTime;
 
