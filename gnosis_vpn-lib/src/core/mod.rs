@@ -277,13 +277,19 @@ impl Core {
             WorkerToCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
-                    Command::DebugInfo => {
-                        tracing::debug!("incoming debug info request");
+                    Command::NerdStats => {
+                        tracing::debug!("incoming nerd stats request");
                         match &self.phase {
-                            Phase::Connecting(conn) => {}
-                            Phase::Connected(conn) => {}
+                            Phase::Connecting(conn) => {
+                                let res = Response::debug_info(command::NerdStatsResponse::Connecting(conn.into()));
+                                let _ = resp.send(res);
+                            }
+                            Phase::Connected(conn) => {
+                                let res = Response::debug_info(command::NerdStatsResponse::Connected(conn.into()));
+                                let _ = resp.send(res);
+                            }
                             _ => {
-                                let res = Response::debug_info(command::DebugResponse::NoInfo);
+                                let res = Response::debug_info(command::NerdStatsResponse::NoInfo);
                                 let _ = resp.send(res);
                             }
                         }

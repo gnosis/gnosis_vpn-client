@@ -4,11 +4,13 @@ use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::time::SystemTime;
 
 use crate::balance::{self, FundingIssue};
 use crate::connection;
+use crate::connection::destination::RoutingOptions;
 use crate::connection::destination::{Address, Destination};
 use crate::connectivity_health::ConnectivityHealth;
 use crate::destination_health::DestinationHealth;
@@ -20,7 +22,7 @@ pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
-    DebugInfo,
+    NerdStats,
     Connect(String),
     Metrics,
     Disconnect,
@@ -34,7 +36,7 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
-    DebugInfo(DebugResponse),
+    NerdStats(NerdStatsResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
@@ -143,24 +145,41 @@ pub enum ConnectionState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DebugResponse {
+pub enum NerdStatsResponse {
     NoInfo,
-    Connecting(DebugConnecting),
-    Connected(DebugConnected),
+    Connecting(ConnStats),
+    Connected(ConnStats),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DebugConnecting {
-    pub wireguard: Option<WireGuard>,
-    pub registration: Option<Registration>,
-    pub session: Option<SessionClientMetadata>,
+pub struct ConnStats {
+    pub destination: Destination,
+    pub wg_pubkey: Option<String>,
+    pub wg_server_pubkey: Option<String>,
+    pub wg_ip: Option<String>,
+    pub session_forward_path: Option<RoutingOptions>,
+    pub session_return_path: Option<RoutingOptions>,
+    pub session_bound_host: Option<SocketAddr>,
+    pub session_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DebugConnected {
-    pub wireguard: WireGuard,
-    pub registration: Registration,
-    pub session: SessionClientMetadata,
+impl From<&connection::up::Up> for ConnStats {
+    fn from(conn: &connection::up::Up) -> Self {
+        ConnStats {
+            destination: conn.destination.clone(),
+            wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
+            wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
+            wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
+            session_forward_path: conn.session.as_ref().map(|s| s.forward_path.clone()),
+            session_return_path: conn.session.as_ref().map(|s| s.return_path.clone()),
+            session_bound_host: conn.session.as_ref().map(|s| s.bound_host),
+            session_id: conn
+                .session
+                .as_ref()
+                .and_then(|s| s.active_clients.first())
+                .map(|id| id.to_string()),
+        }
+    }
 }
 
 impl RunMode {
@@ -238,8 +257,8 @@ impl Response {
         Response::Disconnect(disc)
     }
 
-    pub fn debug_info(info: DebugResponse) -> Self {
-        Response::DebugInfo(info)
+    pub fn debug_info(stats: NerdStatsResponse) -> Self {
+        Response::NerdStats(stats)
     }
 
     pub fn status(stat: StatusResponse) -> Self {
