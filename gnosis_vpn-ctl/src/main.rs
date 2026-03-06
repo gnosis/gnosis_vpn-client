@@ -166,51 +166,11 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
 }
 
 fn print_connecting_stats(stats: &command::ConnStats) {
-    let mut str_resp = String::new();
-    match stats.destination.routing {
-        RoutingOptions::IntermediatePath(ref nodes) => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) --CONNECTING--VIA-->",
-                node_addr = stats.node_address
-            ));
-            for n in nodes.clone() {
-                str_resp.push_str(&format!(" {n} --VIA-->"));
-            }
-            str_resp.truncate(str_resp.len() - 8);
-            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address));
-        }
-        RoutingOptions::Hops(nr) => {
-            let nr_val: usize = nr.into();
-            match nr_val {
-                0 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) --CONNECTING--DIRECTLY--> {addr}(exit)\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address
-                    ));
-                }
-                1 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) --CONNECTING--VIA--1HOP--> {addr}(exit)\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address
-                    ));
-                }
-                _ => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) --CONNECTING--VIA--{nr}HOPS--> {addr}(exit)\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address,
-                        nr = nr_val
-                    ));
-                }
-            }
-        }
-    };
+    let mut str_resp = print_conn_stats_routing(stats, "-CONNECTING-");
     str_resp.push_str("---\n");
     str_resp.push_str(
         format!(
-            "WiregGuard Public Key: {}\n",
+            "WireGuard Public Key: {}\n",
             stats.wg_pubkey.clone().unwrap_or("--pending generation--".to_string())
         )
         .as_str(),
@@ -254,48 +214,12 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     );
     println!("{str_resp}");
 }
+
 fn print_connected_stats(stats: &command::ConnStats) {
-    let mut str_resp = String::new();
-    match stats.destination.routing {
-        RoutingOptions::IntermediatePath(ref nodes) => {
-            str_resp.push_str(&format!("{node_addr}(me) --VIA-->", node_addr = stats.node_address));
-            for n in nodes.clone() {
-                str_resp.push_str(&format!(" {n} --VIA-->"));
-            }
-            str_resp.truncate(str_resp.len() - 8);
-            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address));
-        }
-        RoutingOptions::Hops(nr) => {
-            let nr_val: usize = nr.into();
-            match nr_val {
-                0 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) --DIRECTLY--> {addr}(exit)\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address
-                    ));
-                }
-                1 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) --VIA--1HOP--> {addr}(exit)\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address
-                    ));
-                }
-                _ => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) --VIA--{nr}HOPS--> {addr}(exit)\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address,
-                        nr = nr_val
-                    ));
-                }
-            }
-        }
-    };
+    let mut str_resp = print_conn_stats_routing(stats, "-o-");
     str_resp.push_str("---\n");
     if let Some(ref wg_pubkey) = stats.wg_pubkey {
-        str_resp.push_str(format!("WiregGuard Public Key: {}\n", wg_pubkey).as_str());
+        str_resp.push_str(format!("WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     if let Some(ref ip) = stats.wg_ip {
         str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
@@ -311,4 +235,49 @@ fn print_connected_stats(stats: &command::ConnStats) {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     println!("{str_resp}");
+}
+
+fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
+    let mut str_resp = String::new();
+    match stats.destination.routing {
+        RoutingOptions::IntermediatePath(ref nodes) => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA-->",
+                node_addr = stats.node_address
+            ));
+            for n in nodes.clone() {
+                str_resp.push_str(&format!(" {n} --VIA-->"));
+            }
+            str_resp.truncate(str_resp.len() - 8);
+            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address));
+        }
+        RoutingOptions::Hops(nr) => {
+            let nr_val: usize = nr.into();
+            match nr_val {
+                0 => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}(exit)\n",
+                        node_addr = stats.node_address,
+                        addr = stats.destination.address
+                    ));
+                }
+                1 => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}(exit)\n",
+                        node_addr = stats.node_address,
+                        addr = stats.destination.address
+                    ));
+                }
+                _ => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}(exit)\n",
+                        node_addr = stats.node_address,
+                        addr = stats.destination.address,
+                        nr = nr_val
+                    ));
+                }
+            }
+        }
+    };
+    str_resp
 }
