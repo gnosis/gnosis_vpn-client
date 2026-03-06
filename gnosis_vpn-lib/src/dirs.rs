@@ -37,10 +37,8 @@ pub enum DirError {
 pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
     ensure_dir(&home, 0o755, uid, gid).map_err(Error::HomeFolder)?;
     let cache_path = home.join(CACHE_DIRECTORY);
-    tracing::debug!("Using cache folder: {}", cache_path.display());
     ensure_dir(&cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
     let config_path = home.join(CONFIG_DIRECTORY);
-    tracing::debug!("Using config folder: {}", config_path.display());
     ensure_dir(&config_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
     Ok(home)
 }

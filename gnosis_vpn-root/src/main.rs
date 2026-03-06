@@ -176,6 +176,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
+        state_home = worker_params.state_home().display(),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
