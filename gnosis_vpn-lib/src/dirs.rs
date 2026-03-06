@@ -29,7 +29,7 @@ pub enum DirError {
     #[error("Cannot create directory: {0}")]
     Creation(String),
     #[error("Cannot adjust ownership: {0}")]
-    OwnerShip(String),
+    Ownership(String),
 }
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
@@ -66,7 +66,7 @@ pub fn ensure_dir(path: &PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), D
 
     unix_fs::chown(path.clone(), Some(uid), Some(gid)).map_err(|error| {
         let msg = format!("Failed to set ownership at {path}: {error:?}", path = path.display());
-        DirError::OwnerShip(msg)
+        DirError::Ownership(msg)
     })?;
     Ok(())
 }
