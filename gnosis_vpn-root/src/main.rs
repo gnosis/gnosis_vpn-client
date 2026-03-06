@@ -24,7 +24,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{logging, ping, socket, worker};
+use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -134,14 +134,12 @@ async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::E
         }
     };
 
-    let socket_dir = socket_path.parent().ok_or_else(|| {
-        tracing::error!("socket path has no parent");
-        exitcode::UNAVAILABLE
-    })?;
-    fs::create_dir_all(socket_dir).await.map_err(|e| {
-        tracing::error!(error = %e, "error creating socket directory");
-        exitcode::IOERR
-    })?;
+    if let Some(socket_dir) = socket_path.parent() {
+        fs::create_dir_all(socket_dir).await.map_err(|e| {
+            tracing::error!(error = %e, "error creating socket directory");
+            exitcode::IOERR
+        })?;
+    }
 
     let listener = UnixListener::bind(socket_path).map_err(|e| {
         tracing::error!(error = ?e, "error binding socket");
@@ -178,12 +176,19 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
+        state_home = %worker_params.state_home().display(),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
 
     // Write root pidfile for the newsyslog service to send signals to
     if let Some(ref pid_file) = args.pid_file {
+        if let Some(pid_dir) = pid_file.parent() {
+            fs::create_dir_all(pid_dir).await.map_err(|e| {
+                tracing::error!(error = %e, "error creating pid_file directory");
+                exitcode::IOERR
+            })?;
+        }
         tracing::debug!(path = ?pid_file, "writing pidfile");
         let pid = process::id().to_string();
         fs::write(pid_file, pid).await.expect("failed to write pidfile");
@@ -677,6 +682,12 @@ fn setup_logging(
 ) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
     match log_file {
         Some(log_path) => {
+            if let Some(parent) = log_path.parent() {
+                dirs::ensure_dir(&parent.to_path_buf(), 0o755, worker.uid, worker.gid).map_err(|err| {
+                    eprintln!("Failed to create log directory {}: {}", parent.display(), err);
+                    exitcode::IOERR
+                })?;
+            }
             let fmt_layer = logging::make_file_fmt_layer(&log_path.to_string_lossy(), worker).map_err(|err| {
                 eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
                 exitcode::IOERR

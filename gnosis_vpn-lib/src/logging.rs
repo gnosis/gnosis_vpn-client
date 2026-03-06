@@ -2,7 +2,8 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
 use std::fs::OpenOptions;
-use std::os::unix::fs::{self, OpenOptionsExt};
+use std::os::unix;
+use std::os::unix::fs::OpenOptionsExt;
 
 use crate::worker::Worker;
 
@@ -53,7 +54,7 @@ pub fn make_file_fmt_layer(log_path: &str, worker: &Worker) -> Result<FileFmtLay
         .mode(0o644)
         .open(log_path)?;
 
-    fs::chown(log_path, Some(worker.uid), Some(worker.gid))?;
+    unix::fs::chown(log_path, Some(worker.uid), Some(worker.gid))?;
 
     Ok(fmt::layer().with_writer(BoxMakeWriter::new(file)).with_ansi(false))
 }

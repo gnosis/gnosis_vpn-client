@@ -1,9 +1,7 @@
 use thiserror::Error;
 
 use std::fs::DirBuilder;
-use std::io::{self, ErrorKind};
-use std::os::unix::fs::DirBuilderExt;
-use std::os::unix::fs::{self as unix_fs};
+use std::os::unix::fs::{self as unix_fs, DirBuilderExt};
 use std::path::PathBuf;
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
@@ -18,55 +16,55 @@ const CACHE_DIRECTORY: &str = ".cache";
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("IO error: {0}")]
-    IO(#[from] io::Error),
-    #[error("Cannot create cache directory: {0}")]
-    CacheDirCreation(String),
-    #[error("Cannot create config directory: {0}")]
-    ConfigDirCreation(String),
+    #[error("Error ensuring home directory: {0}")]
+    HomeFolder(DirError),
+    #[error("Error ensuring cache directory: {0}")]
+    CacheFolder(DirError),
+    #[error("Error ensuring config directory: {0}")]
+    ConfigFolder(DirError),
+}
+
+#[derive(Debug, Error)]
+pub enum DirError {
+    #[error("Cannot create directory: {0}")]
+    Creation(String),
+    #[error("Cannot adjust ownership: {0}")]
+    Ownership(String),
 }
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
 // tracing is not yet enabled so we cannot use it
-pub fn setup_worker(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
-    // home folder will be created by installer
+pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
+    ensure_dir(&home, 0o755, uid, gid).map_err(Error::HomeFolder)?;
     let cache_path = home.join(CACHE_DIRECTORY);
+    ensure_dir(&cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
     let config_path = home.join(CONFIG_DIRECTORY);
-    ensure_dir_with_owner(&cache_path, uid, gid).map_err(|error| {
-        let msg = format!(
-            "Failed to create cache directory at {cache}: {error:?}",
-            cache = cache_path.display()
-        );
-        Error::CacheDirCreation(msg)
-    })?;
-    ensure_dir_with_owner(&config_path, uid, gid).map_err(|error| {
-        let msg = format!(
-            "Failed to create config directory at {config}: {error:?}",
-            config = config_path.display()
-        );
-        Error::ConfigDirCreation(msg)
-    })?;
+    ensure_dir(&config_path, 0o700, uid, gid).map_err(Error::ConfigFolder)?;
     Ok(home)
 }
 
-pub fn cache_dir(home: PathBuf, file: &str) -> Result<PathBuf, Error> {
-    let cache_file = home.join(CACHE_DIRECTORY).join(file);
-    tracing::debug!("Using cache file: {}", cache_file.display());
-    Ok(cache_file)
+pub fn cache_dir(home: PathBuf, file: &str) -> PathBuf {
+    home.join(CACHE_DIRECTORY).join(file)
 }
 
-pub fn config_dir(home: PathBuf, file: &str) -> Result<PathBuf, Error> {
-    let config_file = home.join(CONFIG_DIRECTORY).join(file);
-    tracing::debug!("Using config file: {}", config_file.display());
-    Ok(config_file)
+pub fn config_dir(home: PathBuf, file: &str) -> PathBuf {
+    home.join(CONFIG_DIRECTORY).join(file)
 }
 
-fn ensure_dir_with_owner(path: &PathBuf, uid: u32, gid: u32) -> Result<(), io::Error> {
-    let res = DirBuilder::new().mode(0o700).create(path);
-    match res {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(e),
-    }?;
-    unix_fs::chown(path, Some(uid), Some(gid))
+// Ensures that the specified directory exists with the given permissions and ownership.
+pub fn ensure_dir(path: &PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), DirError> {
+    DirBuilder::new()
+        .recursive(true)
+        .mode(mode)
+        .create(path)
+        .map_err(|error| {
+            let msg = format!("Failed to create directory at {path}: {error:?}", path = path.display());
+            DirError::Creation(msg)
+        })?;
+
+    unix_fs::chown(path.clone(), Some(uid), Some(gid)).map_err(|error| {
+        let msg = format!("Failed to set ownership at {path}: {error:?}", path = path.display());
+        DirError::Ownership(msg)
+    })?;
+    Ok(())
 }

@@ -28,7 +28,7 @@ pub async fn executable() -> Result<(), wireguard::Error> {
 /// Write the WireGuard config to a file and bring up the interface using `wg-quick`.
 /// Returns created interface name on success.
 pub async fn up(state_home: PathBuf, config_content: String) -> Result<String, wireguard::Error> {
-    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)?;
+    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE);
     let content = config_content.as_bytes();
 
     // Remove stale config so mode() applies to a fresh file (O_CREAT only sets mode on creation)
@@ -81,7 +81,7 @@ pub async fn resolve_interface_name() -> String {
 }
 
 pub async fn down(state_home: PathBuf, logs: Logs) -> Result<(), wireguard::Error> {
-    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)?;
+    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE);
     Command::new("wg-quick").arg("down").arg(conf_file).run(logs).await?;
     Ok(())
 }

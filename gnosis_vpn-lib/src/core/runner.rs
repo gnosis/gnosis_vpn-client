@@ -373,7 +373,7 @@ async fn run_hopr(
 
     Hopr::new(
         cfg,
-        hopr::config::db_file(worker_params.state_home())?.as_path(),
+        hopr::config::db_file(worker_params.state_home()).as_path(),
         keys,
         blokli_url,
         blokli_config.into(),
