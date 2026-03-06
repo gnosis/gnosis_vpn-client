@@ -39,7 +39,7 @@ pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
     let cache_path = home.join(CACHE_DIRECTORY);
     ensure_dir(&cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
     let config_path = home.join(CONFIG_DIRECTORY);
-    ensure_dir(&config_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
+    ensure_dir(&config_path, 0o700, uid, gid).map_err(Error::ConfigFolder)?;
     Ok(home)
 }
 
