@@ -254,7 +254,7 @@ impl Response {
         Response::Disconnect(disc)
     }
 
-    pub fn debug_info(stats: NerdStatsResponse) -> Self {
+    pub fn nerd_stats(stats: NerdStatsResponse) -> Self {
         Response::NerdStats(stats)
     }
 
