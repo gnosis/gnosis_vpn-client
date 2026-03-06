@@ -43,8 +43,8 @@ pub enum RootToWorker {
     RotateLogs,
     /// Startup parameters
     StartupParams {
-        worker_params: WorkerParams,
         config: Config,
+        worker_params: WorkerParams,
     },
     /// Socket command received by root
     WorkerCommand { cmd: WorkerCommand, id: u64 },
