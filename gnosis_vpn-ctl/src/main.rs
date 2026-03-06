@@ -257,24 +257,27 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
             match nr_val {
                 0 => {
                     str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}(exit)\n",
+                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
                         node_addr = stats.node_address,
-                        addr = stats.destination.address
+                        addr = stats.destination.address,
+                        exit = stats.destination.id,
                     ));
                 }
                 1 => {
                     str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}(exit)\n",
+                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
                         node_addr = stats.node_address,
-                        addr = stats.destination.address
+                        addr = stats.destination.address,
+                        exit = stats.destination.id,
                     ));
                 }
                 _ => {
                     str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}(exit)\n",
+                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
                         node_addr = stats.node_address,
                         addr = stats.destination.address,
-                        nr = nr_val
+                        nr = nr_val,
+                        exit = stats.destination.id,
                     ));
                 }
             }
