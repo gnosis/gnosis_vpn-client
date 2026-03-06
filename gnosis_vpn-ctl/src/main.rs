@@ -248,6 +248,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
             for n in nodes.clone() {
                 str_resp.push_str(&format!(" {n} --VIA-->"));
             }
+            // safe to truncate as nodes cannot be empty - ensured by type definition
             str_resp.truncate(str_resp.len() - 8);
             str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address));
         }
