@@ -13,8 +13,7 @@ use std::process;
 use gnosis_vpn_lib::core::Core;
 use gnosis_vpn_lib::event::{CoreToWorker, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
-use gnosis_vpn_lib::logging;
-use gnosis_vpn_lib::socket;
+use gnosis_vpn_lib::{command, config, logging, socket, worker_params};
 
 mod cli;
 mod init;
@@ -160,82 +159,19 @@ impl State {
     async fn incoming_command(&mut self, cmd: RootToWorker) -> IncomingResolution {
         match cmd {
             RootToWorker::Shutdown => {
-                tracing::info!("received shutdown command from root");
-                if let Some(core) = &mut self.core_handle {
-                    let _ = core.sender_to_core.send(WorkerToCore::Shutdown).await;
-                    return IncomingResolution::ShutdownWaitingForCore;
-                }
-                tracing::debug!("core not yet started");
-                return IncomingResolution::Shutdown(exitcode::OK);
+                return self.cmd_shutdown().await;
             }
             RootToWorker::RotateLogs => {
-                if let Some(log_path) = &self.log_path {
-                    tracing::info!("received rotate logs command from root");
-                    let res = logging::use_file_fmt_layer(&log_path.to_string_lossy())
-                        .map(|new_layer| self.reload_handle.reload(new_layer));
-                    match res {
-                        Ok(_) => {
-                            tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            return IncomingResolution::SustainLoop;
-                        }
-                        Err(e) => {
-                            eprintln!("failed to reopen log file {:?}: {}", self.log_path, e);
-                            return IncomingResolution::Shutdown(exitcode::IOERR);
-                        }
-                    }
-                } else {
-                    tracing::warn!("received rotate logs command from root but no log file configured - ignoring");
-                    return IncomingResolution::SustainLoop;
-                }
+                return self.cmd_rotate_logs().await;
             }
             RootToWorker::StartupParams { config, worker_params } => {
-                tracing::debug!(?config, ?worker_params, "received startup params from root");
-                match &self.core_handle {
-                    Some(core) => {}
-                    None => {}
-                }
-                if !self.core_task.is_empty() {
-                    tracing::warn!("core already initialized - ignoring startup params");
-                    return IncomingResolution::SustainLoop;
-                }
-                let (core_to_worker_sender, core_to_worker_receiver) = mpsc::channel(32);
-                let res_core = Core::init(config, worker_params, core_to_worker_sender).await;
-                match res_core {
-                    Ok((core, worker_to_core_sender)) => {
-                        self.core_task.spawn(async move { core.start().await });
-                        self.receiver_from_core = Some(core_to_worker_receiver);
-                        self.sender_to_core = worker_to_core_sender;
-                        tracing::info!("core logic initialized and started");
-                        return IncomingResolution::SustainLoop;
-                    }
-                    Err(err) => {
-                        tracing::error!(error = ?err, "failed to initialize core logic");
-                        return IncomingResolution::Shutdown(exitcode::OSERR);
-                    }
-                }
+                return self.cmd_startup_params(config, worker_params).await;
             }
             RootToWorker::WorkerCommand { cmd, id } => {
-                tracing::debug!(?cmd, id, "received command from root");
-                let (sender, recv) = oneshot::channel();
-                let _ = self
-                    .sender_to_core
-                    .send(WorkerToCore::WorkerCommand { cmd, resp: sender })
-                    .await;
-                let res_recv = recv.await;
-                match res_recv {
-                    Ok(resp) => {
-                        return IncomingResolution::Response(WorkerToRoot::Response { id, resp });
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed");
-                        return IncomingResolution::SustainLoop;
-                    }
-                }
+                return self.cmd_worker_command(cmd, id).await;
             }
             RootToWorker::ResponseFromRoot(response) => {
-                tracing::debug!(?response, "received response from root");
-                self.sender_to_core.send(WorkerToCore::ResponseFromRoot(response)).await;
-                return IncomingResolution::SustainLoop;
+                return self.cmd_response_from_root(response).await;
             }
         }
     }
@@ -260,6 +196,93 @@ impl State {
                 }
             }
         }
+    }
+
+    async fn cmd_shutdown(&mut self) -> IncomingResolution {
+        tracing::info!("received shutdown command from root");
+        if let Some(core) = &mut self.core_handle {
+            let _ = core.sender_to_core.send(WorkerToCore::Shutdown).await;
+            return IncomingResolution::ShutdownWaitingForCore;
+        }
+        tracing::debug!("core not yet started");
+        return IncomingResolution::Shutdown(exitcode::OK);
+    }
+
+    async fn cmd_rotate_logs(&mut self) -> IncomingResolution {
+        if let Some(log_path) = &self.log_path {
+            tracing::info!("received rotate logs command from root");
+            let res = logging::use_file_fmt_layer(&log_path.to_string_lossy())
+                .map(|new_layer| self.reload_handle.reload(new_layer));
+            match res {
+                Ok(_) => {
+                    tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                    return IncomingResolution::SustainLoop;
+                }
+                Err(e) => {
+                    eprintln!("failed to reopen log file {:?}: {}", self.log_path, e);
+                    return IncomingResolution::Shutdown(exitcode::IOERR);
+                }
+            }
+        } else {
+            tracing::warn!("received rotate logs command from root but no log file configured - ignoring");
+            return IncomingResolution::SustainLoop;
+        }
+    }
+
+    async fn cmd_startup_params(
+        &mut self,
+        config: config::Config,
+        worker_params: worker_params::WorkerParams,
+    ) -> IncomingResolution {
+        tracing::debug!(?config, ?worker_params, "received startup params from root");
+        match &self.core_handle {
+            Some(core) => {}
+            None => {}
+        }
+        if !self.core_task.is_empty() {
+            tracing::warn!("core already initialized - ignoring startup params");
+            return IncomingResolution::SustainLoop;
+        }
+        let (core_to_worker_sender, core_to_worker_receiver) = mpsc::channel(32);
+        let res_core = Core::init(config, worker_params, core_to_worker_sender).await;
+        match res_core {
+            Ok((core, worker_to_core_sender)) => {
+                self.core_task.spawn(async move { core.start().await });
+                self.receiver_from_core = Some(core_to_worker_receiver);
+                self.sender_to_core = worker_to_core_sender;
+                tracing::info!("core logic initialized and started");
+                return IncomingResolution::SustainLoop;
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "failed to initialize core logic");
+                return IncomingResolution::Shutdown(exitcode::OSERR);
+            }
+        }
+    }
+
+    async fn cmd_worker_command(&mut self, cmd: command::Command, id: u64) -> IncomingResolution {
+        tracing::debug!(?cmd, id, "received command from root");
+        let (sender, recv) = oneshot::channel();
+        let _ = self
+            .sender_to_core
+            .send(WorkerToCore::WorkerCommand { cmd, resp: sender })
+            .await;
+        let res_recv = recv.await;
+        match res_recv {
+            Ok(resp) => {
+                return IncomingResolution::Response(WorkerToRoot::Response { id, resp });
+            }
+            Err(err) => {
+                tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed");
+                return IncomingResolution::SustainLoop;
+            }
+        }
+    }
+
+    async fn cmd_response_from_root(&mut self, response: serde_json::Value) -> IncomingResolution {
+        tracing::debug!(?response, "received response from root");
+        self.sender_to_core.send(WorkerToCore::ResponseFromRoot(response)).await;
+        return IncomingResolution::SustainLoop;
     }
 }
 
