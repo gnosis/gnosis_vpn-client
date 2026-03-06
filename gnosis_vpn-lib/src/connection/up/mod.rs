@@ -16,8 +16,8 @@ pub mod runner;
 
 #[derive(Debug)]
 pub enum Event {
-    Progress(Progress),
-    Setback(Setback),
+    Progress(Box<Progress>),
+    Setback(Box<Setback>),
 }
 
 #[derive(Debug)]
@@ -108,9 +108,9 @@ impl Up {
         }
     }
 
-    pub fn connect_progress(&mut self, evt: Progress) {
+    pub fn connect_progress(&mut self, evt: Box<Progress>) {
         let now = SystemTime::now();
-        match evt {
+        match *evt {
             Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
             Progress::OpenBridge(wg) => {
                 self.phase = (now, Phase::OpeningBridge);

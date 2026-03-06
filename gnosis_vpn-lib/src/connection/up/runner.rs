@@ -531,9 +531,9 @@ async fn request_ping(
 }
 
 fn setback(setback: Setback) -> Results {
-    Results::ConnectionEvent(Event::Setback(setback))
+    Results::ConnectionEvent(Event::Setback(Box::new(setback)))
 }
 
 fn progress(progress: Progress) -> Results {
-    Results::ConnectionEvent(Event::Progress(progress))
+    Results::ConnectionEvent(Event::Progress(Box::new(progress)))
 }
