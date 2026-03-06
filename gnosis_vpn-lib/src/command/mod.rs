@@ -4,6 +4,7 @@ use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -20,6 +21,7 @@ pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     Status,
+    NerdStats,
     Connect(String),
     Metrics,
     Disconnect,
@@ -33,6 +35,7 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
+    NerdStats(NerdStatsResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
@@ -140,6 +143,42 @@ pub enum ConnectionState {
     Disconnecting(SystemTime, connection::down::Phase),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NerdStatsResponse {
+    NoInfo,
+    Connecting(ConnStats),
+    Connected(ConnStats),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnStats {
+    pub node_address: Address,
+    pub destination: Destination,
+    pub wg_pubkey: Option<String>,
+    pub wg_server_pubkey: Option<String>,
+    pub wg_ip: Option<String>,
+    pub session_bound_host: Option<SocketAddr>,
+    pub session_id: Option<String>,
+}
+
+impl ConnStats {
+    pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
+        ConnStats {
+            node_address,
+            destination: conn.destination.clone(),
+            wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
+            wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
+            wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
+            session_bound_host: conn.session.as_ref().map(|s| s.bound_host),
+            session_id: conn
+                .session
+                .as_ref()
+                .and_then(|s| s.active_clients.first())
+                .map(|id| id.to_string()),
+        }
+    }
+}
+
 impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
@@ -213,6 +252,10 @@ impl Response {
 
     pub fn disconnect(disc: DisconnectResponse) -> Self {
         Response::Disconnect(disc)
+    }
+
+    pub fn nerd_stats(stats: NerdStatsResponse) -> Self {
+        Response::NerdStats(stats)
     }
 
     pub fn status(stat: StatusResponse) -> Self {
