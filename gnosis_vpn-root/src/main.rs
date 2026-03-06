@@ -24,7 +24,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{logging, ping, socket, worker};
+use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
 mod routing;
@@ -176,7 +176,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        state_home = worker_params.state_home().display(),
+        state_home = %worker_params.state_home().display(),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
@@ -683,7 +683,7 @@ fn setup_logging(
     match log_file {
         Some(log_path) => {
             if let Some(parent) = log_path.parent() {
-                dirs::ensure_dir(parent, 0o755, worker.uid, worker.gid).map_err(|err| {
+                dirs::ensure_dir(&parent.to_path_buf(), 0o755, worker.uid, worker.gid).map_err(|err| {
                     eprintln!("Failed to create log directory {}: {}", parent.display(), err);
                     exitcode::IOERR
                 })?;
