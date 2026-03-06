@@ -1,10 +1,9 @@
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
-use std::fs::{self, OpenOptions, Permissions};
+use std::fs::OpenOptions;
 use std::os::unix;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
 
 use crate::worker::Worker;
 
