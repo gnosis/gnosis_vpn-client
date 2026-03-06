@@ -3,7 +3,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
 use std::fs::OpenOptions;
 use std::os::unix;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 
 use crate::worker::Worker;
 
