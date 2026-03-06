@@ -106,7 +106,7 @@ impl Worker {
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
             // set up application state directory
-            let home = dirs::setup_worker(input.state_home, uid, gid).map_err(|error| {
+            let home = dirs::setup_home(input.state_home, uid, gid).map_err(|error| {
                 eprintln!("Error setting up home directory for {worker_user:?}: {error:?}");
                 Error::InvalidHomeDir
             })?;
