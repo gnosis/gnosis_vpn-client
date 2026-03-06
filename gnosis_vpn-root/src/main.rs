@@ -683,7 +683,7 @@ fn setup_logging(
     match log_file {
         Some(log_path) => {
             if let Some(parent) = log_path.parent() {
-                dirs.ensure_dir(parent, 0o755, worker.uid, worker.gid).map_err(|err| {
+                dirs::ensure_dir(parent, 0o755, worker.uid, worker.gid).map_err(|err| {
                     eprintln!("Failed to create log directory {}: {}", parent.display(), err);
                     exitcode::IOERR
                 })?;
