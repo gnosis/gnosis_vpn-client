@@ -26,7 +26,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 struct CoreHandle {
     task: JoinSet<()>,
     sender_to_core: mpsc::Sender<WorkerToCore>,
-    receiver_from_core: mpsc::Receiver<CoreToWorker>,
 }
 
 struct LoggingHandle {
@@ -158,7 +157,11 @@ async fn incoming_socket() -> Result<
 }
 
 impl State {
-    pub async fn incoming_command(&mut self, cmd: RootToWorker) -> IncomingResolution {
+    pub async fn incoming_command(
+        &mut self,
+        cmd: RootToWorker,
+        sender_from_core: &mpsc::Sender<CoreToWorker>,
+    ) -> IncomingResolution {
         match cmd {
             RootToWorker::Shutdown => {
                 return self.cmd_shutdown().await;
@@ -167,7 +170,7 @@ impl State {
                 return self.cmd_rotate_logs().await;
             }
             RootToWorker::StartupParams { config, worker_params } => {
-                return self.cmd_startup_params(config, worker_params).await;
+                return self.cmd_startup_params(config, worker_params, sender_from_core).await;
             }
             RootToWorker::WorkerCommand { cmd, id } => {
                 return self.cmd_worker_command(cmd, id).await;
@@ -215,14 +218,14 @@ impl State {
         &mut self,
         config: config::Config,
         worker_params: worker_params::WorkerParams,
+        sender_from_core: &mpsc::Sender<CoreToWorker>,
     ) -> IncomingResolution {
         tracing::debug!(?config, ?worker_params, "received startup params from root");
         if let Some(_) = &self.core_handle {
             tracing::warn!("core already initialized - ignoring startup params");
             return IncomingResolution::SustainLoop;
         }
-        let (core_to_worker_sender, core_to_worker_receiver) = mpsc::channel(32);
-        let res_core = Core::init(config, worker_params, core_to_worker_sender).await;
+        let res_core = Core::init(config, worker_params, sender_from_core.clone()).await;
         match res_core {
             Ok((core, worker_to_core_sender)) => {
                 let mut task = JoinSet::new();
@@ -230,7 +233,6 @@ impl State {
                 let ch = CoreHandle {
                     task,
                     sender_to_core: worker_to_core_sender,
-                    receiver_from_core: core_to_worker_receiver,
                 };
                 self.core_handle = Some(ch);
                 tracing::info!("core logic initialized and started");
@@ -310,14 +312,15 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut writer = BufWriter::new(writer_half);
 
     // enter main loop
-    let state = State {
+    let mut state = State {
         core_handle: None,
         log_handle,
     };
     tracing::info!("enter listening mode");
+    let (sender_from_core, mut receiver_from_core) = mpsc::channel::<CoreToWorker>(32);
     loop {
         tokio::select! {
-            Some(cmd) = socket_receiver.recv() => match state.incoming_command(cmd).await {
+            Some(cmd) = socket_receiver.recv() => match state.incoming_command(cmd, &sender_from_core).await {
                 IncomingResolution::Shutdown(code) => {
                     tracing::info!(?code, "shutting down worker daemon before core loop initialization");
                     cancel_signal_swallower.cancel();
@@ -328,11 +331,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
                     tracing::info!("waiting for core loop to finish before shutting down worker daemon");
                 }
                 IncomingResolution::Response(resp) => {
+                    tracing::debug!(?resp, "sending response to root");
                     send_to_root(resp, &mut writer).await?;
                 }
                 IncomingResolution::SustainLoop => {}
             },
-            Some(evt) = state.core_handle.as_mut().map(|h| &mut h.receiver_from_core.recv()).unwrap(), if state.core_handle.is_some() => match evt {
+            Some(event) = receiver_from_core.recv() => match event {
                 CoreToWorker::RequestToRoot(req) => {
                     tracing::debug!(?req, "incoming request to root from core");
                     send_to_root(WorkerToRoot::RequestToRoot(req), &mut writer).await?;
@@ -341,7 +345,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             Some(_) = state.core_handle.as_mut().map(|h| h.task.join_next()).unwrap(), if state.core_handle.is_some() => {
                 tracing::info!("shutting down worker daemon after core loop completion");
                 return Ok(());
-            }
+            },
             else => {
                 tracing::error!("unexpected channel closure");
                 return Err(exitcode::IOERR);
