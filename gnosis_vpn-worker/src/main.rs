@@ -40,7 +40,6 @@ struct State {
 
 enum IncomingResolution {
     Shutdown(exitcode::ExitCode),
-    ShutdownWaitingForCore,
     SustainLoop,
     Response(WorkerToRoot),
 }
@@ -185,7 +184,7 @@ impl State {
         tracing::info!("received shutdown command from root");
         if let Some(core) = &mut self.core_handle {
             let _ = core.sender_to_core.send(WorkerToCore::Shutdown).await;
-            return IncomingResolution::ShutdownWaitingForCore;
+            return IncomingResolution::SustainLoop;
         }
         tracing::debug!("core not yet started");
         return IncomingResolution::Shutdown(exitcode::OK);
@@ -326,9 +325,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
                     cancel_signal_swallower.cancel();
                     cancel_socket_reader.cancel();
                     return Err(code);
-                }
-                IncomingResolution::ShutdownWaitingForCore => {
-                    tracing::info!("waiting for core loop to finish before shutting down worker daemon");
                 }
                 IncomingResolution::Response(resp) => {
                     tracing::debug!(?resp, "sending response to root");
