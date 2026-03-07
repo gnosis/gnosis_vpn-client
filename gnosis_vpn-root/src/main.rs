@@ -322,7 +322,11 @@ async fn loop_daemon(
 
     loop {
         tokio::select! {
-            Some(signal) = signal_receiver.recv() => match signal {
+            // signal receiver
+            // -> shutdown
+            // -> force shutdown
+            // -> log rotation
+            Some(signal) = signal_receiver.recv() => match state.incoming_signal(signal).await {
                 SignalMessage::Shutdown => {
                     if shutdown_ongoing {
                         tracing::warn!("force shutdown immediately");
@@ -360,6 +364,9 @@ async fn loop_daemon(
                 }
             },
 
+            // incoming on system socket
+            // might be own function
+
             Ok((stream, _addr)) = socket.accept() => {
                 let cmd_sender = socket_cmd_sender.clone();
                 ongoing_request_responses.spawn(async move {
@@ -368,15 +375,26 @@ async fn loop_daemon(
                     }
                 });
             }
+
+            // incoming cmd on system socket
+            // -> forward to worker
+            // -> handled bny root
+
             Some(socket_cmd) = socket_cmd_receiver.recv() => {
                 pending_response_counter += 1;
                 pending_responses.insert(pending_response_counter, socket_cmd.resp);
                 let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: pending_response_counter };
                 send_to_worker(msg, &mut socket_writer).await?;
             }
+
+            // response from ping cmd
+            // -> might be handled out side of this loop
             Some(res) = ping_receiver.recv() => {
                 send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut socket_writer).await?;
             }
+
+
+            // incoming from worker
             Ok(Some(line)) = socket_lines_reader.next_line() => {
                 let cmd = parse_outgoing_worker(line)?;
                 match cmd {
@@ -421,6 +439,8 @@ async fn loop_daemon(
                     },
                 }
             },
+
+            // worker finished
             Ok(status) = worker_child.wait() => {
                 if shutdown_ongoing {
                     if status.success() {
