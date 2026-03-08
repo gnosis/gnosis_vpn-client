@@ -113,7 +113,9 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
     Ok((owned_cancel, receiver))
 }
 
-async fn socket_listener(socket_path: &Path) -> Result<TokioUnixListener, exitcode::ExitCode> {
+async fn socket_listener(
+    socket_path: &Path,
+) -> Result<(CancellationToken, mspc::Receiver<Command>), exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -158,7 +160,35 @@ async fn socket_listener(socket_path: &Path) -> Result<TokioUnixListener, exitco
             exitcode::NOPERM
         })?;
 
-    Ok(listener)
+    let ongoing = JoinSet::new();
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    let (sender, receiver) = mpsc::channel(32);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Ok((stream, addr)) = listener.accept() => {
+                ongoing.spawn(async move {
+                    if let Some(handle) = incoming_on_root_socket(stream, &sender).await {
+                        handle.await.ok();
+                    }
+                });
+                },
+                _ = cancel.cancelled() => {
+                    tracing::debug!("socket listener received cancellation");
+                    ongoing.shutdown().await;
+                    break;
+                }
+                else => {
+                    tracing::warn!("socket listener streams closed");
+                    break;
+                }
+
+            }
+        }
+    });
+
+    Ok((owned_cancel, receiver))
 }
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
