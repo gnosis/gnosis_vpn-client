@@ -26,7 +26,7 @@ use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::bypass;
 use super::route_ops::RouteOps;
@@ -42,7 +42,7 @@ fn vpn_subnet_route() -> String {
 
 /// Dynamic routing not available on macOS.
 pub async fn dynamic_router(
-    _state_home: &Path,
+    _state_home: PathBuf,
     _worker: worker::Worker,
     _wg_data: event::WireGuardData,
 ) -> Result<DynamicRouter, Error> {
@@ -53,12 +53,12 @@ pub struct DynamicRouter {}
 
 /// Builds a static macOS router.
 pub fn static_router(
-    state_home: &Path,
+    state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 ) -> Result<impl Routing, Error> {
     Ok(StaticRouter {
-        state_home: state_home.to_path_buf(),
+        state_home,
         wg_data,
         peer_ips,
         route_ops: DarwinRouteOps,
@@ -219,7 +219,7 @@ impl Routing for DynamicRouter {
 }
 
 /// Try whatever teardown we can on startup to clean up from any previous unclean shutdowns.
-pub async fn reset_on_startup(state_home: &Path) {
+pub async fn reset_on_startup(state_home: PathBuf) {
     let wg = RealWgOps {};
     let _ = wg.wg_quick_down(state_home, Logs::Suppress).await;
 }

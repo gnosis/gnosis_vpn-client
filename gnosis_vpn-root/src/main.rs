@@ -49,6 +49,7 @@ struct DaemonState {
     router: Option<Box<dyn Routing>>,
     worker_child: Option<WorkerChild>,
     shutdown_ongoing: Shutdown,
+    sender_response_from_root: mpsc::Sender<ResponseFromRoot>,
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
@@ -317,8 +318,18 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(&worker_params.state_home()).await;
 
-    let mut state = DaemonState::new(args, worker_user, config, worker_params, reload_handle);
-    let res = state.daemon_loop(signal_receiver, socket_listener).await;
+    let (sender_response_from_root, receiver_response_from_root) = mpsc::channel(1);
+    let mut state = DaemonState::new(
+        args,
+        worker_user,
+        config,
+        worker_params,
+        reload_handle,
+        sender_response_from_root,
+    );
+    let res = state
+        .daemon_loop(signal_receiver, socket_listener, receiver_response_from_root)
+        .await;
 
     // restore routing if connected
     state.teardown_any_routing(None).await;
@@ -472,6 +483,7 @@ impl DaemonState {
         config: Config,
         worker_params: WorkerParams,
         reload_handle: Option<LogReloadHandle>,
+        sender_response_from_root: mpsc::Sender<ResponseFromRoot>,
     ) -> Self {
         Self {
             args,
@@ -484,6 +496,7 @@ impl DaemonState {
             shutdown_ongoing: Shutdown::None,
             pending_response_counter: 0,
             pending_responses: HashMap::new(),
+            sender_response_from_root,
         }
     }
 
@@ -498,14 +511,17 @@ impl DaemonState {
 
     async fn daemon_loop(
         &mut self,
-        signal_receiver: mpsc::Receiver<SignalMessage>,
-        socket_listener: mpsc::Receiver<SocketCmd>,
+        mut signal_receiver: mpsc::Receiver<SignalMessage>,
+        mut socket_listener: mpsc::Receiver<SocketCmd>,
+        mut receiver_response_from_root: mpsc::Receiver<ResponseFromRoot>,
     ) -> Result<(), exitcode::ExitCode> {
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
                 Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
-                Ok(status) = self.worker_child.as_mut().unwrap().child.wait(), if self.worker_child.is_some() => self.incoming_worker_exit(status).await?,
+                Some(resp) = receiver_response_from_root.recv() => self.outgoing_response_from_root(resp).await?,
+                // unwrap is covered by guard clause
+                Ok(status) = self.worker_child.as_mut().unwrap().child.wait(), if self.worker_child.is_some() => self.incoming_worker_exit(status)?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -516,14 +532,11 @@ impl DaemonState {
 
     async fn incoming_signal(&mut self, signal: SignalMessage) -> Result<(), exitcode::ExitCode> {
         match signal {
-            SignalMessage::Shutdown => {
-                if self.shutdown_ongoing {
-                    tracing::warn!("received shutdown signal but shutdown is already ongoing - forcing immediate exit");
-                    Err(exitcode::OK)
-                } else {
+            SignalMessage::Shutdown => match self.shutdown_ongoing {
+                Shutdown::None => {
                     tracing::info!("received shutdown signal - initiating shutdown");
-                    self.shutdown_ongoing = true;
-                    if let Some(child) = self.worker_child.as_ref() {
+                    self.shutdown_ongoing = Shutdown::Service;
+                    if let Some(ref mut child) = self.worker_child {
                         tracing::debug!("sending shutdown signal to worker process");
                         send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
                         Ok(())
@@ -532,7 +545,20 @@ impl DaemonState {
                         Err(exitcode::OK)
                     }
                 }
-            }
+                Shutdown::Worker => {
+                    tracing::info!(
+                        "received shutdown signal but worker already shutting down - escalate to service shutdown"
+                    );
+                    self.shutdown_ongoing = Shutdown::Service;
+                    Ok(())
+                }
+                Shutdown::Service => {
+                    tracing::warn!(
+                        "received shutdown signal but service shutdown already ongoing - forcing immediate exit"
+                    );
+                    Err(exitcode::OK)
+                }
+            },
             SignalMessage::RotateLogs => {
                 if let (Some(handle), Some(path)) = (&self.reload_handle, &self.args.log_file) {
                     let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user)
@@ -540,11 +566,11 @@ impl DaemonState {
                     match res {
                         Ok(_) => {
                             tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            if let Some(child) = self.worker_child.as_ref() {
+                            if let Some(ref mut child) = self.worker_child {
                                 tracing::debug!("sending rotate logs to worker process");
                                 send_to_worker(RootToWorker::RotateLogs, &mut child.socket_writer).await?;
                             }
-                            OK(())
+                            Ok(())
                         }
                         Err(e) => {
                             eprintln!("failed to reopen log file {:?}: {}", path, e);
@@ -585,6 +611,22 @@ impl DaemonState {
                 });
             }
         }
+    }
+
+    async fn outgoing_response_from_root(&mut self, resp: ResponseFromRoot) -> Result<(), exitcode::ExitCode> {
+        match self.worker_child {
+            Some(ref mut child) => {
+                let msg = RootToWorker::ResponseFromRoot(resp);
+                send_to_worker(msg, &mut child.socket_writer).await?;
+            }
+            None => {
+                tracing::warn!(
+                    ?resp,
+                    "received response from root but no worker process active - ignoring"
+                );
+            }
+        }
+        Ok(())
     }
 
     async fn incoming_root_command(&self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
@@ -630,7 +672,7 @@ impl DaemonState {
         }
     }
 
-    fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
+    async fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?resp, "received worker response");
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
             if resp_sender.send(resp).is_err() {
@@ -642,7 +684,7 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn incoming_worker_request(&mut self, request: RequestToRoot) {
+    async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
             RequestToRoot::DynamicWgRouting { wg_data } => {
@@ -700,7 +742,7 @@ impl DaemonState {
         }
     }
 
-    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
+    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> -> Result<(), exitcode::ExitCode> {
         let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
             exitcode::IOERR
@@ -786,13 +828,14 @@ impl DaemonState {
             socket_writer,
         });
     }
+
     async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
         // ensure we run down before going up to ensure clean slate
         self.teardown_any_routing(None).await;
 
         let state_home = self.worker_params.state_home();
-        let worker_user = self.worker_user;
-        let res_router = routing::dynamic_router(&state_home, worker_user, wg_data).await;
+        let worker_user = self.worker_user.clone();
+        let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
         match res_router {
             Ok(mut router) => {
                 // router creation successfull, try setup
@@ -825,10 +868,10 @@ impl DaemonState {
         peer_ips: Vec<Ipv4Addr>,
     ) -> Result<(), String> {
         // ensure we run down before going up to ensure clean slate
-        self.teardown_any_routing(maybe_router).await;
+        self.teardown_any_routing(None).await;
 
         let state_home = self.worker_params.state_home();
-        let res_router = routing::static_router(&state_home, wg_data, peer_ips);
+        let res_router = routing::static_router(state_home, wg_data, peer_ips);
         match res_router {
             Ok(mut router) => {
                 // router creation successfull, try setup
