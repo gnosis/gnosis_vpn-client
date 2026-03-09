@@ -488,6 +488,7 @@ impl DaemonState {
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
         mut socket_listener: mpsc::Receiver<SocketCmd>,
     ) -> Result<(), exitcode::ExitCode> {
+        tracing::info!("entering main loop waiting for commands");
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
