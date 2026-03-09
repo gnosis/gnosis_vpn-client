@@ -16,7 +16,6 @@ use gnosis_vpn_lib::hopr::hopr_lib;
 use gnosis_vpn_lib::{command, config, logging, socket, worker_params};
 
 mod cli;
-mod init;
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]

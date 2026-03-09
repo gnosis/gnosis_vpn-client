@@ -112,7 +112,7 @@ pub enum RunMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InfoResponse {
-    version: String,
+    pub version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
