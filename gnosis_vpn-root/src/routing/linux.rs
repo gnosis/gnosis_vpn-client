@@ -31,7 +31,7 @@ use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::netlink_ops::{NetlinkOps, RealNetlinkOps, RouteSpec, RuleSpec};
 use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
@@ -59,7 +59,7 @@ pub type FwmarkInfra = FwmarkInfrastructure<RealNetlinkOps>;
 /// The router requires pre-existing fwmark infrastructure (set up via
 /// `setup_fwmark_infrastructure`) and only handles VPN-specific routing.
 pub async fn dynamic_router(
-    state_home: PathBuf,
+    state_home: &Path,
     worker: worker::Worker,
     wg_data: event::WireGuardData,
 ) -> Result<impl Routing, Error> {
@@ -72,7 +72,7 @@ pub async fn dynamic_router(
     let netlink = RealNetlinkOps::new(handle.clone());
     let wg = RealWgOps;
     Ok(Router {
-        state_home,
+        state_home: state_home.to_path_buf(),
         wg_data,
         netlink,
         wg,
@@ -87,7 +87,7 @@ pub async fn dynamic_router(
 /// Used when dynamic routing is not available. Provides simpler routing
 /// by adding explicit host routes for peer IPs before bringing up WireGuard.
 pub fn static_fallback_router(
-    state_home: PathBuf,
+    state_home: &Path,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
 ) -> Result<impl Routing, Error> {
@@ -96,7 +96,7 @@ pub fn static_fallback_router(
     let route_ops = NetlinkRouteOps::new(handle);
     let wg = RealWgOps;
     Ok(FallbackRouter {
-        state_home,
+        state_home: state_home.to_path_buf(),
         wg_data,
         peer_ips,
         route_ops,
@@ -907,11 +907,11 @@ fn pre_down_routing(route_addr: String, device: String, gateway: Option<String>)
     }
 }
 
-/// Try whatever shutdown we can on startup to clean up from any previous unclean shutdowns.
+/// Try whatever teardown we can on startup to clean up from any previous unclean shutdowns.
 pub async fn reset_on_startup(state_home: &Path) {
     cleanup_stale_fwmark_rules().await;
     let wg = RealWgOps {};
-    wg.wg_quick_down(state_home, Logs::Suppress).await;
+    let _ = wg.wg_quick_down(state_home, Logs::Suppress).await;
 }
 
 // ============================================================================
