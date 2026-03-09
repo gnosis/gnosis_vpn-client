@@ -186,7 +186,7 @@ impl State {
             return IncomingResolution::SustainLoop;
         }
         tracing::debug!("core not yet started");
-        return IncomingResolution::Shutdown(exitcode::OK);
+        IncomingResolution::Shutdown(exitcode::OK)
     }
 
     async fn cmd_rotate_logs(&mut self) -> IncomingResolution {
@@ -203,11 +203,11 @@ impl State {
         match res {
             Ok(_) => {
                 tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                return IncomingResolution::SustainLoop;
+                IncomingResolution::SustainLoop
             }
             Err(e) => {
                 eprintln!("failed to reopen log file {:?}: {}", log_handle.log_path, e);
-                return IncomingResolution::Shutdown(exitcode::IOERR);
+                IncomingResolution::Shutdown(exitcode::IOERR)
             }
         }
     }
@@ -219,7 +219,7 @@ impl State {
         sender_from_core: &mpsc::Sender<CoreToWorker>,
     ) -> IncomingResolution {
         tracing::debug!(?config, ?worker_params, "received startup params from root");
-        if let Some(_) = &self.core_handle {
+        if self.core_handle.is_some() {
             tracing::warn!("core already initialized - ignoring startup params");
             return IncomingResolution::SustainLoop;
         }
@@ -234,11 +234,11 @@ impl State {
                 };
                 self.core_handle = Some(ch);
                 tracing::info!("core logic initialized and started");
-                return IncomingResolution::SustainLoop;
+                IncomingResolution::SustainLoop
             }
             Err(err) => {
                 tracing::error!(error = ?err, "failed to initialize core logic");
-                return IncomingResolution::Shutdown(exitcode::OSERR);
+                IncomingResolution::Shutdown(exitcode::OSERR)
             }
         }
     }
@@ -264,11 +264,11 @@ impl State {
         let res_recv = recv.await;
         match res_recv {
             Ok(resp) => {
-                return IncomingResolution::Response(WorkerToRoot::Response { id, resp });
+                IncomingResolution::Response(WorkerToRoot::Response { id, resp })
             }
             Err(err) => {
                 tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed");
-                return IncomingResolution::SustainLoop;
+                IncomingResolution::SustainLoop
             }
         }
     }
@@ -289,7 +289,7 @@ impl State {
             .sender_to_core
             .send(WorkerToCore::ResponseFromRoot(response))
             .await;
-        return IncomingResolution::SustainLoop;
+        IncomingResolution::SustainLoop
     }
 }
 
