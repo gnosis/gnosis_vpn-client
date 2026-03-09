@@ -47,9 +47,14 @@ struct DaemonState {
     worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
     router: Option<Box<dyn Routing>>,
-    worker_channel: (mpsc::Sender<String>, mpsc::Receiver<String>),
-    worker_child: Option<WorkerChild>,
     shutdown_ongoing: Shutdown,
+    // used to forward messages incoming on unix socket to worker process
+    incoming_worker_channel: (mpsc::Sender<String>, mpsc::Receiver<String>),
+    // optional worker paramters set after construction
+    worker_child: Option<WorkerChild>,
+    // status code channel for when the worker process exits
+    worker_exit_channel: (mpsc::Sender<process::ExitStatus>, mpsc::Receiver<process::ExitStatus>),
+    // keep track of longer running root tasks
     ping_tasks: JoinSet<Result<Duration, String>>,
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
@@ -75,7 +80,6 @@ struct SocketCmd {
 }
 
 struct WorkerChild {
-    child: tokio::process::Child,
     socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
     cancel: CancellationToken,
 }
@@ -474,7 +478,8 @@ impl DaemonState {
             pending_response_counter: 0,
             pending_responses: HashMap::new(),
             ping_tasks: JoinSet::new(),
-            worker_channel: mpsc::channel(32),
+            incoming_worker_channel: mpsc::channel(32),
+            worker_exit_channel: mpsc::channel(1),
         }
     }
 
@@ -491,9 +496,8 @@ impl DaemonState {
                         Ok(res) => self.outgoing_response_from_root(ResponseFromRoot::Ping { res }).await?,
                         Err(err) => tracing::error!(error = ?err, "ping task join error"),
                 },
-                Some(line) = self.worker_channel.1.recv() => self.incoming_worker_line(line).await?,
-                // unwrap is covered by guard clause
-                Ok(status) = self.worker_child.as_mut().unwrap().child.wait(), if self.worker_child.is_some() => self.incoming_worker_exit(status)?,
+                Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
+                Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res)?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -694,7 +698,7 @@ impl DaemonState {
         }
     }
 
-    fn incoming_worker_exit(&mut self, status: std::process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+    fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
         self.worker_child = None;
         match self.shutdown_ongoing {
             Shutdown::None => {
@@ -748,7 +752,7 @@ impl DaemonState {
         if let Some(ref log_file) = self.args.log_file {
             worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
         }
-        let child = worker_command.spawn().map_err(|err| {
+        let mut child = worker_command.spawn().map_err(|err| {
             tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
@@ -782,14 +786,21 @@ impl DaemonState {
 
         let cancel = CancellationToken::new();
         let owned_cancel = cancel.clone();
-        let sender = self.worker_channel.0.clone();
+        let lines_sender = self.incoming_worker_channel.0.clone();
+        let exit_sender = self.worker_exit_channel.0.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     Ok(Some(line)) = socket_lines_reader.next_line() => {
-                        let _ = sender.send(line.clone()).await.map_err(|err| {
+                        let _ = lines_sender.send(line.clone()).await.map_err(|err| {
                             tracing::error!(error = ?err, "worker channel receiver dropped");
                         });
+                    },
+                    Ok(status) = child.wait() => {
+                        let _ = exit_sender.send(status).await.map_err(|err| {
+                            tracing::error!(error = ?err, "worker exit channel receiver dropped");
+                        });
+                        break;
                     },
                     _ = owned_cancel.cancelled() => {
                         tracing::debug!("worker command listener received cancellation");
@@ -803,11 +814,7 @@ impl DaemonState {
             }
         });
 
-        self.worker_child = Some(WorkerChild {
-            child,
-            cancel,
-            socket_writer,
-        });
+        self.worker_child = Some(WorkerChild { cancel, socket_writer });
         Ok(())
     }
 
