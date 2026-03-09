@@ -48,12 +48,18 @@ struct DaemonState {
     reload_handle: Option<LogReloadHandle>,
     router: Option<Box<dyn Routing>>,
     worker_child: Option<WorkerChild>,
-    shutdown_ongoing: bool,
+    shutdown_ongoing: Shutdown,
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
     pending_response_counter: u64,
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
+}
+
+enum Shutdown {
+    Worker,
+    Service,
+    None,
 }
 
 enum SignalMessage {
@@ -69,7 +75,7 @@ struct SocketCmd {
 struct WorkerChild {
     child: tokio::process::Child,
     pid: i32,
-    socket_writer:  BufWriter<WriteHalf<UnixStream>>,
+    socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
     cancel: CancellationToken,
 }
 
@@ -123,7 +129,7 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
 
 async fn incoming_on_root_socket(
     stream: TokioUnixStream,
-    socket_cmd_sender: &mpsc::Sender<SocketCmd>,
+    socket_cmd_sender: mpsc::Sender<SocketCmd>,
 ) -> Option<JoinHandle<()>> {
     let (socket_reader_half, socket_writer_half) = stream.into_split();
     let socket_reader = BufReader::new(socket_reader_half);
@@ -218,16 +224,17 @@ async fn socket_listener(
             exitcode::NOPERM
         })?;
 
-    let ongoing = JoinSet::new();
+    let mut ongoing = JoinSet::new();
     let cancel = CancellationToken::new();
     let owned_cancel = cancel.clone();
     let (sender, receiver) = mpsc::channel(32);
     tokio::spawn(async move {
         loop {
+            let cloned_sender = sender.clone();
             tokio::select! {
-                Ok((stream, addr)) = listener.accept() => {
+                Ok((stream, _addr)) = listener.accept() => {
                     ongoing.spawn(async move {
-                        if let Some(handle) = incoming_on_root_socket(stream, &sender).await {
+                        if let Some(handle) = incoming_on_root_socket(stream, cloned_sender).await {
                             handle.await.ok();
                         }
                     });
@@ -310,8 +317,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(&worker_params.state_home()).await;
 
-    let state = DaemonState::new( args, worker_user, config, worker_params, reload_handle,);
-    let res = state.loop(signal_receiver, socket_listener).await;
+    let mut state = DaemonState::new(args, worker_user, config, worker_params, reload_handle);
+    let res = state.daemon_loop(signal_receiver, socket_listener).await;
 
     // restore routing if connected
     state.teardown_any_routing(None).await;
@@ -328,10 +335,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     res
 }
 
-
 async fn send_to_worker(
     msg: RootToWorker,
-    writer: &mut BufWriter<WriteHalf<UnixStream>>,
+    writer: &mut BufWriter<WriteHalf<TokioUnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(&msg).map_err(|err| {
         tracing::error!(msg = ?msg, error = ?err, "failed to serialize message");
@@ -372,86 +378,7 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expected_up: bool) {
-    if let Some(router) = maybe_router {
-        let logs = if expected_up { Logs::Print } else { Logs::Suppress };
-        router.teardown(logs).await;
-    }
-}
-
-async fn setup_dynamic_routing(
-    maybe_router: &mut Option<Box<dyn Routing>>,
-    state_home: PathBuf,
-    worker_user: worker::Worker,
-    wg_data: event::WireGuardData,
-) -> Result<(), String> {
-    // ensure we run down before going up to ensure clean slate
-    teardown_any_routing(maybe_router, false).await;
-
-    let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
-    match res_router {
-        Ok(mut router) => {
-            // router creation successfull, try setup
-            let res_setup = router.setup().await;
-            *maybe_router = Some(Box::new(router));
-            match res_setup {
-                Ok(_) => {
-                    tracing::info!("dynamic routing setup successfully");
-                    Ok(())
-                }
-                Err(error) => {
-                    // setup failed, call cleanup and return error
-                    tracing::error!(?error, "dynamic routing setup error");
-                    teardown_any_routing(maybe_router, true).await;
-                    Err(error.to_string())
-                }
-            }
-        }
-        Err(error) => {
-            // router creation failed, return error
-            tracing::error!(?error, "failed to build dynamic router");
-            Err(error.to_string())
-        }
-    }
-}
-
-async fn setup_static_routing(
-    maybe_router: &mut Option<Box<dyn Routing>>,
-    state_home: PathBuf,
-    wg_data: event::WireGuardData,
-    peer_ips: Vec<Ipv4Addr>,
-) -> Result<(), String> {
-    // ensure we run down before going up to ensure clean slate
-    teardown_any_routing(maybe_router, false).await;
-
-    let res_router = routing::static_router(state_home, wg_data, peer_ips);
-    match res_router {
-        Ok(mut router) => {
-            // router creation successfull, try setup
-            let res_setup = router.setup().await;
-            *maybe_router = Some(Box::new(router));
-            match res_setup {
-                Ok(_) => {
-                    tracing::info!("static routing setup successfully");
-                    Ok(())
-                }
-                Err(error) => {
-                    // setup failed, call cleanup and return error
-                    tracing::error!(?error, "static routing setup error");
-                    teardown_any_routing(maybe_router, true).await;
-                    Err(error.to_string())
-                }
-            }
-        }
-        Err(error) => {
-            // router creation failed, return error
-            tracing::error!(?error, "failed to build static router");
-            Err(error.to_string())
-        }
-    }
-}
-
-fn spawn_ping(options: ping::Options) -> (CancellationToken, oneshot::Receiver<Result<Duration, String>>) {
+async fn spawn_ping(options: ping::Options) -> (CancellationToken, oneshot::Receiver<Result<Duration, String>>) {
     let cancel = CancellationToken::new();
     let owned_cancel = cancel.clone();
     let (sender, receiver) = oneshot::channel();
@@ -464,30 +391,11 @@ fn spawn_ping(options: ping::Options) -> (CancellationToken, oneshot::Receiver<R
                     tracing::debug!(error = ?e, "ping error");
                     e.to_string()
                 });
-                let _ = sender.send(res).await.map_err(|_| {
-                    tracing::error!("ping receiver closed unexpectedly");
-                });
+                let _ = sender.send(res);
             })
             .await;
     });
     (owned_cancel, receiver)
-}
-
-/// limit root service to two threads
-/// one for the socket to be responsive
-/// one for handling worker task orchestration
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() {
-    let args = cli::parse();
-
-    match daemon(args).await {
-        Ok(_) => (),
-        Err(exitcode::OK) => (),
-        Err(code) => {
-            tracing::warn!("abnormal exit");
-            process::exit(code);
-        }
-    }
 }
 
 fn setup_logging(
@@ -540,14 +448,31 @@ async fn write_pidfile(pid_file: &Option<PathBuf>) -> Result<(), exitcode::ExitC
     Ok(())
 }
 
+/// limit root service to two threads
+/// one for the socket to be responsive
+/// one for handling worker task orchestration
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() {
+    let args = cli::parse();
+
+    match daemon(args).await {
+        Ok(_) => (),
+        Err(exitcode::OK) => (),
+        Err(code) => {
+            tracing::warn!("abnormal exit");
+            process::exit(code);
+        }
+    }
+}
+
 impl DaemonState {
     fn new(
-    args: cli::Cli,
-    worker_user: worker::Worker,
-    config: Config,
-    worker_params: WorkerParams,
-    reload_handle: Option<LogReloadHandle>,
-    ) -> Self{
+        args: cli::Cli,
+        worker_user: worker::Worker,
+        config: Config,
+        worker_params: WorkerParams,
+        reload_handle: Option<LogReloadHandle>,
+    ) -> Self {
         Self {
             args,
             worker_user,
@@ -556,58 +481,62 @@ impl DaemonState {
             reload_handle,
             router: None,
             worker_child: None,
-            shutdown_ongoing: false,
+            shutdown_ongoing: Shutdown::None,
             pending_response_counter: 0,
             pending_responses: HashMap::new(),
         }
     }
 
-
     async fn teardown_any_routing(&mut self, overwrite_expected_up: Option<bool>) {
         if let Some(ref mut router) = self.router {
-            let logs = overwrite_expected_up.map(|expected_up| if expected_up { Logs::Print } else { Logs::Suppress })
-                .unwrap_or( Logs::Print);
+            let logs = overwrite_expected_up
+                .map(|expected_up| if expected_up { Logs::Print } else { Logs::Suppress })
+                .unwrap_or(Logs::Print);
             router.teardown(logs).await;
         }
     }
 
-    async fn loop(&mut self, signal_receiver: mpsc::Receiver<SignalMessage>, socket_listener: mpsc::Receiver<LibCommand>) -> Result<(), exitcode::ExitCode> {
-
-    loop {
-        tokio::select! {
-            Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
-            Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
-            Ok(status) = self.worker_child.as_mut().map(|c| c.child.wait()) if self.worker_child.is_some() => self.incoming_worker_exit(status).await?,
-            else => {
-                tracing::error!("unexpected channel closure");
-                return Err(exitcode::IOERR);
+    async fn daemon_loop(
+        &mut self,
+        signal_receiver: mpsc::Receiver<SignalMessage>,
+        socket_listener: mpsc::Receiver<SocketCmd>,
+    ) -> Result<(), exitcode::ExitCode> {
+        loop {
+            tokio::select! {
+                Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
+                Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
+                Ok(status) = self.worker_child.as_mut().unwrap().child.wait(), if self.worker_child.is_some() => self.incoming_worker_exit(status).await?,
+                else => {
+                    tracing::error!("unexpected channel closure");
+                    return Err(exitcode::IOERR);
+                }
             }
         }
     }
-    }
 
-    async fn incoming_signal(&mut self, signal:SignalMessage) -> Result<(), exitcode::ExitCode> {
+    async fn incoming_signal(&mut self, signal: SignalMessage) -> Result<(), exitcode::ExitCode> {
         match signal {
             SignalMessage::Shutdown => {
                 if self.shutdown_ongoing {
                     tracing::warn!("received shutdown signal but shutdown is already ongoing - forcing immediate exit");
                     Err(exitcode::OK)
                 } else {
-                tracing::info!("received shutdown signal - initiating shutdown");
-                self.shutdown_ongoing = true;
-                if let Some(child) = self.worker_child.as_ref() {
-                    tracing::debug!("sending shutdown signal to worker process");
-                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
-                    Ok(())
-                } else {
-                    tracing::debug!("no worker process active - shutdown immediately");
-                    Err(exitcode::OK)
+                    tracing::info!("received shutdown signal - initiating shutdown");
+                    self.shutdown_ongoing = true;
+                    if let Some(child) = self.worker_child.as_ref() {
+                        tracing::debug!("sending shutdown signal to worker process");
+                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                        Ok(())
+                    } else {
+                        tracing::debug!("no worker process active - shutdown immediately");
+                        Err(exitcode::OK)
+                    }
                 }
-                }
-            },
+            }
             SignalMessage::RotateLogs => {
                 if let (Some(handle), Some(path)) = (&self.reload_handle, &self.args.log_file) {
-                    let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user).map(|new_layer| handle.reload(new_layer));
+                    let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user)
+                        .map(|new_layer| handle.reload(new_layer));
                     match res {
                         Ok(_) => {
                             tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
@@ -616,7 +545,7 @@ impl DaemonState {
                                 send_to_worker(RootToWorker::RotateLogs, &mut child.socket_writer).await?;
                             }
                             OK(())
-                        },
+                        }
                         Err(e) => {
                             eprintln!("failed to reopen log file {:?}: {}", path, e);
                             Err(exitcode::IOERR)
@@ -632,25 +561,27 @@ impl DaemonState {
 
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
         match WorkerCommand::try_from(socket_cmd.cmd) {
-            Ok(w_cmd) => {
-                match self.worker_child {
-                    Some(child) => {
-                        self.pending_response_counter += 1;
-                        self.pending_responses.insert(self.pending_response_counter, socket_cmd.resp);
-                        let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: self.pending_response_counter };
-                        send_to_worker(msg, &mut child.socket_writer).await?;
-                    }
-                    None => {
-                        let _ = socket_cmd.resp.send(Response::WorkerOffline).map_err(|error| {
-                            tracing::error!(?error, "socket command response channel closed");
-                        });
-                    }
+            Ok(w_cmd) => match self.worker_child {
+                Some(child) => {
+                    self.pending_response_counter += 1;
+                    self.pending_responses
+                        .insert(self.pending_response_counter, socket_cmd.resp);
+                    let msg = RootToWorker::Command {
+                        cmd: socket_cmd.cmd,
+                        id: self.pending_response_counter,
+                    };
+                    send_to_worker(msg, &mut child.socket_writer).await?;
                 }
-            }
+                None => {
+                    let _ = socket_cmd.resp.send(Response::WorkerOffline).map_err(|error| {
+                        tracing::error!(?error, "socket command response channel closed");
+                    });
+                }
+            },
             Err(_) => {
                 let resp = self.incoming_root_command(socket_cmd.cmd);
                 let _ = socket_cmd.resp.send(resp).map_err(|error| {
-                            tracing::error!(?error, "socket command response channel closed");
+                    tracing::error!(?error, "socket command response channel closed");
                 });
             }
         }
@@ -658,46 +589,45 @@ impl DaemonState {
 
     async fn incoming_root_command(&self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
         match cmd {
-    LibCommand::Status | LibCommand::NerdStats | LibCommand::Connect(_) | LibCommand::Disconnect | LibCommand::Balance | LibCommand::FundingTool(_) | LibCommand::Telemetry | LibCommand::RefreshNode => {
-        Ok(Response::WorkerOffline)
-    },
-        LibCommand::Ping => Ok(Response::Pong),
-            LibCommand::Info => Ok(Response::Info(InfoResponse { version: env!("CARGO_PKG_VERSION").to_string() })),
-            LibCommand::StartClient => {
-                match self.worker_child {
-                    Some(_) => {
-                    Ok(Response::StartClient(StartClientResponse::AlreadyRunning))
-                    },
-                    None => {
-                        self.setup_worker().await?;
-                        Ok(Response::StartClient(StartClientResponse::Started))
-                    }
+            LibCommand::Status
+            | LibCommand::NerdStats
+            | LibCommand::Connect(_)
+            | LibCommand::Disconnect
+            | LibCommand::Balance
+            | LibCommand::FundingTool(_)
+            | LibCommand::Telemetry
+            | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
+            LibCommand::Ping => Ok(Response::Pong),
+            LibCommand::Info => Ok(Response::Info(InfoResponse {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            })),
+            LibCommand::StartClient => match self.worker_child {
+                Some(_) => Ok(Response::StartClient(StartClientResponse::AlreadyRunning)),
+                None => {
+                    self.setup_worker().await?;
+                    Ok(Response::StartClient(StartClientResponse::Started))
                 }
             },
-            LibCommand::StopClient => {
-                match self.worker_child {
-                    Some(child) => {
-                        tracing::debug!("sending shutdown signal to worker process due to StopClient command");
-                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
-                        Ok(Response::StopClient(StopClientResponse::Stopped))
-                    },
-                    None => {
-                        Ok(Response::StopClient(StopClientResponse::NotRunning))
-                    }
+            LibCommand::StopClient => match self.worker_child {
+                Some(child) => {
+                    tracing::debug!("sending shutdown signal to worker process due to StopClient command");
+                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    Ok(Response::StopClient(StopClientResponse::Stopped))
                 }
+                None => Ok(Response::StopClient(StopClientResponse::NotRunning)),
             },
         }
     }
 
     async fn incoming_worker_line(&mut self, line: String) -> Result<(), exitcode::ExitCode> {
-    let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
-        tracing::error!(error = %err, "failed parsing incoming worker command");
-        exitcode::DATAERR
-    })?;
-    match cmd {
-        WorkerToRoot::Response {id, resp} => self.incoming_worker_response(id, resp).await,
-        WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await
-    }
+        let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
+            tracing::error!(error = %err, "failed parsing incoming worker command");
+            exitcode::DATAERR
+        })?;
+        match cmd {
+            WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, resp).await,
+            WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
+        }
     }
 
     fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
@@ -717,16 +647,24 @@ impl DaemonState {
         match request {
             RequestToRoot::DynamicWgRouting { wg_data } => {
                 let res = self.setup_dynamic_routing(wg_data);
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
-            },
+                send_to_worker(
+                    RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
+                    &mut socket_writer,
+                )
+                .await?;
+            }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
                 let res = self.setup_static_routing(wg_data);
                 let state_home = self.worker_params.state_home();
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
-            },
+                send_to_worker(
+                    RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
+                    &mut socket_writer,
+                )
+                .await?;
+            }
             RequestToRoot::TearDownWg => {
                 self.teardown_any_routing(None).await;
-            },
+            }
             RequestToRoot::Ping { options } => {
                 let (cancel, receiver) = spawn_ping(options).await;
                 Ok(())
@@ -734,98 +672,186 @@ impl DaemonState {
         }
     }
 
-    fn incoming_worker_exit(&mut self, status: std::process::ExitStatus) -> exitcode::ExitCode {
-                if self.shutdown_ongoing {
-                    if status.success() {
-                        tracing::info!("worker exited cleanly");
-                        exitcode::OK
-                    } else {
-                        tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
-                        exitcode::IOERR
-                    }
+    fn incoming_worker_exit(&mut self, status: std::process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+        self.worker_child = None;
+        match self.shutdown_ongoing {
+            Shutdown::None => {
+                tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
+                Ok(())
+            }
+            Shutdown::Worker => {
+                if status.success() {
+                    tracing::info!("worker exited cleanly as requested");
+                    Ok(())
                 } else {
-                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                    exitcode::IOERR
+                    tracing::warn!(status = ?status.code(), "worker exited with error during requested shutdown");
+                    Ok(())
                 }
+            }
+            Shutdown::Service => {
+                if status.success() {
+                    tracing::info!("worker exited cleanly on service shutdown");
+                    Err(exitcode::OK)
+                } else {
+                    tracing::error!(status = ?status.code(), "worker exited with error during service shutdown");
+                    Err(exitcode::IOERR)
+                }
+            }
+        }
     }
 
-async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
-    let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
-        tracing::error!(error = ?err, "unable to create socket pair for worker communication");
-        exitcode::IOERR
-    })?;
+    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
+        let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
+            tracing::error!(error = ?err, "unable to create socket pair for worker communication");
+            exitcode::IOERR
+        })?;
 
-    // remove the "Close-On-Exec" flag to avoid premature socket closure by root
-    let fd = child_socket.as_raw_fd();
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-    }
+        // remove the "Close-On-Exec" flag to avoid premature socket closure by root
+        let fd = child_socket.as_raw_fd();
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+        }
 
-    let mut worker_command = TokioCommand::new(setup.worker_user.binary.clone())
-        .current_dir(&setup.worker_user.home)
-        .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-        .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
-        .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-        .uid(setup.worker_user.uid)
-        .gid(setup.worker_user.gid);
+        let mut worker_command = TokioCommand::new(setup.worker_user.binary.clone())
+            .current_dir(&setup.worker_user.home)
+            .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
+            .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
+            .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
+            .uid(setup.worker_user.uid)
+            .gid(setup.worker_user.gid);
 
-    if let Some(log_file) = self.args.log_file {
-        worker_command = worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
-    }
-    let child = worker_command.spawn() .map_err(|err| {
+        if let Some(log_file) = self.args.log_file {
+            worker_command = worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
+        }
+        let child = worker_command.spawn().map_err(|err| {
             tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
-    let pid: i32 = child.id().map(|id| id as i32).ok_or_else(|| {
-        tracing::error!("unable to get worker PID");
-        exitcode::IOERR
-    })?;
+        let pid: i32 = child.id().map(|id| id as i32).ok_or_else(|| {
+            tracing::error!("unable to get worker PID");
+            exitcode::IOERR
+        })?;
 
-    parent_socket.set_nonblocking(true).map_err(|err| {
-        tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
-        exitcode::IOERR
-    })?;
+        parent_socket.set_nonblocking(true).map_err(|err| {
+            tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
+            exitcode::IOERR
+        })?;
 
-    let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
-        tracing::error!(error = ?err, "unable to create unix stream from socket");
-        exitcode::IOERR
-    })?;
+        let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
+            tracing::error!(error = ?err, "unable to create unix stream from socket");
+            exitcode::IOERR
+        })?;
 
-    // root <-> worker communication setup
-    tracing::debug!("splitting unix stream into reader and writer halves");
-    let (reader_half, writer_half) = io::split(parent_stream);
-    let reader = BufReader::new(reader_half);
-    let mut socket_lines_reader = reader.lines();
-    let mut socket_writer = BufWriter::new(writer_half);
+        // root <-> worker communication setup
+        tracing::debug!("splitting unix stream into reader and writer halves");
+        let (reader_half, writer_half) = io::split(parent_stream);
+        let reader = BufReader::new(reader_half);
+        let mut socket_lines_reader = reader.lines();
+        let mut socket_writer = BufWriter::new(writer_half);
 
-    // send initial configuration and resources to worker
-    send_to_worker( RootToWorker::StartupParams { config: self.config.clone(), worker_params: self.worker_params.clone(), }, &mut socket_writer,).await?;
+        // send initial configuration and resources to worker
+        send_to_worker(
+            RootToWorker::StartupParams {
+                config: self.config.clone(),
+                worker_params: self.worker_params.clone(),
+            },
+            &mut socket_writer,
+        )
+        .await?;
 
-    let cancel = CancellationToken::new();
-    let owned_cancel = cancel.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Ok(Some(line)) = socket_lines_reader.next_line() => self.incoming_worker_line(line).await,
-                _ = cancel.cancelled() => {
-                    tracing::debug!("worker received cancellation");
-                    break;
-                }
-                else => {
-                    tracing::warn!("worker streams closed");
-                    break;
+        let cancel = CancellationToken::new();
+        let owned_cancel = cancel.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Ok(Some(line)) = socket_lines_reader.next_line() => self.incoming_worker_line(line).await,
+                    _ = cancel.cancelled() => {
+                        tracing::debug!("worker received cancellation");
+                        break;
+                    }
+                    else => {
+                        tracing::warn!("worker streams closed");
+                        break;
+                    }
                 }
             }
-        }
-    });
+        });
 
-    self.worker_child = Some(WorkerChild {
-        child,
-        pid,
-        cancel,
-        socket_writer,
-    });
-}
+        self.worker_child = Some(WorkerChild {
+            child,
+            pid,
+            cancel,
+            socket_writer,
+        });
+    }
+    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
+        // ensure we run down before going up to ensure clean slate
+        self.teardown_any_routing(None).await;
+
+        let state_home = self.worker_params.state_home();
+        let worker_user = self.worker_user;
+        let res_router = routing::dynamic_router(&state_home, worker_user, wg_data).await;
+        match res_router {
+            Ok(mut router) => {
+                // router creation successfull, try setup
+                let res_setup = router.setup().await;
+                self.router = Some(Box::new(router));
+                match res_setup {
+                    Ok(_) => {
+                        tracing::info!("dynamic routing setup successfully");
+                        Ok(())
+                    }
+                    Err(error) => {
+                        // setup failed, call cleanup and return error
+                        tracing::error!(?error, "dynamic routing setup error");
+                        self.teardown_any_routing(None).await;
+                        Err(error.to_string())
+                    }
+                }
+            }
+            Err(error) => {
+                // router creation failed, return error
+                tracing::error!(?error, "failed to build dynamic router");
+                Err(error.to_string())
+            }
+        }
+    }
+
+    async fn setup_static_routing(
+        &mut self,
+        wg_data: event::WireGuardData,
+        peer_ips: Vec<Ipv4Addr>,
+    ) -> Result<(), String> {
+        // ensure we run down before going up to ensure clean slate
+        self.teardown_any_routing(maybe_router).await;
+
+        let state_home = self.worker_params.state_home();
+        let res_router = routing::static_router(&state_home, wg_data, peer_ips);
+        match res_router {
+            Ok(mut router) => {
+                // router creation successfull, try setup
+                let res_setup = router.setup().await;
+                self.router = Some(Box::new(router));
+                match res_setup {
+                    Ok(_) => {
+                        tracing::info!("static routing setup successfully");
+                        Ok(())
+                    }
+                    Err(error) => {
+                        // setup failed, call cleanup and return error
+                        tracing::error!(?error, "static routing setup error");
+                        self.teardown_any_routing(None).await;
+                        Err(error.to_string())
+                    }
+                }
+            }
+            Err(error) => {
+                // router creation failed, return error
+                tracing::error!(?error, "failed to build static router");
+                Err(error.to_string())
+            }
+        }
+    }
 }
