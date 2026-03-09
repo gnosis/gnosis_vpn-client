@@ -24,7 +24,7 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
+pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
     let content = fs::read_to_string(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
@@ -36,13 +36,13 @@ pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub async fn store_safe(state_home: &Path, safe_module: &SafeModule) -> Result<(), Error> {
+pub async fn store_safe(state_home: PathBuf, safe_module: &SafeModule) -> Result<(), Error> {
     let safe_file = safe_file(state_home);
     let content = serde_yaml::to_string(&safe_module)?;
     fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
-pub async fn read_safe(state_home: &Path) -> Result<SafeModule, Error> {
+pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
     let content = fs::read_to_string(safe_file(state_home)).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
@@ -67,10 +67,10 @@ publish: false
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub fn safe_file(state_home: &Path) -> PathBuf {
+pub fn safe_file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, SAFE_FILE)
 }
 
-pub(crate) fn db_file(state_home: &Path) -> PathBuf {
+pub(crate) fn db_file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, DB_FILE)
 }

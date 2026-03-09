@@ -70,7 +70,7 @@ impl WorkerParams {
                 tracing::info!(?path, "Using provided HOPR identity file");
                 path.to_path_buf()
             }
-            None => identity::file(&self.state_home()),
+            None => identity::file(self.state_home()),
         };
 
         let identity_pass = match &self.identity_pass {
@@ -79,7 +79,7 @@ impl WorkerParams {
                 pass.to_string()
             }
             None => {
-                let path = identity::pass_file(&self.state_home);
+                let path = identity::pass_file(self.state_home());
                 match fs::read_to_string(&path).await {
                     Ok(p) => {
                         tracing::debug!(?path, "No HOPR identity pass provided - read from file instead");
@@ -99,30 +99,30 @@ impl WorkerParams {
             }
         };
 
-        identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
+        identity::from_path(identity_file, identity_pass.clone()).map_err(Error::from)
     }
 
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
         let identity_file = match &self.identity_file {
             Some(path) => path.to_path_buf(),
-            None => identity::file(&self.state_home),
+            None => identity::file(self.state_home()),
         };
 
         let identity_pass = match &self.identity_pass {
             Some(pass) => pass.to_string(),
             None => {
-                let path = identity::pass_file(&self.state_home);
+                let path = identity::pass_file(self.state_home());
                 fs::read_to_string(&path).await?
             }
         };
 
-        identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
+        identity::from_path(identity_file, identity_pass.clone()).map_err(Error::from)
     }
 
     pub async fn to_config(&self, safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             // use user provided configuration path
-            ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
+            ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
             // check status of config generation
             ConfigFileMode::Generated => config::generate(safe_module).await.map_err(Error::from),
         }

@@ -31,7 +31,7 @@ use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::{event, wireguard, worker};
 
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::netlink_ops::{NetlinkOps, RealNetlinkOps, RouteSpec, RuleSpec};
 use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};

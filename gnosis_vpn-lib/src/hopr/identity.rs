@@ -4,7 +4,7 @@ use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use thiserror::Error;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::dirs;
 
@@ -23,20 +23,20 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-pub fn from_path(file: &Path, pass: String) -> Result<HoprKeys, Error> {
-    let id_path_owned = file.to_string_lossy().into_owned();
+pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
+    let id_path = file.to_string_lossy().to_string();
     let retrieval_mode = IdentityRetrievalModes::FromFile {
         password: pass.as_str(),
-        id_path: id_path_owned.as_str(),
+        id_path: id_path.as_str(),
     };
     HoprKeys::try_from(retrieval_mode).map_err(Error::KeyPair)
 }
 
-pub fn file(state_home: &Path) -> PathBuf {
+pub fn file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, ID_FILE)
 }
 
-pub fn pass_file(state_home: &Path) -> PathBuf {
+pub fn pass_file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, ID_PASS)
 }
 
