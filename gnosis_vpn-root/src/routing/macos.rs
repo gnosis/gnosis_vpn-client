@@ -134,7 +134,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        let iface_name = match self.wg.wg_quick_up(&self.state_home, wg_quick_content).await {
+        let iface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await {
             Ok(name) => name,
             Err(e) => {
                 tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
@@ -162,7 +162,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
                     }
                 }
                 // Bring down WireGuard
-                if let Err(wg_err) = self.wg.wg_quick_down(&self.state_home, Logs::Suppress).await {
+                if let Err(wg_err) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
                     tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
                 }
                 // Rollback bypass routes
@@ -196,7 +196,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         }
 
         // wg-quick down
-        match self.wg.wg_quick_down(&self.state_home, logs).await {
+        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
             Err(error) => tracing::warn!(?error, "wg-quick down failed, continuing with bypass route cleanup"),
         }
