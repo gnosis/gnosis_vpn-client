@@ -129,8 +129,9 @@ impl Core {
     pub async fn init(
         config: Config,
         worker_params: WorkerParams,
+        incoming_receiver: mpsc::Receiver<WorkerToCore>,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
-    ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
+    ) -> Result<Core, Error> {
         wireguard::available().await?;
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
@@ -154,7 +155,6 @@ impl Core {
             destination_healths.insert(id, DestinationHealth::Init);
         }
 
-        let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let core = Core {
             // config data
             config,
@@ -188,7 +188,7 @@ impl Core {
             responder_unit: None,
             responder_duration: None,
         };
-        Ok((core, incoming_sender))
+        Ok(core)
     }
 
     pub async fn start(mut self) {
