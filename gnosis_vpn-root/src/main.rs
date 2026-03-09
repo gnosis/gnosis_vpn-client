@@ -115,7 +115,7 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
 
 async fn socket_listener(
     socket_path: &Path,
-) -> Result<(CancellationToken, mspc::Receiver<Command>), exitcode::ExitCode> {
+) -> Result<(CancellationToken, mpsc::Receiver<LibCommand>), exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -250,9 +250,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
 
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
-    #[cfg(target_os = "linux")]
-    routing::cleanup_stale_fwmark_rules().await;
-
+    routing::reset_on_startup(&worker_params.state_home()).await;
     // store router ref for a later teardown if necessary
     let mut maybe_router: Option<Box<dyn Routing>> = None;
 
@@ -265,11 +263,16 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         log_path: args.log_file.clone(),
     };
 
-    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
+    let res = loop_daemon(setup, signal_receiver, socket_listener, &mut maybe_router).await;
 
     // restore routing if connected
     teardown_any_routing(&mut maybe_router, false).await;
 
+    // cancel running tasks
+    cancel_socket_listener.cancel();
+    cancel_signal_handlers.cancel();
+
+    // remove socket file
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
         tracing::error!(error = ?err, "failed removing socket on shutdown");
     });
@@ -336,8 +339,8 @@ async fn setup_worker(setup: &DaemonSetup) -> Result<WorkerChild, exitcode::Exit
 
 async fn loop_daemon(
     setup: DaemonSetup,
-    signal_receiver: &mut mpsc::Receiver<SignalMessage>,
-    socket: TokioUnixListener,
+    signal_receiver: mpsc::Receiver<SignalMessage>,
+    socket_listener: mpsc::Receiver<LibCommand>,
     maybe_router: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     // safe state_home for usage later
