@@ -40,13 +40,20 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
-struct DaemonSetup {
+struct DaemonState {
     args: cli::Cli,
     worker_user: worker::Worker,
     config: Config,
     worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
-    log_path: Option<PathBuf>,
+    router: Option<Box<dyn Routing>>,
+    worker_child: Option<WorkerChild>,
+    shutdown_ongoing: bool,
+    // External socket commands need an internal mapping:
+    // root process will keep track of worker requests and map their responses
+    // so that the requesting stream on the socket receives it's answer
+    pending_response_counter: u64,
+    pending_responses: HashMap<u64, oneshot::Sender<Response>>,
 }
 
 enum SignalMessage {
@@ -62,7 +69,8 @@ struct SocketCmd {
 struct WorkerChild {
     child: tokio::process::Child,
     pid: i32,
-    parent_stream: TokioUnixStream,
+    socket_writer:  BufWriter<WriteHalf<UnixStream>>,
+    cancel: CancellationToken,
 }
 
 async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMessage>), exitcode::ExitCode> {
@@ -115,7 +123,7 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
 
 async fn socket_listener(
     socket_path: &Path,
-) -> Result<(CancellationToken, mpsc::Receiver<LibCommand>), exitcode::ExitCode> {
+) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
     match socket_path.try_exists() {
         Ok(true) => {
             tracing::info!("probing for running instance");
@@ -251,22 +259,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(&worker_params.state_home()).await;
-    // store router ref for a later teardown if necessary
-    let mut maybe_router: Option<Box<dyn Routing>> = None;
 
-    let setup = DaemonSetup {
-        args,
-        worker_user,
-        config,
-        worker_params,
-        reload_handle,
-        log_path: args.log_file.clone(),
-    };
-
-    let res = loop_daemon(setup, signal_receiver, socket_listener, &mut maybe_router).await;
+    let state = DaemonState::new( args, worker_user, config, worker_params, reload_handle,);
+    let res = state.loop(signal_receiver, socket_listener).await;
 
     // restore routing if connected
-    teardown_any_routing(&mut maybe_router, false).await;
+    state.teardown_any_routing(None).await;
 
     // cancel running tasks
     cancel_socket_listener.cancel();
@@ -280,68 +278,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     res
 }
 
-async fn setup_worker(setup: &DaemonSetup) -> Result<WorkerChild, exitcode::ExitCode> {
-    let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
-        tracing::error!(error = ?err, "unable to create socket pair for worker communication");
-        exitcode::IOERR
-    })?;
-
-    // remove the "Close-On-Exec" flag to avoid premature socket closure by root
-    let fd = child_socket.as_raw_fd();
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-    }
-
-    let mut worker_command = TokioCommand::new(setup.worker_user.binary.clone());
-    if let Some(log_file) = &setup.args.log_file {
-        worker_command
-            .arg("--log-file")
-            .arg(log_file.to_string_lossy().to_string());
-    }
-    let child = worker_command
-        .current_dir(&setup.worker_user.home)
-        .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-        .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
-        .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-        .uid(setup.worker_user.uid)
-        .gid(setup.worker_user.gid)
-        .spawn()
-        .map_err(|err| {
-            tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
-            exitcode::IOERR
-        })?;
-
-    let pid: i32 = child.id().map(|id| id as i32).ok_or_else(|| {
-        tracing::error!("unable to get worker PID");
-        exitcode::IOERR
-    })?;
-
-    parent_socket.set_nonblocking(true).map_err(|err| {
-        tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
-        exitcode::IOERR
-    })?;
-
-    let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
-        tracing::error!(error = ?err, "unable to create unix stream from socket");
-        exitcode::IOERR
-    })?;
-
-    // root <-> worker communication setup
-    tracing::debug!("splitting unix stream into reader and writer halves");
-
-    Ok(WorkerChild {
-        child,
-        pid,
-        parent_stream,
-    })
-}
 
 async fn loop_daemon(
     setup: DaemonSetup,
     signal_receiver: mpsc::Receiver<SignalMessage>,
     socket_listener: mpsc::Receiver<LibCommand>,
-    maybe_router: &mut Option<Box<dyn Routing>>,
 ) -> Result<(), exitcode::ExitCode> {
     // safe state_home for usage later
     let state_home = setup.worker_params.state_home();
@@ -376,8 +317,6 @@ async fn loop_daemon(
     let cancel_token = CancellationToken::new();
     let (ping_sender, mut ping_receiver) = mpsc::channel(32);
     let (socket_cmd_sender, mut socket_cmd_receiver) = mpsc::channel(32);
-
-    let mut worker_child: Option<WorkerChild> = None;
 
     tracing::info!("entering main daemon loop");
 
@@ -773,4 +712,211 @@ async fn write_pidfile(pid_file: &Option<PathBuf>) -> Result<(), exitcode::ExitC
         })?;
     }
     Ok(())
+}
+
+impl DaemonState {
+    fn new(
+    args: cli::Cli,
+    worker_user: worker::Worker,
+    config: Config,
+    worker_params: WorkerParams,
+    reload_handle: Option<LogReloadHandle>,
+    ) -> Self{
+        Self {
+            args,
+            worker_user,
+            config,
+            worker_params,
+            reload_handle,
+            router: None,
+            worker_child: None,
+            shutdown_ongoing: false,
+            pending_response_counter: 0,
+            pending_responses: HashMap::new(),
+        }
+    }
+
+
+    async fn teardown_any_routing(&mut self, overwrite_expected_up: Option<bool>) {
+        if let Some(ref mut router) = self.router {
+            let logs = overwrite_expected_up.map(|expected_up| if expected_up { Logs::Print } else { Logs::Suppress })
+                .unwrap_or( Logs::Print);
+            router.teardown(logs).await;
+        }
+    }
+
+    async fn loop(&mut self, signal_receiver: mpsc::Receiver<SignalMessage>, socket_listener: mpsc::Receiver<LibCommand>) -> Result<(), exitcode::ExitCode> {
+
+    loop {
+        tokio::select! {
+            Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
+            Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
+            Ok(status) = self.worker_child.as_mut().map(|c| c.child.wait()) if self.worker_child.is_some() => self.incoming_worker_exit(status).await?,
+            else => {
+                tracing::error!("unexpected channel closure");
+                return Err(exitcode::IOERR);
+            }
+        }
+    }
+    }
+
+    async fn incoming_signal(&mut self, signal:SignalMessage) -> Result<(), exitcode::ExitCode> {
+        match signal {
+            SignalMessage::Shutdown => {
+                if self.shutdown_ongoing {
+                    tracing::warn!("received shutdown signal but shutdown is already ongoing - forcing immediate exit");
+                    Err(exitcode::OK)
+                } else {
+                tracing::info!("received shutdown signal - initiating shutdown");
+                self.shutdown_ongoing = true;
+                if let Some(child) = self.worker_child.as_ref() {
+                    tracing::debug!("sending shutdown signal to worker process");
+                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    Ok(())
+                } else {
+                    tracing::debug!("no worker process active - shutdown immediately");
+                    Err(exitcode::OK)
+                }
+                }
+            },
+            SignalMessage::RotateLogs => {
+                if let (Some(handle), Some(path)) = (&self.reload_handle, &self.args.log_file) {
+                    let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user).map(|new_layer| handle.reload(new_layer));
+                    match res {
+                        Ok(_) => {
+                            tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                            if let Some(child) = self.worker_child.as_ref() {
+                                tracing::debug!("sending rotate logs to worker process");
+                                send_to_worker(RootToWorker::RotateLogs, &mut child.socket_writer).await?;
+                            }
+                            OK(())
+                        },
+                        Err(e) => {
+                            eprintln!("failed to reopen log file {:?}: {}", path, e);
+                            Err(exitcode::IOERR)
+                        }
+                    }
+                } else {
+                    tracing::debug!("no log file configured, skipping log reload on SIGHUP");
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
+        match WorkerCommand::try_from(socket_cmd.cmd) {
+            Ok(w_cmd) => {
+                match self.worker_child {
+                    Some(child) => {
+                        self.pending_response_counter += 1;
+                        self.pending_responses.insert(self.pending_response_counter, socket_cmd.resp);
+                        let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: self.pending_response_counter };
+                        send_to_worker(msg, &mut child.socket_writer).await?;
+                    }
+                    None => {}
+                }
+            }
+            Err(_) => {
+            }
+        }
+    }
+
+    async fn incoming_worker_line(&mut self, line: String) {
+    }
+
+    fn incoming_worker_exit(&mut self, status: std::process::ExitStatus) -> exitcode::ExitCode {
+                if self.shutdown_ongoing {
+                    if status.success() {
+                        tracing::info!("worker exited cleanly");
+                        exitcode::OK
+                    } else {
+                        tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
+                        exitcode::IOERR
+                    }
+                } else {
+                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
+                    exitcode::IOERR
+                }
+    }
+
+async fn setup_worker(&self) -> Result<(), exitcode::ExitCode> {
+    let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
+        tracing::error!(error = ?err, "unable to create socket pair for worker communication");
+        exitcode::IOERR
+    })?;
+
+    // remove the "Close-On-Exec" flag to avoid premature socket closure by root
+    let fd = child_socket.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+    }
+
+    let mut worker_command = TokioCommand::new(setup.worker_user.binary.clone())
+        .current_dir(&setup.worker_user.home)
+        .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
+        .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
+        .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
+        .uid(setup.worker_user.uid)
+        .gid(setup.worker_user.gid);
+
+    if let Some(log_file) = self.args.log_file {
+        worker_command = worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
+    }
+    let child = worker_command.spawn() .map_err(|err| {
+            tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
+            exitcode::IOERR
+        })?;
+
+    let pid: i32 = child.id().map(|id| id as i32).ok_or_else(|| {
+        tracing::error!("unable to get worker PID");
+        exitcode::IOERR
+    })?;
+
+    parent_socket.set_nonblocking(true).map_err(|err| {
+        tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
+        exitcode::IOERR
+    })?;
+
+    let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
+        tracing::error!(error = ?err, "unable to create unix stream from socket");
+        exitcode::IOERR
+    })?;
+
+    // root <-> worker communication setup
+    tracing::debug!("splitting unix stream into reader and writer halves");
+    let (reader_half, writer_half) = io::split(parent_stream);
+    let reader = BufReader::new(reader_half);
+    let mut socket_lines_reader = reader.lines();
+    let mut socket_writer = BufWriter::new(writer_half);
+
+    // send initial configuration and resources to worker
+    send_to_worker( RootToWorker::StartupParams { config: self.config.clone(), worker_params: self.worker_params.clone(), }, &mut socket_writer,).await?;
+
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Ok(Some(line)) = socket_lines_reader.next_line() => self.incoming_worker_line(line).await,
+                _ = cancel.cancelled() => {
+                    tracing::debug!("worker received cancellation");
+                    break;
+                }
+                else => {
+                    tracing::warn!("worker streams closed");
+                    break;
+                }
+            }
+        }
+    });
+
+    self.worker_child = Some(WorkerChild {
+        child,
+        pid,
+        cancel,
+        socket_writer,
+    });
+}
 }

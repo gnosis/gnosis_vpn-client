@@ -21,18 +21,29 @@ pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, 
 /// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
+    /// Request general status about destinations and connected state
     Status,
+    /// Request detailed stats about the current connection, if any
     NerdStats,
+    /// Connect to a destination, specified by its id
     Connect(String),
-    Metrics,
+    /// Disconnect from a destination
     Disconnect,
+    /// Show channel balance and funding status
     Balance,
-    Ping,
-    RefreshNode,
+    /// Trigger funding tool - only allowed at certain phases
     FundingTool(String),
+    /// Return telmetry metrics of the underlying edge client, if running
     Telemetry,
+    /// Retrigger a balance check
+    RefreshNode,
+    /// Determine service lifeness
+    Ping,
+    /// Deliver service version and other meta
     Info,
+    /// Start worker process and edge client if not already running
     StartClient,
+    /// Stop a running worker process and edge client
     StopClient,
 }
 
@@ -41,12 +52,11 @@ pub enum WorkerCommand {
     Status,
     NerdStats,
     Connect(String),
-    Metrics,
     Disconnect,
     Balance,
-    RefreshNode,
     FundingTool(String),
     Telemetry,
+    RefreshNode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,11 +66,11 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
-    Metrics(String),
-    Telemetry(Option<String>),
     FundingTool(FundingToolResponse),
+    Telemetry(Option<String>),
     Pong,
-    Empty,
+    Info(InfoResponse),
+    RefreshNodeTriggered,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,8 +103,13 @@ pub enum RunMode {
         funding: FundingState,
         hopr_status: Option<HoprStatus>,
     },
-    /// Shutting down service
+    /// Shutting down edge client,
     Shutdown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InfoResponse {
+    version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -456,6 +471,25 @@ impl Display for HoprInitStatus {
     }
 }
 
+impl TryFrom<Command> for WorkerCommand {
+    type Error = ();
+
+    fn try_from(value: Command) -> Result<Self, Self::Error> {
+        match value {
+            Command::Status => Ok(WorkerCommand::Status),
+            Command::NerdStats => Ok(WorkerCommand::NerdStats),
+            Command::Connect(dest) => Ok(WorkerCommand::Connect(dest)),
+            Command::Disconnect => Ok(WorkerCommand::Disconnect),
+            Command::Balance => Ok(WorkerCommand::Balance),
+            Command::RefreshNode => Ok(WorkerCommand::RefreshNode),
+            Command::FundingTool(dest) => Ok(WorkerCommand::FundingTool(dest)),
+            Command::Telemetry => Ok(WorkerCommand::Telemetry),
+            // Commands that are not relevant for the worker
+            Command::Info | Command::Ping | Command::StartClient | Command::StopClient => Err(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,7 +584,7 @@ mod tests {
         let disc = DisconnectResponse::new(destination);
         assert!(matches!(Response::disconnect(disc), Response::Disconnect(_)));
 
-        let status = StatusResponse::new(RunMode::Init, vec![]);
+        let status = StatusResponse::new(RunMode::Waiting, vec![]);
         assert!(matches!(Response::status(status), Response::Status(_)));
         Ok(())
     }

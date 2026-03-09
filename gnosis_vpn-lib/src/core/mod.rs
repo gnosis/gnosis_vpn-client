@@ -516,17 +516,6 @@ impl Core {
                             let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
                         }
                     },
-
-                    WorkerCommand::Metrics => {
-                        let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
-                            Ok(m) => m,
-                            Err(err) => {
-                                tracing::error!(?err, "failed to collect hopr metrics");
-                                String::new()
-                            }
-                        };
-                        let _ = resp.send(Response::Metrics(metrics));
-                    }
                 }
                 true
             }
