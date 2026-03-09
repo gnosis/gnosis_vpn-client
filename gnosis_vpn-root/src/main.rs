@@ -76,7 +76,6 @@ struct SocketCmd {
 
 struct WorkerChild {
     child: tokio::process::Child,
-    pid: i32,
     socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
     cancel: CancellationToken,
 }
@@ -627,6 +626,7 @@ impl DaemonState {
             LibCommand::StopClient => match self.worker_child {
                 Some(ref mut child) => {
                     tracing::debug!("sending shutdown signal to worker process due to StopClient command");
+                    self.shutdown_ongoing = Shutdown::Worker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
@@ -753,11 +753,6 @@ impl DaemonState {
             exitcode::IOERR
         })?;
 
-        let pid: i32 = child.id().map(|id| id as i32).ok_or_else(|| {
-            tracing::error!("unable to get worker PID");
-            exitcode::IOERR
-        })?;
-
         parent_socket.set_nonblocking(true).map_err(|err| {
             tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
             exitcode::IOERR
@@ -810,7 +805,6 @@ impl DaemonState {
 
         self.worker_child = Some(WorkerChild {
             child,
-            pid,
             cancel,
             socket_writer,
         });

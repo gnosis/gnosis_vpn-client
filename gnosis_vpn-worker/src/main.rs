@@ -40,7 +40,7 @@ struct State {
 enum IncomingResolution {
     Shutdown(exitcode::ExitCode),
     SustainLoop,
-    Response(WorkerToRoot),
+    Response(Box<WorkerToRoot>),
 }
 
 async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
@@ -263,9 +263,7 @@ impl State {
             .await;
         let res_recv = recv.await;
         match res_recv {
-            Ok(resp) => {
-                IncomingResolution::Response(WorkerToRoot::Response { id, resp })
-            }
+            Ok(resp) => IncomingResolution::Response(Box::new(WorkerToRoot::Response { id, resp })),
             Err(err) => {
                 tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed");
                 IncomingResolution::SustainLoop
@@ -334,7 +332,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             Some(event) = receiver_from_core.recv() => match event {
                 CoreToWorker::RequestToRoot(req) => {
                     tracing::debug!(?req, "incoming request to root from core");
-                    send_to_root(WorkerToRoot::RequestToRoot(req), &mut writer).await?;
+                    send_to_root(Box::new(WorkerToRoot::RequestToRoot(req)), &mut writer).await?;
                 }
             },
             Some(_) = state.core_handle.as_mut().map(|h| h.task.join_next()).unwrap(), if state.core_handle.is_some() => {
@@ -350,7 +348,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 }
 
 async fn send_to_root(
-    resp: WorkerToRoot,
+    resp: Box<WorkerToRoot>,
     writer: &mut BufWriter<WriteHalf<TokioUnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(&resp).map_err(|err| {
