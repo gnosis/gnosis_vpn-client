@@ -168,11 +168,11 @@ async fn socket_listener(
         loop {
             tokio::select! {
                 Ok((stream, addr)) = listener.accept() => {
-                ongoing.spawn(async move {
-                    if let Some(handle) = incoming_on_root_socket(stream, &sender).await {
-                        handle.await.ok();
-                    }
-                });
+                    ongoing.spawn(async move {
+                        if let Some(handle) = incoming_on_root_socket(stream, &sender).await {
+                            handle.await.ok();
+                        }
+                    });
                 },
                 _ = cancel.cancelled() => {
                     tracing::debug!("socket listener received cancellation");
@@ -192,9 +192,8 @@ async fn socket_listener(
 }
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
-    let worker_params = WorkerParams::from(&args);
-
     // ensure worker user exists
+    let worker_params = WorkerParams::from(&args);
     let input = worker::Input::new(
         args.worker_user.clone(),
         args.worker_binary.clone(),
@@ -206,8 +205,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         exitcode::NOUSER
     })?;
 
+    // setup logging
     let reload_handle = setup_logging(&args.log_file, &worker_user)?;
 
+    // introduce ourself in the logs
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         state_home = %worker_params.state_home().display(),
@@ -216,23 +217,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     );
 
     // Write root pidfile for the newsyslog service to send signals to
-    if let Some(ref pid_file) = args.pid_file {
-        if let Some(pid_dir) = pid_file.parent() {
-            fs::create_dir_all(pid_dir).await.map_err(|e| {
-                tracing::error!(error = %e, "error creating pid_file directory");
-                exitcode::IOERR
-            })?;
-        }
-        tracing::debug!(path = ?pid_file, "writing pidfile");
-        let pid = process::id().to_string();
-        fs::write(pid_file, pid).await.map_err(|e| {
-            tracing::error!(error = ?e, "error writing pid file");
-            exitcode::IOERR
-        })?;
-    }
-
-    // set up signal handlers
-    let (cancel_signal_handlers, signal_receiver) = signal_channel().await?;
+    write_pidfile(&args.pid_file).await?;
 
     // check wireguard tooling
     wg_tooling::available()
@@ -257,24 +242,28 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         exitcode::NOINPUT
     })?;
 
+    // set up signal handlers
+    let (cancel_signal_handlers, signal_receiver) = signal_channel().await?;
+
     // set up system socket
     let socket_path = args.socket_path.clone();
-    let socket = socket_listener(&args.socket_path).await?;
+    let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
 
+    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
+    #[cfg(target_os = "linux")]
+    routing::cleanup_stale_fwmark_rules().await;
+
+    // store router ref for a later teardown if necessary
     let mut maybe_router: Option<Box<dyn Routing>> = None;
-    let log_path = args.log_file.clone();
+
     let setup = DaemonSetup {
         args,
         worker_user,
         config,
         worker_params,
         reload_handle,
-        log_path,
+        log_path: args.log_file.clone(),
     };
-
-    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
-    #[cfg(target_os = "linux")]
-    routing::cleanup_stale_fwmark_rules().await;
 
     let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
 
@@ -760,4 +749,25 @@ fn setup_logging(
             Ok(None)
         }
     }
+}
+
+// On macOS newsyslog service needs the pid accessible via pidfile
+// Launchctl will not create that pidfile for us
+async fn write_pidfile(pid_file: &Option<PathBuf>) -> Result<(), exitcode::ExitCode> {
+    if let Some(pid_file) = pid_file {
+        if let Some(pid_dir) = pid_file.parent() {
+            fs::create_dir_all(pid_dir).await.map_err(|e| {
+                tracing::error!(error = %e, "error creating pid_file directory");
+                exitcode::IOERR
+            })?;
+        }
+
+        tracing::debug!(path = ?pid_file, "writing pidfile");
+        let pid = process::id().to_string();
+        fs::write(pid_file, pid).await.map_err(|e| {
+            tracing::error!(error = ?e, "error writing pid file");
+            exitcode::IOERR
+        })?;
+    }
+    Ok(())
 }

@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use std::fs::DirBuilder;
 use std::os::unix::fs::{self as unix_fs, DirBuilderExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
 
@@ -34,25 +34,25 @@ pub enum DirError {
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
 // tracing is not yet enabled so we cannot use it
-pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
+pub fn setup_home(home: &Path, uid: u32, gid: u32) -> Result<(), Error> {
     ensure_dir(&home, 0o755, uid, gid).map_err(Error::HomeFolder)?;
     let cache_path = home.join(CACHE_DIRECTORY);
     ensure_dir(&cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
     let config_path = home.join(CONFIG_DIRECTORY);
     ensure_dir(&config_path, 0o700, uid, gid).map_err(Error::ConfigFolder)?;
-    Ok(home)
+    Ok(())
 }
 
-pub fn cache_dir(home: PathBuf, file: &str) -> PathBuf {
+pub fn cache_dir(home: &Path, file: &str) -> PathBuf {
     home.join(CACHE_DIRECTORY).join(file)
 }
 
-pub fn config_dir(home: PathBuf, file: &str) -> PathBuf {
+pub fn config_dir(home: &Path, file: &str) -> PathBuf {
     home.join(CONFIG_DIRECTORY).join(file)
 }
 
 // Ensures that the specified directory exists with the given permissions and ownership.
-pub fn ensure_dir(path: &PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), DirError> {
+pub fn ensure_dir(path: &Path, mode: u32, uid: u32, gid: u32) -> Result<(), DirError> {
     DirBuilder::new()
         .recursive(true)
         .mode(mode)
@@ -62,7 +62,7 @@ pub fn ensure_dir(path: &PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), D
             DirError::Creation(msg)
         })?;
 
-    unix_fs::chown(path.clone(), Some(uid), Some(gid)).map_err(|error| {
+    unix_fs::chown(path, Some(uid), Some(gid)).map_err(|error| {
         let msg = format!("Failed to set ownership at {path}: {error:?}", path = path.display());
         DirError::Ownership(msg)
     })?;

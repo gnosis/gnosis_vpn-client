@@ -1019,7 +1019,7 @@ impl Core {
     }
 
     async fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
-        let res = hopr_config::read_safe(self.worker_params.state_home()).await;
+        let res = hopr_config::read_safe(&self.worker_params.state_home()).await;
         match res {
             Ok(safe_module) => {
                 tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
@@ -1108,7 +1108,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::persist_safe(state_home, safe_module, results_sender).await;
+                    runner::persist_safe(&state_home, safe_module, results_sender).await;
                 })
                 .await
         });

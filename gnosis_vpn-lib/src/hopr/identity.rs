@@ -32,11 +32,11 @@ pub fn from_path(file: &Path, pass: String) -> Result<HoprKeys, Error> {
     HoprKeys::try_from(retrieval_mode).map_err(Error::KeyPair)
 }
 
-pub fn file(state_home: PathBuf) -> PathBuf {
+pub fn file(state_home: &Path) -> PathBuf {
     dirs::config_dir(state_home, ID_FILE)
 }
 
-pub fn pass_file(state_home: PathBuf) -> PathBuf {
+pub fn pass_file(state_home: &Path) -> PathBuf {
     dirs::config_dir(state_home, ID_PASS)
 }
 

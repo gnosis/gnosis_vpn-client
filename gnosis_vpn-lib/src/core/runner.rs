@@ -19,7 +19,7 @@ use tokio::time;
 use url::Url;
 
 use std::fmt::{self, Display};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -155,7 +155,7 @@ pub async fn safe_deployment(
     let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
-pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
+pub async fn persist_safe(state_home: &Path, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
     let res = hopr_config::store_safe(state_home, &safe_module).await;
     let _ = results_sender
@@ -373,7 +373,7 @@ async fn run_hopr(
 
     Hopr::new(
         cfg,
-        hopr::config::db_file(worker_params.state_home()).as_path(),
+        hopr::config::db_file(&worker_params.state_home()).as_path(),
         keys,
         blokli_url,
         blokli_config.into(),

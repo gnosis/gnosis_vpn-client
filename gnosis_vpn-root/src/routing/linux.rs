@@ -577,7 +577,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             &self.wg_data.peer_info,
             vec!["Table = off".to_string()],
         );
-        let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
+        let interface_name = self.wg.wg_quick_up(&self.state_home, wg_quick_content).await?;
         tracing::debug!(%interface_name, "wg-quick up");
 
         // Phase 2: Add RFC1918 bypass routes
@@ -761,7 +761,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
 
                 // Step 5: Run wg-quick down while bypass infrastructure is still active
                 // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
-                match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+                match self.wg.wg_quick_down(&self.state_home, logs).await {
                     Ok(_) => tracing::debug!("wg-quick down"),
                     Err(error) => {
                         tracing::warn!(?error, "wg-quick down failed during teardown");
@@ -770,7 +770,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             }
             None => {
                 // Attempt wg-quick down even and ignore errors
-                match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+                match self.wg.wg_quick_down(&self.state_home, logs).await {
                     Ok(_) => tracing::debug!("wg-quick down"),
                     Err(error) => {
                         tracing::warn!(?error, "wg-quick down failed during best-effort teardown");
@@ -833,7 +833,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
+        self.wg.wg_quick_up(&self.state_home, wg_quick_content).await?;
         tracing::debug!("wg-quick up");
         Ok(())
     }
@@ -847,7 +847,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     ///
     async fn teardown(&mut self, logs: Logs) {
         // wg-quick down
-        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
+        match self.wg.wg_quick_down(&self.state_home, logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
             Err(error) => {
                 tracing::error!(?error, "wg-quick down failed during teardown");
@@ -905,6 +905,13 @@ fn pre_down_routing(route_addr: String, device: String, gateway: Option<String>)
             device = device,
         ),
     }
+}
+
+/// Try whatever shutdown we can on startup to clean up from any previous unclean shutdowns.
+pub async fn reset_on_startup(state_home: &Path) {
+    cleanup_stale_fwmark_rules().await;
+    let wg = RealWgOps {};
+    wg.wg_quick_down(state_home, Logs::Suppress).await;
 }
 
 // ============================================================================
