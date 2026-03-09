@@ -321,6 +321,10 @@ impl Response {
     pub fn funding_tool(funding_tool: FundingToolResponse) -> Self {
         Response::FundingTool(funding_tool)
     }
+
+    pub fn info(version: String) -> Self {
+        Response::Info(InfoResponse { version })
+    }
 }
 
 impl Display for Command {

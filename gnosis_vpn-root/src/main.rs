@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{Command as LibCommand, Response};
+use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
@@ -316,7 +316,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
 
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
-    routing::reset_on_startup(&worker_params.state_home()).await;
+    routing::reset_on_startup(worker_params.state_home()).await;
 
     let (sender_response_from_root, receiver_response_from_root) = mpsc::channel(1);
     let mut state = DaemonState::new(
@@ -592,23 +592,26 @@ impl DaemonState {
                     self.pending_response_counter += 1;
                     self.pending_responses
                         .insert(self.pending_response_counter, socket_cmd.resp);
-                    let msg = RootToWorker::Command {
-                        cmd: socket_cmd.cmd,
+                    let msg = RootToWorker::WorkerCommand {
+                        cmd: w_cmd,
                         id: self.pending_response_counter,
                     };
                     send_to_worker(msg, &mut child.socket_writer).await?;
+                    Ok(())
                 }
                 None => {
                     let _ = socket_cmd.resp.send(Response::WorkerOffline).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
+                    Ok(())
                 }
             },
             Err(_) => {
-                let resp = self.incoming_root_command(socket_cmd.cmd);
+                let resp = self.incoming_root_command(socket_cmd.cmd).await?;
                 let _ = socket_cmd.resp.send(resp).map_err(|error| {
                     tracing::error!(?error, "socket command response channel closed");
                 });
+                Ok(())
             }
         }
     }
@@ -629,7 +632,7 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn incoming_root_command(&self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
+    async fn incoming_root_command(&mut self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
         match cmd {
             LibCommand::Status
             | LibCommand::NerdStats
@@ -640,23 +643,21 @@ impl DaemonState {
             | LibCommand::Telemetry
             | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
-            LibCommand::Info => Ok(Response::Info(InfoResponse {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            })),
+            LibCommand::Info => Ok(Response::info(env!("CARGO_PKG_VERSION").to_string())),
             LibCommand::StartClient => match self.worker_child {
-                Some(_) => Ok(Response::StartClient(StartClientResponse::AlreadyRunning)),
+                Some(_) => Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning)),
                 None => {
                     self.setup_worker().await?;
-                    Ok(Response::StartClient(StartClientResponse::Started))
+                    Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
             },
             LibCommand::StopClient => match self.worker_child {
-                Some(child) => {
+                Some(ref mut child) => {
                     tracing::debug!("sending shutdown signal to worker process due to StopClient command");
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
-                    Ok(Response::StopClient(StopClientResponse::Stopped))
+                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
-                None => Ok(Response::StopClient(StopClientResponse::NotRunning)),
+                None => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
             },
         }
     }
@@ -742,7 +743,7 @@ impl DaemonState {
         }
     }
 
-    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> -> Result<(), exitcode::ExitCode> {
+    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
         let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
             exitcode::IOERR
