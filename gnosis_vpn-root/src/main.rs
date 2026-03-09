@@ -1,6 +1,6 @@
 use gnosis_vpn_lib::logging::LogReloadHandle;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 use tokio::process::Command as TokioCommand;
@@ -49,8 +49,7 @@ struct DaemonState {
     router: Option<Box<dyn Routing>>,
     worker_child: Option<WorkerChild>,
     shutdown_ongoing: Shutdown,
-    sender_response_from_root: mpsc::Sender<ResponseFromRoot>,
-    root_tasks: JoinSet<ResponseFromRoot>,
+    ping_tasks: JoinSet<Result<Duration, String>>,
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
@@ -320,12 +319,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     routing::reset_on_startup(worker_params.state_home()).await;
 
     let mut state = DaemonState::new(args, worker_user, config, worker_params, reload_handle);
-    let res = state
-        .daemon_loop(signal_receiver, socket_listener, receiver_response_from_root)
-        .await;
+    let res = state.daemon_loop(signal_receiver, socket_listener).await;
 
-    // restore routing if connected
-    state.teardown_any_routing(None).await;
+    state.teardown().await;
 
     // cancel running tasks
     cancel_socket_listener.cancel();
@@ -382,24 +378,13 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn spawn_ping(options: ping::Options) -> (CancellationToken, oneshot::Receiver<Result<Duration, String>>) {
-    let cancel = CancellationToken::new();
-    let owned_cancel = cancel.clone();
-    let (sender, receiver) = oneshot::channel();
-    tokio::spawn(async move {
-        cancel
-            .run_until_cancelled(async move {
-                // delay ping by one sec to increase success rate
-                time::sleep(Duration::from_secs(1)).await;
-                let res = ping::ping(&options).await.map_err(|e| {
-                    tracing::debug!(error = ?e, "ping error");
-                    e.to_string()
-                });
-                let _ = sender.send(res);
-            })
-            .await;
-    });
-    (owned_cancel, receiver)
+async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
+    // delay ping by one sec to increase success rate
+    time::sleep(Duration::from_secs(1)).await;
+    ping::ping(&options).await.map_err(|e| {
+        tracing::debug!(error = ?e, "ping error");
+        e.to_string()
+    })
 }
 
 fn setup_logging(
@@ -488,16 +473,7 @@ impl DaemonState {
             shutdown_ongoing: Shutdown::None,
             pending_response_counter: 0,
             pending_responses: HashMap::new(),
-            ongoing_tasks: JoinSet::new(),
-        }
-    }
-
-    async fn teardown_any_routing(&mut self, overwrite_expected_up: Option<bool>) {
-        if let Some(ref mut router) = self.router {
-            let logs = overwrite_expected_up
-                .map(|expected_up| if expected_up { Logs::Print } else { Logs::Suppress })
-                .unwrap_or(Logs::Print);
-            router.teardown(logs).await;
+            ping_tasks: JoinSet::new(),
         }
     }
 
@@ -505,13 +481,15 @@ impl DaemonState {
         &mut self,
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
         mut socket_listener: mpsc::Receiver<SocketCmd>,
-        mut receiver_response_from_root: mpsc::Receiver<ResponseFromRoot>,
     ) -> Result<(), exitcode::ExitCode> {
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
                 Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
-                Some(resp) = receiver_response_from_root.recv() => self.outgoing_response_from_root(resp).await?,
+                Some(res) = self.ping_tasks.join_next() =>  match res {
+                        Ok(res) => self.outgoing_response_from_root(ResponseFromRoot::Ping { res }).await?,
+                        Err(err) => tracing::error!(error = ?err, "ping task join error"),
+                },
                 // unwrap is covered by guard clause
                 Ok(status) = self.worker_child.as_mut().unwrap().child.wait(), if self.worker_child.is_some() => self.incoming_worker_exit(status)?,
                 else => {
@@ -692,24 +670,22 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                let res = self.setup_static_routing(wg_data, peer_ips).await;
                 if let Some(ref mut child) = self.worker_child {
-                    tokio::spawn(async move {
-                        let res = self.setup_static_routing(wg_data, peer_ips).await;
-                        send_to_worker(
-                            RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
-                            &mut child.socket_writer,
-                        )
-                        .await
-                    });
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
                 }
                 Ok(())
             }
             RequestToRoot::TearDownWg => {
-                self.teardown_any_routing(None).await;
+                self.teardown_any_routing().await;
                 Ok(())
             }
             RequestToRoot::Ping { options } => {
-                let (cancel, receiver) = spawn_ping(options).await;
+                self.ping_tasks.spawn(async move { spawn_ping(options).await });
                 Ok(())
             }
         }
@@ -756,19 +732,19 @@ impl DaemonState {
             libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
         }
 
-        let mut worker_command = TokioCommand::new(setup.worker_user.binary.clone())
-            .current_dir(&setup.worker_user.home)
+        let mut worker_command = TokioCommand::new(self.worker_user.binary.clone())
+            .current_dir(self.worker_user.home)
             .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
             .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-            .uid(setup.worker_user.uid)
-            .gid(setup.worker_user.gid);
+            .uid(self.worker_user.uid)
+            .gid(self.worker_user.gid);
 
         if let Some(log_file) = self.args.log_file {
             worker_command = worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
         }
         let child = worker_command.spawn().map_err(|err| {
-            tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
+            tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
 
@@ -809,7 +785,12 @@ impl DaemonState {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    Ok(Some(line)) = socket_lines_reader.next_line() => self.incoming_worker_line(line).await,
+                    Ok(Some(line)) = socket_lines_reader.next_line() => match self.incoming_worker_line(line).await {
+                        Ok(_) => (),
+                        Err(err) => {
+                            tracing::error!(error = ?err, "error handling incoming worker message");
+                        }
+                    },
                     _ = cancel.cancelled() => {
                         tracing::debug!("worker received cancellation");
                         break;
@@ -828,18 +809,30 @@ impl DaemonState {
             cancel,
             socket_writer,
         });
+        Ok(())
+    }
+
+    async fn teardown_any_routing(&mut self) {
+        if let Some(ref mut router) = self.router {
+            router.teardown(Logs::Print).await;
+        }
+    }
+
+    /// Remove routing and stop ping tasks
+    async fn teardown(&mut self) {
+        self.ping_tasks.shutdown().await;
+        self.teardown_any_routing().await;
     }
 
     async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
-        // ensure we run down before going up to ensure clean slate
-        self.teardown_any_routing(None).await;
+        // ensure clean slate
+        self.teardown_any_routing().await;
 
         let state_home = self.worker_params.state_home();
         let worker_user = self.worker_user.clone();
         let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
         match res_router {
             Ok(mut router) => {
-                // router creation successfull, try setup
                 let res_setup = router.setup().await;
                 self.router = Some(Box::new(router));
                 match res_setup {
@@ -848,15 +841,13 @@ impl DaemonState {
                         Ok(())
                     }
                     Err(error) => {
-                        // setup failed, call cleanup and return error
                         tracing::error!(?error, "dynamic routing setup error");
-                        self.teardown_any_routing(None).await;
+                        self.teardown_any_routing().await;
                         Err(error.to_string())
                     }
                 }
             }
             Err(error) => {
-                // router creation failed, return error
                 tracing::error!(?error, "failed to build dynamic router");
                 Err(error.to_string())
             }
@@ -868,14 +859,13 @@ impl DaemonState {
         wg_data: event::WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
     ) -> Result<(), String> {
-        // ensure we run down before going up to ensure clean slate
-        self.teardown_any_routing(None).await;
+        // ensure clean slate
+        self.teardown_any_routing().await;
 
         let state_home = self.worker_params.state_home();
         let res_router = routing::static_router(state_home, wg_data, peer_ips);
         match res_router {
             Ok(mut router) => {
-                // router creation successfull, try setup
                 let res_setup = router.setup().await;
                 self.router = Some(Box::new(router));
                 match res_setup {
@@ -884,15 +874,13 @@ impl DaemonState {
                         Ok(())
                     }
                     Err(error) => {
-                        // setup failed, call cleanup and return error
                         tracing::error!(?error, "static routing setup error");
-                        self.teardown_any_routing(None).await;
+                        self.teardown_any_routing().await;
                         Err(error.to_string())
                     }
                 }
             }
             Err(error) => {
-                // router creation failed, return error
                 tracing::error!(?error, "failed to build static router");
                 Err(error.to_string())
             }
