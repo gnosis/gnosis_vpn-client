@@ -50,6 +50,7 @@ struct DaemonState {
     worker_child: Option<WorkerChild>,
     shutdown_ongoing: Shutdown,
     sender_response_from_root: mpsc::Sender<ResponseFromRoot>,
+    root_tasks: JoinSet<ResponseFromRoot>,
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
@@ -318,15 +319,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(worker_params.state_home()).await;
 
-    let (sender_response_from_root, receiver_response_from_root) = mpsc::channel(1);
-    let mut state = DaemonState::new(
-        args,
-        worker_user,
-        config,
-        worker_params,
-        reload_handle,
-        sender_response_from_root,
-    );
+    let mut state = DaemonState::new(args, worker_user, config, worker_params, reload_handle);
     let res = state
         .daemon_loop(signal_receiver, socket_listener, receiver_response_from_root)
         .await;
@@ -483,7 +476,6 @@ impl DaemonState {
         config: Config,
         worker_params: WorkerParams,
         reload_handle: Option<LogReloadHandle>,
-        sender_response_from_root: mpsc::Sender<ResponseFromRoot>,
     ) -> Self {
         Self {
             args,
@@ -496,7 +488,7 @@ impl DaemonState {
             shutdown_ongoing: Shutdown::None,
             pending_response_counter: 0,
             pending_responses: HashMap::new(),
-            sender_response_from_root,
+            ongoing_tasks: JoinSet::new(),
         }
     }
 
@@ -586,12 +578,12 @@ impl DaemonState {
     }
 
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
-        match WorkerCommand::try_from(socket_cmd.cmd) {
+        let SocketCmd { cmd, resp } = socket_cmd;
+        match WorkerCommand::try_from(cmd.clone()) {
             Ok(w_cmd) => match self.worker_child {
-                Some(child) => {
+                Some(ref mut child) => {
                     self.pending_response_counter += 1;
-                    self.pending_responses
-                        .insert(self.pending_response_counter, socket_cmd.resp);
+                    self.pending_responses.insert(self.pending_response_counter, resp);
                     let msg = RootToWorker::WorkerCommand {
                         cmd: w_cmd,
                         id: self.pending_response_counter,
@@ -600,15 +592,15 @@ impl DaemonState {
                     Ok(())
                 }
                 None => {
-                    let _ = socket_cmd.resp.send(Response::WorkerOffline).map_err(|error| {
+                    let _ = resp.send(Response::WorkerOffline).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())
                 }
             },
             Err(_) => {
-                let resp = self.incoming_root_command(socket_cmd.cmd).await?;
-                let _ = socket_cmd.resp.send(resp).map_err(|error| {
+                let response = self.incoming_root_command(cmd).await?;
+                let _ = resp.send(response).map_err(|error| {
                     tracing::error!(?error, "socket command response channel closed");
                 });
                 Ok(())
@@ -689,24 +681,32 @@ impl DaemonState {
         tracing::debug!(?request, "received worker request to root");
         match request {
             RequestToRoot::DynamicWgRouting { wg_data } => {
-                let res = self.setup_dynamic_routing(wg_data);
-                send_to_worker(
-                    RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
-                    &mut socket_writer,
-                )
-                .await?;
+                let res = self.setup_dynamic_routing(wg_data).await;
+                if let Some(ref mut child) = self.worker_child {
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
+                }
+                Ok(())
             }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                let res = self.setup_static_routing(wg_data);
-                let state_home = self.worker_params.state_home();
-                send_to_worker(
-                    RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
-                    &mut socket_writer,
-                )
-                .await?;
+                if let Some(ref mut child) = self.worker_child {
+                    tokio::spawn(async move {
+                        let res = self.setup_static_routing(wg_data, peer_ips).await;
+                        send_to_worker(
+                            RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
+                            &mut child.socket_writer,
+                        )
+                        .await
+                    });
+                }
+                Ok(())
             }
             RequestToRoot::TearDownWg => {
                 self.teardown_any_routing(None).await;
+                Ok(())
             }
             RequestToRoot::Ping { options } => {
                 let (cancel, receiver) = spawn_ping(options).await;
