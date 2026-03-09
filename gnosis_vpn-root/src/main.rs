@@ -121,6 +121,56 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
     Ok((owned_cancel, receiver))
 }
 
+async fn incoming_on_root_socket(
+    stream: TokioUnixStream,
+    socket_cmd_sender: &mpsc::Sender<SocketCmd>,
+) -> Option<JoinHandle<()>> {
+    let (socket_reader_half, socket_writer_half) = stream.into_split();
+    let socket_reader = BufReader::new(socket_reader_half);
+    let res_line = socket_reader.lines().next_line().await;
+    match res_line {
+        Ok(Some(line)) => {
+            let res_decode = serde_json::from_str::<LibCommand>(&line);
+            match res_decode {
+                Ok(cmd) => {
+                    tracing::debug!(command = ?cmd, "received socket command");
+                    let (resp_sender, resp_receiver) = oneshot::channel();
+                    let socket_cmd = SocketCmd { cmd, resp: resp_sender };
+                    if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
+                        tracing::error!(error = ?err, "failed to send socket command to main loop");
+                        return None;
+                    }
+                    // wait for response and send back to socket
+                    let handle = tokio::spawn(async move {
+                        match resp_receiver.await {
+                            Ok(resp) => {
+                                let mut writer = BufWriter::new(socket_writer_half);
+                                if let Err(err) = send_to_socket(&resp, &mut writer).await {
+                                    tracing::error!(error = ?err, "failed to send response to socket");
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!(error = ?err, "socket command response channel closed");
+                            }
+                        }
+                    });
+                    return Some(handle);
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "failed parsing incoming socket command");
+                }
+            }
+        }
+        Ok(None) => {
+            tracing::warn!("socket connection closed by peer");
+        }
+        Err(err) => {
+            tracing::error!(error = ?err, "error reading from socket");
+        }
+    };
+    None
+}
+
 async fn socket_listener(
     socket_path: &Path,
 ) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
@@ -279,247 +329,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 }
 
 
-async fn loop_daemon(
-    setup: DaemonSetup,
-    signal_receiver: mpsc::Receiver<SignalMessage>,
-    socket_listener: mpsc::Receiver<LibCommand>,
-) -> Result<(), exitcode::ExitCode> {
-    // safe state_home for usage later
-    let state_home = setup.worker_params.state_home();
-
-    /*
-    let (reader_half, writer_half) = io::split(parent_stream);
-    let reader = BufReader::new(reader_half);
-    let mut socket_lines_reader = reader.lines();
-    let mut socket_writer = BufWriter::new(writer_half);
-
-    // provide initial resources to worker
-    send_to_worker(
-        RootToWorker::WorkerParams {
-            worker_params: setup.worker_params.clone(),
-        },
-        &mut socket_writer,
-    )
-    .await?;
-    send_to_worker( RootToWorker::WorkerParams { worker_params: setup.worker_params, }, &mut socket_writer,) .await?;
-    send_to_worker(RootToWorker::Config { config: setup.config }, &mut socket_writer).await?;
-    */
-
-    // External socket commands need an internal mapping:
-    // root process will keep track of worker requests and map their responses
-    // so that the requesting stream on the socket receives it's answer
-    let mut pending_response_counter: u64 = 0;
-    let mut pending_responses: HashMap<u64, oneshot::Sender<Response>> = HashMap::new();
-    let mut ongoing_request_responses = JoinSet::new();
-
-    // enter main loop
-    let mut shutdown_ongoing = false;
-    let cancel_token = CancellationToken::new();
-    let (ping_sender, mut ping_receiver) = mpsc::channel(32);
-    let (socket_cmd_sender, mut socket_cmd_receiver) = mpsc::channel(32);
-
-    tracing::info!("entering main daemon loop");
-
-    loop {
-        tokio::select! {
-            // signal receiver
-            // -> shutdown
-            // -> force shutdown
-            // -> log rotation
-            Some(signal) = signal_receiver.recv() => match state.incoming_signal(signal).await {
-                SignalMessage::Shutdown => {
-                    if shutdown_ongoing {
-                        tracing::warn!("force shutdown immediately");
-                        return Ok(());
-                    }
-                    tracing::info!("initiate shutdown");
-                    shutdown_ongoing = true;
-                    cancel_token.cancel();
-                    teardown_any_routing(maybe_router, true).await;
-                    ongoing_request_responses.shutdown().await;
-                }
-                SignalMessage::RotateLogs => {
-                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
-                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    if let (Some(handle), Some(path)) = (&setup.reload_handle, &setup.log_path) {
-                        let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &setup.worker_user).map(|new_layer| handle.reload(new_layer));
-                        match res {
-                            Ok(_) => {
-                                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            },
-                            Err(e) => {
-                                eprintln!("failed to reopen log file {:?}: {}", path, e);
-                                return Err(exitcode::IOERR);
-                            }
-                        };
-                        if let Some(pid) = worker_child.as_ref().map(|child| child.pid) {
-                        tracing::debug!("forwarding SIGHUP to worker process {}", pid);
-                        unsafe {
-                            libc::kill(pid, libc::SIGHUP);
-                        }
-                        }
-                    } else {
-                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
-                    }
-                }
-            },
-
-            // incoming on system socket
-            // might be own function
-
-            Ok((stream, _addr)) = socket.accept() => {
-                let cmd_sender = socket_cmd_sender.clone();
-                ongoing_request_responses.spawn(async move {
-                    if let Some(handle) = incoming_on_root_socket(stream, &cmd_sender).await {
-                        handle.await.ok();
-                    }
-                });
-            }
-
-            // incoming cmd on system socket
-            // -> forward to worker
-            // -> handled bny root
-
-            Some(socket_cmd) = socket_cmd_receiver.recv() => {
-                pending_response_counter += 1;
-                pending_responses.insert(pending_response_counter, socket_cmd.resp);
-                let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: pending_response_counter };
-                send_to_worker(msg, &mut socket_writer).await?;
-            }
-
-            // response from ping cmd
-            // -> might be handled out side of this loop
-            Some(res) = ping_receiver.recv() => {
-                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut socket_writer).await?;
-            }
-
-
-            // incoming from worker
-            Ok(Some(line)) = socket_lines_reader.next_line() => {
-                let cmd = parse_outgoing_worker(line)?;
-                match cmd {
-                    WorkerToRoot::Ack => {
-                        tracing::debug!("received worker ack");
-                    }
-                    WorkerToRoot::OutOfSync => {
-                        tracing::error!("worker out of sync with root - exiting");
-                        return Err(exitcode::UNAVAILABLE);
-                    }
-                    WorkerToRoot::Response { id, resp } => {
-                        tracing::debug!(?resp, "received worker response");
-                        if let Some(resp_sender) = pending_responses.remove(&id) {
-                            if resp_sender.send(resp).is_err() {
-                                tracing::error!(id, "unexpected channel closure");
-                            }
-                        } else {
-                            tracing::warn!(id, "no pending response found for worker response");
-                        }
-                    }
-                    WorkerToRoot::RequestToRoot(request) => {
-                        tracing::debug!(?request, "received worker request to root");
-                        match request {
-                            RequestToRoot::DynamicWgRouting { wg_data  } => {
-                                let state_home = setup.worker_params.state_home();
-                                let worker_user = setup.worker_user.clone();
-                                let res = setup_dynamic_routing(maybe_router, state_home, worker_user, wg_data).await;
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
-                            },
-                            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                                let state_home = setup.worker_params.state_home();
-                                let res = setup_static_routing(maybe_router, state_home, wg_data, peer_ips).await;
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
-                            }
-                            RequestToRoot::TearDownWg => {
-                                teardown_any_routing(maybe_router, true).await;
-                            }
-                            RequestToRoot::Ping { options } => {
-                                spawn_ping(&options, &ping_sender, &cancel_token);
-                            }
-                        }
-                    },
-                }
-            },
-
-            // worker finished
-            Ok(status) = worker_child.wait() => {
-                if shutdown_ongoing {
-                    if status.success() {
-                        tracing::info!("worker exited cleanly");
-                    } else {
-                        tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
-                    }
-                    return Ok(());
-                } else {
-                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                    return Err(exitcode::IOERR);
-                }
-            }
-            else => {
-                tracing::error!("unexpected channel closure");
-                return Err(exitcode::IOERR);
-            }
-        }
-    }
-}
-
-async fn incoming_on_root_socket(
-    stream: TokioUnixStream,
-    socket_cmd_sender: &mpsc::Sender<SocketCmd>,
-) -> Option<JoinHandle<()>> {
-    let (socket_reader_half, socket_writer_half) = stream.into_split();
-    let socket_reader = BufReader::new(socket_reader_half);
-    let res_line = socket_reader.lines().next_line().await;
-    match res_line {
-        Ok(Some(line)) => {
-            let res_decode = serde_json::from_str::<LibCommand>(&line);
-            match res_decode {
-                Ok(cmd) => {
-                    tracing::debug!(command = ?cmd, "received socket command");
-                    let (resp_sender, resp_receiver) = oneshot::channel();
-                    let socket_cmd = SocketCmd { cmd, resp: resp_sender };
-                    if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
-                        tracing::error!(error = ?err, "failed to send socket command to main loop");
-                        return None;
-                    }
-                    // wait for response and send back to socket
-                    let handle = tokio::spawn(async move {
-                        match resp_receiver.await {
-                            Ok(resp) => {
-                                let mut writer = BufWriter::new(socket_writer_half);
-                                if let Err(err) = send_to_socket(&resp, &mut writer).await {
-                                    tracing::error!(error = ?err, "failed to send response to socket");
-                                }
-                            }
-                            Err(err) => {
-                                tracing::error!(error = ?err, "socket command response channel closed");
-                            }
-                        }
-                    });
-                    return Some(handle);
-                }
-                Err(err) => {
-                    tracing::error!(error = %err, "failed parsing incoming socket command");
-                }
-            }
-        }
-        Ok(None) => {
-            tracing::warn!("socket connection closed by peer");
-        }
-        Err(err) => {
-            tracing::error!(error = ?err, "error reading from socket");
-        }
-    };
-    None
-}
-
-fn parse_outgoing_worker(line: String) -> Result<WorkerToRoot, exitcode::ExitCode> {
-    let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
-        tracing::error!(error = %err, "failed parsing outgoing worker command");
-        exitcode::DATAERR
-    })?;
-    Ok(cmd)
-}
-
 async fn send_to_worker(
     msg: RootToWorker,
     writer: &mut BufWriter<WriteHalf<UnixStream>>,
@@ -642,14 +451,10 @@ async fn setup_static_routing(
     }
 }
 
-fn spawn_ping(
-    options: &ping::Options,
-    sender: &mpsc::Sender<Result<Duration, String>>,
-    cancel_token: &CancellationToken,
-) {
-    let cancel = cancel_token.clone();
-    let sender = sender.clone();
-    let options = options.clone();
+fn spawn_ping(options: ping::Options) -> (CancellationToken, oneshot::Receiver<Result<Duration, String>>) {
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    let (sender, receiver) = oneshot::channel();
     tokio::spawn(async move {
         cancel
             .run_until_cancelled(async move {
@@ -665,6 +470,7 @@ fn spawn_ping(
             })
             .await;
     });
+    (owned_cancel, receiver)
 }
 
 /// limit root service to two threads
@@ -834,15 +640,98 @@ impl DaemonState {
                         let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: self.pending_response_counter };
                         send_to_worker(msg, &mut child.socket_writer).await?;
                     }
-                    None => {}
+                    None => {
+                        let _ = socket_cmd.resp.send(Response::WorkerOffline).map_err(|error| {
+                            tracing::error!(?error, "socket command response channel closed");
+                        });
+                    }
                 }
             }
             Err(_) => {
+                let resp = self.incoming_root_command(socket_cmd.cmd);
+                let _ = socket_cmd.resp.send(resp).map_err(|error| {
+                            tracing::error!(?error, "socket command response channel closed");
+                });
             }
         }
     }
 
-    async fn incoming_worker_line(&mut self, line: String) {
+    async fn incoming_root_command(&self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
+        match cmd {
+    LibCommand::Status | LibCommand::NerdStats | LibCommand::Connect(_) | LibCommand::Disconnect | LibCommand::Balance | LibCommand::FundingTool(_) | LibCommand::Telemetry | LibCommand::RefreshNode => {
+        Ok(Response::WorkerOffline)
+    },
+        LibCommand::Ping => Ok(Response::Pong),
+            LibCommand::Info => Ok(Response::Info(InfoResponse { version: env!("CARGO_PKG_VERSION").to_string() })),
+            LibCommand::StartClient => {
+                match self.worker_child {
+                    Some(_) => {
+                    Ok(Response::StartClient(StartClientResponse::AlreadyRunning))
+                    },
+                    None => {
+                        self.setup_worker().await?;
+                        Ok(Response::StartClient(StartClientResponse::Started))
+                    }
+                }
+            },
+            LibCommand::StopClient => {
+                match self.worker_child {
+                    Some(child) => {
+                        tracing::debug!("sending shutdown signal to worker process due to StopClient command");
+                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                        Ok(Response::StopClient(StopClientResponse::Stopped))
+                    },
+                    None => {
+                        Ok(Response::StopClient(StopClientResponse::NotRunning))
+                    }
+                }
+            },
+        }
+    }
+
+    async fn incoming_worker_line(&mut self, line: String) -> Result<(), exitcode::ExitCode> {
+    let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
+        tracing::error!(error = %err, "failed parsing incoming worker command");
+        exitcode::DATAERR
+    })?;
+    match cmd {
+        WorkerToRoot::Response {id, resp} => self.incoming_worker_response(id, resp).await,
+        WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await
+    }
+    }
+
+    fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
+        tracing::debug!(?resp, "received worker response");
+        if let Some(resp_sender) = self.pending_responses.remove(&id) {
+            if resp_sender.send(resp).is_err() {
+                tracing::error!(id, "unexpected channel closure");
+            }
+        } else {
+            tracing::warn!(id, "no pending response found for worker response");
+        }
+        Ok(())
+    }
+
+    async fn incoming_worker_request(&mut self, request: RequestToRoot) {
+        tracing::debug!(?request, "received worker request to root");
+        match request {
+            RequestToRoot::DynamicWgRouting { wg_data } => {
+                let res = self.setup_dynamic_routing(wg_data);
+                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
+            },
+            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                let res = self.setup_static_routing(wg_data);
+                let state_home = self.worker_params.state_home();
+                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
+            },
+            RequestToRoot::TearDownWg => {
+                self.teardown_any_routing(None).await;
+            },
+            RequestToRoot::Ping { options } => {
+                let (cancel, receiver) = spawn_ping(options).await;
+                Ok(())
+            }
+        }
     }
 
     fn incoming_worker_exit(&mut self, status: std::process::ExitStatus) -> exitcode::ExitCode {
@@ -860,7 +749,7 @@ impl DaemonState {
                 }
     }
 
-async fn setup_worker(&self) -> Result<(), exitcode::ExitCode> {
+async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
     let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
         tracing::error!(error = ?err, "unable to create socket pair for worker communication");
         exitcode::IOERR

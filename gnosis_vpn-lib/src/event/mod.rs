@@ -57,12 +57,8 @@ pub enum RootToWorker {
 pub enum WorkerToRoot {
     /// Response to a socket command
     Response { resp: Response, id: u64 },
-    /// Acknowledgement other incoming messages
-    Ack,
     /// Request to root execution
     RequestToRoot(RequestToRoot),
-    /// Received unexpected event from root
-    OutOfSync,
 }
 
 /// Runner requesting root command and usually waiting for response

@@ -485,7 +485,7 @@ impl Core {
                         self.cancel_balances.cancel();
                         self.cancel_balances = CancellationToken::new();
                         self.spawn_balances_runner(results_sender, Duration::ZERO);
-                        let _ = resp.send(Response::Empty);
+                        let _ = resp.send(Response::RefreshNodeTriggered);
                     }
 
                     WorkerCommand::FundingTool(secret) => match self.phase.clone() {

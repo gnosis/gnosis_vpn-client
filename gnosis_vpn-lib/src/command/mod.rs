@@ -68,9 +68,12 @@ pub enum Response {
     Balance(Option<BalanceResponse>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
+    RefreshNodeTriggered,
     Pong,
     Info(InfoResponse),
-    RefreshNodeTriggered,
+    StartClient(StartClientResponse),
+    StopClient(StopClientResponse),
+    WorkerOffline,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,6 +113,18 @@ pub enum RunMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InfoResponse {
     version: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StartClientResponse {
+    Started,
+    AlreadyRunning,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StopClientResponse {
+    Stopped,
+    NotRunning,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
