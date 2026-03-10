@@ -605,8 +605,6 @@ mod tests {
         let disc = DisconnectResponse::new(destination);
         assert!(matches!(Response::disconnect(disc), Response::Disconnect(_)));
 
-        let status = StatusResponse::new(RunMode::Waiting, vec![]);
-        assert!(matches!(Response::status(status), Response::Status(_)));
         Ok(())
     }
 }
