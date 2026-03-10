@@ -398,6 +398,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         reload_handle,
         args.log_file,
     );
+    if args.client_autostart {
+        tracing::debug!("autostarting worker process");
+        state.setup_worker().await?;
+    }
     let res = state
         .daemon_loop(signal_receiver, socket_listener, config_receiver)
         .await;

@@ -61,24 +61,28 @@ pub struct Cli {
     pub worker_binary: PathBuf,
 
     /// Hopr edge client configuration path
-    #[arg( long, env = hopr::ENV_VAR_CONFIG, default_value = None) ]
+    #[arg(long, env = hopr::ENV_VAR_CONFIG, default_value = None) ]
     pub hopr_config_path: Option<PathBuf>,
 
     /// Hopr edge client identity path
-    #[arg( long, env = hopr::ENV_VAR_ID_FILE, default_value = None)]
+    #[arg(long, env = hopr::ENV_VAR_ID_FILE, default_value = None)]
     pub hopr_identity_file: Option<PathBuf>,
 
     /// Hopr edge client identity pass
-    #[arg( long, env = hopr::ENV_VAR_ID_PASS, default_value = None)]
+    #[arg(long, env = hopr::ENV_VAR_ID_PASS, default_value = None)]
     pub hopr_identity_pass: Option<String>,
 
     /// Override internal Hopr Blokli URL used for on chain queries
-    #[arg( long, env = hopr::ENV_VAR_BLOKLI_URL, default_value = None)]
+    #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL, default_value = None)]
     pub hopr_blokli_url: Option<Url>,
 
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
     pub allow_insecure: bool,
+
+    /// Autostart client after service startup
+    #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART)]
+    pub client_autostart: bool,
 
     /// Avoid dynamic peer discovery while connected to the VPN
     #[arg(long, env = worker::ENV_VAR_FORCE_STATIC_ROUTING)]
