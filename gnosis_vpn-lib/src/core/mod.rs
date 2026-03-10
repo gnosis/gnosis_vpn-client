@@ -211,7 +211,11 @@ impl Core {
 
                 // React to internal results from spawned runner tasks
                 Some(results) = results_receiver.recv() => {
-                    self.on_results(results, &results_sender).await;
+                    if self.on_results(results, &results_sender).await {
+                        continue;
+                    } else {
+                        break;
+                    }
                 }
 
                 else => {
@@ -527,7 +531,7 @@ impl Core {
 
     /// Results are events from async runners
     #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
-    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
+    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
             Results::HoprConstruction(edgli_state) => {
@@ -713,9 +717,8 @@ impl Core {
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
-                        tracing::info!(%dest, "disconnecting from target destination due to connection error");
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
+                        tracing::info!(%dest, "restarting connection worker process due to final connection error");
+                        return false;
                     }
                 }
                 (Err(err), phase) => {
@@ -783,7 +786,8 @@ impl Core {
                     self.spawn_health_check_runner(dest.clone(), results_sender, int);
                 }
             }
-        }
+        };
+        return true;
     }
 
     async fn on_results_node_balance(

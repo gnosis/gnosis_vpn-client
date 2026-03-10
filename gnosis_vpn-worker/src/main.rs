@@ -280,6 +280,7 @@ impl State {
                 self.cmd_startup_params(
                     config,
                     worker_params,
+                    target_dest_id,
                     worker_to_core_receiver_wrapper,
                     core_to_worker_sender,
                 )
@@ -333,6 +334,7 @@ impl State {
         &mut self,
         config: config::Config,
         worker_params: worker_params::WorkerParams,
+        target_dest_id: Option<String>,
         worker_to_core_receiver_wrapper: &mut Option<mpsc::Receiver<WorkerToCore>>,
         core_to_worker_sender: mpsc::Sender<CoreToWorker>,
     ) -> IncomingResolution {
@@ -342,7 +344,7 @@ impl State {
         }
         tracing::debug!(?config, ?worker_params, "received startup params from root");
         let (sender, mut core_to_worker_receiver) = mpsc::channel(32);
-        let res_core = Core::init(config, worker_params, sender).await;
+        let res_core = Core::init(config, worker_params, target_dest_id, sender).await;
         match (res_core, worker_to_core_receiver_wrapper.take()) {
             (Ok((core, worker_to_core_sender)), Some(mut worker_to_core_receiver)) => {
                 self.core_task.spawn(async move { core.start().await });
