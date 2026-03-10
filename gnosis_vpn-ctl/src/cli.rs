@@ -63,6 +63,10 @@ pub enum Command {
     /// Trigger telemetry gathering from underlying edge client
     #[command()]
     Telemetry {},
+
+    /// Query some nerd stats for connecting/connected destination
+    #[command()]
+    NerdStats {},
 }
 
 impl From<Command> for LibCommand {
@@ -76,6 +80,7 @@ impl From<Command> for LibCommand {
             Command::FundingTool { secret } => LibCommand::FundingTool(secret),
             Command::Ping {} => LibCommand::Ping,
             Command::Telemetry {} => LibCommand::Telemetry,
+            Command::NerdStats {} => LibCommand::NerdStats,
         }
     }
 }

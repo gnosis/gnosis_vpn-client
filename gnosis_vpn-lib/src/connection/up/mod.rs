@@ -16,8 +16,8 @@ pub mod runner;
 
 #[derive(Debug)]
 pub enum Event {
-    Progress(Progress),
-    Setback(Setback),
+    Progress(Box<Progress>),
+    Setback(Box<Setback>),
 }
 
 #[derive(Debug)]
@@ -29,7 +29,7 @@ pub enum Progress {
     OpenPing,
     PeerIps,
     DynamicWgTunnel(SessionClientMetadata),
-    StaticWgTunnel(usize),
+    StaticWgTunnel(SessionClientMetadata),
     Ping,
     AdjustToMain(Duration),
 }
@@ -68,7 +68,6 @@ pub enum Error {
 /// And avoid duplicating structs in both `core` and `connection` modules.
 #[derive(Clone, Debug)]
 pub struct Up {
-    // TODO phase out this struct of in between storage
     pub destination: Destination,
     pub phase: (SystemTime, Phase),
     pub wireguard: Option<WireGuard>,
@@ -109,9 +108,9 @@ impl Up {
         }
     }
 
-    pub fn connect_progress(&mut self, evt: Progress) {
+    pub fn connect_progress(&mut self, evt: Box<Progress>) {
         let now = SystemTime::now();
-        match evt {
+        match *evt {
             Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
             Progress::OpenBridge(wg) => {
                 self.phase = (now, Phase::OpeningBridge);
@@ -128,8 +127,9 @@ impl Up {
                 self.session = Some(session);
             }
             Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
-            Progress::StaticWgTunnel(_announced_peer_count) => {
+            Progress::StaticWgTunnel(session) => {
                 self.phase = (now, Phase::FallbackToStaticWgTunnel);
+                self.session = Some(session);
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
@@ -192,10 +192,7 @@ impl Display for Progress {
             Progress::OpenPing => write!(f, "Opening main connection"),
             Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
-            Progress::StaticWgTunnel(announced_peer_count) => write!(
-                f,
-                "Establishing static WireGuard tunnel with {announced_peer_count} announced peers"
-            ),
+            Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)

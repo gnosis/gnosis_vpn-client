@@ -277,6 +277,28 @@ impl Core {
             WorkerToCore::Command { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
+                    Command::NerdStats => {
+                        tracing::debug!("incoming nerd stats request");
+                        match &self.phase {
+                            Phase::Connecting(conn) => {
+                                let res = Response::nerd_stats(command::NerdStatsResponse::Connecting(
+                                    command::ConnStats::from_conn(conn, self.node_address),
+                                ));
+                                let _ = resp.send(res);
+                            }
+                            Phase::Connected(conn) => {
+                                let res = Response::nerd_stats(command::NerdStatsResponse::Connected(
+                                    command::ConnStats::from_conn(conn, self.node_address),
+                                ));
+                                let _ = resp.send(res);
+                            }
+                            _ => {
+                                let res = Response::nerd_stats(command::NerdStatsResponse::NoInfo);
+                                let _ = resp.send(res);
+                            }
+                        }
+                    }
+
                     Command::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,

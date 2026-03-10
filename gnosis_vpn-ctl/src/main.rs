@@ -3,6 +3,7 @@ use exitcode::{self, ExitCode};
 use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
+use gnosis_vpn_lib::connection::destination::RoutingOptions;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -131,6 +132,15 @@ fn pretty_print(resp: &Response) {
         Response::Metrics(metrics) => {
             println!("{metrics}");
         }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo) => {
+            eprintln!("No extra stats available. Try connecting to a destination first.");
+        }
+        Response::NerdStats(command::NerdStatsResponse::Connecting(stats)) => {
+            print_connecting_stats(stats);
+        }
+        Response::NerdStats(command::NerdStatsResponse::Connected(stats)) => {
+            print_connected_stats(stats);
+        }
     }
 }
 
@@ -149,5 +159,129 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Metrics(..) => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse::NoInfo) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
     }
+}
+
+fn print_connecting_stats(stats: &command::ConnStats) {
+    let mut str_resp = print_conn_stats_routing(stats, "-CONNECTING-");
+    str_resp.push_str("---\n");
+    str_resp.push_str(
+        format!(
+            "WireGuard Public Key: {}\n",
+            stats.wg_pubkey.clone().unwrap_or("--pending generation--".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Assigned WireGuard IP: {}\n",
+            stats.wg_ip.clone().unwrap_or("--pending registration--".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Session entry: {}\n",
+            stats
+                .session_bound_host
+                .map(|h| h.to_string())
+                .unwrap_or("--pending session creation--".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "Session ID: {}\n",
+            stats
+                .session_id
+                .clone()
+                .unwrap_or("--pending session creation--".to_string())
+        )
+        .as_str(),
+    );
+    str_resp.push_str(
+        format!(
+            "---\nExit WireGuard Public Key: {}\n",
+            stats
+                .wg_server_pubkey
+                .clone()
+                .unwrap_or("--pending registration--".to_string())
+        )
+        .as_str(),
+    );
+    println!("{str_resp}");
+}
+
+fn print_connected_stats(stats: &command::ConnStats) {
+    let mut str_resp = print_conn_stats_routing(stats, "-o-");
+    str_resp.push_str("---\n");
+    if let Some(ref wg_pubkey) = stats.wg_pubkey {
+        str_resp.push_str(format!("WireGuard Public Key: {}\n", wg_pubkey).as_str());
+    }
+    if let Some(ref ip) = stats.wg_ip {
+        str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
+    }
+    if let Some(bound_host) = stats.session_bound_host {
+        str_resp.push_str(format!("Session entry: {bound_host}\n").as_str());
+    }
+    if let Some(ref id) = stats.session_id {
+        str_resp.push_str(format!("Session ID: {id}\n").as_str());
+    }
+
+    if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
+        str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
+    }
+    println!("{str_resp}");
+}
+
+fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
+    let mut str_resp = String::new();
+    match stats.destination.routing {
+        RoutingOptions::IntermediatePath(ref nodes) => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA-->",
+                node_addr = stats.node_address
+            ));
+            for n in nodes.clone() {
+                str_resp.push_str(&format!(" {n} --VIA-->"));
+            }
+            // safe to truncate as nodes cannot be empty - ensured by type definition
+            str_resp.truncate(str_resp.len() - 8);
+            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address));
+        }
+        RoutingOptions::Hops(nr) => {
+            let nr_val: usize = nr.into();
+            match nr_val {
+                0 => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
+                        node_addr = stats.node_address,
+                        addr = stats.destination.address,
+                        exit = stats.destination.id,
+                    ));
+                }
+                1 => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
+                        node_addr = stats.node_address,
+                        addr = stats.destination.address,
+                        exit = stats.destination.id,
+                    ));
+                }
+                _ => {
+                    str_resp.push_str(&format!(
+                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
+                        node_addr = stats.node_address,
+                        addr = stats.destination.address,
+                        nr = nr_val,
+                        exit = stats.destination.id,
+                    ));
+                }
+            }
+        }
+    };
+    str_resp
 }

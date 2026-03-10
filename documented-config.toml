@@ -86,10 +86,13 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # [wireguard]
 # interface listen port for incoming connections; defaults to 51820
 # listen_port = 51820
-# manually override derived allowed_ips for the WireGuard interface
+# manually overwrite derived allowed_ips for the WireGuard interface
 # allowed_ips = "0.0.0.0/0"
 # If you want to disable WireGuard key rotation, provide a static private key here.
 # force_private_key = "<your WireGuard private key>"
+# overwrite default DNS servers for the WireGuard interface; defaults to Cloudflare and Google DNS
+# if overwrite false, does not touch DNS settings at all
+# dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 
 ###
 ## chain provider section - query blockchain settings
