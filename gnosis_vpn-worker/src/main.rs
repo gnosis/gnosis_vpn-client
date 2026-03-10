@@ -28,17 +28,18 @@ struct LoggingHandle {
 }
 
 struct State {
-    worker_to_core_channel: (mpsc::Sender<WorkerToCore>, mpsc::Receiver<WorkerToCore>),
-    core_to_worker_channel: (mpsc::Sender<CoreToWorker>, mpsc::Receiver<CoreToWorker>),
     log_handle: Option<LoggingHandle>,
     core_task: JoinSet<()>,
+    core_cancel: CancellationToken,
     root_socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
 }
 
 enum IncomingResolution {
+    ResponseToCore(Box<ResponseFromRoot>),
+    RoundtripViaCore(Box<(command::WorkerCommand, u64)>),
     Shutdown(exitcode::ExitCode),
+    ShutdownToCore,
     SustainLoop,
-    Response(Box<WorkerToRoot>),
 }
 
 async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
@@ -254,48 +255,54 @@ fn setup_logging(log_file: &Option<std::path::PathBuf>) -> Result<Option<Logging
 
 impl State {
     pub fn new(log_handle: Option<LoggingHandle>, root_socket_writer: BufWriter<WriteHalf<TokioUnixStream>>) -> Self {
-        let worker_to_core_channel = mpsc::channel(32);
-        let core_to_worker_channel = mpsc::channel(32);
         Self {
-            worker_to_core_channel,
-            core_to_worker_channel,
             log_handle,
             core_task: JoinSet::new(),
+            core_cancel: CancellationToken::new(),
             root_socket_writer,
         }
     }
 
-    pub async fn incoming_command(&mut self, cmd: RootToWorker) -> IncomingResolution {
+    pub async fn incoming_command(
+        &mut self,
+        cmd: RootToWorker,
+        worker_to_core_receiver_wrapper: &mut Option<mpsc::Receiver<WorkerToCore>>,
+        core_to_worker_sender: mpsc::Sender<CoreToWorker>,
+    ) -> IncomingResolution {
         match cmd {
-            RootToWorker::Shutdown => {
-                return self.cmd_shutdown().await;
-            }
-            RootToWorker::RotateLogs => {
-                return self.cmd_rotate_logs().await;
-            }
+            RootToWorker::Shutdown => self.cmd_shutdown().await,
+            RootToWorker::RotateLogs => self.cmd_rotate_logs().await,
             RootToWorker::StartupParams { config, worker_params } => {
-                return self.cmd_startup_params(config, worker_params).await;
+                self.cmd_startup_params(
+                    config,
+                    worker_params,
+                    worker_to_core_receiver_wrapper,
+                    core_to_worker_sender,
+                )
+                .await
             }
             RootToWorker::WorkerCommand { cmd, id } => {
-                return self.cmd_worker_command(cmd, id).await;
+                tracing::debug!(?cmd, id, "received command from root");
+                IncomingResolution::RoundtripViaCore(Box::new((cmd, id)))
             }
             RootToWorker::ResponseFromRoot(response) => {
-                return self.cmd_response_from_root(response).await;
+                tracing::debug!(?response, "received response from root");
+                IncomingResolution::ResponseToCore(Box::new(response))
             }
         }
     }
 
-    async fn cmd_shutdown(&mut self) -> IncomingResolution {
-        tracing::info!("received shutdown command from root");
-        if !self.core_task.is_empty() {
-            let _ = self.worker_to_core_channel.0.send(WorkerToCore::Shutdown).await;
-            return IncomingResolution::SustainLoop;
+    async fn cmd_shutdown(&self) -> IncomingResolution {
+        if self.core_task.is_empty() {
+            tracing::info!("received shutdown command from root but core loop not yet initialized");
+            IncomingResolution::Shutdown(exitcode::OK)
+        } else {
+            tracing::info!("received shutdown command from root - shutting down core loop");
+            IncomingResolution::ShutdownToCore
         }
-        tracing::debug!("core not yet started");
-        IncomingResolution::Shutdown(exitcode::OK)
     }
 
-    async fn cmd_rotate_logs(&mut self) -> IncomingResolution {
+    async fn cmd_rotate_logs(&self) -> IncomingResolution {
         let log_handle = match &self.log_handle {
             Some(handle) => handle,
             None => {
@@ -322,77 +329,53 @@ impl State {
         &mut self,
         config: config::Config,
         worker_params: worker_params::WorkerParams,
+        worker_to_core_receiver_wrapper: &mut Option<mpsc::Receiver<WorkerToCore>>,
+        core_to_worker_sender: mpsc::Sender<CoreToWorker>,
     ) -> IncomingResolution {
-        tracing::debug!(?config, ?worker_params, "received startup params from root");
         if !self.core_task.is_empty() {
             tracing::warn!("core already initialized - ignoring startup params");
             return IncomingResolution::SustainLoop;
         }
-        let res_core = Core::init(
-            config,
-            worker_params,
-            self.worker_to_core_channel.1,
-            self.core_to_worker_channel.0.clone(),
-        )
-        .await;
-        match res_core {
-            Ok(core) => {
+        tracing::debug!(?config, ?worker_params, "received startup params from root");
+        let (sender, mut core_to_worker_receiver) = mpsc::channel(32);
+        let res_core = Core::init(config, worker_params, sender).await;
+        match (res_core, worker_to_core_receiver_wrapper.take()) {
+            (Ok((core, worker_to_core_sender)), Some(mut worker_to_core_receiver)) => {
                 self.core_task.spawn(async move { core.start().await });
+                let owned_cancel = self.core_cancel.clone();
+                // set up message forwarding to work around lifetime ownership of receivers
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            Some(cmd) = worker_to_core_receiver.recv() => {
+                                let _ = worker_to_core_sender.send(cmd).await;
+                            },
+                            Some(cmd) = core_to_worker_receiver.recv() => {
+                                let _ = core_to_worker_sender.send(cmd).await;
+                            },
+                            _ = owned_cancel.cancelled() => {
+                                tracing::debug!("worker-core channel forwarding task received cancellation");
+                                break;
+                            },
+                            else => {
+                                tracing::warn!("worker-core channel forwarding task closed");
+                                break;
+                            }
+                        }
+                    }
+                });
                 tracing::info!("core logic initialized and started");
                 IncomingResolution::SustainLoop
             }
-            Err(err) => {
+            (Ok(_), None) => {
+                tracing::error!("failed to initialize core logic - exhausted worker-to-core channel");
+                IncomingResolution::Shutdown(exitcode::SOFTWARE)
+            }
+            (Err(err), _) => {
                 tracing::error!(error = ?err, "failed to initialize core logic");
                 IncomingResolution::Shutdown(exitcode::OSERR)
             }
         }
-    }
-
-    async fn cmd_worker_command(&mut self, cmd: command::WorkerCommand, id: u64) -> IncomingResolution {
-        tracing::debug!(?cmd, id, "received command from root");
-        let (sender, recv) = oneshot::channel();
-        let core_handle = match self.core_handle {
-            Some(ref handle) => handle,
-            None => {
-                tracing::warn!(
-                    ?cmd,
-                    id,
-                    "received worker command from root but core not yet initialized - ignoring"
-                );
-                return IncomingResolution::SustainLoop;
-            }
-        };
-        let _ = core_handle
-            .sender_to_core
-            .send(WorkerToCore::WorkerCommand { cmd, resp: sender })
-            .await;
-        let res_recv = recv.await;
-        match res_recv {
-            Ok(resp) => IncomingResolution::Response(Box::new(WorkerToRoot::Response { id, resp })),
-            Err(err) => {
-                tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed");
-                IncomingResolution::SustainLoop
-            }
-        }
-    }
-
-    async fn cmd_response_from_root(&mut self, response: ResponseFromRoot) -> IncomingResolution {
-        tracing::debug!(?response, "received command from root");
-        let core_handle = match self.core_handle {
-            Some(ref handle) => handle,
-            None => {
-                tracing::warn!(
-                    ?response,
-                    "received response from root but core not yet initialized - ignoring"
-                );
-                return IncomingResolution::SustainLoop;
-            }
-        };
-        let _ = core_handle
-            .sender_to_core
-            .send(WorkerToCore::ResponseFromRoot(response))
-            .await;
-        IncomingResolution::SustainLoop
     }
 
     async fn daemon_loop(
@@ -400,20 +383,39 @@ impl State {
         mut socket_receiver: mpsc::Receiver<RootToWorker>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering worker main loop");
+        let (worker_to_core_sender, worker_to_core_receiver) = mpsc::channel::<WorkerToCore>(32);
+        let (core_to_worker_sender, mut core_to_worker_receiver) = mpsc::channel::<CoreToWorker>(32);
+        let mut worker_to_core_receiver_wrapper = Some(worker_to_core_receiver);
         loop {
             tokio::select! {
-                Some(cmd) = socket_receiver.recv() => match self.incoming_command(cmd).await {
+                Some(cmd) = socket_receiver.recv() => match self.incoming_command(cmd, &mut worker_to_core_receiver_wrapper, core_to_worker_sender.clone()).await {
+                    IncomingResolution::ResponseToCore(resp) => {
+                        let _ = worker_to_core_sender.send(WorkerToCore::ResponseFromRoot(*resp)).await;
+                    }
+                    IncomingResolution::RoundtripViaCore(roundtrip) => {
+                        let (cmd, id) = *roundtrip;
+                        let (resp_sender, resp_recv) = oneshot::channel();
+                        let _ = worker_to_core_sender.send(WorkerToCore::WorkerCommand { cmd, resp: resp_sender }).await;
+                        let res_recv = resp_recv.await;
+                        match res_recv {
+                            Ok(resp) => {
+                                send_to_root(Box::new(WorkerToRoot::Response { id, resp }), &mut self.root_socket_writer).await?;
+                            }
+                            Err(err) => {
+                                tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed while awaiting response for command from root");
+                            }
+                        }
+                    }
                     IncomingResolution::Shutdown(code) => {
                         tracing::info!(?code, "shutting down worker daemon before core loop initialization");
                         return Err(code);
                     }
-                    IncomingResolution::Response(resp) => {
-                        tracing::debug!(?resp, "sending response to root");
-                        send_to_root(resp, &mut self.root_socket_writer).await?;
+                    IncomingResolution::ShutdownToCore => {
+                        let _ = worker_to_core_sender.send(WorkerToCore::Shutdown).await;
                     }
                     IncomingResolution::SustainLoop => {}
                 },
-                Some(event) = self.core_to_worker_channel.1.recv() => match event {
+                Some(event) = core_to_worker_receiver.recv() => match event {
                     CoreToWorker::RequestToRoot(req) => {
                         tracing::debug!(?req, "incoming request to root from core");
                         send_to_root(Box::new(WorkerToRoot::RequestToRoot(req)), &mut self.root_socket_writer).await?;
