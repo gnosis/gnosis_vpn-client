@@ -661,24 +661,27 @@ impl DaemonState {
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
         let SocketCmd { cmd, resp } = socket_cmd;
         match WorkerCommand::try_from(cmd.clone()) {
-            Ok(w_cmd) => match self.worker_child {
-                Some(ref mut child) => {
-                    self.pending_response_counter += 1;
-                    self.pending_responses.insert(self.pending_response_counter, resp);
-                    let msg = RootToWorker::WorkerCommand {
-                        cmd: w_cmd,
-                        id: self.pending_response_counter,
-                    };
-                    send_to_worker(msg, &mut child.socket_writer).await?;
-                    Ok(())
+            Ok(w_cmd) => {
+                self.handle_hybrid_cmd(&w_cmd);
+                match self.worker_child {
+                    Some(ref mut child) => {
+                        self.pending_response_counter += 1;
+                        self.pending_responses.insert(self.pending_response_counter, resp);
+                        let msg = RootToWorker::WorkerCommand {
+                            cmd: w_cmd,
+                            id: self.pending_response_counter,
+                        };
+                        send_to_worker(msg, &mut child.socket_writer).await?;
+                        Ok(())
+                    }
+                    None => {
+                        let _ = resp.send(Response::WorkerOffline).map_err(|error| {
+                            tracing::error!(?error, "socket command response channel closed");
+                        });
+                        Ok(())
+                    }
                 }
-                None => {
-                    let _ = resp.send(Response::WorkerOffline).map_err(|error| {
-                        tracing::error!(?error, "socket command response channel closed");
-                    });
-                    Ok(())
-                }
-            },
+            }
             Err(_) => {
                 let response = self.incoming_root_command(cmd).await?;
                 let _ = resp.send(response).map_err(|error| {
@@ -1027,6 +1030,20 @@ impl DaemonState {
                 tracing::error!(?error, "failed to build static router");
                 Err(error.to_string())
             }
+        }
+    }
+
+    fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
+        match cmd {
+            WorkerCommand::Connect(id) => {
+                tracing::debug!(?id, "remembering target destination from connect command");
+                self.target_dest_id = Some(id.clone());
+            }
+            WorkerCommand::Disconnect => {
+                tracing::debug!("clearing target destination from disconnect command");
+                self.target_dest_id = None;
+            }
+            _ => (),
         }
     }
 }
