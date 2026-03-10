@@ -759,6 +759,7 @@ impl DaemonState {
                     tracing::debug!("sending shutdown signal to worker process due to StopClient command");
                     self.shutdown_ongoing = Shutdown::Worker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    self.target_dest_id = None;
                     self.teardown_any_routing().await;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
