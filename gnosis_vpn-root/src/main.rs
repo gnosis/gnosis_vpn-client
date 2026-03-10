@@ -25,7 +25,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{dirs, hopr, logging, ping, socket, wireguard, worker};
+use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
 mod routing;
