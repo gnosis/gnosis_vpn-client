@@ -839,6 +839,7 @@ impl DaemonState {
                 } else {
                     tracing::warn!(status = ?status.code(), "worker exited with error during requested shutdown");
                 }
+                self.shutdown_ongoing = Shutdown::None;
                 Ok(())
             }
             Shutdown::Service => {
