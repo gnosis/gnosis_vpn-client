@@ -269,10 +269,10 @@ pub async fn config_watcher(
     // Bridge from sync OS thread to async Tokio task
     let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res {
-            if matches!(event.kind, EventKind::Modify(_)) {
-                let _ = notify_tx.send(());
-            }
+        if let Ok(event) = res
+            && matches!(event.kind, EventKind::Modify(_))
+        {
+            let _ = notify_tx.send(());
         }
     })
     .map_err(|e| {
