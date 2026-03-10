@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::dirs;
 
-const ID_FILE: &str = "gnosisvpn-hopr.id";
+pub const ID_FILE: &str = "gnosisvpn-hopr.id";
 const ID_PASS: &str = "gnosisvpn-hopr.pass";
 
 #[derive(Debug, Error)]

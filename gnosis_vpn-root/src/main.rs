@@ -25,7 +25,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
+use gnosis_vpn_lib::{dirs, hopr, logging, ping, socket, wireguard, worker};
 
 mod cli;
 mod routing;
@@ -736,7 +736,14 @@ impl DaemonState {
             | LibCommand::Telemetry
             | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
-            LibCommand::Info => Ok(Response::info(env!("CARGO_PKG_VERSION").to_string())),
+            LibCommand::Info => {
+                let info = command::InfoResponse {
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    log_file: self.log_file.clone(),
+                };
+                Ok(Response::Info(info))
+            }
+
             LibCommand::StartClient => match self.worker_child {
                 Some(_) => Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning)),
                 None => {

@@ -150,8 +150,12 @@ fn pretty_print(resp: &Response) {
         Response::RefreshNodeTriggered => {
             println!("Node balance check triggered");
         }
-        Response::Info(command::InfoResponse { version }) => {
-            println!("Gnosis VPN version: {version}");
+        Response::Info(info) => {
+            let mut str_resp = format!("Gnosis VPN client service {version}", version = info.version);
+            if let Some(ref file) = info.log_file {
+                str_resp.push_str(&format!("\nLog file: {file}", file = file.display()));
+            }
+            println!("{str_resp}");
         }
         Response::StartClient(command::StartClientResponse::Started) => {
             println!("Worker client started");

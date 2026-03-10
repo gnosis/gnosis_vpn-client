@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -113,6 +114,7 @@ pub enum RunMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InfoResponse {
     pub version: String,
+    pub log_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -322,8 +324,8 @@ impl Response {
         Response::FundingTool(funding_tool)
     }
 
-    pub fn info(version: String) -> Self {
-        Response::Info(InfoResponse { version })
+    pub fn info(info: InfoResponse) -> Self {
+        Response::Info(info)
     }
 }
 
