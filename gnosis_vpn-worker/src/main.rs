@@ -272,7 +272,11 @@ impl State {
         match cmd {
             RootToWorker::Shutdown => self.cmd_shutdown().await,
             RootToWorker::RotateLogs => self.cmd_rotate_logs().await,
-            RootToWorker::StartupParams { config, worker_params } => {
+            RootToWorker::StartupParams {
+                config,
+                worker_params,
+                target_dest_id,
+            } => {
                 self.cmd_startup_params(
                     config,
                     worker_params,

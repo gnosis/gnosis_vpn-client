@@ -129,6 +129,7 @@ impl Core {
     pub async fn init(
         config: Config,
         worker_params: WorkerParams,
+        target_dest_id: Option<String>,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         wireguard::available().await?;
@@ -154,6 +155,8 @@ impl Core {
             destination_healths.insert(id, DestinationHealth::Init);
         }
 
+        let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
+
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let core = Core {
             // config data
@@ -172,7 +175,7 @@ impl Core {
             cancel_presafe_queries: CancellationToken::new(),
 
             // user provided data
-            target_destination: None,
+            target_destination,
 
             // runtime data
             phase: Phase::Initial,
