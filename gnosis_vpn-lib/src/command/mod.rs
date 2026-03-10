@@ -34,11 +34,11 @@ pub enum Command {
     Balance,
     /// Trigger funding tool - only allowed at certain phases
     FundingTool(String),
-    /// Return telmetry metrics of the underlying edge client, if running
+    /// Return telemetry metrics of the underlying edge client, if running
     Telemetry,
     /// Retrigger a balance check
     RefreshNode,
-    /// Determine service lifeness
+    /// Determine service liveness
     Ping,
     /// Deliver service version and other meta
     Info,
@@ -503,7 +503,7 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Disconnect => Ok(WorkerCommand::Disconnect),
             Command::Balance => Ok(WorkerCommand::Balance),
             Command::RefreshNode => Ok(WorkerCommand::RefreshNode),
-            Command::FundingTool(dest) => Ok(WorkerCommand::FundingTool(dest)),
+            Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
             Command::Info | Command::Ping | Command::StartClient | Command::StopClient => Err(()),

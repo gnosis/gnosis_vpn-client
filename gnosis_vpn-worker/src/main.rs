@@ -68,7 +68,7 @@ async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
                     tracing::debug!("swallowed SIGTERM");
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::debug!("swallowed SIGTERM");
+                    tracing::debug!("swallowed SIGHUP");
                 }
                 _ = cancel.cancelled() => {
                     tracing::debug!("signal swallower received cancellation");
@@ -408,7 +408,7 @@ impl State {
                                 send_to_root(Box::new(WorkerToRoot::Response { id, resp }), &mut self.root_socket_writer).await?;
                             }
                             Err(err) => {
-                                tracing::warn!(error = ?err, "core-to-worker receiver unexepectedly closed while awaiting response for command from root");
+                                tracing::warn!(error = ?err, "core-to-worker receiver unexpectedly closed while awaiting response for command from root");
                             }
                         }
                     }

@@ -987,7 +987,7 @@ impl Core {
             }
 
             (res, phase) => {
-                tracing::warn!(?res, ?phase, "unexpted funding tool response in wrong phase");
+                tracing::warn!(?res, ?phase, "unexpected funding tool response in wrong phase");
             }
         }
     }

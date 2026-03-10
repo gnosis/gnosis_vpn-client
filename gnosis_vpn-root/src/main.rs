@@ -605,6 +605,7 @@ impl DaemonState {
                     if let Some(ref mut child) = self.worker_child {
                         tracing::debug!("sending shutdown signal to worker process");
                         send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                        self.teardown_any_routing().await;
                         Ok(())
                     } else {
                         tracing::debug!("no worker process active - shutdown immediately");
@@ -961,6 +962,7 @@ impl DaemonState {
         if let Some(ref mut router) = self.router {
             router.teardown(Logs::Print).await;
         }
+        self.router = None;
     }
 
     /// Remove routing and stop ping tasks
