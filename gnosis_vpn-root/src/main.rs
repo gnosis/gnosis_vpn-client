@@ -325,9 +325,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let mut state = DaemonState::new(args, worker_user, config, worker_params, reload_handle);
     let res = state.daemon_loop(signal_receiver, socket_listener).await;
 
+    // cancel running tasks and run teardown logic
     state.teardown().await;
-
-    // cancel running tasks
     cancel_socket_listener.cancel();
     cancel_signal_handlers.cancel();
 
@@ -488,7 +487,7 @@ impl DaemonState {
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
         mut socket_listener: mpsc::Receiver<SocketCmd>,
     ) -> Result<(), exitcode::ExitCode> {
-        tracing::info!("entering main loop waiting for commands");
+        tracing::info!("entering root main loop");
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
