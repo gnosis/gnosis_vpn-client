@@ -695,13 +695,11 @@ impl DaemonState {
         match config::read(self.config_path.as_path()).await {
             Ok(new_config) => {
                 self.config = new_config;
-                match self.worker_child {
-                    Some(ref mut child) => {
-                        tracing::debug!("sending shutdown signal to worker process due to config reload");
-                        self.shutdown_ongoing = Shutdown::RestartWorker;
-                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
-                    }
-                    None => (),
+                if let Some(ref mut child) = self.worker_child {
+                    tracing::debug!("sending shutdown signal to worker process due to config reload");
+                    self.shutdown_ongoing = Shutdown::RestartWorker;
+                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    self.teardown_any_routing().await;
                 }
             }
             Err(err) => {
@@ -751,6 +749,7 @@ impl DaemonState {
                     tracing::debug!("sending shutdown signal to worker process due to StopClient command");
                     self.shutdown_ongoing = Shutdown::Worker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    self.teardown_any_routing().await;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
                 None => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
