@@ -45,6 +45,7 @@ pub enum RootToWorker {
     StartupParams {
         config: Config,
         worker_params: WorkerParams,
+        target_dest_id: Option<String>,
     },
     /// Socket command received by root
     WorkerCommand { cmd: WorkerCommand, id: u64 },

@@ -50,6 +50,8 @@ struct DaemonState {
     reload_handle: Option<LogReloadHandle>,
     router: Option<Box<dyn Routing>>,
     shutdown_ongoing: Shutdown,
+    // keep track of the current target for restore/restart/reload logic
+    target_dest_id: Option<String>,
     // used to forward messages incoming on unix socket to worker process
     incoming_worker_channel: (mpsc::Sender<String>, mpsc::Receiver<String>),
     // optional worker paramters set after construction
@@ -67,6 +69,7 @@ struct DaemonState {
 
 enum Shutdown {
     Worker,
+    RestartWorker,
     Service,
     None,
 }
@@ -549,20 +552,21 @@ impl DaemonState {
         log_file: Option<PathBuf>,
     ) -> Self {
         Self {
-            worker_user,
             config,
             config_path,
+            incoming_worker_channel: mpsc::channel(32),
             log_file,
-            worker_params,
-            reload_handle,
-            router: None,
-            worker_child: None,
-            shutdown_ongoing: Shutdown::None,
             pending_response_counter: 0,
             pending_responses: HashMap::new(),
             ping_tasks: JoinSet::new(),
-            incoming_worker_channel: mpsc::channel(32),
+            reload_handle,
+            router: None,
+            shutdown_ongoing: Shutdown::None,
+            target_dest_id: None,
+            worker_child: None,
             worker_exit_channel: mpsc::channel(1),
+            worker_params,
+            worker_user,
         }
     }
 
@@ -583,7 +587,7 @@ impl DaemonState {
                         Err(err) => tracing::error!(error = ?err, "ping task join error"),
                 },
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
-                Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res)?,
+                Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -619,6 +623,13 @@ impl DaemonState {
                         "received shutdown signal but service shutdown already ongoing - forcing immediate exit"
                     );
                     Err(exitcode::OK)
+                }
+                Shutdown::RestartWorker => {
+                    tracing::info!(
+                        "received shutdown signal but worker restart already ongoing - escalate to service shutdown"
+                    );
+                    self.shutdown_ongoing = Shutdown::Service;
+                    Ok(())
                 }
             },
             SignalMessage::RotateLogs => {
@@ -684,7 +695,14 @@ impl DaemonState {
         match config::read(self.config_path.as_path()).await {
             Ok(new_config) => {
                 self.config = new_config;
-                // TODO trigger service reload
+                match self.worker_child {
+                    Some(ref mut child) => {
+                        tracing::debug!("sending shutdown signal to worker process due to config reload");
+                        self.shutdown_ongoing = Shutdown::RestartWorker;
+                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    }
+                    None => (),
+                }
             }
             Err(err) => {
                 tracing::error!(error = ?err, "unable to read updated configuration file - ignoring change");
@@ -799,7 +817,7 @@ impl DaemonState {
         }
     }
 
-    fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+    async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
         self.worker_child = None;
         match self.shutdown_ongoing {
             Shutdown::None => {
@@ -809,11 +827,10 @@ impl DaemonState {
             Shutdown::Worker => {
                 if status.success() {
                     tracing::info!("worker exited cleanly as requested");
-                    Ok(())
                 } else {
                     tracing::warn!(status = ?status.code(), "worker exited with error during requested shutdown");
-                    Ok(())
                 }
+                Ok(())
             }
             Shutdown::Service => {
                 if status.success() {
@@ -823,6 +840,15 @@ impl DaemonState {
                     tracing::error!(status = ?status.code(), "worker exited with error during service shutdown");
                     Err(exitcode::IOERR)
                 }
+            }
+            Shutdown::RestartWorker => {
+                if status.success() {
+                    tracing::info!("worker exited cleanly as before restart");
+                } else {
+                    tracing::warn!(status = ?status.code(), "worker exited with error before restart");
+                }
+                self.shutdown_ongoing = Shutdown::None;
+                self.setup_worker().await
             }
         }
     }
@@ -880,6 +906,7 @@ impl DaemonState {
             RootToWorker::StartupParams {
                 config: self.config.clone(),
                 worker_params: self.worker_params.clone(),
+                target_dest_id: self.target_dest_id.clone(),
             },
             &mut socket_writer,
         )
