@@ -1,4 +1,5 @@
 use gnosis_vpn_lib::logging::LogReloadHandle;
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
@@ -41,9 +42,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
 struct DaemonState {
-    args: cli::Cli,
     worker_user: worker::Worker,
     config: Config,
+    config_path: PathBuf,
+    log_file: Option<PathBuf>,
     worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
     router: Option<Box<dyn Routing>>,
@@ -261,6 +263,69 @@ async fn socket_listener(
     Ok((owned_cancel, receiver))
 }
 
+pub async fn config_watcher(
+    config_path: PathBuf,
+) -> Result<(CancellationToken, mpsc::Receiver<()>), exitcode::ExitCode> {
+    // Bridge from sync OS thread to async Tokio task
+    let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Ok(event) = res {
+            if matches!(event.kind, EventKind::Modify(_)) {
+                let _ = notify_tx.send(());
+            }
+        }
+    })
+    .map_err(|e| {
+        tracing::error!(error = ?e, "error setting up config file watcher");
+        exitcode::IOERR
+    })?;
+
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    watcher.watch(&config_path, RecursiveMode::NonRecursive).map_err(|e| {
+        tracing::error!(error = ?e, "error watching config file");
+        exitcode::IOERR
+    })?;
+    tracing::info!(config_path = %config_path.display(), "watching config file for changes");
+
+    let (sender, receiver) = mpsc::channel(1);
+    let debounce_duration = Duration::from_millis(250);
+    tokio::spawn(async move {
+        // keep watcher alive
+        let _watcher = watcher;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    tracing::debug!("config watcher received cancellation.");
+                    return;
+                }
+                Some(_) = notify_rx.recv() => {
+                    // create second debounce loop
+                    let debounce_timeout = time::sleep(debounce_duration);
+                    tokio::pin!(debounce_timeout);
+                    loop {
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                tracing::debug!("config watcher received cancellation during debounce.");
+                                return;
+                            }
+                            _ = debounce_timeout.as_mut() => {
+                                let _ = sender.send(()).await;
+                                break;
+                            }
+                            Some(_) = notify_rx.recv() => {
+                                debounce_timeout.as_mut().reset(time::Instant::now() + debounce_duration);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Ok((owned_cancel, receiver))
+}
+
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // ensure worker user exists
     let worker_params = WorkerParams::from(&args);
@@ -319,16 +384,29 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let socket_path = args.socket_path.clone();
     let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
 
+    // set up config file watcher
+    let (cancel_config_watcher, config_receiver) = config_watcher(config_path.clone()).await?;
+
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(worker_params.state_home()).await;
 
-    let mut state = DaemonState::new(args, worker_user, config, worker_params, reload_handle);
-    let res = state.daemon_loop(signal_receiver, socket_listener).await;
+    let mut state = DaemonState::new(
+        worker_user,
+        config,
+        config_path,
+        worker_params,
+        reload_handle,
+        args.log_file,
+    );
+    let res = state
+        .daemon_loop(signal_receiver, socket_listener, config_receiver)
+        .await;
 
     // cancel running tasks and run teardown logic
     state.teardown().await;
     cancel_socket_listener.cancel();
     cancel_signal_handlers.cancel();
+    cancel_config_watcher.cancel();
 
     // remove socket file
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
@@ -459,16 +537,18 @@ async fn main() {
 
 impl DaemonState {
     fn new(
-        args: cli::Cli,
         worker_user: worker::Worker,
         config: Config,
+        config_path: PathBuf,
         worker_params: WorkerParams,
         reload_handle: Option<LogReloadHandle>,
+        log_file: Option<PathBuf>,
     ) -> Self {
         Self {
-            args,
             worker_user,
             config,
+            config_path,
+            log_file,
             worker_params,
             reload_handle,
             router: None,
@@ -486,12 +566,14 @@ impl DaemonState {
         &mut self,
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
         mut socket_listener: mpsc::Receiver<SocketCmd>,
+        mut config_receiver: mpsc::Receiver<()>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
                 Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
+                Some(_) = config_receiver.recv() => self.incoming_config_change().await?,
                 Some(res) = self.ping_tasks.join_next() =>  match res {
                         Ok(res) => self.outgoing_response_from_root(ResponseFromRoot::Ping { res }).await?,
                         Err(err) => tracing::error!(error = ?err, "ping task join error"),
@@ -536,7 +618,7 @@ impl DaemonState {
                 }
             },
             SignalMessage::RotateLogs => {
-                if let (Some(handle), Some(path)) = (&self.reload_handle, &self.args.log_file) {
+                if let (Some(handle), Some(path)) = (&self.reload_handle, &self.log_file) {
                     let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user)
                         .map(|new_layer| handle.reload(new_layer));
                     match res {
@@ -590,6 +672,21 @@ impl DaemonState {
                 Ok(())
             }
         }
+    }
+
+    async fn incoming_config_change(&mut self) -> Result<(), exitcode::ExitCode> {
+        tracing::info!("configuration file change detected - reloading configuration");
+
+        match config::read(self.config_path.as_path()).await {
+            Ok(new_config) => {
+                self.config = new_config;
+                // TODO trigger service reload
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "unable to read updated configuration file - ignoring change");
+            }
+        }
+        Ok(())
     }
 
     async fn outgoing_response_from_root(&mut self, resp: ResponseFromRoot) -> Result<(), exitcode::ExitCode> {
@@ -749,7 +846,7 @@ impl DaemonState {
             .uid(self.worker_user.uid)
             .gid(self.worker_user.gid);
 
-        if let Some(ref log_file) = self.args.log_file {
+        if let Some(ref log_file) = self.log_file {
             worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
         }
         let mut child = worker_command.spawn().map_err(|err| {
