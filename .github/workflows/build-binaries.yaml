@@ -22,8 +22,7 @@ on:
       runner:
         type: choice
         options:
-          - macos-15-xlarge
-          - macos-15-intel
+          - depot-macos-15
           - depot-ubuntu-22.04-4
           - depot-ubuntu-22.04-arm-4
         required: true
