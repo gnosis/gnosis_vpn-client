@@ -888,8 +888,13 @@ impl DaemonState {
         self.worker_child = None;
         match self.shutdown_ongoing {
             Shutdown::None => {
-                tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                Ok(())
+                if status.success() {
+                    tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                    self.setup_worker().await
+                } else {
+                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
+                    Err(exitcode::TEMPFAIL)
+                }
             }
             Shutdown::Worker => {
                 if status.success() {
