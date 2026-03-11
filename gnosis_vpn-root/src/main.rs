@@ -734,7 +734,7 @@ impl DaemonState {
     }
 
     async fn outgoing_response_from_root(&mut self, resp: ResponseFromRoot) -> Result<(), exitcode::ExitCode> {
-        if matches!(self.shutdown_ongoing, Shutdown::Service)
+        if matches!(self.shutdown_ongoing, Shutdown::None)
             && let Some(ref mut child) = self.worker_child
         {
             let msg = RootToWorker::ResponseFromRoot(resp);
@@ -774,7 +774,7 @@ impl DaemonState {
                     Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
                 (Shutdown::Worker, _) => {
-                    // excavate to restart
+                    // escalate to restart
                     tracing::debug!("received start client command during worker shutdown - escalating to restart");
                     self.shutdown_ongoing = Shutdown::RestartWorker;
                     Ok(Response::StartClient(command::StartClientResponse::Started))
@@ -805,10 +805,8 @@ impl DaemonState {
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
                 (Shutdown::RestartWorker, _) => {
-                    // escalate to service shutdown
-                    tracing::debug!(
-                        "received stop client command during worker restart - escalating to service shutdown"
-                    );
+                    // cancel worker restart and keep it stopped
+                    tracing::debug!("received stop client command during worker restart - cancelling restart");
                     self.shutdown_ongoing = Shutdown::Worker;
                     self.target_dest_id = None;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
