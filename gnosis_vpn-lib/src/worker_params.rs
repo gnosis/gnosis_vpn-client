@@ -99,7 +99,7 @@ impl WorkerParams {
             }
         };
 
-        identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
+        identity::from_path(identity_file, identity_pass.clone()).map_err(Error::from)
     }
 
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
@@ -116,13 +116,13 @@ impl WorkerParams {
             }
         };
 
-        identity::from_path(identity_file.as_path(), identity_pass.clone()).map_err(Error::from)
+        identity::from_path(identity_file, identity_pass.clone()).map_err(Error::from)
     }
 
     pub async fn to_config(&self, safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             // use user provided configuration path
-            ConfigFileMode::Manual(path) => config::from_path(path.as_ref()).await.map_err(Error::from),
+            ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
             // check status of config generation
             ConfigFileMode::Generated => config::generate(safe_module).await.map_err(Error::from),
         }

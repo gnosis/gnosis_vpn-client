@@ -126,12 +126,6 @@ fn pretty_print(resp: &Response) {
         Response::Pong => {
             println!("Pong");
         }
-        Response::Empty => {
-            println!();
-        }
-        Response::Metrics(metrics) => {
-            println!("{metrics}");
-        }
         Response::NerdStats(command::NerdStatsResponse::NoInfo) => {
             eprintln!("No extra stats available. Try connecting to a destination first.");
         }
@@ -140,6 +134,43 @@ fn pretty_print(resp: &Response) {
         }
         Response::NerdStats(command::NerdStatsResponse::Connected(stats)) => {
             print_connected_stats(stats);
+        }
+        Response::FundingTool(command::FundingToolResponse::WrongPhase) => {
+            eprintln!("Already past potential funding phase - no longer possible to fund");
+        }
+        Response::FundingTool(command::FundingToolResponse::Started) => {
+            println!("Started funding");
+        }
+        Response::FundingTool(command::FundingToolResponse::InProgress) => {
+            println!("Funding in progress");
+        }
+        Response::FundingTool(command::FundingToolResponse::Done) => {
+            println!("Funding complete");
+        }
+        Response::RefreshNodeTriggered => {
+            println!("Node balance check triggered");
+        }
+        Response::Info(info) => {
+            let mut str_resp = format!("Gnosis VPN client service {version}", version = info.version);
+            if let Some(ref file) = info.log_file {
+                str_resp.push_str(&format!("\nLog file: {file}", file = file.display()));
+            }
+            println!("{str_resp}");
+        }
+        Response::StartClient(command::StartClientResponse::Started) => {
+            println!("Worker client started");
+        }
+        Response::StartClient(command::StartClientResponse::AlreadyRunning) => {
+            eprintln!("Worker client already running");
+        }
+        Response::StopClient(command::StopClientResponse::Stopped) => {
+            println!("Worker client stopped");
+        }
+        Response::StopClient(command::StopClientResponse::NotRunning) => {
+            eprintln!("Worker client not running");
+        }
+        Response::WorkerOffline => {
+            eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
     }
 }
@@ -155,13 +186,22 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Status(..) => exitcode::OK,
         Response::Balance(..) => exitcode::OK,
         Response::Pong => exitcode::OK,
-        Response::Empty => exitcode::OK,
-        Response::Metrics(..) => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
         Response::NerdStats(command::NerdStatsResponse::NoInfo) => exitcode::UNAVAILABLE,
         Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
         Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
+        Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
+        Response::RefreshNodeTriggered => exitcode::OK,
+        Response::Info(..) => exitcode::OK,
+        Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
+        Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
+        Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
+        Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
+        Response::WorkerOffline => exitcode::UNAVAILABLE,
     }
 }
 

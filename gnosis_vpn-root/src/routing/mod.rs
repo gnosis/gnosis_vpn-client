@@ -40,9 +40,9 @@ pub(crate) mod mocks;
 // ============================================================================
 
 #[cfg(target_os = "linux")]
-pub use linux::{cleanup_stale_fwmark_rules, dynamic_router, static_fallback_router as static_router};
+pub use linux::{dynamic_router, reset_on_startup, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
-pub use macos::{dynamic_router, static_router};
+pub use macos::{dynamic_router, reset_on_startup, static_router};
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)

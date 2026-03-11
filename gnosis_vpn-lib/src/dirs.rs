@@ -34,13 +34,13 @@ pub enum DirError {
 
 // Sets up the required directories for the worker, ensuring they are owned by the worker user
 // tracing is not yet enabled so we cannot use it
-pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<PathBuf, Error> {
-    ensure_dir(&home, 0o755, uid, gid).map_err(Error::HomeFolder)?;
+pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<(), Error> {
+    ensure_dir(home.clone(), 0o755, uid, gid).map_err(Error::HomeFolder)?;
     let cache_path = home.join(CACHE_DIRECTORY);
-    ensure_dir(&cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
+    ensure_dir(cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
     let config_path = home.join(CONFIG_DIRECTORY);
-    ensure_dir(&config_path, 0o700, uid, gid).map_err(Error::ConfigFolder)?;
-    Ok(home)
+    ensure_dir(config_path, 0o700, uid, gid).map_err(Error::ConfigFolder)?;
+    Ok(())
 }
 
 pub fn cache_dir(home: PathBuf, file: &str) -> PathBuf {
@@ -52,11 +52,11 @@ pub fn config_dir(home: PathBuf, file: &str) -> PathBuf {
 }
 
 // Ensures that the specified directory exists with the given permissions and ownership.
-pub fn ensure_dir(path: &PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), DirError> {
+pub fn ensure_dir(path: PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), DirError> {
     DirBuilder::new()
         .recursive(true)
         .mode(mode)
-        .create(path)
+        .create(path.clone())
         .map_err(|error| {
             let msg = format!("Failed to create directory at {path}: {error:?}", path = path.display());
             DirError::Creation(msg)
