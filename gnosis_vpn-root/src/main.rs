@@ -281,17 +281,17 @@ pub async fn config_watcher(
     // Bridge from sync OS thread to async Tokio task
     let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res {
-            if event.paths.iter().any(|path| path == &config_file) {
-                match event.kind {
-                    EventKind::Modify(_data) => {
-                        let _ = notify_tx.send(());
-                    }
-                    EventKind::Create(_data) => {
-                        let _ = notify_tx.send(());
-                    }
-                    _ => {}
+        if let Ok(event) = res
+            && event.paths.iter().any(|path| path == &config_file)
+        {
+            match event.kind {
+                EventKind::Modify(_data) => {
+                    let _ = notify_tx.send(());
                 }
+                EventKind::Create(_data) => {
+                    let _ = notify_tx.send(());
+                }
+                _ => {}
             }
         }
     })
@@ -622,7 +622,7 @@ impl DaemonState {
                     if let Some(ref mut child) = self.worker_child {
                         tracing::debug!("sending shutdown signal to worker process");
                         send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
-                        self.teardown_any_routing().await;
+                        self.cleanup_worker_resources().await;
                         Ok(())
                     } else {
                         tracing::debug!("no worker process active - shutdown immediately");
@@ -720,7 +720,7 @@ impl DaemonState {
                     tracing::debug!("sending shutdown signal to worker process due to config reload");
                     self.shutdown_ongoing = Shutdown::RestartWorker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
-                    self.teardown_any_routing().await;
+                    self.cleanup_worker_resources().await;
                 }
             }
             Err(err) => {
@@ -777,8 +777,8 @@ impl DaemonState {
                     tracing::debug!("sending shutdown signal to worker process due to StopClient command");
                     self.shutdown_ongoing = Shutdown::Worker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    self.cleanup_worker_resources().await;
                     self.target_dest_id = None;
-                    self.teardown_any_routing().await;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
                 None => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
@@ -984,11 +984,16 @@ impl DaemonState {
 
     /// Remove routing and stop ping tasks
     async fn teardown(&mut self) {
-        self.ping_tasks.shutdown().await;
+        self.cleanup_worker_resources().await;
         if let Some(ref mut child) = self.worker_child {
             child.cancel.cancel();
         }
+    }
+
+    async fn cleanup_worker_resources(&mut self) {
+        self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
+        self.pending_responses.clear();
     }
 
     async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
