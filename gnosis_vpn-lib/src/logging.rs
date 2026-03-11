@@ -30,9 +30,10 @@ pub const DEFAULT_LOG_FILE: &str = "/Library/Logs/GnosisVPN/gnosisvpn.log";
 ///
 /// This function is also called during log rotation to reopen the log file
 /// after it has been rotated by an external tool. On macOS, `newsyslog`
-/// handles rotation and sends a `SIGHUP` signal to the process afterward,
-/// which should then call this function to reopen the new log file and
-/// reload the layer using the [`LogReloadHandle`].
+/// handles rotation; on Linux, `logrotate` does it. In both cases,
+/// a `SIGHUP` signal is sent to the process afterward, which should then
+/// call this function to reopen the new log file and reload the layer
+/// using the [`LogReloadHandle`].
 ///
 /// # Errors
 ///
@@ -77,9 +78,10 @@ pub fn use_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Error
 ///
 /// The returned [`LogReloadHandle`] allows the file layer to be swapped at
 /// runtime without restarting the process. This is essential for log rotation:
-/// on macOS, `newsyslog` rotates the log file and then sends `SIGHUP` to the
-/// process, which should then call [`make_file_fmt_layer`] to reopen the
-/// rotated log file and reload it via the [`LogReloadHandle`].
+/// on macOS, `newsyslog` rotates the log file; on Linux, `logrotate` does it.
+/// In both cases, `SIGHUP` is sent to the process, which should then call
+/// [`make_file_fmt_layer`] to reopen the rotated log file and
+/// reload it via the [`LogReloadHandle`].
 ///
 /// # Errors
 ///
