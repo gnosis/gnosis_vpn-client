@@ -218,6 +218,12 @@ impl Routing for DynamicRouter {
     async fn teardown(&mut self, _logs: Logs) {}
 }
 
+/// Try whatever teardown we can on startup to clean up from any previous unclean shutdowns.
+pub async fn reset_on_startup(state_home: PathBuf) {
+    let wg = RealWgOps {};
+    let _ = wg.wg_quick_down(state_home, Logs::Suppress).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

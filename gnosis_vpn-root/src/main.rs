@@ -1,9 +1,10 @@
 use gnosis_vpn_lib::logging::LogReloadHandle;
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::fs;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::net::{UnixListener, UnixStream};
-use tokio::process::Command;
+use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
+use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
@@ -14,12 +15,12 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
-use std::os::unix::net::UnixStream as StdUnixStream;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self};
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{Command as LibCommand, Response};
+use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
@@ -40,13 +41,38 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
-struct DaemonSetup {
-    args: cli::Cli,
+struct DaemonState {
     worker_user: worker::Worker,
     config: Config,
+    config_path: PathBuf,
+    log_file: Option<PathBuf>,
     worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
-    log_path: Option<PathBuf>,
+    router: Option<Box<dyn Routing>>,
+    shutdown_ongoing: Shutdown,
+    // keep track of the current target for restore/restart/reload logic
+    target_dest_id: Option<String>,
+    // used to forward messages incoming on unix socket to worker process
+    incoming_worker_channel: (mpsc::Sender<String>, mpsc::Receiver<String>),
+    // optional worker paramters set after construction
+    worker_child: Option<WorkerChild>,
+    // status code channel for when the worker process exits
+    worker_exit_channel: (mpsc::Sender<process::ExitStatus>, mpsc::Receiver<process::ExitStatus>),
+    // keep track of longer running root tasks
+    ping_tasks: JoinSet<Result<Duration, String>>,
+    // External socket commands need an internal mapping:
+    // root process will keep track of worker requests and map their responses
+    // so that the requesting stream on the socket receives it's answer
+    pending_response_counter: u64,
+    pending_responses: HashMap<u64, oneshot::Sender<Response>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Shutdown {
+    Worker,
+    RestartWorker,
+    Service,
+    None,
 }
 
 enum SignalMessage {
@@ -59,7 +85,12 @@ struct SocketCmd {
     resp: oneshot::Sender<Response>,
 }
 
-async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::ExitCode> {
+struct WorkerChild {
+    socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
+    cancel: CancellationToken,
+}
+
+async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMessage>), exitcode::ExitCode> {
     let (sender, receiver) = mpsc::channel(32);
     let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
         tracing::error!(?error, "error setting up SIGINT handler");
@@ -74,389 +105,42 @@ async fn signal_channel() -> Result<mpsc::Receiver<SignalMessage>, exitcode::Exi
         exitcode::IOERR
     })?;
 
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
                     tracing::debug!("received SIGINT");
-                    if sender.send(SignalMessage::Shutdown).await.is_err() {
-                        tracing::warn!("SIGINT: receiver closed");
-                        break;
-                    }
+                    let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sigterm.recv() => {
                     tracing::debug!("received SIGTERM");
-                    if sender.send(SignalMessage::Shutdown).await.is_err() {
-                        tracing::warn!("SIGTERM: receiver closed");
-                        break;
-                    }
+                    let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sighup.recv() => {
                     tracing::debug!("received SIGHUP");
-                    if sender.send(SignalMessage::RotateLogs).await.is_err() {
-                        tracing::warn!("SIGHUP: receiver closed");
-                        break;
-                    }
+                    let _ =  sender.send(SignalMessage::RotateLogs).await;
+                }
+                _ = cancel.cancelled() => {
+                    tracing::debug!("signal channel received cancellation");
+                    break;
                 }
                 else => {
-                    tracing::warn!("signal streams closed");
+                    tracing::warn!("signal channel streams closed");
                     break;
                 }
             }
         }
     });
 
-    Ok(receiver)
-}
-
-async fn socket_listener(socket_path: &Path) -> Result<UnixListener, exitcode::ExitCode> {
-    match socket_path.try_exists() {
-        Ok(true) => {
-            tracing::info!("probing for running instance");
-            match socket::root::process_cmd(socket_path, &LibCommand::Ping).await {
-                Ok(_) => {
-                    tracing::error!("system service is already running - cannot start another instance");
-                    return Err(exitcode::TEMPFAIL);
-                }
-                Err(e) => {
-                    tracing::debug!(warn = ?e, "done probing for running instance");
-                }
-            };
-            fs::remove_file(socket_path).await.map_err(|e| {
-                tracing::error!(error = ?e, "error removing stale socket file");
-                exitcode::IOERR
-            })?;
-        }
-        Ok(false) => (),
-        Err(e) => {
-            tracing::error!(error = ?e, "error checking socket path");
-            return Err(exitcode::IOERR);
-        }
-    };
-
-    if let Some(socket_dir) = socket_path.parent() {
-        fs::create_dir_all(socket_dir).await.map_err(|e| {
-            tracing::error!(error = %e, "error creating socket directory");
-            exitcode::IOERR
-        })?;
-    }
-
-    let listener = UnixListener::bind(socket_path).map_err(|e| {
-        tracing::error!(error = ?e, "error binding socket");
-        exitcode::OSFILE
-    })?;
-
-    // update permissions to allow unprivileged access
-    fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
-        .await
-        .map_err(|e| {
-            tracing::error!(error = ?e, "error setting socket permissions");
-            exitcode::NOPERM
-        })?;
-
-    Ok(listener)
-}
-
-async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
-    let worker_params = WorkerParams::from(&args);
-
-    // ensure worker user exists
-    let input = worker::Input::new(
-        args.worker_user.clone(),
-        args.worker_binary.clone(),
-        env!("CARGO_PKG_VERSION"),
-        worker_params.state_home(),
-    );
-    let worker_user = worker::Worker::from_system(input).await.map_err(|error| {
-        eprintln!("error determining worker user: {:?}", error);
-        exitcode::NOUSER
-    })?;
-
-    let reload_handle = setup_logging(&args.log_file, &worker_user)?;
-
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        state_home = %worker_params.state_home().display(),
-        "starting {}",
-        env!("CARGO_PKG_NAME")
-    );
-
-    // Write root pidfile for the newsyslog service to send signals to
-    if let Some(ref pid_file) = args.pid_file {
-        if let Some(pid_dir) = pid_file.parent() {
-            fs::create_dir_all(pid_dir).await.map_err(|e| {
-                tracing::error!(error = %e, "error creating pid_file directory");
-                exitcode::IOERR
-            })?;
-        }
-        tracing::debug!(path = ?pid_file, "writing pidfile");
-        let pid = process::id().to_string();
-        fs::write(pid_file, pid).await.expect("failed to write pidfile");
-    }
-
-    let mut signal_receiver = signal_channel().await?;
-
-    // check wireguard tooling
-    wg_tooling::available()
-        .await
-        .and(wg_tooling::executable().await)
-        .map_err(|err| {
-            tracing::error!(error = ?err, "error checking WireGuard tools");
-            exitcode::UNAVAILABLE
-        })?;
-
-    // prepare worker resources
-    let config_path = match args.config_path.canonicalize() {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(error = %e, "error canonicalizing config path");
-            return Err(exitcode::IOERR);
-        }
-    };
-    let config = config::read(config_path.as_path()).await.map_err(|err| {
-        tracing::error!(error = ?err, "unable to read initial configuration file");
-        exitcode::NOINPUT
-    })?;
-
-    // set up system socket
-    let socket_path = args.socket_path.clone();
-    let socket = socket_listener(&args.socket_path).await?;
-
-    let mut maybe_router: Option<Box<dyn Routing>> = None;
-    let log_path = args.log_file.clone();
-    let setup = DaemonSetup {
-        args,
-        worker_user,
-        config,
-        worker_params,
-        reload_handle,
-        log_path,
-    };
-
-    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
-    #[cfg(target_os = "linux")]
-    routing::cleanup_stale_fwmark_rules().await;
-
-    let res = loop_daemon(setup, &mut signal_receiver, socket, &mut maybe_router).await;
-
-    // restore routing if connected
-    teardown_any_routing(&mut maybe_router, false).await;
-
-    let _ = fs::remove_file(&socket_path).await.map_err(|err| {
-        tracing::error!(error = ?err, "failed removing socket on shutdown");
-    });
-
-    res
-}
-
-async fn loop_daemon(
-    setup: DaemonSetup,
-    signal_receiver: &mut mpsc::Receiver<SignalMessage>,
-    socket: UnixListener,
-    maybe_router: &mut Option<Box<dyn Routing>>,
-) -> Result<(), exitcode::ExitCode> {
-    let (parent_socket, child_socket) = StdUnixStream::pair().map_err(|err| {
-        tracing::error!(error = ?err, "unable to create socket pair for worker communication");
-        exitcode::IOERR
-    })?;
-
-    // remove the "Close-On-Exec" flag to avoid premature socket closure by root
-    let fd = child_socket.as_raw_fd();
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-    }
-
-    let mut worker_command = Command::new(setup.worker_user.binary.clone());
-    if let Some(log_file) = &setup.args.log_file {
-        worker_command
-            .arg("--log-file")
-            .arg(log_file.to_string_lossy().to_string());
-    }
-    let mut worker_child = worker_command
-        .current_dir(&setup.worker_user.home)
-        .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-        .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
-        .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-        .uid(setup.worker_user.uid)
-        .gid(setup.worker_user.gid)
-        .spawn()
-        .map_err(|err| {
-            tracing::error!(error = ?err, ?setup.worker_user, "unable to spawn worker process");
-            exitcode::IOERR
-        })?;
-
-    let worker_pid: i32 = worker_child.id().map(|id| id as i32).ok_or_else(|| {
-        tracing::error!("unable to get worker PID");
-        exitcode::IOERR
-    })?;
-
-    parent_socket.set_nonblocking(true).map_err(|err| {
-        tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
-        exitcode::IOERR
-    })?;
-
-    let parent_stream = UnixStream::from_std(parent_socket).map_err(|err| {
-        tracing::error!(error = ?err, "unable to create unix stream from socket");
-        exitcode::IOERR
-    })?;
-
-    // root <-> worker communication setup
-    tracing::debug!("splitting unix stream into reader and writer halves");
-    let (reader_half, writer_half) = io::split(parent_stream);
-    let reader = BufReader::new(reader_half);
-    let mut socket_lines_reader = reader.lines();
-    let mut socket_writer = BufWriter::new(writer_half);
-
-    // provide initial resources to worker
-    send_to_worker(
-        RootToWorker::WorkerParams {
-            worker_params: setup.worker_params.clone(),
-        },
-        &mut socket_writer,
-    )
-    .await?;
-    send_to_worker(RootToWorker::Config { config: setup.config }, &mut socket_writer).await?;
-
-    // External socket commands need an internal mapping:
-    // root process will keep track of worker requests and map their responses
-    // so that the requesting stream on the socket receives it's answer
-    let mut pending_response_counter: u64 = 0;
-    let mut pending_responses: HashMap<u64, oneshot::Sender<Response>> = HashMap::new();
-    let mut ongoing_request_responses = JoinSet::new();
-
-    // enter main loop
-    let mut shutdown_ongoing = false;
-    let cancel_token = CancellationToken::new();
-    let (ping_sender, mut ping_receiver) = mpsc::channel(32);
-    let (socket_cmd_sender, mut socket_cmd_receiver) = mpsc::channel(32);
-
-    tracing::info!("entering main daemon loop");
-
-    loop {
-        tokio::select! {
-            Some(signal) = signal_receiver.recv() => match signal {
-                SignalMessage::Shutdown => {
-                    if shutdown_ongoing {
-                        tracing::warn!("force shutdown immediately");
-                        return Ok(());
-                    }
-                    tracing::info!("initiate shutdown");
-                    shutdown_ongoing = true;
-                    cancel_token.cancel();
-                    teardown_any_routing(maybe_router, true).await;
-                    ongoing_request_responses.shutdown().await;
-                }
-                SignalMessage::RotateLogs => {
-                    // Recreate the file layer and swap it in the reload handle so that logging continues to the new file after rotation
-                    // Note: we rely on newsyslog to have already rotated the file (renamed it and created a new one) before sending SIGHUP, so make_file_fmt_layer should open the new file rather than the rotated one
-                    if let (Some(handle), Some(path)) = (&setup.reload_handle, &setup.log_path) {
-                        let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &setup.worker_user)
-                            .map(|new_layer| handle.reload(new_layer));
-                        match res {
-                            Ok(_) => {
-                                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            },
-                            Err(e) => {
-                                eprintln!("failed to reopen log file {:?}: {}", path, e);
-                                return Err(exitcode::IOERR);
-                            }
-                        };
-                        tracing::debug!("forwarding SIGHUP to worker process {}", worker_pid);
-                        unsafe {
-                            libc::kill(worker_pid, libc::SIGHUP);
-                        }
-                    } else {
-                        tracing::debug!("no log file configured, skipping log reload on SIGHUP");
-                    }
-                }
-            },
-
-            Ok((stream, _addr)) = socket.accept() => {
-                let cmd_sender = socket_cmd_sender.clone();
-                ongoing_request_responses.spawn(async move {
-                    if let Some(handle) = incoming_on_root_socket(stream, &cmd_sender).await {
-                        handle.await.ok();
-                    }
-                });
-            }
-            Some(socket_cmd) = socket_cmd_receiver.recv() => {
-                pending_response_counter += 1;
-                pending_responses.insert(pending_response_counter, socket_cmd.resp);
-                let msg = RootToWorker::Command { cmd: socket_cmd.cmd, id: pending_response_counter };
-                send_to_worker(msg, &mut socket_writer).await?;
-            }
-            Some(res) = ping_receiver.recv() => {
-                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::Ping { res }), &mut socket_writer).await?;
-            }
-            Ok(Some(line)) = socket_lines_reader.next_line() => {
-                let cmd = parse_outgoing_worker(line)?;
-                match cmd {
-                    WorkerToRoot::Ack => {
-                        tracing::debug!("received worker ack");
-                    }
-                    WorkerToRoot::OutOfSync => {
-                        tracing::error!("worker out of sync with root - exiting");
-                        return Err(exitcode::UNAVAILABLE);
-                    }
-                    WorkerToRoot::Response { id, resp } => {
-                        tracing::debug!(?resp, "received worker response");
-                        if let Some(resp_sender) = pending_responses.remove(&id) {
-                            if resp_sender.send(resp).is_err() {
-                                tracing::error!(id, "unexpected channel closure");
-                            }
-                        } else {
-                            tracing::warn!(id, "no pending response found for worker response");
-                        }
-                    }
-                    WorkerToRoot::RequestToRoot(request) => {
-                        tracing::debug!(?request, "received worker request to root");
-                        match request {
-                            RequestToRoot::DynamicWgRouting { wg_data  } => {
-                                let state_home = setup.worker_params.state_home();
-                                let worker_user = setup.worker_user.clone();
-                                let res = setup_dynamic_routing(maybe_router, state_home, worker_user, wg_data).await;
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }), &mut socket_writer).await?;
-                            },
-                            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                                let state_home = setup.worker_params.state_home();
-                                let res = setup_static_routing(maybe_router, state_home, wg_data, peer_ips).await;
-                                send_to_worker(RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }), &mut socket_writer).await?;
-                            }
-                            RequestToRoot::TearDownWg => {
-                                teardown_any_routing(maybe_router, true).await;
-                            }
-                            RequestToRoot::Ping { options } => {
-                                spawn_ping(&options, &ping_sender, &cancel_token);
-                            }
-                        }
-                    },
-                }
-            },
-            Ok(status) = worker_child.wait() => {
-                if shutdown_ongoing {
-                    if status.success() {
-                        tracing::info!("worker exited cleanly");
-                    } else {
-                        tracing::warn!(status = ?status.code(), "worker exited with error during shutdown");
-                    }
-                    return Ok(());
-                } else {
-                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                    return Err(exitcode::IOERR);
-                }
-            }
-            else => {
-                tracing::error!("unexpected channel closure");
-                return Err(exitcode::IOERR);
-            }
-        }
-    }
+    tracing::info!("signal handlers set up for SIGINT, SIGTERM and SIGHUP");
+    Ok((owned_cancel, receiver))
 }
 
 async fn incoming_on_root_socket(
-    stream: UnixStream,
-    socket_cmd_sender: &mpsc::Sender<SocketCmd>,
+    stream: TokioUnixStream,
+    socket_cmd_sender: mpsc::Sender<SocketCmd>,
 ) -> Option<JoinHandle<()>> {
     let (socket_reader_half, socket_writer_half) = stream.into_split();
     let socket_reader = BufReader::new(socket_reader_half);
@@ -504,17 +188,262 @@ async fn incoming_on_root_socket(
     None
 }
 
-fn parse_outgoing_worker(line: String) -> Result<WorkerToRoot, exitcode::ExitCode> {
-    let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
-        tracing::error!(error = %err, "failed parsing outgoing worker command");
-        exitcode::DATAERR
+async fn socket_listener(
+    socket_path: &Path,
+) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
+    match socket_path.try_exists() {
+        Ok(true) => {
+            tracing::info!("probing for running instance");
+            match socket::root::process_cmd(socket_path, &LibCommand::Ping).await {
+                Ok(_) => {
+                    tracing::error!("system service is already running - cannot start another instance");
+                    return Err(exitcode::TEMPFAIL);
+                }
+                Err(e) => {
+                    tracing::debug!(warn = ?e, "done probing for running instance");
+                }
+            };
+            fs::remove_file(socket_path).await.map_err(|e| {
+                tracing::error!(error = ?e, "error removing stale socket file");
+                exitcode::IOERR
+            })?;
+        }
+        Ok(false) => (),
+        Err(e) => {
+            tracing::error!(error = ?e, "error checking socket path");
+            return Err(exitcode::IOERR);
+        }
+    };
+
+    if let Some(socket_dir) = socket_path.parent() {
+        fs::create_dir_all(socket_dir).await.map_err(|e| {
+            tracing::error!(error = %e, "error creating socket directory");
+            exitcode::IOERR
+        })?;
+    }
+
+    let listener = TokioUnixListener::bind(socket_path).map_err(|e| {
+        tracing::error!(error = ?e, "error binding socket");
+        exitcode::OSFILE
     })?;
-    Ok(cmd)
+
+    // update permissions to allow unprivileged access
+    fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = ?e, "error setting socket permissions");
+            exitcode::NOPERM
+        })?;
+
+    let mut ongoing = JoinSet::new();
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    let (sender, receiver) = mpsc::channel(32);
+    tokio::spawn(async move {
+        loop {
+            let cloned_sender = sender.clone();
+            tokio::select! {
+                Ok((stream, _addr)) = listener.accept() => {
+                    ongoing.spawn(async move {
+                        if let Some(handle) = incoming_on_root_socket(stream, cloned_sender).await {
+                            handle.await.ok();
+                        }
+                    });
+                },
+                _ = cancel.cancelled() => {
+                    tracing::debug!("socket listener received cancellation");
+                    ongoing.shutdown().await;
+                    break;
+                }
+                else => {
+                    tracing::warn!("socket listener streams closed");
+                    break;
+                }
+
+            }
+        }
+    });
+
+    Ok((owned_cancel, receiver))
+}
+
+pub async fn config_watcher(
+    config_path: PathBuf,
+) -> Result<(CancellationToken, mpsc::Receiver<()>), exitcode::ExitCode> {
+    let parent = match config_path.parent() {
+        Some(parent) => parent,
+        None => {
+            tracing::error!("config path has no parent directory");
+            return Err(exitcode::IOERR);
+        }
+    };
+
+    let config_file = config_path.clone();
+    // Bridge from sync OS thread to async Tokio task
+    let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Ok(event) = res
+            && event.paths.iter().any(|path| path == &config_file)
+        {
+            match event.kind {
+                EventKind::Modify(_data) => {
+                    let _ = notify_tx.send(());
+                }
+                EventKind::Create(_data) => {
+                    let _ = notify_tx.send(());
+                }
+                _ => {}
+            }
+        }
+    })
+    .map_err(|e| {
+        tracing::error!(error = ?e, "error setting up config file watcher");
+        exitcode::IOERR
+    })?;
+
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    watcher.watch(parent, RecursiveMode::NonRecursive).map_err(|e| {
+        tracing::error!(error = ?e, "error watching config file");
+        exitcode::IOERR
+    })?;
+    tracing::info!(config_path = %config_path.display(), "watching config file for changes");
+
+    let (sender, receiver) = mpsc::channel(1);
+    let debounce_duration = Duration::from_millis(250);
+    tokio::spawn(async move {
+        // keep watcher alive
+        let _watcher = watcher;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    tracing::debug!("config watcher received cancellation.");
+                    return;
+                }
+                Some(_) = notify_rx.recv() => {
+                    // create second debounce loop
+                    let debounce_timeout = time::sleep(debounce_duration);
+                    tokio::pin!(debounce_timeout);
+                    loop {
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                tracing::debug!("config watcher received cancellation during debounce.");
+                                return;
+                            }
+                            _ = debounce_timeout.as_mut() => {
+                                let _ = sender.send(()).await;
+                                break;
+                            }
+                            Some(_) = notify_rx.recv() => {
+                                debounce_timeout.as_mut().reset(time::Instant::now() + debounce_duration);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Ok((owned_cancel, receiver))
+}
+
+async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
+    // ensure worker user exists
+    let worker_params = WorkerParams::from(&args);
+    let input = worker::Input::new(
+        args.worker_user.clone(),
+        args.worker_binary.clone(),
+        env!("CARGO_PKG_VERSION"),
+        worker_params.state_home(),
+    );
+    let worker_user = worker::Worker::from_system(input).await.map_err(|error| {
+        eprintln!("error determining worker user: {:?}", error);
+        exitcode::NOUSER
+    })?;
+
+    // setup logging
+    let reload_handle = setup_logging(&args.log_file, &worker_user)?;
+
+    // introduce ourself in the logs
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        state_home = %worker_params.state_home().display(),
+        "starting {}",
+        env!("CARGO_PKG_NAME")
+    );
+
+    // Write root pidfile for the newsyslog service to send signals to
+    write_pidfile(&args.pid_file).await?;
+
+    // check wireguard tooling
+    wg_tooling::available()
+        .await
+        .and(wg_tooling::executable().await)
+        .map_err(|err| {
+            tracing::error!(error = ?err, "error checking WireGuard tools");
+            exitcode::UNAVAILABLE
+        })?;
+
+    // prepare worker resources
+    let config_path = match args.config_path.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(error = %e, "error canonicalizing config path");
+            return Err(exitcode::IOERR);
+        }
+    };
+
+    let config = config::read(config_path.as_path()).await.map_err(|err| {
+        tracing::error!(error = ?err, "unable to read initial configuration file");
+        exitcode::NOINPUT
+    })?;
+
+    // set up signal handlers
+    let (cancel_signal_handlers, signal_receiver) = signal_channel().await?;
+
+    // set up system socket
+    let socket_path = args.socket_path.clone();
+    let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
+
+    // set up config file watcher
+    let (cancel_config_watcher, config_receiver) = config_watcher(config_path.clone()).await?;
+
+    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
+    routing::reset_on_startup(worker_params.state_home()).await;
+
+    let mut state = DaemonState::new(
+        worker_user,
+        config,
+        config_path,
+        worker_params,
+        reload_handle,
+        args.log_file,
+    );
+    if args.client_autostart {
+        tracing::debug!("autostarting worker process");
+        state.setup_worker().await?;
+    }
+    let res = state
+        .daemon_loop(signal_receiver, socket_listener, config_receiver)
+        .await;
+
+    // cancel running tasks and run teardown logic
+    state.teardown().await;
+    cancel_socket_listener.cancel();
+    cancel_signal_handlers.cancel();
+    cancel_config_watcher.cancel();
+
+    // remove socket file
+    let _ = fs::remove_file(&socket_path).await.map_err(|err| {
+        tracing::error!(error = ?err, "failed removing socket on shutdown");
+    });
+
+    res
 }
 
 async fn send_to_worker(
     msg: RootToWorker,
-    writer: &mut BufWriter<WriteHalf<UnixStream>>,
+    writer: &mut BufWriter<WriteHalf<TokioUnixStream>>,
 ) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(&msg).map_err(|err| {
         tracing::error!(msg = ?msg, error = ?err, "failed to serialize message");
@@ -555,108 +484,63 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
-async fn teardown_any_routing(maybe_router: &mut Option<Box<dyn Routing>>, expected_up: bool) {
-    if let Some(router) = maybe_router {
-        let logs = if expected_up { Logs::Print } else { Logs::Suppress };
-        router.teardown(logs).await;
-    }
+async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
+    // delay ping by one sec to increase success rate
+    time::sleep(Duration::from_secs(1)).await;
+    ping::ping(&options).await.map_err(|e| {
+        tracing::debug!(error = ?e, "ping error");
+        e.to_string()
+    })
 }
 
-async fn setup_dynamic_routing(
-    maybe_router: &mut Option<Box<dyn Routing>>,
-    state_home: PathBuf,
-    worker_user: worker::Worker,
-    wg_data: event::WireGuardData,
-) -> Result<(), String> {
-    // ensure we run down before going up to ensure clean slate
-    teardown_any_routing(maybe_router, false).await;
-
-    let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
-    match res_router {
-        Ok(mut router) => {
-            // router creation successfull, try setup
-            let res_setup = router.setup().await;
-            *maybe_router = Some(Box::new(router));
-            match res_setup {
-                Ok(_) => {
-                    tracing::info!("dynamic routing setup successfully");
-                    Ok(())
-                }
-                Err(error) => {
-                    // setup failed, call cleanup and return error
-                    tracing::error!(?error, "dynamic routing setup error");
-                    teardown_any_routing(maybe_router, true).await;
-                    Err(error.to_string())
-                }
+fn setup_logging(
+    log_file: &Option<std::path::PathBuf>,
+    worker: &worker::Worker,
+) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
+    match log_file {
+        Some(log_path) => {
+            if let Some(parent) = log_path.parent() {
+                dirs::ensure_dir(parent.to_path_buf(), 0o755, worker.uid, worker.gid).map_err(|err| {
+                    eprintln!("Failed to create log directory {}: {}", parent.display(), err);
+                    exitcode::IOERR
+                })?;
             }
+            let fmt_layer = logging::make_file_fmt_layer(&log_path.to_string_lossy(), worker).map_err(|err| {
+                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
+                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
+                exitcode::IOERR
+            })?;
+            Ok(Some(handle))
         }
-        Err(error) => {
-            // router creation failed, return error
-            tracing::error!(?error, "failed to build dynamic router");
-            Err(error.to_string())
-        }
-    }
-}
-
-async fn setup_static_routing(
-    maybe_router: &mut Option<Box<dyn Routing>>,
-    state_home: PathBuf,
-    wg_data: event::WireGuardData,
-    peer_ips: Vec<Ipv4Addr>,
-) -> Result<(), String> {
-    // ensure we run down before going up to ensure clean slate
-    teardown_any_routing(maybe_router, false).await;
-
-    let res_router = routing::static_router(state_home, wg_data, peer_ips);
-    match res_router {
-        Ok(mut router) => {
-            // router creation successfull, try setup
-            let res_setup = router.setup().await;
-            *maybe_router = Some(Box::new(router));
-            match res_setup {
-                Ok(_) => {
-                    tracing::info!("static routing setup successfully");
-                    Ok(())
-                }
-                Err(error) => {
-                    // setup failed, call cleanup and return error
-                    tracing::error!(?error, "static routing setup error");
-                    teardown_any_routing(maybe_router, true).await;
-                    Err(error.to_string())
-                }
-            }
-        }
-        Err(error) => {
-            // router creation failed, return error
-            tracing::error!(?error, "failed to build static router");
-            Err(error.to_string())
+        None => {
+            logging::setup_stdout();
+            Ok(None)
         }
     }
 }
 
-fn spawn_ping(
-    options: &ping::Options,
-    sender: &mpsc::Sender<Result<Duration, String>>,
-    cancel_token: &CancellationToken,
-) {
-    let cancel = cancel_token.clone();
-    let sender = sender.clone();
-    let options = options.clone();
-    tokio::spawn(async move {
-        cancel
-            .run_until_cancelled(async move {
-                // delay ping by one sec to increase success rate
-                time::sleep(Duration::from_secs(1)).await;
-                let res = ping::ping(&options).await.map_err(|e| {
-                    tracing::debug!(error = ?e, "ping error");
-                    e.to_string()
-                });
-                let _ = sender.send(res).await.map_err(|_| {
-                    tracing::error!("ping receiver closed unexpectedly");
-                });
-            })
-            .await;
-    });
+// On macOS newsyslog service needs the pid accessible via pidfile
+// Launchctl will not create that pidfile for us
+async fn write_pidfile(pid_file: &Option<PathBuf>) -> Result<(), exitcode::ExitCode> {
+    if let Some(pid_file) = pid_file {
+        if let Some(pid_dir) = pid_file.parent() {
+            fs::create_dir_all(pid_dir).await.map_err(|e| {
+                tracing::error!(error = %e, "error creating pid_file directory");
+                exitcode::IOERR
+            })?;
+        }
+
+        tracing::debug!(path = ?pid_file, "writing pidfile");
+        let pid = process::id().to_string();
+        fs::write(pid_file, pid).await.map_err(|e| {
+            tracing::error!(error = ?e, "error writing pid file");
+            exitcode::IOERR
+        })?;
+    }
+    Ok(())
 }
 
 /// limit root service to two threads
@@ -676,31 +560,558 @@ async fn main() {
     }
 }
 
-fn setup_logging(
-    log_file: &Option<std::path::PathBuf>,
-    worker: &worker::Worker,
-) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
-    match log_file {
-        Some(log_path) => {
-            if let Some(parent) = log_path.parent() {
-                dirs::ensure_dir(&parent.to_path_buf(), 0o755, worker.uid, worker.gid).map_err(|err| {
-                    eprintln!("Failed to create log directory {}: {}", parent.display(), err);
-                    exitcode::IOERR
-                })?;
-            }
-            let fmt_layer = logging::make_file_fmt_layer(&log_path.to_string_lossy(), worker).map_err(|err| {
-                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
-                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            Ok(Some(handle))
+impl DaemonState {
+    fn new(
+        worker_user: worker::Worker,
+        config: Config,
+        config_path: PathBuf,
+        worker_params: WorkerParams,
+        reload_handle: Option<LogReloadHandle>,
+        log_file: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            config,
+            config_path,
+            incoming_worker_channel: mpsc::channel(32),
+            log_file,
+            pending_response_counter: 0,
+            pending_responses: HashMap::new(),
+            ping_tasks: JoinSet::new(),
+            reload_handle,
+            router: None,
+            shutdown_ongoing: Shutdown::None,
+            target_dest_id: None,
+            worker_child: None,
+            worker_exit_channel: mpsc::channel(1),
+            worker_params,
+            worker_user,
         }
-        None => {
-            logging::setup_stdout();
-            Ok(None)
+    }
+
+    async fn daemon_loop(
+        &mut self,
+        mut signal_receiver: mpsc::Receiver<SignalMessage>,
+        mut socket_listener: mpsc::Receiver<SocketCmd>,
+        mut config_receiver: mpsc::Receiver<()>,
+    ) -> Result<(), exitcode::ExitCode> {
+        tracing::info!("entering root main loop");
+        loop {
+            tokio::select! {
+                Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
+                Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
+                Some(_) = config_receiver.recv() => self.incoming_config_change().await?,
+                Some(res) = self.ping_tasks.join_next() =>  match res {
+                        Ok(res) => self.outgoing_response_from_root(ResponseFromRoot::Ping { res }).await?,
+                        Err(err) => tracing::error!(error = ?err, "ping task join error"),
+                },
+                Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
+                Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
+                else => {
+                    tracing::error!("unexpected channel closure");
+                    return Err(exitcode::IOERR);
+                }
+            }
+        }
+    }
+
+    async fn incoming_signal(&mut self, signal: SignalMessage) -> Result<(), exitcode::ExitCode> {
+        match signal {
+            SignalMessage::Shutdown => match self.shutdown_ongoing {
+                Shutdown::None => {
+                    tracing::info!("received shutdown signal - initiating shutdown");
+                    self.shutdown_ongoing = Shutdown::Service;
+                    if let Some(ref mut child) = self.worker_child {
+                        tracing::debug!("sending shutdown signal to worker process");
+                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                        self.cleanup_worker_resources().await;
+                        Ok(())
+                    } else {
+                        tracing::debug!("no worker process active - shutdown immediately");
+                        Err(exitcode::OK)
+                    }
+                }
+                Shutdown::Worker => {
+                    tracing::info!(
+                        "received shutdown signal but worker already shutting down - escalate to service shutdown"
+                    );
+                    self.shutdown_ongoing = Shutdown::Service;
+                    Ok(())
+                }
+                Shutdown::Service => {
+                    tracing::warn!(
+                        "received shutdown signal but service shutdown already ongoing - forcing immediate exit"
+                    );
+                    Err(exitcode::OK)
+                }
+                Shutdown::RestartWorker => {
+                    tracing::info!(
+                        "received shutdown signal but worker restart already ongoing - escalate to service shutdown"
+                    );
+                    self.shutdown_ongoing = Shutdown::Service;
+                    Ok(())
+                }
+            },
+            SignalMessage::RotateLogs => {
+                if let (Some(handle), Some(path)) = (&self.reload_handle, &self.log_file) {
+                    let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user)
+                        .map(|new_layer| handle.reload(new_layer));
+                    match res {
+                        Ok(_) => {
+                            tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
+                            if matches!(self.shutdown_ongoing, Shutdown::None)
+                                && let Some(ref mut child) = self.worker_child
+                            {
+                                tracing::debug!("sending rotate logs to worker process");
+                                send_to_worker(RootToWorker::RotateLogs, &mut child.socket_writer).await?;
+                            }
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("failed to reopen log file {:?}: {}", path, e);
+                            Err(exitcode::IOERR)
+                        }
+                    }
+                } else {
+                    tracing::debug!("no log file configured, skipping log reload on SIGHUP");
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
+        let SocketCmd { cmd, resp } = socket_cmd;
+        match WorkerCommand::try_from(cmd.clone()) {
+            Ok(w_cmd) => {
+                self.handle_hybrid_cmd(&w_cmd);
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    self.pending_response_counter += 1;
+                    self.pending_responses.insert(self.pending_response_counter, resp);
+                    let msg = RootToWorker::WorkerCommand {
+                        cmd: w_cmd,
+                        id: self.pending_response_counter,
+                    };
+                    send_to_worker(msg, &mut child.socket_writer).await
+                } else {
+                    let _ = resp.send(Response::WorkerOffline).map_err(|error| {
+                        tracing::error!(?error, "socket command response channel closed");
+                    });
+                    Ok(())
+                }
+            }
+            Err(_) => {
+                let response = self.incoming_root_command(cmd).await?;
+                let _ = resp.send(response).map_err(|error| {
+                    tracing::error!(?error, "socket command response channel closed");
+                });
+                Ok(())
+            }
+        }
+    }
+
+    async fn incoming_config_change(&mut self) -> Result<(), exitcode::ExitCode> {
+        tracing::info!("configuration file change detected - reloading configuration");
+
+        match config::read(self.config_path.as_path()).await {
+            Ok(new_config) => {
+                self.config = new_config;
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    tracing::debug!("sending shutdown signal to worker process due to config reload");
+                    self.shutdown_ongoing = Shutdown::RestartWorker;
+                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    self.cleanup_worker_resources().await;
+                }
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "unable to read updated configuration file - ignoring change");
+            }
+        }
+        Ok(())
+    }
+
+    async fn outgoing_response_from_root(&mut self, resp: ResponseFromRoot) -> Result<(), exitcode::ExitCode> {
+        if matches!(self.shutdown_ongoing, Shutdown::None)
+            && let Some(ref mut child) = self.worker_child
+        {
+            let msg = RootToWorker::ResponseFromRoot(resp);
+            send_to_worker(msg, &mut child.socket_writer).await
+        } else {
+            tracing::warn!(
+                ?resp,
+                "received response from root but no active worker process - ignoring"
+            );
+            Ok(())
+        }
+    }
+
+    async fn incoming_root_command(&mut self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
+        match cmd {
+            LibCommand::Status
+            | LibCommand::NerdStats
+            | LibCommand::Connect(_)
+            | LibCommand::Disconnect
+            | LibCommand::Balance
+            | LibCommand::FundingTool(_)
+            | LibCommand::Telemetry
+            | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
+            LibCommand::Ping => Ok(Response::Pong),
+            LibCommand::Info => {
+                let info = command::InfoResponse {
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    log_file: self.log_file.clone(),
+                };
+                Ok(Response::Info(info))
+            }
+
+            LibCommand::StartClient => match (self.shutdown_ongoing, &self.worker_child) {
+                (Shutdown::None, Some(_)) => Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning)),
+                (Shutdown::None, None) => {
+                    self.setup_worker().await?;
+                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                }
+                (Shutdown::Worker, _) => {
+                    // escalate to restart
+                    tracing::debug!("received start client command during worker shutdown - escalating to restart");
+                    self.shutdown_ongoing = Shutdown::RestartWorker;
+                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                }
+                (Shutdown::RestartWorker, _) => {
+                    // ignore already restarting
+                    tracing::debug!("received start client command during worker restart - ignoring");
+                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                }
+                (Shutdown::Service, _) => {
+                    tracing::warn!("received start client command during service shutdown - cannot start client");
+                    Err(exitcode::TEMPFAIL)
+                }
+            },
+            LibCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
+                (Shutdown::None, None) => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
+                (Shutdown::None, Some(child)) => {
+                    tracing::debug!("sending shutdown signal to worker process due to stop client command");
+                    self.shutdown_ongoing = Shutdown::Worker;
+                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    self.cleanup_worker_resources().await;
+                    self.target_dest_id = None;
+                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                }
+                (Shutdown::Worker, _) => {
+                    // ignore already stopping
+                    tracing::debug!("received stop client command during worker shutdown - ignoring");
+                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                }
+                (Shutdown::RestartWorker, _) => {
+                    // cancel worker restart and keep it stopped
+                    tracing::debug!("received stop client command during worker restart - cancelling restart");
+                    self.shutdown_ongoing = Shutdown::Worker;
+                    self.target_dest_id = None;
+                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                }
+                (Shutdown::Service, _) => {
+                    tracing::warn!("received stop client command during service shutdown - cannot stop client");
+                    Err(exitcode::TEMPFAIL)
+                }
+            },
+        }
+    }
+
+    async fn incoming_worker_line(&mut self, line: String) -> Result<(), exitcode::ExitCode> {
+        let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
+            tracing::error!(error = %err, "failed parsing incoming worker command");
+            exitcode::DATAERR
+        })?;
+        match cmd {
+            WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, resp).await,
+            WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
+        }
+    }
+
+    async fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
+        tracing::debug!(?resp, "received worker response");
+        if let Some(resp_sender) = self.pending_responses.remove(&id) {
+            if resp_sender.send(resp).is_err() {
+                tracing::error!(id, "unexpected channel closure");
+            }
+        } else {
+            tracing::warn!(id, "no pending response found for worker response");
+        }
+        Ok(())
+    }
+
+    async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
+        tracing::debug!(?request, "received worker request to root");
+        match request {
+            RequestToRoot::DynamicWgRouting { wg_data } => {
+                let res = self.setup_dynamic_routing(wg_data).await;
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
+            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+                let res = self.setup_static_routing(wg_data, peer_ips).await;
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
+            RequestToRoot::TearDownWg => {
+                self.teardown_any_routing().await;
+                Ok(())
+            }
+            RequestToRoot::Ping { options } => {
+                self.ping_tasks.spawn(async move { spawn_ping(options).await });
+                Ok(())
+            }
+        }
+    }
+
+    async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+        self.worker_child = None;
+        match self.shutdown_ongoing {
+            Shutdown::None => {
+                if status.success() {
+                    tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                    self.setup_worker().await
+                } else {
+                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
+                    Err(exitcode::TEMPFAIL)
+                }
+            }
+            Shutdown::Worker => {
+                if status.success() {
+                    tracing::info!("worker exited cleanly as requested");
+                } else {
+                    tracing::warn!(status = ?status.code(), "worker exited with error during requested shutdown");
+                }
+                self.shutdown_ongoing = Shutdown::None;
+                Ok(())
+            }
+            Shutdown::Service => {
+                if status.success() {
+                    tracing::info!("worker exited cleanly on service shutdown");
+                    Err(exitcode::OK)
+                } else {
+                    tracing::error!(status = ?status.code(), "worker exited with error during service shutdown");
+                    Err(exitcode::IOERR)
+                }
+            }
+            Shutdown::RestartWorker => {
+                if status.success() {
+                    tracing::info!("worker exited cleanly as before restart");
+                } else {
+                    tracing::warn!(status = ?status.code(), "worker exited with error before restart");
+                }
+                self.shutdown_ongoing = Shutdown::None;
+                self.setup_worker().await
+            }
+        }
+    }
+
+    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
+        let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
+            tracing::error!(error = ?err, "unable to create socket pair for worker communication");
+            exitcode::IOERR
+        })?;
+
+        // remove the "Close-On-Exec" flag to avoid premature socket closure by root
+        let fd = child_socket.as_raw_fd();
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+        }
+
+        let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
+
+        worker_command
+            .current_dir(self.worker_user.home.clone())
+            .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
+            .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
+            .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
+            .uid(self.worker_user.uid)
+            .gid(self.worker_user.gid);
+
+        if let Some(ref log_file) = self.log_file {
+            worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
+        }
+        let mut child = worker_command.spawn().map_err(|err| {
+            tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
+            exitcode::IOERR
+        })?;
+
+        parent_socket.set_nonblocking(true).map_err(|err| {
+            tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
+            exitcode::IOERR
+        })?;
+
+        let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
+            tracing::error!(error = ?err, "unable to create unix stream from socket");
+            exitcode::IOERR
+        })?;
+
+        // root <-> worker communication setup
+        tracing::debug!("splitting unix stream into reader and writer halves");
+        let (reader_half, writer_half) = io::split(parent_stream);
+        let reader = BufReader::new(reader_half);
+        let mut socket_lines_reader = reader.lines();
+        let mut socket_writer = BufWriter::new(writer_half);
+
+        // send initial configuration and resources to worker
+        send_to_worker(
+            RootToWorker::StartupParams {
+                config: self.config.clone(),
+                worker_params: self.worker_params.clone(),
+                target_dest_id: self.target_dest_id.clone(),
+            },
+            &mut socket_writer,
+        )
+        .await?;
+
+        let cancel = CancellationToken::new();
+        let owned_cancel = cancel.clone();
+        let lines_sender = self.incoming_worker_channel.0.clone();
+        let exit_sender = self.worker_exit_channel.0.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Ok(Some(line)) = socket_lines_reader.next_line() => {
+                        let _ = lines_sender.send(line.clone()).await.map_err(|err| {
+                            tracing::error!(error = ?err, "worker channel receiver dropped");
+                        });
+                    },
+                    Ok(status) = child.wait() => {
+                        let _ = exit_sender.send(status).await.map_err(|err| {
+                            tracing::error!(error = ?err, "worker exit channel receiver dropped");
+                        });
+                        break;
+                    },
+                    _ = owned_cancel.cancelled() => {
+                        tracing::debug!("worker command listener received cancellation");
+                        break;
+                    }
+                    else => {
+                        tracing::warn!("worker streams closed");
+                        break;
+                    }
+                }
+            }
+        });
+
+        self.worker_child = Some(WorkerChild { cancel, socket_writer });
+        Ok(())
+    }
+
+    async fn teardown_any_routing(&mut self) {
+        if let Some(ref mut router) = self.router {
+            router.teardown(Logs::Print).await;
+        }
+        self.router = None;
+    }
+
+    /// Remove routing and stop ping tasks
+    async fn teardown(&mut self) {
+        self.cleanup_worker_resources().await;
+        if let Some(ref mut child) = self.worker_child {
+            child.cancel.cancel();
+        }
+    }
+
+    async fn cleanup_worker_resources(&mut self) {
+        self.ping_tasks.shutdown().await;
+        self.teardown_any_routing().await;
+        self.pending_responses.clear();
+    }
+
+    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
+        // ensure clean slate
+        self.teardown_any_routing().await;
+
+        let state_home = self.worker_params.state_home();
+        let worker_user = self.worker_user.clone();
+        let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
+        match res_router {
+            Ok(mut router) => {
+                let res_setup = router.setup().await;
+                self.router = Some(Box::new(router));
+                match res_setup {
+                    Ok(_) => {
+                        tracing::info!("dynamic routing setup successfully");
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::error!(?error, "dynamic routing setup error");
+                        self.teardown_any_routing().await;
+                        Err(error.to_string())
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(?error, "failed to build dynamic router");
+                Err(error.to_string())
+            }
+        }
+    }
+
+    async fn setup_static_routing(
+        &mut self,
+        wg_data: event::WireGuardData,
+        peer_ips: Vec<Ipv4Addr>,
+    ) -> Result<(), String> {
+        // ensure clean slate
+        self.teardown_any_routing().await;
+
+        let state_home = self.worker_params.state_home();
+        let res_router = routing::static_router(state_home, wg_data, peer_ips);
+        match res_router {
+            Ok(mut router) => {
+                let res_setup = router.setup().await;
+                self.router = Some(Box::new(router));
+                match res_setup {
+                    Ok(_) => {
+                        tracing::info!("static routing setup successfully");
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::error!(?error, "static routing setup error");
+                        self.teardown_any_routing().await;
+                        Err(error.to_string())
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(?error, "failed to build static router");
+                Err(error.to_string())
+            }
+        }
+    }
+
+    fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
+        match cmd {
+            WorkerCommand::Connect(id) => {
+                tracing::debug!(?id, "remembering target destination from connect command");
+                self.target_dest_id = Some(id.clone());
+            }
+            WorkerCommand::Disconnect => {
+                tracing::debug!("clearing target destination from disconnect command");
+                self.target_dest_id = None;
+            }
+            _ => (),
         }
     }
 }

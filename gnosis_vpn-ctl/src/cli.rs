@@ -67,6 +67,18 @@ pub enum Command {
     /// Query some nerd stats for connecting/connected destination
     #[command()]
     NerdStats {},
+
+    /// Display service information, like version and file locations
+    #[command()]
+    Info {},
+
+    /// Start worker process that runs vpn main logic loop
+    #[command()]
+    StartClient {},
+
+    /// Stop worker process to return to idle mode
+    #[command()]
+    StopClient {},
 }
 
 impl From<Command> for LibCommand {
@@ -81,6 +93,9 @@ impl From<Command> for LibCommand {
             Command::Ping {} => LibCommand::Ping,
             Command::Telemetry {} => LibCommand::Telemetry,
             Command::NerdStats {} => LibCommand::NerdStats,
+            Command::Info {} => LibCommand::Info,
+            Command::StartClient {} => LibCommand::StartClient,
+            Command::StopClient {} => LibCommand::StopClient,
         }
     }
 }

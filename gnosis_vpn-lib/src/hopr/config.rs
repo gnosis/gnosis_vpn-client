@@ -2,7 +2,7 @@ use serde_yaml;
 use thiserror::Error;
 use tokio::fs;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::compat::SafeModule;
 use crate::dirs;
@@ -24,7 +24,7 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
+pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
     let content = fs::read_to_string(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile

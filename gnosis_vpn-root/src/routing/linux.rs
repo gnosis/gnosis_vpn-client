@@ -96,7 +96,7 @@ pub fn static_fallback_router(
     let route_ops = NetlinkRouteOps::new(handle);
     let wg = RealWgOps;
     Ok(FallbackRouter {
-        state_home,
+        state_home: state_home.to_path_buf(),
         wg_data,
         peer_ips,
         route_ops,
@@ -905,6 +905,13 @@ fn pre_down_routing(route_addr: String, device: String, gateway: Option<String>)
             device = device,
         ),
     }
+}
+
+/// Try whatever teardown we can on startup to clean up from any previous unclean shutdowns.
+pub async fn reset_on_startup(state_home: PathBuf) {
+    cleanup_stale_fwmark_rules().await;
+    let wg = RealWgOps {};
+    let _ = wg.wg_quick_down(state_home, Logs::Suppress).await;
 }
 
 // ============================================================================

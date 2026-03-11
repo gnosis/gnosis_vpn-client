@@ -43,6 +43,7 @@ pub const DEFAULT_WORKER_USER: &str = USERNAME;
 pub const ENV_VAR_WORKER_BINARY: &str = "GNOSISVPN_WORKER_BINARY";
 pub const ENV_VAR_WORKER_USER: &str = "GNOSISVPN_WORKER_USER";
 pub const ENV_VAR_FORCE_STATIC_ROUTING: &str = "GNOSISVPN_FORCE_STATIC_ROUTING";
+pub const ENV_VAR_CLIENT_AUTOSTART: &str = "GNOSISVPN_CLIENT_AUTOSTART";
 
 #[derive(Debug, Clone)]
 pub struct Worker {
@@ -106,7 +107,7 @@ impl Worker {
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
             // set up application state directory
-            let home = dirs::setup_home(input.state_home, uid, gid).map_err(|error| {
+            dirs::setup_home(input.state_home.clone(), uid, gid).map_err(|error| {
                 eprintln!("Error setting up home directory for {worker_user:?}: {error:?}");
                 Error::InvalidHomeDir
             })?;
@@ -115,7 +116,7 @@ impl Worker {
                 binary: binary.to_string(),
                 gid,
                 group_name,
-                home,
+                home: input.state_home,
             })
         } else {
             eprintln!(

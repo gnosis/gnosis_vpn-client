@@ -3,7 +3,7 @@ members = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.76.1"
+version = "0.80.0"
 edition = "2024"
 license = "LGPL-3.0"
 
@@ -21,12 +21,13 @@ clap = { version = "4.5.57", features = ["derive", "env"] }
 exitcode = "1.1.2"
 futures = "0.3.31"
 humantime = "2.3.0"
+notify = "8.2.0"
 futures-util = "0.3.31"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
-libc = "0.2.177"
-mnl = "0.3"
-nftnl = "0.9"
+libc = "0.2.183"
+mnl = "0.3.1"
+nftnl = "0.9.1"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
@@ -45,10 +46,10 @@ tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "0.3.22"
 tokio = { version = "1.48.0", features = ["full"] }
 url = { version = "2.5.7", features = ["serde"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "26e4afe679a98de02b34c0343f2fe308303a77d9", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "e28ac48a6fdfe9f7e867123abed00fc9a9f14a3a", features = [
   "prometheus",
 ] }
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "cacfb94fc40b71f36891cdb56c9e708efb3ec1bc", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "2612c9442cca0638b6ed6e6427b2b5c487cf1432", features = [
   "runtime-tokio",
 ] }
 serde_with = "3.16.1"

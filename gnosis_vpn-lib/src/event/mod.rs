@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use crate::command::{Command, Response};
+use crate::command::{Response, WorkerCommand};
 use crate::config::Config;
 use crate::ping;
 use crate::wireguard::{self, WireGuard};
@@ -16,8 +16,8 @@ use crate::worker_params::WorkerParams;
 #[derive(Debug)]
 pub enum WorkerToCore {
     /// Socket command avaiting response
-    Command {
-        cmd: Command,
+    WorkerCommand {
+        cmd: WorkerCommand,
         resp: oneshot::Sender<Response>,
     },
     Shutdown,
@@ -37,12 +37,18 @@ pub enum CoreToWorker {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
-    /// Startup parameters for hoprd
-    WorkerParams { worker_params: WorkerParams },
-    /// Configuration file
-    Config { config: Config },
+    /// Wrap up and tear down any resources before worker process exits
+    Shutdown,
+    /// Rotate logs
+    RotateLogs,
+    /// Startup parameters
+    StartupParams {
+        config: Config,
+        worker_params: WorkerParams,
+        target_dest_id: Option<String>,
+    },
     /// Socket command received by root
-    Command { cmd: Command, id: u64 },
+    WorkerCommand { cmd: WorkerCommand, id: u64 },
     /// Result of a request to root
     ResponseFromRoot(ResponseFromRoot),
 }
@@ -52,12 +58,8 @@ pub enum RootToWorker {
 pub enum WorkerToRoot {
     /// Response to a socket command
     Response { resp: Response, id: u64 },
-    /// Acknowledgement other incoming messages
-    Ack,
     /// Request to root execution
     RequestToRoot(RequestToRoot),
-    /// Received unexpected event from root
-    OutOfSync,
 }
 
 /// Runner requesting root command and usually waiting for response
