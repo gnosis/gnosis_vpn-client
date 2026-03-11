@@ -269,13 +269,30 @@ async fn socket_listener(
 pub async fn config_watcher(
     config_path: PathBuf,
 ) -> Result<(CancellationToken, mpsc::Receiver<()>), exitcode::ExitCode> {
+    let parent = match config_path.parent() {
+        Some(parent) => parent,
+        None => {
+            tracing::error!("config path has no parent directory");
+            return Err(exitcode::IOERR);
+        }
+    };
+
+    let config_file = config_path.clone();
     // Bridge from sync OS thread to async Tokio task
     let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res
-            && matches!(event.kind, EventKind::Modify(_))
-        {
-            let _ = notify_tx.send(());
+        if let Ok(event) = res {
+            if event.paths.iter().any(|path| path == &config_file) {
+                match event.kind {
+                    EventKind::Modify(_data) => {
+                        let _ = notify_tx.send(());
+                    }
+                    EventKind::Create(_data) => {
+                        let _ = notify_tx.send(());
+                    }
+                    _ => {}
+                }
+            }
         }
     })
     .map_err(|e| {
@@ -285,7 +302,7 @@ pub async fn config_watcher(
 
     let cancel = CancellationToken::new();
     let owned_cancel = cancel.clone();
-    watcher.watch(&config_path, RecursiveMode::NonRecursive).map_err(|e| {
+    watcher.watch(parent, RecursiveMode::NonRecursive).map_err(|e| {
         tracing::error!(error = ?e, "error watching config file");
         exitcode::IOERR
     })?;
