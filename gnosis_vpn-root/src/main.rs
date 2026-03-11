@@ -67,6 +67,7 @@ struct DaemonState {
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
 }
 
+#[derive(Debug, Clone, Copy)]
 enum Shutdown {
     Worker,
     RestartWorker,
@@ -657,7 +658,9 @@ impl DaemonState {
                     match res {
                         Ok(_) => {
                             tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            if let Some(ref mut child) = self.worker_child {
+                            if matches!(self.shutdown_ongoing, Shutdown::None)
+                                && let Some(ref mut child) = self.worker_child
+                            {
                                 tracing::debug!("sending rotate logs to worker process");
                                 send_to_worker(RootToWorker::RotateLogs, &mut child.socket_writer).await?;
                             }
@@ -681,23 +684,21 @@ impl DaemonState {
         match WorkerCommand::try_from(cmd.clone()) {
             Ok(w_cmd) => {
                 self.handle_hybrid_cmd(&w_cmd);
-                match self.worker_child {
-                    Some(ref mut child) => {
-                        self.pending_response_counter += 1;
-                        self.pending_responses.insert(self.pending_response_counter, resp);
-                        let msg = RootToWorker::WorkerCommand {
-                            cmd: w_cmd,
-                            id: self.pending_response_counter,
-                        };
-                        send_to_worker(msg, &mut child.socket_writer).await?;
-                        Ok(())
-                    }
-                    None => {
-                        let _ = resp.send(Response::WorkerOffline).map_err(|error| {
-                            tracing::error!(?error, "socket command response channel closed");
-                        });
-                        Ok(())
-                    }
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    self.pending_response_counter += 1;
+                    self.pending_responses.insert(self.pending_response_counter, resp);
+                    let msg = RootToWorker::WorkerCommand {
+                        cmd: w_cmd,
+                        id: self.pending_response_counter,
+                    };
+                    send_to_worker(msg, &mut child.socket_writer).await
+                } else {
+                    let _ = resp.send(Response::WorkerOffline).map_err(|error| {
+                        tracing::error!(?error, "socket command response channel closed");
+                    });
+                    Ok(())
                 }
             }
             Err(_) => {
@@ -716,7 +717,9 @@ impl DaemonState {
         match config::read(self.config_path.as_path()).await {
             Ok(new_config) => {
                 self.config = new_config;
-                if let Some(ref mut child) = self.worker_child {
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
                     tracing::debug!("sending shutdown signal to worker process due to config reload");
                     self.shutdown_ongoing = Shutdown::RestartWorker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
@@ -731,19 +734,18 @@ impl DaemonState {
     }
 
     async fn outgoing_response_from_root(&mut self, resp: ResponseFromRoot) -> Result<(), exitcode::ExitCode> {
-        match self.worker_child {
-            Some(ref mut child) => {
-                let msg = RootToWorker::ResponseFromRoot(resp);
-                send_to_worker(msg, &mut child.socket_writer).await?;
-            }
-            None => {
-                tracing::warn!(
-                    ?resp,
-                    "received response from root but no worker process active - ignoring"
-                );
-            }
+        if matches!(self.shutdown_ongoing, Shutdown::None)
+            && let Some(ref mut child) = self.worker_child
+        {
+            let msg = RootToWorker::ResponseFromRoot(resp);
+            send_to_worker(msg, &mut child.socket_writer).await
+        } else {
+            tracing::warn!(
+                ?resp,
+                "received response from root but no active worker process - ignoring"
+            );
+            Ok(())
         }
-        Ok(())
     }
 
     async fn incoming_root_command(&mut self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
@@ -765,23 +767,54 @@ impl DaemonState {
                 Ok(Response::Info(info))
             }
 
-            LibCommand::StartClient => match self.worker_child {
-                Some(_) => Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning)),
-                None => {
+            LibCommand::StartClient => match (self.shutdown_ongoing, &self.worker_child) {
+                (Shutdown::None, Some(_)) => Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning)),
+                (Shutdown::None, None) => {
                     self.setup_worker().await?;
                     Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
+                (Shutdown::Worker, _) => {
+                    // escalate to restart
+                    tracing::debug!("received start client command during worker shutdown - escalating to restart");
+                    self.shutdown_ongoing = Shutdown::RestartWorker;
+                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                }
+                (Shutdown::RestartWorker, _) => {
+                    // ignore already restarting
+                    tracing::debug!("received start client command during worker restart - ignoring");
+                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                }
+                (Shutdown::Service, _) => {
+                    tracing::warn!("received start client command during service shutdown - cannot start client");
+                    Err(exitcode::TEMPFAIL)
+                }
             },
-            LibCommand::StopClient => match self.worker_child {
-                Some(ref mut child) => {
-                    tracing::debug!("sending shutdown signal to worker process due to StopClient command");
+            LibCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
+                (Shutdown::None, None) => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
+                (Shutdown::None, Some(child)) => {
+                    tracing::debug!("sending shutdown signal to worker process due to stop client command");
                     self.shutdown_ongoing = Shutdown::Worker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
                     self.cleanup_worker_resources().await;
                     self.target_dest_id = None;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
-                None => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
+                (Shutdown::Worker, _) => {
+                    // ignore already stopping
+                    tracing::debug!("received stop client command during worker shutdown - ignoring");
+                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                }
+                (Shutdown::RestartWorker, _) => {
+                    // cancel worker restart and keep it stopped
+                    tracing::debug!("received stop client command during worker restart - cancelling restart");
+                    self.shutdown_ongoing = Shutdown::Worker;
+                    self.target_dest_id = None;
+                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                }
+                (Shutdown::Service, _) => {
+                    tracing::warn!("received stop client command during service shutdown - cannot stop client");
+                    Err(exitcode::TEMPFAIL)
+                }
             },
         }
     }
@@ -814,7 +847,9 @@ impl DaemonState {
         match request {
             RequestToRoot::DynamicWgRouting { wg_data } => {
                 let res = self.setup_dynamic_routing(wg_data).await;
-                if let Some(ref mut child) = self.worker_child {
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
                     send_to_worker(
                         RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
                         &mut child.socket_writer,
@@ -825,7 +860,9 @@ impl DaemonState {
             }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
                 let res = self.setup_static_routing(wg_data, peer_ips).await;
-                if let Some(ref mut child) = self.worker_child {
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
                     send_to_worker(
                         RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
                         &mut child.socket_writer,
@@ -849,8 +886,13 @@ impl DaemonState {
         self.worker_child = None;
         match self.shutdown_ongoing {
             Shutdown::None => {
-                tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                Ok(())
+                if status.success() {
+                    tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                    self.setup_worker().await
+                } else {
+                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
+                    Err(exitcode::TEMPFAIL)
+                }
             }
             Shutdown::Worker => {
                 if status.success() {
