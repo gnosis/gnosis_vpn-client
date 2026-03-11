@@ -3,7 +3,7 @@ members = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.76.2"
+version = "0.80.0"
 edition = "2024"
 license = "LGPL-3.0"
 
@@ -25,9 +25,9 @@ notify = "8.2.0"
 futures-util = "0.3.31"
 humantime-serde = "1.1.1"
 human-bandwidth = "0.1.4"
-libc = "0.2.177"
-mnl = "0.3"
-nftnl = "0.9"
+libc = "0.2.183"
+mnl = "0.3.1"
+nftnl = "0.9.1"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
