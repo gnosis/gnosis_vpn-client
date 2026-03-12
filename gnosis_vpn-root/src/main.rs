@@ -65,6 +65,8 @@ struct DaemonState {
     // so that the requesting stream on the socket receives it's answer
     pending_response_counter: u64,
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
+    // keepalive timer
+    keepalive_timer: time::Sleep,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -585,6 +587,7 @@ impl DaemonState {
             worker_exit_channel: mpsc::channel(1),
             worker_params,
             worker_user,
+            keepalive_timer: time::sleep(Duration::ZERO),
         }
     }
 
