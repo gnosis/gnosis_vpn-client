@@ -92,6 +92,7 @@ struct WorkerChild {
     cancel: CancellationToken,
 }
 
+#[derive(Debug)]
 enum KeepAliveInstruction {
     Reset,
     Ignite(Duration),
@@ -362,6 +363,7 @@ async fn keep_alive_timer(
     let owned_cancel = cancel.clone();
     let (sender, receiver) = mpsc::channel(1);
     tokio::spawn(async move {
+        let mut active = false;
         let mut dur = Duration::ZERO;
         let keepalive = time::sleep(dur);
         tokio::pin!(keepalive);
@@ -377,15 +379,19 @@ async fn keep_alive_timer(
                             keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
                         KeepAliveInstruction::Ignite(duration) => {
+                            tracing::debug!(?duration, "ignite keep alive timer");
+                            active = true;
                             dur = duration;
                             keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
                         KeepAliveInstruction::Stop => {
+                            tracing::debug!("stop keep alive timer");
+                            active = false;
                             keepalive.as_mut().reset(time::Instant::now())
                         }
                     }
                 }
-                _ = keepalive.as_mut() => {
+                _ = keepalive.as_mut(), if active => {
                     let _ = sender.send(()).await;
                 }
             }
@@ -1026,7 +1032,7 @@ impl DaemonState {
             self.shutdown_ongoing = Shutdown::Worker;
             send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
             self.cleanup_worker_resources().await;
-            // keep target dest so we can start reconnecting on start
+            self.target_dest_id = None;
         }
         Ok(())
     }
@@ -1094,8 +1100,6 @@ impl DaemonState {
         let owned_cancel = cancel.clone();
         let lines_sender = self.incoming_worker_channel.0.clone();
         let exit_sender = self.worker_exit_channel.0.clone();
-        // TODO store instant and keepalive to enable remaining keepalive calculation
-        // TODO react to when keepalive runs out
         tokio::spawn(async move {
             loop {
                 tokio::select! {
