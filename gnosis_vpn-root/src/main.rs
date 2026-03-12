@@ -1028,7 +1028,9 @@ impl DaemonState {
 
     async fn keep_alive_expired(&mut self) -> Result<(), exitcode::ExitCode> {
         tracing::info!("keepalive timer expired - shutting down worker process");
-        if let Some(ref mut child) = self.worker_child {
+        if matches!(self.shutdown_ongoing, Shutdown::None)
+            && let Some(ref mut child) = self.worker_child
+        {
             self.shutdown_ongoing = Shutdown::Worker;
             send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
             self.cleanup_worker_resources().await;
