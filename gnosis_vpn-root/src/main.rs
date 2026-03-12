@@ -65,8 +65,8 @@ struct DaemonState {
     // so that the requesting stream on the socket receives it's answer
     pending_response_counter: u64,
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
-    // keepalive timer
-    keepalive_timer: time::Sleep,
+    // keepalive instructions from service to timer loop
+    keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +90,12 @@ struct SocketCmd {
 struct WorkerChild {
     socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
     cancel: CancellationToken,
+}
+
+enum KeepAliveInstruction {
+    Reset,
+    Ignite(Duration),
+    Stop,
 }
 
 async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMessage>), exitcode::ExitCode> {
@@ -349,6 +355,46 @@ pub async fn config_watcher(
     Ok((owned_cancel, receiver))
 }
 
+async fn keep_alive_timer(
+    mut keep_alive_instruction_receiver: mpsc::Receiver<KeepAliveInstruction>,
+) -> Result<(CancellationToken, mpsc::Receiver<()>), exitcode::ExitCode> {
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    let (sender, receiver) = mpsc::channel(1);
+    tokio::spawn(async move {
+        let mut dur = Duration::ZERO;
+        let keepalive = time::sleep(dur);
+        tokio::pin!(keepalive);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    tracing::debug!("keep alive timer received cancellation.");
+                    return;
+                }
+                Some(msg) = keep_alive_instruction_receiver.recv() => {
+                    match msg {
+                        KeepAliveInstruction::Reset => {
+                            keepalive.as_mut().reset(time::Instant::now() + dur);
+                        }
+                        KeepAliveInstruction::Ignite(duration) => {
+                            dur = duration;
+                            keepalive.as_mut().reset(time::Instant::now() + dur);
+                        }
+                        KeepAliveInstruction::Stop => {
+                            keepalive.as_mut().reset(time::Instant::now())
+                        }
+                    }
+                }
+                _ = keepalive.as_mut() => {
+                    let _ = sender.send(()).await;
+                }
+            }
+        }
+    });
+
+    Ok((owned_cancel, receiver))
+}
+
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // ensure worker user exists
     let worker_params = WorkerParams::from(&args);
@@ -410,6 +456,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // set up config file watcher
     let (cancel_config_watcher, config_receiver) = config_watcher(config_path.clone()).await?;
 
+    // set up keepalive timer
+    let (keep_alive_instruction_sender, keep_alive_instruction_receiver) = mpsc::channel(32);
+    let (cancel_keep_alive_timer, keep_alive_expired) = keep_alive_timer(keep_alive_instruction_receiver).await?;
+
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(worker_params.state_home()).await;
 
@@ -420,13 +470,18 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_params,
         reload_handle,
         args.log_file,
+        keep_alive_instruction_sender,
     );
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
-        state.setup_worker(keepalive).await?;
+        state.setup_worker().await?;
+        let _ = state
+            .keep_alive_instruction_sender
+            .send(KeepAliveInstruction::Ignite(keepalive))
+            .await;
     }
     let res = state
-        .daemon_loop(signal_receiver, socket_listener, config_receiver)
+        .daemon_loop(signal_receiver, socket_listener, config_receiver, keep_alive_expired)
         .await;
 
     // cancel running tasks and run teardown logic
@@ -434,6 +489,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     cancel_socket_listener.cancel();
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
+    cancel_keep_alive_timer.cancel();
 
     // remove socket file
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
@@ -570,6 +626,7 @@ impl DaemonState {
         worker_params: WorkerParams,
         reload_handle: Option<LogReloadHandle>,
         log_file: Option<PathBuf>,
+        keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     ) -> Self {
         Self {
             config,
@@ -587,7 +644,7 @@ impl DaemonState {
             worker_exit_channel: mpsc::channel(1),
             worker_params,
             worker_user,
-            keepalive_timer: time::sleep(Duration::ZERO),
+            keep_alive_instruction_sender,
         }
     }
 
@@ -596,6 +653,7 @@ impl DaemonState {
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
         mut socket_listener: mpsc::Receiver<SocketCmd>,
         mut config_receiver: mpsc::Receiver<()>,
+        mut keep_alive_expired: mpsc::Receiver<()>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
         loop {
@@ -609,6 +667,7 @@ impl DaemonState {
                 },
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
+                _ = keep_alive_expired.recv() => self.keep_alive_expired().await?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -696,7 +755,12 @@ impl DaemonState {
                         cmd: w_cmd,
                         id: self.pending_response_counter,
                     };
-                    send_to_worker(msg, &mut child.socket_writer).await
+                    send_to_worker(msg, &mut child.socket_writer).await?;
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Reset)
+                        .await;
+                    Ok(())
                 } else {
                     let _ = resp.send(Response::WorkerOffline).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
@@ -772,22 +836,37 @@ impl DaemonState {
 
             LibCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {
                 (Shutdown::None, Some(_)) => {
-                    // TODO update keepalive
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Ignite(keepalive))
+                        .await;
                     Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
                 }
                 (Shutdown::None, None) => {
-                    self.setup_worker(keepalive).await?;
+                    self.setup_worker().await?;
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Ignite(keepalive))
+                        .await;
                     Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
                 (Shutdown::Worker, _) => {
                     // escalate to restart
                     tracing::debug!("received start client command during worker shutdown - escalating to restart");
                     self.shutdown_ongoing = Shutdown::RestartWorker;
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Ignite(keepalive))
+                        .await;
                     Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
                 (Shutdown::RestartWorker, _) => {
                     // ignore already restarting
                     tracing::debug!("received start client command during worker restart - ignoring");
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Ignite(keepalive))
+                        .await;
                     Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
                 (Shutdown::Service, _) => {
@@ -795,6 +874,7 @@ impl DaemonState {
                     Err(exitcode::TEMPFAIL)
                 }
             },
+
             LibCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
                 (Shutdown::None, None) => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
                 (Shutdown::None, Some(child)) => {
@@ -894,8 +974,12 @@ impl DaemonState {
             Shutdown::None => {
                 if status.success() {
                     tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
-                    // TODO calculate remaining keepalive duration
-                    self.setup_worker().await
+                    self.setup_worker().await?;
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Reset)
+                        .await;
+                    Ok(())
                 } else {
                     tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
                     Err(exitcode::TEMPFAIL)
@@ -921,18 +1005,33 @@ impl DaemonState {
             }
             Shutdown::RestartWorker => {
                 if status.success() {
-                    tracing::info!("worker exited cleanly as before restart");
+                    tracing::info!("worker exited cleanly before restart");
                 } else {
                     tracing::warn!(status = ?status.code(), "worker exited with error before restart");
                 }
                 self.shutdown_ongoing = Shutdown::None;
-                // TODO calculate remaining keepalive duration
-                self.setup_worker().await
+                self.setup_worker().await?;
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Reset)
+                    .await;
+                Ok(())
             }
         }
     }
 
-    async fn setup_worker(&mut self, keepalive: Duration) -> Result<(), exitcode::ExitCode> {
+    async fn keep_alive_expired(&mut self) -> Result<(), exitcode::ExitCode> {
+        tracing::info!("keepalive timer expired - shutting down worker process");
+        if let Some(ref mut child) = self.worker_child {
+            self.shutdown_ongoing = Shutdown::Worker;
+            send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+            self.cleanup_worker_resources().await;
+            // keep target dest so we can start reconnecting on start
+        }
+        Ok(())
+    }
+
+    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
         let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
             exitcode::IOERR
@@ -1046,6 +1145,10 @@ impl DaemonState {
         self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
         self.pending_responses.clear();
+        let _ = self
+            .keep_alive_instruction_sender
+            .send(KeepAliveInstruction::Stop)
+            .await;
     }
 
     async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
