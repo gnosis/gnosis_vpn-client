@@ -392,6 +392,7 @@ async fn keep_alive_timer(
                     }
                 }
                 _ = keepalive.as_mut(), if active => {
+                    active = false;
                     let _ = sender.send(()).await;
                 }
             }
@@ -673,7 +674,7 @@ impl DaemonState {
                 },
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
-                _ = keep_alive_expired.recv() => self.keep_alive_expired().await?,
+                Some(_) = keep_alive_expired.recv() => self.keep_alive_expired().await?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
