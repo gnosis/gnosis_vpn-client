@@ -72,9 +72,16 @@ pub enum Command {
     #[command()]
     Info {},
 
-    /// Start worker process that runs vpn main logic loop
+    /// Start worker process that runs main connection loop
+    /// Needs a keep alive timeout to determine how long to wait for commands before stopping
+    /// worker and returning to idle mode
+    /// This timeout will be reset on every worker command.
+    /// Commands not resetting the timeout are: Info, StopClient, Ping
     #[command()]
-    StartClient {},
+    StartClient {
+        /// Keep alive timeout - stops worker when expired
+        keep_alive: humantime::Duration,
+    },
 
     /// Stop worker process to return to idle mode
     #[command()]
@@ -94,7 +101,7 @@ impl From<Command> for LibCommand {
             Command::Telemetry {} => LibCommand::Telemetry,
             Command::NerdStats {} => LibCommand::NerdStats,
             Command::Info {} => LibCommand::Info,
-            Command::StartClient {} => LibCommand::StartClient,
+            Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
         }
     }

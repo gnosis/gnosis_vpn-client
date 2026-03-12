@@ -42,8 +42,7 @@ pub enum Command {
     Ping,
     /// Deliver service version and other meta
     Info,
-    /// Start worker process and edge client if not already running, with a keepalive duration for
-    /// the client, subsequent calls to StartClient will extend the keepalive accordingly
+    /// Start worker process and edge client if not already running, with a keep alive duration for the client
     StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
