@@ -419,9 +419,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         reload_handle,
         args.log_file,
     );
-    if args.client_autostart {
-        tracing::debug!("autostarting worker process");
-        state.setup_worker().await?;
+    if let Some(keepalive) = args.client_autostart {
+        tracing::debug!(?keepalive, "autostarting worker process");
+        state.setup_worker(keepalive).await?;
     }
     let res = state
         .daemon_loop(signal_receiver, socket_listener, config_receiver)
@@ -767,10 +767,13 @@ impl DaemonState {
                 Ok(Response::Info(info))
             }
 
-            LibCommand::StartClient => match (self.shutdown_ongoing, &self.worker_child) {
-                (Shutdown::None, Some(_)) => Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning)),
+            LibCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {
+                (Shutdown::None, Some(_)) => {
+                    // TODO update keepalive
+                    Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
+                }
                 (Shutdown::None, None) => {
-                    self.setup_worker().await?;
+                    self.setup_worker(keepalive).await?;
                     Ok(Response::StartClient(command::StartClientResponse::Started))
                 }
                 (Shutdown::Worker, _) => {
@@ -888,6 +891,7 @@ impl DaemonState {
             Shutdown::None => {
                 if status.success() {
                     tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                    // TODO calculate remaining keepalive duration
                     self.setup_worker().await
                 } else {
                     tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
@@ -919,12 +923,13 @@ impl DaemonState {
                     tracing::warn!(status = ?status.code(), "worker exited with error before restart");
                 }
                 self.shutdown_ongoing = Shutdown::None;
+                // TODO calculate remaining keepalive duration
                 self.setup_worker().await
             }
         }
     }
 
-    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
+    async fn setup_worker(&mut self, keepalive: Duration) -> Result<(), exitcode::ExitCode> {
         let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
             exitcode::IOERR
@@ -987,6 +992,8 @@ impl DaemonState {
         let owned_cancel = cancel.clone();
         let lines_sender = self.incoming_worker_channel.0.clone();
         let exit_sender = self.worker_exit_channel.0.clone();
+        // TODO store instant and keepalive to enable remaining keepalive calculation
+        // TODO react to when keepalive runs out
         tokio::spawn(async move {
             loop {
                 tokio::select! {

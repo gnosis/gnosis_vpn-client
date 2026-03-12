@@ -7,7 +7,7 @@ use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::balance::{self, FundingIssue};
 use crate::connection;
@@ -42,8 +42,9 @@ pub enum Command {
     Ping,
     /// Deliver service version and other meta
     Info,
-    /// Start worker process and edge client if not already running
-    StartClient,
+    /// Start worker process and edge client if not already running, with a keepalive duration for
+    /// the client, subsequent calls to StartClient will extend the keepalive accordingly
+    StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
 }
@@ -506,7 +507,7 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient | Command::StopClient => Err(()),
+            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
     }
 }
