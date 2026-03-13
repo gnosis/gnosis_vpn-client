@@ -2,6 +2,7 @@ use clap::Parser;
 use url::Url;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
 use gnosis_vpn_lib::{config, dirs, hopr, logging, socket};
@@ -80,9 +81,11 @@ pub struct Cli {
     #[arg(long)]
     pub allow_insecure: bool,
 
-    /// Autostart client after service startup
-    #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART)]
-    pub client_autostart: bool,
+    /// Autostart client after service startup with specified keepalive duration
+    #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
+                value_parser = humantime::parse_duration
+        )]
+    pub client_autostart: Option<Duration>,
 
     /// Avoid dynamic peer discovery while connected to the VPN
     #[arg(long, env = worker::ENV_VAR_FORCE_STATIC_ROUTING)]

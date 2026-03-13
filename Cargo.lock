@@ -3076,6 +3076,7 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
+ "humantime",
  "mimalloc",
  "serde_json",
  "tokio",
