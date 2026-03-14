@@ -15,22 +15,8 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-22.04 # Use oldest supported LTS for max compatibility
+    runs-on: depot-ubuntu-22.04-4
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
@@ -46,22 +32,8 @@ jobs:
         run: nix build .#gnosis_vpn-dev -L
   checks:
     name: Lint, format and unit test
-    runs-on: ubuntu-22.04
+    runs-on: depot-ubuntu-22.04-4
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
@@ -83,9 +55,9 @@ jobs:
           - architecture: aarch64-linux
             runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
           - architecture: aarch64-darwin
-            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU, 14GB RAM and 14GB SSD. 8-core GPU
+            runner: depot-macos-15
           - architecture: x86_64-darwin
-            runner: macos-15-intel # Uses Intel hardware 4vCPU, 14GB RAM and 14GB SSD
+            runner: depot-macos-15
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:

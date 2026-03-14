@@ -25,13 +25,13 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-22.04
+            runner: depot-ubuntu-22.04-4
           - architecture: aarch64-linux
-            runner: ubuntu-22.04-arm
+            runner: depot-ubuntu-22.04-arm-4
           - architecture: aarch64-darwin
-            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU, 14GB RAM and 14GB SSD. 8-core GPU
+            runner: depot-macos-15
           - architecture: x86_64-darwin
-            runner: macos-15-intel # Uses Intel hardware 4vCPU, 14GB RAM and 14GB SSD
+            runner: depot-macos-15
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
@@ -44,7 +44,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-latest # Use default runner for utility jobs
+    runs-on: depot-ubuntu-22.04-4
     permissions:
       contents: write
     steps:
