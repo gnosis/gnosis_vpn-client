@@ -32,7 +32,7 @@ jobs:
     secrets: inherit
   comment:
     name: Comment PR
-    runs-on: ubuntu-latest # Use default runner for utility jobs
+    runs-on: depot-ubuntu-22.04-4
     needs:
       - build-binaries
     steps:

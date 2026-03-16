@@ -44,7 +44,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-latest # Use default runner for utility jobs
+    runs-on: depot-ubuntu-22.04-4
     permissions:
       contents: write
     steps:
