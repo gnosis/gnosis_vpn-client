@@ -3,12 +3,12 @@
 
 use backon::Retryable;
 use bytesize::ByteSize;
-use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
+use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::prelude::*;
 use serde::Deserialize;
@@ -63,6 +63,9 @@ pub enum Results {
         res: Result<Hopr, Error>,
         safe_module: SafeModule,
     },
+    SafelessInteractor {
+        res: Result<SafelessInteractor, Error>,
+    },
     Balances {
         res: Result<balance::Balances, Error>,
     },
@@ -111,6 +114,8 @@ pub enum Error {
     ChannelError(#[from] hopr_api::ChannelError),
     #[error("Funding tool error: {0}")]
     FundingTool(String),
+    #[error("Safeless interactor creation error: {0}")]
+    SafelessInteractorCreation(String),
 }
 
 #[derive(Debug, Error)]
@@ -213,6 +218,15 @@ pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
 pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
     run_monitor_session(hopr, session).await;
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
+}
+
+pub async fn create_safeless_interactor(
+    worker_params: &WorkerParams,
+    blokli_config: BlockchainConnectorConfig,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_create_safeless_interactor(worker_params, blokli_config).await;
+    let _ = results_sender.send(Results::SafelessInteractor { res }).await;
 }
 
 async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
@@ -416,6 +430,25 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
     }
 }
 
+async fn run_create_safeless_interactor(
+    worker_params: &WorkerParams,
+    blokli_config: BlockchainConnectorConfig,
+) -> Result<SafelessInteractor, Error> {
+    let blokli_provider = worker_params.blokli_url();
+    let chain_key = worker_params.calc_keys().await?.chain_key;
+    (|| async {
+        let res = edgli::blokli::SafelessInteractor::new(blokli_provider.clone(), &chain_key, Some(blokli_config))
+            .await
+            .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
+        Ok(res)
+    })
+    .retry(remote_data::backoff_expo_long_delay())
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "SafelessInteractor creation attempt failed, retrying...");
+    })
+    .await
+}
+
 impl Display for Results {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -461,6 +494,10 @@ impl Display for Results {
             Results::ConnectedPeers { res } => match res {
                 Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
                 Err(err) => write!(f, "ConnectedPeers: Error({})", err),
+            },
+            Results::SafelessInteractor { res } => match res {
+                Ok(_) => write!(f, "SafelessInteractor: Created Successfully"),
+                Err(err) => write!(f, "SafelessInteractor: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent(evt) => {
