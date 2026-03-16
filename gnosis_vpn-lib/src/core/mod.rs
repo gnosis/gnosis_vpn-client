@@ -191,7 +191,7 @@ impl Core {
 
     pub async fn start(mut self) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.spawn_initial_runner(&results_sender, Duration::ZERO).await;
+        self.spawn_initial_runner(&results_sender, Duration::ZERO);
         loop {
             tokio::select! {
                 // React to an incoming worker events
@@ -798,7 +798,7 @@ impl Core {
             }
             Err(err) => {
                 tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
-                self.spawn_initial_runner(results_sender, Duration::from_secs(30)).await;
+                self.spawn_initial_runner(results_sender, Duration::from_secs(30));
             }
         }
     }
@@ -1027,7 +1027,7 @@ impl Core {
         }
     }
 
-    async fn spawn_initial_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_initial_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
