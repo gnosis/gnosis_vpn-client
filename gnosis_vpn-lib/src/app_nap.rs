@@ -36,7 +36,7 @@ mod macos {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 mod noop {
     /// No-op token on non-macOS platforms.
     pub struct ActivityToken;
@@ -48,7 +48,7 @@ mod noop {
 
 #[cfg(target_os = "macos")]
 pub use macos::{ActivityToken, disable};
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub use noop::{ActivityToken, disable};
 
 #[cfg(test)]
