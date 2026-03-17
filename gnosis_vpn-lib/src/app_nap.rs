@@ -16,6 +16,12 @@ mod macos {
         _activity: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2::runtime::NSObjectProtocol>>,
     }
 
+    // SAFETY: The activity token returned by `beginActivityWithOptions:reason:` is a
+    // refcounted Cocoa object that is safe to hold across threads. It is only used as
+    // a lifetime anchor — no methods are called on it after creation.
+    unsafe impl Send for ActivityToken {}
+    unsafe impl Sync for ActivityToken {}
+
     /// Disables App Nap for the current process.
     ///
     /// Returns an [`ActivityToken`] that must be kept alive for the duration needed.
@@ -44,3 +50,15 @@ mod noop {
 pub use macos::{ActivityToken, disable};
 #[cfg(not(target_os = "macos"))]
 pub use noop::{ActivityToken, disable};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disable_returns_valid_token() {
+        let _token = disable("test: App Nap prevention");
+        // On macOS this exercises the real FFI path;
+        // on other platforms it exercises the no-op path.
+    }
+}
