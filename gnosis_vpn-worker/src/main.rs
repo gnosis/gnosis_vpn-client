@@ -219,6 +219,8 @@ fn main() {
 async fn main_inner() {
     let args = cli::parse();
 
+    let _app_nap_token = gnosis_vpn_lib::app_nap::disable("VPN session monitoring requires timely execution");
+
     match daemon(args).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),

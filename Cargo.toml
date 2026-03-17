@@ -32,10 +32,8 @@ mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
 multiaddr = "0.18.2"
-parking_lot = "0.12.5"
 ping = "0.7.0"
 rand = "0.10.0"
-regex = "1.12.2"
 reqwest = { version = "0.13.1", features = ["json", "blocking"] }
 rtnetlink = "0.20.0"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -56,6 +54,9 @@ serde_with = "3.16.1"
 serde_yaml = "0.9.34"
 tokio-util = { version = "0.7.17", features = ["rt"] }
 uzers = "0.12.2"
+
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 

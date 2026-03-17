@@ -1,3 +1,4 @@
+pub mod app_nap;
 pub mod balance;
 pub mod command;
 pub mod compat;
