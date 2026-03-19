@@ -55,7 +55,7 @@ serde_yaml = "0.9.34"
 tokio-util = { version = "0.7.17", features = ["rt"] }
 uzers = "0.12.2"
 
-objc2 = "0.6"
+objc2 = "0.6.4"
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
