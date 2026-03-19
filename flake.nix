@@ -107,7 +107,7 @@
               LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
               LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
 
-              # poing pkg-config to static libraries
+              # pointing pkg-config to static libraries
               PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-unknown-linux-musl" = {
@@ -132,7 +132,7 @@
               LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
               LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
 
-              # poing pkg-config to static libraries
+              # pointing pkg-config to static libraries
               PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-apple-darwin" = {
