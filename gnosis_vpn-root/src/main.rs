@@ -615,8 +615,6 @@ async fn write_pidfile(pid_file: &Option<PathBuf>) -> Result<(), exitcode::ExitC
 async fn main() {
     let args = cli::parse();
 
-    let _app_nap_token = gnosis_vpn_lib::app_nap::disable("VPN root daemon requires timely process management");
-
     match daemon(args).await {
         Ok(_) => (),
         Err(exitcode::OK) => (),
