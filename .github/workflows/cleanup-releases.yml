@@ -18,7 +18,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Process and Delete Release Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
