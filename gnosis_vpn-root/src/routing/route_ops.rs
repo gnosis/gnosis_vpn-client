@@ -1,11 +1,15 @@
 //! Platform-agnostic route manipulation abstraction.
 //!
-//! Defines [`RouteOps`] trait for basic routing operations used by [`FallbackRouter`](super::linux::FallbackRouter).
+//! Defines the [`RouteOps`] trait for basic routing operations used by:
+//! - the Linux fallback router (type `FallbackRouter` in module `routing::linux`)
+//! - the bypass route manager (`bypass::BypassRouteManager`)
+//! - the macOS router (module `routing::macos`)
 //!
 //! **Limitation:** All operations are IPv4-only. IPv6 routing is not supported.
 //!
 //! Platform-specific implementations:
-//! - Linux: [`NetlinkRouteOps`](super::route_ops_linux::NetlinkRouteOps) via rtnetlink
+//! - Linux: type `NetlinkRouteOps` in module `routing::route_ops_linux` (via rtnetlink)
+//! - macOS: type `DarwinRouteOps` in module `routing::route_ops_macos`
 
 use async_trait::async_trait;
 
