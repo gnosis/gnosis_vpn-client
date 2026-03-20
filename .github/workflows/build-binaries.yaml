@@ -17,64 +17,21 @@ on:
       version_type:
         required: true
         type: string
-  workflow_dispatch:
-    inputs:
-      runner:
-        type: choice
-        options:
-          - ubuntu-22.04
-          - ubuntu-22.04-arm
-          - macos-15-xlarge
-          - macos-15-intel
-          - depot-ubuntu-22.04-4
-          - depot-ubuntu-22.04-arm-4
-        required: true
-        description: "GH Runner to use"
-      architecture:
-        type: choice
-        options:
-          - x86_64-linux
-          - aarch64-linux
-          - aarch64-darwin
-          - x86_64-darwin
-        required: true
-        description: "Architecture to build for"
 jobs:
   binary:
     if: >-
-      github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))) || (github.event_name == 'pull_request' && github.event.pull_request.merged)
+      github.event_name != 'pull_request' || github.event.pull_request.merged == true || contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))
     runs-on: ${{ github.event.inputs.runner || inputs.runner }}
     timeout-minutes: 240
     steps:
-      - name: Free Disk Space
-        if: runner.os == 'Linux'
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Set environment variables
         id: vars
         run: |
-          declare branch architecture publish_type
-          if [[ "${{ inputs.branch }}" != "" ]]; then
-            echo "The workflow is triggered by other pipeline"
-            # It can be triggered by the build, merge or release pipelines
-            branch=${{ inputs.branch }}
-            architecture=${{ inputs.architecture }}
-          else
-            echo "The workflow is triggered manually"
-            branch=${{ github.ref_name }}
-            architecture=${{ github.event.inputs.architecture }}
-          fi
+          declare branch architecture
+          echo "The workflow is triggered by other pipeline"
+          # It can be triggered by the build, merge or release pipelines
+          branch=${{ inputs.branch }}
+          architecture=${{ inputs.architecture }}
           echo "Invocation parameters:"
           echo "branch=${branch}" | tee -a $GITHUB_OUTPUT
           echo "architecture=${architecture}" | tee -a $GITHUB_OUTPUT
@@ -98,6 +55,7 @@ jobs:
         if: inputs.version_type != ''
         id: version
         run: |
+          declare base_version bump_version
           base_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${base_version}+commit.$(git rev-parse --short HEAD)

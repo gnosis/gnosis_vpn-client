@@ -47,7 +47,6 @@
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
-        "x86_64-darwin"
       ];
       perSystem =
         {
@@ -74,7 +73,6 @@
           systemTargets = {
             "x86_64-linux" = "x86_64-unknown-linux-musl";
             "aarch64-linux" = "aarch64-unknown-linux-musl";
-            "x86_64-darwin" = "x86_64-apple-darwin";
             "aarch64-darwin" = "aarch64-apple-darwin";
           };
 
@@ -85,7 +83,6 @@
           # Target-specific build arguments
           # Each target triple has its own compiler flags and build configuration.
           # - Linux targets use musl for static linking and mold for faster linking
-          # - Darwin targets use different profiles based on architecture (intelmac for x86_64)
           # - All targets enable crt-static for standalone binaries
           targetCrateArgs = {
             "x86_64-unknown-linux-musl" = {
@@ -110,7 +107,7 @@
               LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
               LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
 
-              # poing pkg-config to static libraries
+              # pointing pkg-config to static libraries
               PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-unknown-linux-musl" = {
@@ -135,13 +132,8 @@
               LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
               LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
 
-              # poing pkg-config to static libraries
+              # pointing pkg-config to static libraries
               PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
-            };
-            "x86_64-apple-darwin" = {
-              CARGO_PROFILE = "intelmac";
-              # force libiconv from macos lib folder
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
             };
             "aarch64-apple-darwin" = {
               CARGO_PROFILE = "release";

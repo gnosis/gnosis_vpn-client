@@ -25,13 +25,11 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-22.04
+            runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
           - architecture: aarch64-linux
-            runner: ubuntu-22.04-arm
+            runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
           - architecture: aarch64-darwin
-            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU, 14GB RAM and 14GB SSD. 8-core GPU
-          - architecture: x86_64-darwin
-            runner: macos-15-intel # Uses Intel hardware 4vCPU, 14GB RAM and 14GB SSD
+            runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
@@ -44,7 +42,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-latest # Use default runner for utility jobs
+    runs-on: depot-ubuntu-22.04-4
     permissions:
       contents: write
     steps:
@@ -67,7 +65,7 @@ jobs:
           echo "release_version=${release_version}" >> $GITHUB_OUTPUT
       - name: Create release and publish binaries
         run: |
-          architectures=("x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" )
+          architectures=("x86_64-linux" "aarch64-linux" "aarch64-darwin")
           mkdir -p binaries
           echo "Generating release notes"
           gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
