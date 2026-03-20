@@ -61,7 +61,6 @@ pub struct Core {
     // static data
     worker_params: WorkerParams,
     node_address: Address,
-    safeless_interactor: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
     incoming_receiver: mpsc::Receiver<WorkerToCore>,
 
@@ -77,6 +76,7 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
+    safeless_interactor: Option<Arc<SafelessInteractor>>,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
@@ -90,7 +90,8 @@ pub struct Core {
 
 #[derive(Debug, Clone)]
 enum Phase {
-    // initial phase - determine if safe is present
+    // initial phase - instantiate safeless interactor (blokli)
+    // and determine if safe is present
     Initial,
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
@@ -136,12 +137,6 @@ impl Core {
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let blokli_config = config.blokli.clone().into();
-        let safeless_interactor =
-            edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key, Some(blokli_config))
-                .await
-                .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
-
         let mut connectivity_health = HashMap::new();
         for (id, dest) in config.destinations.clone() {
             connectivity_health.insert(
@@ -181,7 +176,7 @@ impl Core {
             phase: Phase::Initial,
             balances: None,
             hopr: None,
-            safeless_interactor: Arc::new(safeless_interactor),
+            safeless_interactor: None,
             ticket_value: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -196,10 +191,9 @@ impl Core {
 
     pub async fn start(mut self) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.initial_runner(&results_sender).await;
+        self.spawn_initial_runner(&results_sender, Duration::ZERO);
         loop {
             tokio::select! {
-
                 // React to an incoming worker events
                 Some(event) = self.incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
@@ -534,6 +528,7 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
+            Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -790,6 +785,24 @@ impl Core {
         return true;
     }
 
+    async fn on_results_safeless_interactor(
+        &mut self,
+        res: Result<SafelessInteractor, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        match res {
+            Ok(safeless_interactor) => {
+                tracing::info!("safeless interactor created successfully");
+                self.safeless_interactor = Some(Arc::new(safeless_interactor));
+                self.determine_next_phase_from_safe_disk_query(results_sender).await;
+            }
+            Err(err) => {
+                tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
+                self.spawn_initial_runner(results_sender, Duration::from_secs(30));
+            }
+        }
+    }
+
     async fn on_results_node_balance(
         &mut self,
         res: Result<balance::PreSafe, runner::Error>,
@@ -1014,7 +1027,22 @@ impl Core {
         }
     }
 
-    async fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_initial_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::create_safeless_interactor(&worker_params, blokli_config.into(), results_sender).await;
+                })
+                .await
+        });
+    }
+
+    async fn determine_next_phase_from_safe_disk_query(&mut self, results_sender: &mpsc::Sender<Results>) {
         let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
             Ok(safe_module) => {
@@ -1045,30 +1073,32 @@ impl Core {
 
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay).await;
-                    runner::query_safe(safeless_interactor, results_sender).await
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::query_safe(safeless_interactor, results_sender).await
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay).await;
-                    runner::node_balance(safeless_interactor, results_sender).await
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::node_balance(safeless_interactor, results_sender).await
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
@@ -1084,16 +1114,17 @@ impl Core {
 
     fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_on_shutdown.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -1128,16 +1159,17 @@ impl Core {
 
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay).await;
-                    runner::ticket_stats(safeless_interactor, results_sender).await;
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::ticket_stats(safeless_interactor, results_sender).await;
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_balances_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
