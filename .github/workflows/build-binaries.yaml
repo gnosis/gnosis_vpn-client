@@ -21,7 +21,7 @@ jobs:
   binary:
     if: >-
       github.event_name != 'pull_request' || github.event.pull_request.merged == true || contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))
-    runs-on: ${{ github.event.inputs.runner || inputs.runner }}
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 240
     steps:
       - name: Set environment variables
@@ -42,7 +42,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
       - name: Use Nix Cache
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         with:
           name: gnosis-vpn-client
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"

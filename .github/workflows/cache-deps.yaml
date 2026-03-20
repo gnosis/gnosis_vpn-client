@@ -34,7 +34,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Use Nix Cache
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         with:
           name: gnosis-vpn-client
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
