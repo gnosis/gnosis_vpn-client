@@ -340,6 +340,7 @@
               commonArgsDev
               // {
                 cargoArtifacts = cargoArtifacts-dev;
+                RUSTDOCFLAGS = "-D warnings"; # Treat rustdoc warnings as errors
               }
             );
 
