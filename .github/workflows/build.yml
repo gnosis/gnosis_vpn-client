@@ -47,7 +47,6 @@ jobs:
       - name: Run flake checks
         run: nix flake check -L --show-trace
   build-binaries:
-    if: contains(github.event.pull_request.labels.*.name, format('binary:{0}', matrix.binary.architecture))
     strategy:
       matrix:
         binary:
