@@ -77,7 +77,7 @@ jobs:
       - name: Install system test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wireguard-tools
+          sudo apt-get install -y wireguard-tools resolvconf
       - name: Install just
         uses: extractions/setup-just@v2
       - name: Build system service and test binary
