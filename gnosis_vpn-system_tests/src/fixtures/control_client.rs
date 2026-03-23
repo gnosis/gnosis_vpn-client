@@ -104,12 +104,7 @@ impl ControlClient {
             match self.status().await {
                 Ok(Some(status)) => match status.run_mode {
                     RunMode::Init => Ok(ConditionCheck::Pending),
-                    RunMode::PreparingSafe {
-                        node_address: _,
-                        node_xdai: _,
-                        node_wxhopr: _,
-                        funding_tool: _,
-                    } => {
+                    RunMode::PreparingSafe { .. } => {
                         warn!("safe being prepared");
                         Ok(ConditionCheck::Pending)
                     }
