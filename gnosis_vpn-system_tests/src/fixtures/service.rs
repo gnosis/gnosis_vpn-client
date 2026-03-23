@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use crate::cli::SharedArgs;
 use anyhow::Context;
@@ -10,7 +10,7 @@ pub struct Service;
 
 impl Service {
     /// Spawns the binary with the configuration required for system tests.
-    pub fn spawn(binary: &Path, cfg: &SharedArgs, socket_path: &Path) -> anyhow::Result<()> {
+    pub fn spawn(binary: &Path, cfg: &SharedArgs, socket_path: &Path) -> anyhow::Result<ServiceGuard> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).context("create socket directory")?;
         }
@@ -32,9 +32,18 @@ impl Service {
         match cmd.spawn() {
             Ok(_child) => {
                 info!("Started gnosis-vpn service");
-                Ok(())
+                Ok(ServiceGuard(_child))
             }
             Err(error) => Err(error.into()),
         }
+    }
+}
+
+pub struct ServiceGuard(Child);
+
+impl Drop for ServiceGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }

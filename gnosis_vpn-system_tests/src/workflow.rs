@@ -6,7 +6,11 @@ use tracing::{error, info};
 use crate::{
     cli::{Cli, Command},
     download,
-    fixtures::{control_client::ControlClient, lib, service::Service},
+    fixtures::{
+        control_client::ControlClient,
+        lib,
+        service::{Service, ServiceGuard},
+    },
     report::{ReportTable, RowStatus},
 };
 use gnosis_vpn_lib::connection::destination::Destination;
@@ -23,6 +27,7 @@ const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct SystemTestWorkflow {
     cli: Cli,
     client: ControlClient,
+    _service: ServiceGuard,
 }
 
 impl SystemTestWorkflow {
@@ -30,9 +35,13 @@ impl SystemTestWorkflow {
         let (gnosis_bin_root, socket_path) = lib::prepare_configs().await?;
         let client = ControlClient::new(socket_path.clone());
 
-        Service::spawn(&gnosis_bin_root, &cli.shared, &socket_path)?;
+        let service = Service::spawn(&gnosis_bin_root, &cli.shared, &socket_path)?;
 
-        Ok(Self { cli, client })
+        Ok(Self {
+            cli,
+            client,
+            _service: service,
+        })
     }
 
     pub async fn run(self) -> Result<()> {
