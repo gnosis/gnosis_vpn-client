@@ -1,18 +1,69 @@
+//! # Routing Modes
+//!
+//! This module provides split-tunnel VPN routing implementations for different platforms.
+//!
+//! ## Dynamic Routing (Linux only, default)
+//! Uses rtnetlink + firewall rules for policy-based routing with firewall marks.
+//! Most reliable but requires root and nftables availability.
+//!
+//! ## Static Routing (all platforms)
+//! Uses route operations via platform-native APIs.
+//! Simpler but may have reduced reliability during network changes.
+
 use async_trait::async_trait;
 use thiserror::Error;
 
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use gnosis_vpn_lib::{dirs, wireguard};
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
+mod bypass;
+pub(crate) mod route_ops;
+pub(crate) mod wg_ops;
+
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        pub(crate) mod netlink_ops;
+        pub(crate) mod nftables_ops;
+        pub(crate) mod route_ops_linux;
+        mod linux;
+    } else if #[cfg(target_os = "macos")] {
+        pub(crate) mod route_ops_macos;
+        mod macos;
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod mocks;
+
+// ============================================================================
+// Shared Utilities
+// ============================================================================
 
 #[cfg(target_os = "linux")]
-pub use linux::{dynamic_router, static_fallback_router as static_router};
+pub use linux::{dynamic_router, reset_on_startup, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
-pub use macos::{dynamic_router, static_router};
+pub use macos::{dynamic_router, reset_on_startup, static_router};
+
+/// RFC1918 + link-local networks that should bypass VPN tunnel.
+/// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)
+/// so they take precedence in the routing table.
+///
+/// **Limitation:** If your VPN server uses an IP in a non-standard 10.x range
+/// (e.g., 10.1.0.0/16), traffic may be misrouted because 10.0.0.0/8 bypass
+/// takes precedence over the more specific VPN server IP. The VPN_TUNNEL_SUBNET
+/// (10.128.0.0/9) is designed to override this for the standard HOPR VPN range,
+/// but custom VPN configurations may require adjustment.
+pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
+    ("10.0.0.0", 8),     // RFC1918 Class A private
+    ("172.16.0.0", 12),  // RFC1918 Class B private
+    ("192.168.0.0", 16), // RFC1918 Class C private
+    ("169.254.0.0", 16), // Link-local (APIPA)
+];
+
+/// VPN internal subnet that must be routed through the tunnel.
+/// This is more specific than the RFC1918 bypass (10.0.0.0/8),
+/// so it takes precedence and ensures VPN server traffic uses the tunnel.
+pub(crate) const VPN_TUNNEL_SUBNET: (&str, u8) = ("10.128.0.0", 9);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -32,7 +83,6 @@ pub enum Error {
     #[allow(dead_code)]
     NotAvailable,
 
-    #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
     General(String),
 
@@ -41,23 +91,12 @@ pub enum Error {
     Rtnetlink(#[from] rtnetlink::Error),
 
     #[cfg(target_os = "linux")]
-    #[error("iptables error: {0} ")]
-    IpTables(String),
-}
-
-impl Error {
-    #[cfg(target_os = "linux")]
-    pub fn iptables(e: impl Into<Box<dyn std::error::Error>>) -> Self {
-        Self::IpTables(e.into().to_string())
-    }
-
-    pub fn is_not_available(&self) -> bool {
-        matches!(self, Self::NotAvailable)
-    }
+    #[error("nftables error: {0} ")]
+    NfTables(String),
 }
 
 #[async_trait]
 pub trait Routing {
     async fn setup(&mut self) -> Result<(), Error>;
-    async fn teardown(&mut self, logs: Logs) -> Result<(), Error>;
+    async fn teardown(&mut self, logs: Logs);
 }

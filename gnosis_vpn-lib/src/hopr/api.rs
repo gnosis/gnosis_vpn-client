@@ -12,7 +12,6 @@ use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
 use multiaddr::Protocol;
-use regex::Regex;
 use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
@@ -34,8 +33,6 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum ChannelError {
-    #[error("failed to fund channel: {0}")]
-    Fund(HoprError),
     #[error("channel is pending to close")]
     PendingToClose,
     #[error("failed to open channel: {0}")]
@@ -79,37 +76,23 @@ impl Hopr {
     }
 
     // --- channel management ---
-    /// Ensure a channel to the specified target is open and funded with the specified amount.
+    /// Ensure a channel to the specified target is open with the specified amount.
     ///
     /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
     /// 2. AutoFunding making sure that once a channel is open, it will stay funded
     #[instrument(skip(self), level = "debug", ret, err)]
-    pub async fn ensure_channel_open_and_funded(
+    pub async fn ensure_channel_open(
         &self,
         target: Address,
         amount: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
-        threshold: edgli::hopr_lib::Balance<edgli::hopr_lib::WxHOPR>,
     ) -> Result<(), ChannelError> {
-        tracing::debug!("ensure hopr channel funding");
+        tracing::debug!("ensure hopr channel open");
         let channels_from_me = self.edgli.channels_from(&self.edgli.me_onchain()).await?;
 
         if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
             match channel.status {
-                edgli::hopr_lib::ChannelStatus::Open => {
-                    // mirror AutoFunding strategy behaviour on startup (fund if less than or equal to threshold)
-                    if channel.balance.le(&threshold) {
-                        tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "funding existing channel");
-                        self.edgli
-                            .fund_channel(channel.get_id(), amount)
-                            .await
-                            .map(|_| ())
-                            .map_err(HoprError::HoprLib)
-                            .map_err(ChannelError::Fund)
-                    } else {
-                        Ok(())
-                    }
-                }
+                edgli::hopr_lib::ChannelStatus::Open => Ok(()),
                 edgli::hopr_lib::ChannelStatus::PendingToClose(_) => {
                     tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is pending to close, cannot fund or open a new one");
                     Err(ChannelError::PendingToClose)
@@ -351,7 +334,7 @@ impl Hopr {
         Ok(Balances {
             node_xdai: self.edgli.get_balance().await?,
             safe_wxhopr: self.edgli.get_safe_balance().await?,
-            channels_out_wxhopr: self
+            channels_out: self
                 .edgli
                 .channels_from(&self.edgli.me_onchain())
                 .await?
@@ -360,39 +343,13 @@ impl Hopr {
                     if matches!(ch.status, edgli::hopr_lib::ChannelStatus::Open)
                         || matches!(ch.status, edgli::hopr_lib::ChannelStatus::PendingToClose(_))
                     {
-                        Some(ch.balance)
+                        Some((ch.destination, ch.balance))
                     } else {
                         None
                     }
                 })
-                .reduce(|acc, x| acc + x)
-                .unwrap_or(edgli::hopr_lib::Balance::<edgli::hopr_lib::WxHOPR>::zero()),
+                .collect(),
         })
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub fn get_telemetry(&self) -> Result<HoprTelemetry, HoprError> {
-        tracing::debug!("query hopr telemetry");
-        // Regex to match: hopr_indexer_sync_progress followed by optional labels and a float value
-        // Handles cases like:
-        // hopr_indexer_sync_progress 0.85
-        // hopr_indexer_sync_progress{label="value"} 0.85
-        // hopr_indexer_sync_progress{label1="value1",label2="value2"} 0.85
-        let re = Regex::new(r"hopr_indexer_sync_progress(?:\{[^}]*\})?\s+([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
-            .expect("the sync extraction regex is constructible");
-
-        edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics()
-            .map(move |prometheus_values| {
-                tracing::debug!("prometheus metrics: {}", prometheus_values);
-                let sync_percentage = re
-                    .captures(prometheus_values.as_ref())
-                    .and_then(|caps| caps.get(1))
-                    .and_then(|m| m.as_str().parse::<f32>().ok())
-                    .unwrap_or_default();
-
-                HoprTelemetry { sync_percentage }
-            })
-            .map_err(|e| HoprError::Telemetry(e.to_string()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]

@@ -47,7 +47,6 @@
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
-        "x86_64-darwin"
       ];
       perSystem =
         {
@@ -75,7 +74,6 @@
           systemTargets = {
             "x86_64-linux" = "x86_64-unknown-linux-musl";
             "aarch64-linux" = "aarch64-unknown-linux-musl";
-            "x86_64-darwin" = "x86_64-apple-darwin";
             "aarch64-darwin" = "aarch64-apple-darwin";
           };
 
@@ -86,7 +84,6 @@
           # Target-specific build arguments
           # Each target triple has its own compiler flags and build configuration.
           # - Linux targets use musl for static linking and mold for faster linking
-          # - Darwin targets use different profiles based on architecture (intelmac for x86_64)
           # - All targets enable crt-static for standalone binaries
           targetCrateArgs = {
             "x86_64-unknown-linux-musl" = {
@@ -106,8 +103,13 @@
               CC_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
               CXX_x86_64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
 
-              # poing pkg-config to static libraries
-              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+
+              # pointing pkg-config to static libraries
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-unknown-linux-musl" = {
               CARGO_PROFILE = "release";
@@ -126,13 +128,13 @@
               CC_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
               CXX_aarch64_unknown_linux_musl = "${staticPkgs.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
 
-              # poing pkg-config to static libraries
-              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig";
-            };
-            "x86_64-apple-darwin" = {
-              CARGO_PROFILE = "intelmac";
-              # force libiconv from macos lib folder
-              CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+
+              # pointing pkg-config to static libraries
+              PKG_CONFIG_PATH = "${staticPkgs.openssl.dev}/lib/pkgconfig:${staticPkgs.sqlite.dev}/lib/pkgconfig:${staticPkgs.libmnl}/lib/pkgconfig:${staticPkgs.libnftnl}/lib/pkgconfig";
             };
             "aarch64-apple-darwin" = {
               CARGO_PROFILE = "release";
@@ -156,13 +158,29 @@
           );
 
           # Clean cargo source to exclude build artifacts and unnecessary files
-          src = craneLib.cleanCargoSource ./.;
+          srcFiles = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./.cargo/config.toml
+              ./.cargo/audit.toml
+              ./Cargo.toml
+              ./Cargo.lock
+              ./deny.toml
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-lib)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-root)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-worker)
+              ./rustfmt.toml
+              ./rust-toolchain.toml
+              ./taplo.toml
+            ];
+          };
 
           # Common build arguments shared across all crane operations
           # These are used for dependency building, clippy, docs, tests, etc.
           # CARGO_PROFILE is part of the commonArgs to make depsonly build match the target derivations
           commonArgsRelease = {
-            inherit src;
+            src = srcFiles;
             strictDeps = true; # Enforce strict separation of build-time and runtime dependencies
 
             # Build-time dependencies (available during compilation)
@@ -183,6 +201,8 @@
                 [
                   staticPkgs.openssl
                   staticPkgs.sqlite
+                  staticPkgs.libmnl
+                  staticPkgs.libnftnl
                 ]
               else
                 [
@@ -223,7 +243,7 @@
               lib
               pkgs
               ;
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
+            inherit (craneLib.crateNameFromCargoToml { src = srcFiles; }) version;
             pname = "gnosis_vpn";
             commonArgs = commonArgsRelease;
             cargoArtifacts = cargoArtifacts-release;
@@ -237,7 +257,7 @@
               lib
               pkgs
               ;
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
+            inherit (craneLib.crateNameFromCargoToml { src = srcFiles; }) version;
             pname = "gnosis_vpn-dev";
             commonArgs = commonArgsDev;
             cargoArtifacts = cargoArtifacts-dev;
@@ -295,16 +315,6 @@
               formatter.include_document_start = true;
             };
           };
-          generate-lockfile = {
-            type = "app";
-            program = toString (
-              pkgs.writeShellScript "generate-lockfile" ''
-                export PATH="${craneLib.rustc}/bin:$PATH"
-                exec cargo generate-lockfile "$@"
-              ''
-            );
-            meta.description = "Generate Cargo.lock with minimal dependencies (Rust toolchain only)";
-          };
         in
         {
           inherit treefmt;
@@ -331,19 +341,23 @@
               commonArgsDev
               // {
                 cargoArtifacts = cargoArtifacts-dev;
+                RUSTDOCFLAGS = "-D warnings"; # Treat rustdoc warnings as errors
               }
             );
 
             # Audit dependencies
+            # Vulnerabilities are exempted because they are either:
+            # - From transitive dependencies we cannot control
+            # - Unmaintained crates with no viable alternatives
+            # - Lack a fixed version
             audit = craneLib.cargoAudit {
-              inherit src advisory-db;
-              # Ignore RSA vulnerability (RUSTSEC-2023-0071) - comes from hopr-lib transitive dependency
-              cargoAuditExtraArgs = "--ignore RUSTSEC-2023-0071";
+              src = srcFiles;
+              inherit advisory-db;
             };
 
             # Audit licenses
             licenses = craneLib.cargoDeny {
-              inherit src;
+              src = srcFiles;
             };
 
             # Run tests with cargo-nextest
@@ -367,20 +381,27 @@
             inherit pre-commit-check;
             default = gnosis_vpn-release;
           };
-          # // systemTestsDockerPackages;
 
-          devShells.default = craneLib.devShell {
-            inherit pre-commit-check;
-            checks = self.checks.${system};
+          devShells.default = craneLib.devShell (
+            {
+              inherit pre-commit-check;
+              checks = self.checks.${system};
 
-            packages = [
-              pkgs.cargo-machete
-              pkgs.cargo-shear
-              pkgs.rust-analyzer
-            ];
+              packages = [
+                pkgs.cargo-machete
+                pkgs.cargo-shear
+                pkgs.rust-analyzer
+              ];
 
-            VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
-          };
+              VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
+            }
+            // lib.optionalAttrs pkgs.stdenv.isLinux {
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${staticPkgs.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${staticPkgs.libnftnl}/lib";
+            }
+          );
 
           formatter = config.treefmt.build.wrapper;
         };

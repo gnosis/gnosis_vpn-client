@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::command::{Command, Response};
 
-pub const DEFAULT_PATH: &str = "/var/run/gnosisvpn/gnosisvpn.sock";
+pub const DEFAULT_PATH: &str = "/var/run/gnosisvpn.sock";
 pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 
 #[derive(Debug, Error)]

@@ -15,28 +15,14 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-22.04 # Use oldest supported LTS for max compatibility
+    runs-on: depot-ubuntu-22.04-4
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
         uses: cachix/install-nix-action@v31
       - name: Use Nix Cache
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         with:
           name: gnosis-vpn-client
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
@@ -46,28 +32,14 @@ jobs:
         run: nix build .#gnosis_vpn-dev -L
   checks:
     name: Lint, format and unit test
-    runs-on: ubuntu-22.04
+    runs-on: depot-ubuntu-22.04-4
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Nix
         uses: cachix/install-nix-action@v31
       - name: Use Nix Cache
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         with:
           name: gnosis-vpn-client
         env:
@@ -124,13 +96,11 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-22.04
+            runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
           - architecture: aarch64-linux
-            runner: ubuntu-22.04-arm
+            runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
           - architecture: aarch64-darwin
-            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU, 14GB RAM and 14GB SSD. 8-core GPU
-          - architecture: x86_64-darwin
-            runner: macos-15-intel # Uses Intel hardware 4vCPU, 14GB RAM and 14GB SSD
+            runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:

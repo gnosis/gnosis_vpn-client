@@ -2,6 +2,7 @@ use clap::Parser;
 use url::Url;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
 use gnosis_vpn_lib::{config, dirs, hopr, logging, socket};
@@ -30,6 +31,7 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
+    /// Service state directory - practically identical with home directory of the worker user
     #[arg(
         long,
         env = dirs::ENV_VAR_STATE_HOME,
@@ -37,12 +39,14 @@ pub struct Cli {
     )]
     pub state_home: PathBuf,
 
+    /// Log file path - provide if you want the service to manage the log file
     #[arg(
         long,
         env = logging::ENV_VAR_LOG_FILE,
     )]
     pub log_file: Option<PathBuf>,
 
+    /// PID file path - needed if cannot get the process id otherwise
     #[arg(
         long,
         env = ENV_VAR_PID_FILE,
@@ -58,24 +62,30 @@ pub struct Cli {
     pub worker_binary: PathBuf,
 
     /// Hopr edge client configuration path
-    #[arg( long, env = hopr::ENV_VAR_CONFIG, default_value = None) ]
+    #[arg(long, env = hopr::ENV_VAR_CONFIG, default_value = None) ]
     pub hopr_config_path: Option<PathBuf>,
 
     /// Hopr edge client identity path
-    #[arg( long, env = hopr::ENV_VAR_ID_FILE, default_value = None)]
+    #[arg(long, env = hopr::ENV_VAR_ID_FILE, default_value = None)]
     pub hopr_identity_file: Option<PathBuf>,
 
     /// Hopr edge client identity pass
-    #[arg( long, env = hopr::ENV_VAR_ID_PASS, default_value = None)]
+    #[arg(long, env = hopr::ENV_VAR_ID_PASS, default_value = None)]
     pub hopr_identity_pass: Option<String>,
 
     /// Override internal Hopr Blokli URL used for on chain queries
-    #[arg( long, env = hopr::ENV_VAR_BLOKLI_URL, default_value = None)]
+    #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL, default_value = None)]
     pub hopr_blokli_url: Option<Url>,
 
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
     pub allow_insecure: bool,
+
+    /// Autostart client after service startup with specified keepalive duration
+    #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
+                value_parser = humantime::parse_duration
+        )]
+    pub client_autostart: Option<Duration>,
 
     /// Avoid dynamic peer discovery while connected to the VPN
     #[arg(long, env = worker::ENV_VAR_FORCE_STATIC_ROUTING)]

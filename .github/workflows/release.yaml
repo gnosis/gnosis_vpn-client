@@ -11,6 +11,11 @@ on:
           - patch
           - minor
           - major
+      trigger_snapshot:
+        description: "Trigger installer snapshot in gnosis_vpn"
+        required: false
+        type: boolean
+        default: false
 concurrency:
   group: release
   cancel-in-progress: false
@@ -20,13 +25,11 @@ jobs:
       matrix:
         binary:
           - architecture: x86_64-linux
-            runner: ubuntu-22.04
+            runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
           - architecture: aarch64-linux
-            runner: ubuntu-22.04-arm
+            runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
           - architecture: aarch64-darwin
-            runner: macos-15-xlarge # Uses Apple Silicon M2 hardware 5vCPU, 14GB RAM and 14GB SSD. 8-core GPU
-          - architecture: x86_64-darwin
-            runner: macos-15-intel # Uses Intel hardware 4vCPU, 14GB RAM and 14GB SSD
+            runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
     name: Binary ${{ matrix.binary.architecture }}
     uses: ./.github/workflows/build-binaries.yaml
     with:
@@ -39,7 +42,7 @@ jobs:
     name: Close release
     needs:
       - build-binaries
-    runs-on: ubuntu-latest # Use default runner for utility jobs
+    runs-on: depot-ubuntu-22.04-4
     permissions:
       contents: write
     steps:
@@ -62,7 +65,7 @@ jobs:
           echo "release_version=${release_version}" >> $GITHUB_OUTPUT
       - name: Create release and publish binaries
         run: |
-          architectures=("x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" )
+          architectures=("x86_64-linux" "aarch64-linux" "aarch64-darwin")
           mkdir -p binaries
           echo "Generating release notes"
           gh release create v${{ steps.environment.outputs.release_version }} --generate-notes
@@ -132,7 +135,7 @@ jobs:
           # capture group 3: "
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" Cargo.toml
           rm Cargo.toml.bak
-          nix develop --command cargo generate-lockfile
+          nix develop --command cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.source == null) | .name' | xargs -I{} nix develop --command cargo update -p {}
           echo "bump_version=${bump_version}" >> $GITHUB_OUTPUT
           echo v${{ steps.environment.outputs.release_version }} > LATEST
           echo "LATEST updated to v${{ steps.environment.outputs.release_version }}"
@@ -156,6 +159,7 @@ jobs:
             I'm thrilled to inform the new gnosis_vpn-client version v${{ steps.bump.outputs.current_version }} has been released.
             [Release Notes](https://github.com/gnosis/gnosis_vpn-client/releases/tag/v${{ steps.bump.outputs.current_version }})
       - name: Trigger installer snapshot
+        if: ${{ inputs.trigger_snapshot }}
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
           token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}

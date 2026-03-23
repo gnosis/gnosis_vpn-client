@@ -1,9 +1,8 @@
-use rand::Rng;
 use serde_yaml;
 use thiserror::Error;
 use tokio::fs;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::compat::SafeModule;
 use crate::dirs;
@@ -25,7 +24,7 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
+pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
     let content = fs::read_to_string(path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
@@ -38,13 +37,13 @@ pub async fn from_path(path: &Path) -> Result<HoprLibConfig, Error> {
 }
 
 pub async fn store_safe(state_home: PathBuf, safe_module: &SafeModule) -> Result<(), Error> {
-    let safe_file = safe_file(state_home)?;
+    let safe_file = safe_file(state_home);
     let content = serde_yaml::to_string(&safe_module)?;
     fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
 pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
-    let content = fs::read_to_string(safe_file(state_home)?).await.map_err(|e| {
+    let content = fs::read_to_string(safe_file(state_home)).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
         } else {
@@ -57,25 +56,21 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
 pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
     let content = format!(
         r##"
-host:
-    port: {port}
-    address: !Domain edge.example.com
 safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
 publish: false
 "##,
-        port = rand::rng().random_range(20000..65000),
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
     );
     serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
-pub fn safe_file(state_home: PathBuf) -> Result<PathBuf, Error> {
-    dirs::config_dir(state_home, SAFE_FILE).map_err(Error::Dirs)
+pub fn safe_file(state_home: PathBuf) -> PathBuf {
+    dirs::config_dir(state_home, SAFE_FILE)
 }
 
-pub(crate) fn db_file(state_home: PathBuf) -> Result<PathBuf, Error> {
-    dirs::config_dir(state_home, DB_FILE).map_err(Error::Dirs)
+pub(crate) fn db_file(state_home: PathBuf) -> PathBuf {
+    dirs::config_dir(state_home, DB_FILE)
 }

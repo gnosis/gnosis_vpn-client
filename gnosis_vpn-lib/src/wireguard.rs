@@ -67,19 +67,21 @@ pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
     pub allowed_ips: Option<String>,
+    pub dns: Option<String>,
 }
 
 impl Config {
-    pub(crate) fn new<L, M, S>(listen_port: Option<L>, allowed_ips: Option<M>, force_private_key: Option<S>) -> Self
-    where
-        L: Into<u16>,
-        M: Into<String>,
-        S: Into<String>,
-    {
+    pub(crate) fn new(
+        listen_port: Option<u16>,
+        allowed_ips: Option<String>,
+        force_private_key: Option<String>,
+        dns: Option<String>,
+    ) -> Self {
         Config {
-            listen_port: listen_port.map(Into::into),
-            allowed_ips: allowed_ips.map(Into::into),
-            force_private_key: force_private_key.map(Into::into),
+            listen_port,
+            allowed_ips,
+            force_private_key,
+            dns,
         }
     }
 }
@@ -155,27 +157,35 @@ impl WireGuard {
         lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
         lines.push(format!("Address = {}", interface.address));
         lines.push(format!("MTU = {WG_MTU}"));
+        if let Some(dns) = &self.config.dns {
+            lines.push(format!("DNS = {dns}"));
+        }
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));
         }
         lines.extend(extra_interface_lines);
 
+        // Blackhold Ipv6 traffic for now.
+        // Contrary to routing exceptions this happens in preup and postdown
+        // To avoid leakage and because those are global rules
         #[cfg(target_os = "linux")]
         {
-            // we cannot handle IPv6 yet, so blackhole it for now
-            // on linux there is a metric system for ip route commands
-            // this last command gets the smallest metric so it should take precedence
-            lines.push("PostUp = ip -6 route add blackhole ::/0".to_string());
-            lines.push("PreDown = ip -6 route del blackhole ::/0".to_string());
+            // we cannot handle IPv6 yet, so blackhole it for now, make it idempotent to avoid wg-quick stopping because of errors
+            lines.push("PreUp = ip -6 route del blackhole ::/1 || true".to_string());
+            lines.push("PreUp = ip -6 route del blackhole 8000::/1 || true".to_string());
+            lines.push("PreUp = ip -6 route add blackhole ::/1".to_string());
+            lines.push("PreUp = ip -6 route add blackhole 8000::/1".to_string());
+            lines.push("PostDown = ip -6 route del blackhole ::/1 || true".to_string());
+            lines.push("PostDown = ip -6 route del blackhole 8000::/1 || true".to_string());
         }
         #[cfg(target_os = "macos")]
         {
             // on macos to avoid fighting router specific rules we split the range in two
             // this way the routes are more specific and take precedence over other rules
-            lines.push("PostUp = route -n add -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PostUp = route -n add -blackhole -inet6 8000::/1 ::1".to_string());
-            lines.push("PreDown = route -n delete -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PreDown = route -n delete -blackhole -inet6 8000::/1 ::1".to_string());
+            lines.push("PreUp = route -n add -blackhole -inet6 ::/1 ::1".to_string());
+            lines.push("PreUp = route -n add -blackhole -inet6 8000::/1 ::1".to_string());
+            lines.push("PostDown = route -n delete -blackhole -inet6 ::/1 ::1".to_string());
+            lines.push("PostDown = route -n delete -blackhole -inet6 8000::/1 ::1".to_string());
         }
 
         lines.push("".to_string()); // Empty line for spacing

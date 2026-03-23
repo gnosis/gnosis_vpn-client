@@ -4,38 +4,77 @@ use edgli::hopr_lib::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::connectivity_health::ConnectivityHealth;
 use crate::destination_health::DestinationHealth;
-use crate::info::Info;
 use crate::log_output;
 
+mod balance_response;
+pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
+
+/// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Command {
+    /// Request general status about destinations and connected state
     Status,
+    /// Request detailed stats about the current connection, if any
+    NerdStats,
+    /// Connect to a destination, specified by its id
     Connect(String),
-    Metrics,
+    /// Disconnect from a destination
+    Disconnect,
+    /// Show channel balance and funding status
+    Balance,
+    /// Trigger funding tool - only allowed at certain phases
+    FundingTool(String),
+    /// Return telemetry metrics of the underlying edge client, if running
+    Telemetry,
+    /// Retrigger a balance check
+    RefreshNode,
+    /// Determine service liveness
+    Ping,
+    /// Deliver service version and other meta
+    Info,
+    /// Start worker process and edge client if not already running, with a keep alive duration for the client
+    StartClient(Duration),
+    /// Stop a running worker process and edge client
+    StopClient,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum WorkerCommand {
+    Status,
+    NerdStats,
+    Connect(String),
     Disconnect,
     Balance,
-    Ping,
-    RefreshNode,
     FundingTool(String),
+    Telemetry,
+    RefreshNode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
+    NerdStats(NerdStatsResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Option<BalanceResponse>),
-    Metrics(String),
+    FundingTool(FundingToolResponse),
+    Telemetry(Option<String>),
+    RefreshNodeTriggered,
     Pong,
-    Empty,
+    Info(InfoResponse),
+    StartClient(StartClientResponse),
+    StopClient(StopClientResponse),
+    WorkerOffline,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,8 +92,11 @@ pub enum RunMode {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHOPR>,
-        funding_tool: balance::FundingTool,
+        funding_tool: Option<String>,
+        error: Option<String>,
     },
+    /// Safe deployment ongoing
+    DeployingSafe { node_address: Address },
     /// Hopr started, determining ticket value for strategies
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
@@ -65,8 +107,26 @@ pub enum RunMode {
         funding: FundingState,
         hopr_status: Option<HoprStatus>,
     },
-    /// Shutting down service
+    /// Shutting down edge client,
     Shutdown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InfoResponse {
+    pub version: String,
+    pub log_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StartClientResponse {
+    Started,
+    AlreadyRunning,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StopClientResponse {
+    Stopped,
+    NotRunning,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -117,6 +177,14 @@ pub enum DisconnectResponse {
     NotConnected,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum FundingToolResponse {
+    WrongPhase,
+    Started,
+    InProgress,
+    Done,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
@@ -133,27 +201,60 @@ pub enum ConnectionState {
     Disconnecting(SystemTime, connection::down::Phase),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct BalanceResponse {
-    pub node: Balance<XDai>,
-    pub safe: Balance<WxHOPR>,
-    pub channels_out: Balance<WxHOPR>,
-    pub info: Info,
-    pub issues: Vec<FundingIssue>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NerdStatsResponse {
+    NoInfo,
+    Connecting(ConnStats),
+    Connected(ConnStats),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnStats {
+    pub node_address: Address,
+    pub destination: Destination,
+    pub wg_pubkey: Option<String>,
+    pub wg_server_pubkey: Option<String>,
+    pub wg_ip: Option<String>,
+    pub session_bound_host: Option<SocketAddr>,
+    pub session_id: Option<String>,
+}
+
+impl ConnStats {
+    pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
+        ConnStats {
+            node_address,
+            destination: conn.destination.clone(),
+            wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
+            wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
+            wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
+            session_bound_host: conn.session.as_ref().map(|s| s.bound_host),
+            session_id: conn
+                .session
+                .as_ref()
+                .and_then(|s| s.active_clients.first())
+                .map(|id| id.to_string()),
+        }
+    }
 }
 
 impl RunMode {
     pub fn preparing_safe(
         node_address: Address,
         pre_safe: &Option<balance::PreSafe>,
-        funding_tool: balance::FundingTool,
+        funding_tool: Option<String>,
+        error: Option<String>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
             node_xdai: pre_safe.clone().map(|s| s.node_xdai).unwrap_or_default(),
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
+            error,
         }
+    }
+
+    pub fn deploying_safe(node_address: Address) -> Self {
+        RunMode::DeployingSafe { node_address }
     }
 
     pub fn warmup(edgli_init_state: Option<EdgliInitState>, hopr_state: Option<HoprState>) -> Self {
@@ -202,24 +303,6 @@ impl StatusResponse {
     }
 }
 
-impl BalanceResponse {
-    pub fn new(
-        node: Balance<XDai>,
-        safe: Balance<WxHOPR>,
-        channels_out: Balance<WxHOPR>,
-        issues: Vec<FundingIssue>,
-        info: Info,
-    ) -> Self {
-        BalanceResponse {
-            node,
-            safe,
-            channels_out,
-            issues,
-            info,
-        }
-    }
-}
-
 impl Response {
     pub fn connect(conn: ConnectResponse) -> Self {
         Response::Connect(conn)
@@ -229,12 +312,31 @@ impl Response {
         Response::Disconnect(disc)
     }
 
+    pub fn nerd_stats(stats: NerdStatsResponse) -> Self {
+        Response::NerdStats(stats)
+    }
+
     pub fn status(stat: StatusResponse) -> Self {
         Response::Status(stat)
+    }
+
+    pub fn funding_tool(funding_tool: FundingToolResponse) -> Self {
+        Response::FundingTool(funding_tool)
+    }
+
+    pub fn info(info: InfoResponse) -> Self {
+        Response::Info(info)
     }
 }
 
 impl Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = log_output::serialize(self);
+        write!(f, "{s}")
+    }
+}
+
+impl Display for WorkerCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = log_output::serialize(self);
         write!(f, "{s}")
@@ -300,12 +402,20 @@ impl Display for RunMode {
                 node_xdai,
                 node_wxhopr,
                 funding_tool,
+                error,
             } => {
-                write!(
-                    f,
-                    "Waiting for funding on {node_address}({node_xdai}, {node_wxhopr}) - {funding_tool}"
-                )
+                let mut msg = format!("Preparing Safe (node: {node_address}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}");
+                msg = match (funding_tool, error) {
+                    (Some(tool), Some(error)) => {
+                        format!("{msg}, funding tool: {tool}, error: {error})")
+                    }
+                    (Some(tool), None) => format!("{msg}, funding tool: {tool})"),
+                    (None, Some(error)) => format!("{msg}, error: {error})"),
+                    (None, None) => format!("{msg})"),
+                };
+                write!(f, "{}", msg)
             }
+            RunMode::DeployingSafe { node_address } => write!(f, "Deploying Safe (node: {})", node_address),
             RunMode::Warmup {
                 hopr_init_status,
                 hopr_status,
@@ -378,6 +488,25 @@ impl Display for HoprInitStatus {
             HoprInitStatus::CreatingNode => write!(f, "Creating node"),
             HoprInitStatus::StartingNode => write!(f, "Starting node"),
             HoprInitStatus::Ready => write!(f, "Ready"),
+        }
+    }
+}
+
+impl TryFrom<Command> for WorkerCommand {
+    type Error = ();
+
+    fn try_from(value: Command) -> Result<Self, Self::Error> {
+        match value {
+            Command::Status => Ok(WorkerCommand::Status),
+            Command::NerdStats => Ok(WorkerCommand::NerdStats),
+            Command::Connect(dest) => Ok(WorkerCommand::Connect(dest)),
+            Command::Disconnect => Ok(WorkerCommand::Disconnect),
+            Command::Balance => Ok(WorkerCommand::Balance),
+            Command::RefreshNode => Ok(WorkerCommand::RefreshNode),
+            Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
+            Command::Telemetry => Ok(WorkerCommand::Telemetry),
+            // Commands that are not relevant for the worker
+            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
     }
 }
@@ -476,8 +605,6 @@ mod tests {
         let disc = DisconnectResponse::new(destination);
         assert!(matches!(Response::disconnect(disc), Response::Disconnect(_)));
 
-        let status = StatusResponse::new(RunMode::Init, vec![]);
-        assert!(matches!(Response::status(status), Response::Status(_)));
         Ok(())
     }
 }

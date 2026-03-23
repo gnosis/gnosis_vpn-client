@@ -1,6 +1,7 @@
-pub use edgli::hopr_lib::{Balance, WxHOPR, XDai};
+pub use edgli::hopr_lib::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 
 // in order of priority
@@ -9,9 +10,9 @@ pub enum FundingIssue {
     Unfunded,           // cannot work at all - initial state
     ChannelsOutOfFunds, // less than 1 ticket (10 wxHOPR)
     SafeOutOfFunds,     // less than 1 ticket (10 wxHOPR) - cannot top up channels
-    SafeLowOnFunds,     // lower than min_stake_threshold * channels
+    SafeLowOnFunds,     // lower than min_stake_threshold * 2
     NodeUnderfunded,    // lower than 0.0075 xDai
-    NodeLowOnFunds,     // lower than 0.0075 xDai * channels
+    NodeLowOnFunds,     // lower than 0.0075 xDai * 2
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,17 +34,6 @@ impl Display for FundingIssue {
             FundingIssue::NodeLowOnFunds => "low on funds - soon cannot open new connection or keep existing ones",
         };
         write!(f, "{s}")
-    }
-}
-
-impl Display for FundingTool {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FundingTool::NotStarted => write!(f, "Funding not started"),
-            FundingTool::InProgress => write!(f, "Funding in progress"),
-            FundingTool::CompletedSuccess => write!(f, "Funding successful"),
-            FundingTool::CompletedError(err) => write!(f, "Funding error: {}", err),
-        }
     }
 }
 
@@ -72,7 +62,7 @@ impl Display for PreSafe {
 pub struct Balances {
     pub node_xdai: Balance<XDai>,
     pub safe_wxhopr: Balance<WxHOPR>,
-    pub channels_out_wxhopr: Balance<WxHOPR>,
+    pub channels_out: HashMap<Address, Balance<WxHOPR>>,
 }
 
 impl Display for Balances {
@@ -80,13 +70,15 @@ impl Display for Balances {
         write!(
             f,
             "Balances(node_xdai: {}, safe_wxhopr: {}, channels_out_wxhopr: {})",
-            self.node_xdai, self.safe_wxhopr, self.channels_out_wxhopr
+            self.node_xdai,
+            self.safe_wxhopr,
+            self.channels_out.values().copied().sum::<Balance<WxHOPR>>()
         )
     }
 }
 
 impl Balances {
-    pub fn to_funding_issues(&self, channel_targets_len: usize, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
+    pub fn to_funding_issues(&self, _channel_targets_len: usize, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
         let mut issues = Vec::new();
 
         if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
@@ -94,19 +86,20 @@ impl Balances {
             return issues;
         }
 
-        if self.channels_out_wxhopr < min_stake_threshold(ticket_value) {
+        let all_channel_funds = self.channels_out.values().copied().sum::<Balance<WxHOPR>>();
+        if all_channel_funds < min_stake_threshold(ticket_value) {
             issues.push(FundingIssue::ChannelsOutOfFunds);
         }
 
-        if self.safe_wxhopr < min_stake_threshold(ticket_value) {
+        if self.safe_wxhopr < funding_amount(ticket_value) {
             issues.push(FundingIssue::SafeOutOfFunds);
-        } else if self.safe_wxhopr < (min_stake_threshold(ticket_value) * channel_targets_len) {
+        } else if self.safe_wxhopr < (funding_amount(ticket_value) * 2) {
             issues.push(FundingIssue::SafeLowOnFunds);
         }
 
         if self.node_xdai < min_funds_threshold() {
             issues.push(FundingIssue::NodeUnderfunded);
-        } else if self.node_xdai < (min_funds_threshold() + channel_targets_len) {
+        } else if self.node_xdai < (min_funds_threshold() * 2) {
             issues.push(FundingIssue::NodeLowOnFunds);
         }
 
@@ -138,7 +131,7 @@ mod tests {
         let balances = Balances {
             node_xdai: Balance::<XDai>::zero(),
             safe_wxhopr: Balance::<WxHOPR>::zero(),
-            channels_out_wxhopr: Balance::<WxHOPR>::zero(),
+            channels_out: HashMap::new(),
         };
         let issues = balances.to_funding_issues(2, Balance::<WxHOPR>::from(5u64));
 

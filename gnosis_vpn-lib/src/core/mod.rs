@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::command::{self, Command, Response, RunMode};
+use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
@@ -23,7 +23,7 @@ use crate::connectivity_health::{self, ConnectivityHealth};
 use crate::destination_health::{self, DestinationHealth};
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError, config as hopr_config, identity};
+use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::ticket_stats::TicketStats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
@@ -61,13 +61,13 @@ pub struct Core {
     // static data
     worker_params: WorkerParams,
     node_address: Address,
-    safeless_interactor: Arc<SafelessInteractor>,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
+    incoming_receiver: mpsc::Receiver<WorkerToCore>,
 
     // cancellation tokens
     cancel_balances: CancellationToken,
     cancel_connection: CancellationToken,
-    cancel_for_shutdown: CancellationToken,
+    cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
 
     // user provided data
@@ -76,7 +76,7 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    funding_tool: balance::FundingTool,
+    safeless_interactor: Option<Arc<SafelessInteractor>>,
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
@@ -90,17 +90,32 @@ pub struct Core {
 
 #[derive(Debug, Clone)]
 enum Phase {
+    // initial phase - instantiate safeless interactor (blokli)
+    // and determine if safe is present
     Initial,
-    CreatingSafe {
+    /// safe absent or safe deployment error - repeatedly query node balance and safe info
+    CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
-        deploy_safe: Querying<SafeModule>,
+        funding_tool: balance::FundingTool,
+        deploy_safe_error: Option<String>,
     },
+    /// enough funds and no deployed safe - run safe deployment
+    DeployingSafe {
+        node_balance: Querying<balance::PreSafe>,
+        query_safe: Querying<Option<SafeModule>>,
+    },
+    /// construct edge client
     Starting(Option<EdgliInitState>),
+    /// start edge client
     HoprSyncing,
+    /// edge client running normally
     HoprRunning,
+    // connecting to a destination
     Connecting(connection::up::Up),
+    /// connected to a destination
     Connected(connection::up::Up),
+    /// dismantle state
     ShuttingDown,
 }
 
@@ -108,8 +123,6 @@ enum Phase {
 enum Querying<T> {
     Init,
     Success(T),
-    // TODO expose error in status
-    #[allow(dead_code)]
     Error(String),
 }
 
@@ -117,18 +130,13 @@ impl Core {
     pub async fn init(
         config: Config,
         worker_params: WorkerParams,
+        target_dest_id: Option<String>,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
-    ) -> Result<Core, Error> {
+    ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         wireguard::available().await?;
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let blokli_config = config.blokli.clone().into();
-        let safeless_interactor =
-            edgli::blokli::SafelessInteractor::new(worker_params.blokli_url(), &keys.chain_key, Some(blokli_config))
-                .await
-                .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
-
         let mut connectivity_health = HashMap::new();
         for (id, dest) in config.destinations.clone() {
             connectivity_health.insert(
@@ -142,7 +150,10 @@ impl Core {
             destination_healths.insert(id, DestinationHealth::Init);
         }
 
-        Ok(Core {
+        let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
+
+        let (incoming_sender, incoming_receiver) = mpsc::channel(32);
+        let core = Core {
             // config data
             config,
 
@@ -150,22 +161,22 @@ impl Core {
             worker_params,
             node_address,
             outgoing_sender,
+            incoming_receiver,
 
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
             cancel_connection: CancellationToken::new(),
-            cancel_for_shutdown: CancellationToken::new(),
+            cancel_on_shutdown: CancellationToken::new(),
             cancel_presafe_queries: CancellationToken::new(),
 
             // user provided data
-            target_destination: None,
+            target_destination,
 
             // runtime data
             phase: Phase::Initial,
             balances: None,
-            funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
-            safeless_interactor: Arc::new(safeless_interactor),
+            safeless_interactor: None,
             ticket_value: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -174,17 +185,17 @@ impl Core {
             destination_healths,
             responder_unit: None,
             responder_duration: None,
-        })
+        };
+        Ok((core, incoming_sender))
     }
 
-    pub async fn start(mut self, incoming_receiver: &mut mpsc::Receiver<WorkerToCore>) {
+    pub async fn start(mut self) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
-        self.initial_runner(&results_sender).await;
+        self.spawn_initial_runner(&results_sender, Duration::ZERO);
         loop {
             tokio::select! {
-
                 // React to an incoming worker events
-                Some(event) = incoming_receiver.recv() => {
+                Some(event) = self.incoming_receiver.recv() => {
                     if self.on_event(event, &results_sender).await {
                         continue;
                     } else {
@@ -194,7 +205,11 @@ impl Core {
 
                 // React to internal results from spawned runner tasks
                 Some(results) = results_receiver.recv() => {
-                    self.on_results(results, &results_sender).await;
+                    if self.on_results(results, &results_sender).await {
+                        continue;
+                    } else {
+                        break;
+                    }
                 }
 
                 else => {
@@ -212,9 +227,10 @@ impl Core {
             WorkerToCore::Shutdown => {
                 tracing::debug!("incoming shutdown request");
                 self.phase = Phase::ShuttingDown;
+                // no need to recreate cancellation tokens after shutdown
                 self.cancel_balances.cancel();
                 self.cancel_connection.cancel();
-                self.cancel_for_shutdown.cancel();
+                self.cancel_on_shutdown.cancel();
                 self.cancel_presafe_queries.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
@@ -269,23 +285,71 @@ impl Core {
                 true
             }
 
-            WorkerToCore::Command { cmd, resp } => {
+            WorkerToCore::WorkerCommand { cmd, resp } => {
                 tracing::debug!(%cmd, "incoming command");
                 match cmd {
-                    Command::Status => {
+                    WorkerCommand::NerdStats => {
+                        tracing::debug!("incoming nerd stats request");
+                        match &self.phase {
+                            Phase::Connecting(conn) => {
+                                let res = Response::nerd_stats(command::NerdStatsResponse::Connecting(
+                                    command::ConnStats::from_conn(conn, self.node_address),
+                                ));
+                                let _ = resp.send(res);
+                            }
+                            Phase::Connected(conn) => {
+                                let res = Response::nerd_stats(command::NerdStatsResponse::Connected(
+                                    command::ConnStats::from_conn(conn, self.node_address),
+                                ));
+                                let _ = resp.send(res);
+                            }
+                            _ => {
+                                let res = Response::nerd_stats(command::NerdStatsResponse::NoInfo);
+                                let _ = resp.send(res);
+                            }
+                        }
+                    }
+
+                    WorkerCommand::Status => {
                         let runmode = match self.phase.clone() {
                             Phase::Initial => RunMode::Init,
-                            Phase::CreatingSafe {
+                            Phase::CheckingSafe {
                                 node_balance,
-                                query_safe: _,
-                                deploy_safe: _,
+                                query_safe,
+                                funding_tool,
+                                deploy_safe_error,
                             } => {
                                 let balance = match node_balance {
-                                    Querying::Success(b) => Some(b),
+                                    Querying::Success(ref b) => Some(b.clone()),
                                     _ => None,
                                 };
-                                RunMode::preparing_safe(self.node_address, &balance, self.funding_tool.clone())
+                                let mut errors = "".to_string();
+                                if let Querying::Error(err) = node_balance {
+                                    errors = err
+                                };
+                                if let Querying::Error(err) = query_safe {
+                                    errors = format!("{} {}", errors, err);
+                                }
+                                if let Some(deploy_err) = deploy_safe_error {
+                                    errors = format!("{} {}", errors, deploy_err);
+                                }
+                                let funding_tool = match funding_tool {
+                                    balance::FundingTool::NotStarted => None,
+                                    balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
+                                    balance::FundingTool::CompletedSuccess => {
+                                        Some("Funding tool ran successfully".to_string())
+                                    }
+                                    balance::FundingTool::CompletedError(error) => {
+                                        Some(format!("Funding tool error: {error}"))
+                                    }
+                                };
+                                let error = if errors.is_empty() { None } else { Some(errors) };
+                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, error)
                             }
+                            Phase::DeployingSafe {
+                                node_balance: _,
+                                query_safe: _,
+                            } => RunMode::deploying_safe(self.node_address),
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
@@ -340,7 +404,7 @@ impl Core {
                         let _ = resp.send(res);
                     }
 
-                    Command::Connect(id) => match self.config.destinations.clone().get(&id) {
+                    WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
                             if let Some(connectivity) = self.connectivity_health.get(&dest.id) {
                                 if connectivity.is_ready_to_connect() {
@@ -371,7 +435,7 @@ impl Core {
                         }
                     },
 
-                    Command::Disconnect => {
+                    WorkerCommand::Disconnect => {
                         self.target_destination = None;
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -388,23 +452,17 @@ impl Core {
                         self.act_on_target(results_sender);
                     }
 
-                    Command::Balance => {
+                    WorkerCommand::Balance => {
                         if let (Some(hopr), Some(balances), Some(ticket_value)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_value)
                         {
-                            let info = hopr.info();
-                            let min_channel_count = connectivity_health::count_distinct_channels(
-                                &self.connectivity_health.values().collect::<Vec<_>>(),
-                            );
-                            let issues: Vec<balance::FundingIssue> =
-                                balances.to_funding_issues(min_channel_count, ticket_value);
-
                             let res = command::BalanceResponse::new(
-                                balances.node_xdai,
-                                balances.safe_wxhopr,
-                                balances.channels_out_wxhopr,
-                                issues,
-                                info,
+                                &hopr.info(),
+                                &balances,
+                                &ticket_value,
+                                &self.config.destinations.clone(),
+                                self.connectivity_health.values().collect::<Vec<_>>().as_slice(),
+                                self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
                             let _ = resp.send(Response::Balance(Some(res)));
                         } else {
@@ -412,39 +470,53 @@ impl Core {
                         }
                     }
 
-                    Command::Ping => {
-                        let _ = resp.send(Response::Pong);
+                    WorkerCommand::Telemetry => {
+                        let res = match hopr::telemetry() {
+                            Ok(t) => Some(t),
+                            Err(err) => {
+                                tracing::error!(?err, "failed to collect hopr telemetry");
+                                None
+                            }
+                        };
+                        let _ = resp.send(Response::Telemetry(res));
                     }
 
-                    Command::RefreshNode => {
+                    WorkerCommand::RefreshNode => {
                         // immediately request balances and cancel existing balance loop
                         self.cancel_balances.cancel();
                         self.cancel_balances = CancellationToken::new();
                         self.spawn_balances_runner(results_sender, Duration::ZERO);
-                        let _ = resp.send(Response::Empty);
+                        let _ = resp.send(Response::RefreshNodeTriggered);
                     }
 
-                    Command::FundingTool(secret) => {
-                        if matches!(self.phase, Phase::CreatingSafe { .. }) {
-                            self.funding_tool = balance::FundingTool::InProgress;
-                            self.spawn_funding_runner(secret, results_sender);
-                            let _ = resp.send(Response::Empty);
-                        } else {
-                            tracing::warn!("cannot start funding tool - safe already deployed");
-                            let _ = resp.send(Response::Empty);
-                        }
-                    }
-
-                    Command::Metrics => {
-                        let metrics = match edgli::hopr_lib::Hopr::<bool, bool>::collect_hopr_metrics() {
-                            Ok(m) => m,
-                            Err(err) => {
-                                tracing::error!(?err, "failed to collect hopr metrics");
-                                String::new()
+                    WorkerCommand::FundingTool(secret) => match self.phase.clone() {
+                        Phase::CheckingSafe {
+                            node_balance,
+                            query_safe,
+                            funding_tool,
+                            deploy_safe_error,
+                        } => match funding_tool {
+                            balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
+                                self.phase = Phase::CheckingSafe {
+                                    node_balance,
+                                    query_safe,
+                                    funding_tool: balance::FundingTool::InProgress,
+                                    deploy_safe_error,
+                                };
+                                self.spawn_funding_runner(secret, results_sender);
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
                             }
-                        };
-                        let _ = resp.send(Response::Metrics(metrics));
-                    }
+                            balance::FundingTool::InProgress => {
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
+                            }
+                            balance::FundingTool::CompletedSuccess => {
+                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Done));
+                            }
+                        },
+                        _ => {
+                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
+                        }
+                    },
                 }
                 true
             }
@@ -453,9 +525,10 @@ impl Core {
 
     /// Results are events from async runners
     #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
-    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) {
+    async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(phase = ?self.phase, %results, "on runner results");
         match results {
+            Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -474,6 +547,7 @@ impl Core {
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
+            Results::FundingTool { res } => self.on_results_funding_tool(res),
 
             Results::PersistSafe { res, safe_module } => match res {
                 Ok(()) => {
@@ -498,15 +572,6 @@ impl Core {
                 Err(err) => {
                     tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
                     self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
-                }
-            },
-
-            Results::FundingTool { res } => match res {
-                Ok(None) => self.funding_tool = balance::FundingTool::CompletedSuccess,
-                Ok(Some(reason)) => self.funding_tool = balance::FundingTool::CompletedError(reason),
-                Err(err) => {
-                    tracing::error!(?err, "funding runner exited with error");
-                    self.funding_tool = balance::FundingTool::CompletedError(err.to_string());
                 }
             },
 
@@ -647,9 +712,8 @@ impl Core {
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
-                        tracing::info!(%dest, "disconnecting from target destination due to connection error");
-                        self.target_destination = None;
-                        self.act_on_target(results_sender);
+                        tracing::info!(%dest, "restarting connection worker process due to final connection error");
+                        return false;
                     }
                 }
                 (Err(err), phase) => {
@@ -717,6 +781,25 @@ impl Core {
                     self.spawn_health_check_runner(dest.clone(), results_sender, int);
                 }
             }
+        };
+        return true;
+    }
+
+    async fn on_results_safeless_interactor(
+        &mut self,
+        res: Result<SafelessInteractor, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        match res {
+            Ok(safeless_interactor) => {
+                tracing::info!("safeless interactor created successfully");
+                self.safeless_interactor = Some(Arc::new(safeless_interactor));
+                self.determine_next_phase_from_safe_disk_query(results_sender).await;
+            }
+            Err(err) => {
+                tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
+                self.spawn_initial_runner(results_sender, Duration::from_secs(30));
+            }
         }
     }
 
@@ -728,17 +811,19 @@ impl Core {
         match (res, self.phase.clone()) {
             (
                 Ok(presafe),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::info!(%presafe, "on presafe node balance");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
@@ -746,17 +831,19 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to fetch presafe node balance - retrying");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Error(err.to_string()),
                     query_safe,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
@@ -772,10 +859,10 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         match (res, self.phase.clone()) {
-            (Ok(Some(safe_module)), Phase::CreatingSafe { .. }) => {
+            (Ok(Some(safe_module)), Phase::CheckingSafe { .. }) => {
                 tracing::info!(?safe_module, "found safe module");
-                // we got our safe module - cancel presafe balance checks
                 self.cancel_presafe_queries.cancel();
+                self.cancel_presafe_queries = CancellationToken::new();
                 // start edge client with queried safe module
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
@@ -783,17 +870,19 @@ impl Core {
             }
             (
                 Ok(None),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::info!("found no deployed safe module");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Success(None),
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -801,17 +890,19 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to query safe module - retrying");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Error(err.to_string()),
-                    deploy_safe,
+                    deploy_safe_error,
+                    funding_tool,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
@@ -827,7 +918,7 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         match (res, self.phase.clone()) {
-            (Ok(safe_module), Phase::CreatingSafe { .. }) => {
+            (Ok(safe_module), Phase::DeployingSafe { .. }) => {
                 tracing::info!(?safe_module, "deployed safe module");
                 // start edge client with new safe module
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
@@ -836,17 +927,17 @@ impl Core {
             }
             (
                 Err(err),
-                Phase::CreatingSafe {
+                Phase::DeployingSafe {
                     node_balance,
                     query_safe,
-                    deploy_safe: _,
                 },
             ) => {
                 tracing::error!(?err, "failed to deploy safe module - retrying from balance check");
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe,
-                    deploy_safe: Querying::Error(err.to_string()),
+                    deploy_safe_error: Some(err.to_string()),
+                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -857,23 +948,101 @@ impl Core {
         }
     }
 
-    fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
-        if let Phase::CreatingSafe {
-            node_balance: Querying::Success(presafe),
-            query_safe: Querying::Success(None),
-            deploy_safe: _,
-        } = &self.phase
-        {
-            if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                tracing::warn!("insufficient funds to start safe deployment - waiting for funding");
-            } else {
-                self.cancel_presafe_queries.cancel();
-                self.spawn_safe_deployment_runner(presafe, results_sender);
+    fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
+        match (res, self.phase.clone()) {
+            (
+                Ok(None),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedSuccess,
+                }
+            }
+            (
+                Ok(Some(reason)),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedError(reason),
+                }
+            }
+            (
+                Err(err),
+                Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    ..
+                },
+            ) => {
+                self.phase = Phase::CheckingSafe {
+                    node_balance,
+                    query_safe,
+                    deploy_safe_error,
+                    funding_tool: balance::FundingTool::CompletedError(err.to_string()),
+                }
+            }
+
+            (res, phase) => {
+                tracing::warn!(?res, ?phase, "unexpected funding tool response in wrong phase");
             }
         }
     }
 
-    async fn initial_runner(&mut self, results_sender: &mpsc::Sender<Results>) {
+    fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
+        if let Phase::CheckingSafe {
+            node_balance: Querying::Success(presafe),
+            query_safe: Querying::Success(None),
+            deploy_safe_error: _,
+            funding_tool: _,
+        } = self.phase.clone()
+        {
+            if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
+                tracing::warn!("insufficient funds to start safe deployment - waiting for funding");
+            } else {
+                self.phase = Phase::DeployingSafe {
+                    node_balance: Querying::Success(presafe.clone()),
+                    query_safe: Querying::Success(None),
+                };
+                self.cancel_presafe_queries.cancel();
+                self.cancel_presafe_queries = CancellationToken::new();
+                self.spawn_safe_deployment_runner(&presafe, results_sender);
+            }
+        }
+    }
+
+    fn spawn_initial_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::create_safeless_interactor(&worker_params, blokli_config.into(), results_sender).await;
+                })
+                .await
+        });
+    }
+
+    async fn determine_next_phase_from_safe_disk_query(&mut self, results_sender: &mpsc::Sender<Results>) {
         let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
             Ok(safe_module) => {
@@ -890,10 +1059,11 @@ impl Core {
                         "error deserializing existing safe module - querying safeless interactor"
                     );
                 }
-                self.phase = Phase::CreatingSafe {
+                self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Init,
                     query_safe: Querying::Init,
-                    deploy_safe: Querying::Init,
+                    deploy_safe_error: None,
+                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::ZERO);
                 self.spawn_node_balance_runner(results_sender, Duration::ZERO);
@@ -903,34 +1073,36 @@ impl Core {
 
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay).await;
-                    runner::query_safe(safeless_interactor, results_sender).await
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::query_safe(safeless_interactor, results_sender).await
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay).await;
-                    runner::node_balance(safeless_interactor, results_sender).await
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::node_balance(safeless_interactor, results_sender).await
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -941,21 +1113,22 @@ impl Core {
     }
 
     fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
-        let cancel = self.cancel_for_shutdown.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let state_home = self.worker_params.state_home();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -970,7 +1143,7 @@ impl Core {
 
     fn spawn_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         self.phase = Phase::Starting(None);
-        let cancel = self.cancel_for_shutdown.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
         let results_sender = results_sender.clone();
@@ -985,17 +1158,18 @@ impl Core {
     }
 
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_for_shutdown.clone();
-        let safeless_interactor = self.safeless_interactor.clone();
+        let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move {
-                    time::sleep(delay).await;
-                    runner::ticket_stats(safeless_interactor, results_sender).await;
-                })
-                .await
-        });
+        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::ticket_stats(safeless_interactor, results_sender).await;
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_balances_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -1015,7 +1189,7 @@ impl Core {
 
     fn spawn_wait_for_running(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1037,7 +1211,7 @@ impl Core {
         self.ongoing_channel_fundings.push(address);
         tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
         if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1052,7 +1226,7 @@ impl Core {
 
     fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1072,7 +1246,7 @@ impl Core {
         delay: Duration,
     ) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             let config_connection = self.config.connection.clone();
             let old_health = self
@@ -1125,7 +1299,7 @@ impl Core {
 
     fn spawn_disconnection_runner(&mut self, disconn: &connection::down::Down, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_for_shutdown.clone();
+            let cancel = self.cancel_on_shutdown.clone();
             let config_connection = self.config.connection.clone();
             let hopr = hopr.clone();
             let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);

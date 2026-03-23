@@ -1,4 +1,3 @@
-use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::process::Command;
@@ -22,10 +21,10 @@ pub enum Error {
     PrimaryGroupMissing,
     #[error("Invalid worker binary path")]
     InvalidBinaryPath,
+    #[error("Unable to ensure home state directory")]
+    InvalidHomeDir,
     #[error("Shell command error: {0}")]
     ShellCommandExt(#[from] shell_command_ext::Error),
-    #[error("IO error: {0}")]
-    IO(#[from] io::Error),
 }
 
 #[derive(Debug)]
@@ -44,6 +43,7 @@ pub const DEFAULT_WORKER_USER: &str = USERNAME;
 pub const ENV_VAR_WORKER_BINARY: &str = "GNOSISVPN_WORKER_BINARY";
 pub const ENV_VAR_WORKER_USER: &str = "GNOSISVPN_WORKER_USER";
 pub const ENV_VAR_FORCE_STATIC_ROUTING: &str = "GNOSISVPN_FORCE_STATIC_ROUTING";
+pub const ENV_VAR_CLIENT_AUTOSTART: &str = "GNOSISVPN_CLIENT_AUTOSTART";
 
 #[derive(Debug, Clone)]
 pub struct Worker {
@@ -66,17 +66,25 @@ impl Input {
 }
 
 impl Worker {
+    /// This function is called before tracing is set up
+    /// So we need to work with eprintln
     pub async fn from_system(input: Input) -> Result<Self, Error> {
         let worker_user = uzers::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
-        let path = input.binary.canonicalize()?;
+        let path = input.binary.canonicalize().map_err(|error| {
+            eprintln!(
+                "Worker binary {} at invalid path for {worker_user:?}: {error:?}",
+                input.binary.display()
+            );
+            Error::InvalidBinaryPath
+        })?;
         let binary = path.to_str().ok_or(Error::InvalidBinaryPath)?;
         // check if binary exists
         if !path.exists() {
-            tracing::error!(path = %binary, ?worker_user, "Worker binary not found");
+            eprintln!("Worker binary {} not found for {:?}", binary, worker_user);
             return Err(Error::BinaryNotFound);
         }
         if !path.is_file() {
-            tracing::error!(path = %binary, ?worker_user, "Worker binary is not a file");
+            eprintln!("Worker binary {} is not a file for {:?}", binary, worker_user);
             return Err(Error::NotExecutable);
         }
         // check if binary exists
@@ -89,8 +97,6 @@ impl Worker {
             .find(|g| g.gid() == gid)
             .ok_or(Error::PrimaryGroupMissing)?;
         let group_name = group.name().to_string_lossy().to_string();
-
-        tracing::debug!(path = %binary, ?worker_user, "Verifying worker binary executable permissions");
         let version_output = Command::new(binary)
             .arg("--version")
             .uid(uid)
@@ -101,19 +107,23 @@ impl Worker {
         let version = version_output.split_whitespace().nth(1).unwrap_or_default();
         if version == input.version {
             // set up application state directory
-            let home = dirs::setup_worker(input.state_home, uid, gid).map_err(|err| {
-                tracing::error!(error = ?err, "error setting up home directory");
-                Error::IO(io::Error::other(err.to_string()))
+            dirs::setup_home(input.state_home.clone(), uid, gid).map_err(|error| {
+                eprintln!("Error setting up home directory for {worker_user:?}: {error:?}");
+                Error::InvalidHomeDir
             })?;
             Ok(Worker {
                 uid,
                 binary: binary.to_string(),
                 gid,
                 group_name,
-                home,
+                home: input.state_home,
             })
         } else {
-            tracing::error!(expected = input.version, found = %version, "Worker binary version mismatch");
+            eprintln!(
+                "Worker binary {binary} version mismatch: expected {expected} - found {found} for {worker_user:?}",
+                expected = input.version,
+                found = version
+            );
             Err(Error::VersionMismatch)
         }
     }

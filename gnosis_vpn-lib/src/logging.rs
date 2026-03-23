@@ -2,7 +2,8 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
 use std::fs::OpenOptions;
-use std::os::unix::fs::{self, OpenOptionsExt};
+use std::os::unix;
+use std::os::unix::fs::OpenOptionsExt;
 
 use crate::worker::Worker;
 
@@ -13,10 +14,11 @@ pub type LogReloadHandle = reload::Handle<FileFmtLayer, tracing_subscriber::Regi
 
 const DEFAULT_LOG_FILTER: &str = "info";
 pub const ENV_VAR_LOG_FILE: &str = "GNOSISVPN_LOG_FILE";
+
+#[cfg(target_os = "linux")]
+pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 #[cfg(target_os = "macos")]
 pub const DEFAULT_LOG_FILE: &str = "/Library/Logs/GnosisVPN/gnosisvpn.log";
-#[cfg(not(target_os = "macos"))]
-pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 
 /// Creates a [`FileFmtLayer`] for structured logging to a file.
 ///
@@ -28,9 +30,10 @@ pub const DEFAULT_LOG_FILE: &str = "/var/log/gnosisvpn.log";
 ///
 /// This function is also called during log rotation to reopen the log file
 /// after it has been rotated by an external tool. On macOS, `newsyslog`
-/// handles rotation and sends a `SIGHUP` signal to the process afterward,
-/// which should then call this function to reopen the new log file and
-/// reload the layer using the [`LogReloadHandle`].
+/// handles rotation; on Linux, `logrotate` does it. In both cases,
+/// a `SIGHUP` signal is sent to the process afterward, which should then
+/// call this function to reopen the new log file and reload the layer
+/// using the [`LogReloadHandle`].
 ///
 /// # Errors
 ///
@@ -52,7 +55,7 @@ pub fn make_file_fmt_layer(log_path: &str, worker: &Worker) -> Result<FileFmtLay
         .mode(0o644)
         .open(log_path)?;
 
-    fs::chown(log_path, Some(worker.uid), Some(worker.gid))?;
+    unix::fs::chown(log_path, Some(worker.uid), Some(worker.gid))?;
 
     Ok(fmt::layer().with_writer(BoxMakeWriter::new(file)).with_ansi(false))
 }
@@ -75,9 +78,10 @@ pub fn use_file_fmt_layer(log_path: &str) -> Result<FileFmtLayer, std::io::Error
 ///
 /// The returned [`LogReloadHandle`] allows the file layer to be swapped at
 /// runtime without restarting the process. This is essential for log rotation:
-/// on macOS, `newsyslog` rotates the log file and then sends `SIGHUP` to the
-/// process, which should then call [`make_file_fmt_layer`] to reopen the
-/// rotated log file and reload it via the [`LogReloadHandle`].
+/// on macOS, `newsyslog` rotates the log file; on Linux, `logrotate` does it.
+/// In both cases, `SIGHUP` is sent to the process, which should then call
+/// [`make_file_fmt_layer`] to reopen the rotated log file and
+/// reload it via the [`LogReloadHandle`].
 ///
 /// # Errors
 ///

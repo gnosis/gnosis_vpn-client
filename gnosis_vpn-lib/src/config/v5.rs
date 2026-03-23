@@ -114,14 +114,25 @@ pub(super) struct WireGuard {
     pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
+    pub(super) dns: Option<WireGuardDNS>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct WireGuardDNS {
+    pub overwrite: bool,
+    pub servers: Option<String>,
+}
+
+impl WireGuardDNS {
+    fn default_server() -> String {
+        "1.1.1.1,8.8.8.8".to_string()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct BlokliConfig {
     #[serde(default, with = "humantime_serde::option")]
-    pub(super) tx_confirm_timeout: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) connection_timeout: Option<Duration>,
+    pub(super) connection_sync_timeout: Option<Duration>,
     pub(super) sync_tolerance: Option<usize>,
 }
 
@@ -135,8 +146,19 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         // wireguard nested struct
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
-                for (k, _v) in wg.iter() {
+                for (k, v) in wg.iter() {
                     if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                        continue;
+                    }
+                    if k == "dns" {
+                        if let Some(dns) = v.as_table() {
+                            for (k2, _v2) in dns.iter() {
+                                if k2 == "overwrite" || k2 == "servers" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("wireguard.dns.{k2}"));
+                            }
+                        }
                         continue;
                     }
                     wrong_keys.push(format!("wireguard.{k}"));
@@ -149,7 +171,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
-                    if k == "tx_confirm_timeout" || k == "connection_timeout" || k == "sync_tolerance" {
+                    if k == "connection_sync_timeout" || k == "sync_tolerance" {
                         continue;
                     }
                     wrong_keys.push(format!("blokli.{k}"));
@@ -429,24 +451,32 @@ impl From<Option<WireGuard>> for WireGuardConfig {
         let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key)
+        let dns = value
+            .as_ref()
+            .and_then(|wg| {
+                wg.dns.as_ref().map(|dns| {
+                    if dns.overwrite {
+                        Some(dns.servers.clone().unwrap_or(WireGuardDNS::default_server()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(Some(WireGuardDNS::default_server()));
+        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
     }
 }
 
 impl From<Option<BlokliConfig>> for HoprBlokliConfig {
     fn from(value: Option<BlokliConfig>) -> Self {
-        let tx_confirm_timeout = value
+        let connection_sync_timeout = value
             .as_ref()
-            .and_then(|b| b.tx_confirm_timeout)
-            .unwrap_or_else(|| Duration::from_secs(90));
-        let connection_timeout = value
-            .as_ref()
-            .and_then(|b| b.connection_timeout)
-            .unwrap_or_else(|| Duration::from_secs(30));
+            .and_then(|b| b.connection_sync_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().connection_sync_timeout);
+        // Edge client uses less tolerance than the default of 90%
         let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
         HoprBlokliConfig {
-            tx_confirm_timeout,
-            connection_timeout,
+            connection_sync_timeout,
             sync_tolerance,
         }
     }
@@ -585,10 +615,10 @@ listen_port = 51820
 allowed_ips = "10.128.0.1/9"
 # use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
+dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 
 [blokli]
-tx_confirm_timeout = "90s"
-connection_timeout = "30s"
+connection_sync_timeout = "30s"
 sync_tolerance = 50
 "#####;
         toml::from_str::<Config>(config)?;
