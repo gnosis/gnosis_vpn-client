@@ -1,6 +1,6 @@
 use gnosis_vpn_lib::command::{
     BalanceResponse, Command, ConnectResponse, ConnectionState, DestinationState, DisconnectResponse, Response,
-    RunMode, StatusResponse,
+    RunMode, StartClientResponse, StatusResponse, StopClientResponse,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination};
 use gnosis_vpn_lib::connectivity_health::Health;
@@ -79,6 +79,24 @@ impl ControlClient {
         match self.send(&Command::Disconnect).await {
             Ok(Response::Disconnect(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected disconnect response {resp:?}")),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Start the client
+    pub async fn start(&self) -> anyhow::Result<StartClientResponse> {
+        match self.send(&Command::StartClient(Duration::from_secs(30))).await {
+            Ok(Response::StartClient(state)) => Ok(state),
+            Ok(resp) => Err(anyhow::anyhow!("unexpected start response {resp:?}")),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Stop the client
+    pub async fn stop(&self) -> anyhow::Result<StopClientResponse> {
+        match self.send(&Command::StopClient).await {
+            Ok(Response::StopClient(state)) => Ok(state),
+            Ok(resp) => Err(anyhow::anyhow!("unexpected stop response {resp:?}")),
             Err(e) => Err(e),
         }
     }

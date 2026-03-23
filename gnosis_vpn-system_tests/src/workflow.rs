@@ -93,15 +93,20 @@ impl SystemTestWorkflow {
         };
 
         self.close_connection(DISCONNECTION_TIMEOUT).await?;
+        self.client.stop().await?;
 
         Ok(())
     }
 
     async fn ensure_daemon_ready(&self) -> Result<()> {
         self.client.wait_for_service_running(SERVICE_TIMEOUT).await?;
+
+        self.client.start().await?;
+
         self.client.wait_for_safe_created(SAFE_TIMEOUT).await?;
         self.client.wait_for_node_running(NODE_RUNNING_TIMEOUT).await?;
         self.client.wait_for_node_funding(NODE_FUNDING_TIMEOUT).await?;
+
         Ok(())
     }
 
