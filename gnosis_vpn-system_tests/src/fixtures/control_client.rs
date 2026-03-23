@@ -2,9 +2,8 @@ use gnosis_vpn_lib::command::{
     BalanceResponse, Command, ConnectResponse, ConnectionState, DestinationState, DisconnectResponse, Response,
     RunMode, StartClientResponse, StatusResponse, StopClientResponse,
 };
-use gnosis_vpn_lib::connection::destination::{Address, Destination};
+use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::connectivity_health::Health;
-use gnosis_vpn_lib::hopr::hopr_lib::ToHex;
 use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
 use std::{path::PathBuf, time::Duration};
@@ -66,8 +65,8 @@ impl ControlClient {
     }
 
     /// Initiates a VPN connection to the provided destination.
-    pub async fn connect(&self, destination: Address) -> anyhow::Result<ConnectResponse> {
-        match self.send(&Command::Connect(destination.to_hex())).await {
+    pub async fn connect(&self, destination: String) -> anyhow::Result<ConnectResponse> {
+        match self.send(&Command::Connect(destination)).await {
             Ok(Response::Connect(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected connect response {resp:?}")),
             Err(e) => Err(e),
@@ -85,7 +84,7 @@ impl ControlClient {
 
     /// Start the client
     pub async fn start(&self) -> anyhow::Result<StartClientResponse> {
-        match self.send(&Command::StartClient(Duration::from_secs(30))).await {
+        match self.send(&Command::StartClient(Duration::from_mins(5))).await {
             Ok(Response::StartClient(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected start response {resp:?}")),
             Err(e) => Err(e),

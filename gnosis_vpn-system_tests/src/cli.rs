@@ -40,7 +40,7 @@ pub struct SharedArgs {
         long = "proxy",
         env = "SYSTEM_TEST_PROXY",
         value_name = "URL",
-        default_value = "http://10.128.0.1:3128"
+        default_value = None
     )]
     pub proxy: Option<Url>,
 

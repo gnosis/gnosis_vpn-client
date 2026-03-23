@@ -144,7 +144,7 @@ impl SystemTestWorkflow {
     async fn try_connect(&self, destination: &Destination, timeout: Duration) -> Result<()> {
         info!(
             dest = %destination,
-            state = ?self.client.connect(destination.address).await?,
+            state = ?self.client.connect(destination.id.clone()).await?,
             "initiated connection",
         );
 
