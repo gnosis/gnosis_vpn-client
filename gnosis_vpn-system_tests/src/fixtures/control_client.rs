@@ -84,7 +84,7 @@ impl ControlClient {
 
     /// Start the client
     pub async fn start(&self) -> anyhow::Result<StartClientResponse> {
-        match self.send(&Command::StartClient(Duration::from_mins(5))).await {
+        match self.send(&Command::StartClient(Duration::from_mins(10))).await {
             Ok(Response::StartClient(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected start response {resp:?}")),
             Err(e) => Err(e),
