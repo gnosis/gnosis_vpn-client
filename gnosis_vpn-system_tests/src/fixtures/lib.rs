@@ -106,29 +106,6 @@ pub async fn download_file(size_bytes: u64, proxy: Option<&Url>) -> anyhow::Resu
     Ok(())
 }
 
-/// Queries an IP echo endpoint (e.g. api.ipify.org) and returns the IP string.
-pub async fn fetch_public_ip(ip_echo_url: &Url, proxy: Option<&Url>) -> anyhow::Result<String> {
-    let mut client = reqwest::Client::builder().timeout(Duration::from_secs(60));
-    if let Some(proxy_url) = proxy {
-        client = client.proxy(reqwest::Proxy::all(proxy_url.as_str())?);
-    }
-
-    let response_text = client
-        .build()?
-        .get(ip_echo_url.clone())
-        .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await?;
-
-    let trimmed = response_text.trim().to_string();
-    if trimmed.is_empty() {
-        warn!(url = %ip_echo_url, "ip echo response was empty");
-    }
-    Ok(trimmed)
-}
-
 /// Attempts to resolve the a binary path for the current build profile.
 pub fn find_binary(name: &str) -> anyhow::Result<PathBuf> {
     let env_key = format!("CARGO_BIN_EXE_{}", name.replace('-', "_").to_uppercase());

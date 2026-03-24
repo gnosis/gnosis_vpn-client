@@ -7,7 +7,7 @@ pub struct Cli {
     #[command(flatten)]
     pub shared: SharedArgs,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -25,15 +25,6 @@ pub struct SharedArgs {
         default_value = "https://blokli.rotsee.hoprnet.link"
     )]
     pub blokli_url: Url,
-
-    /// Public IP echo endpoint leveraged to verify outbound connectivity.
-    #[arg(
-        long = "ipEchoUrl",
-        env = "SYSTEM_TEST_IP_ECHO_URL",
-        value_name = "URL",
-        default_value = "https://api.ipify.org"
-    )]
-    pub ip_echo_url: Url,
 
     /// Optional HTTP proxy used for download/upload requests.
     #[arg(

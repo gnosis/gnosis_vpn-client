@@ -86,10 +86,9 @@ impl SystemTestWorkflow {
         self.establish_connection(&destination, FINAL_CONNECTION_TIMEOUT)
             .await?;
 
-        self.get_public_ip().await?;
-
         match &self.cli.command {
-            Command::Download(args) => download::run_downloads(&self.cli.shared, args).await?,
+            Some(Command::Download(args)) => download::run_downloads(&self.cli.shared, args).await?,
+            None => info!("no additional commands to run"),
         };
 
         self.close_connection(DISCONNECTION_TIMEOUT).await?;
@@ -166,16 +165,5 @@ impl SystemTestWorkflow {
     async fn close_connection(&self, timeout: Duration) -> Result<()> {
         info!("closing connection");
         self.client.wait_for_disconnection(timeout).await
-    }
-
-    async fn get_public_ip(&self) -> Result<String> {
-        info!("querying public IP via the echo service");
-        match lib::fetch_public_ip(&self.cli.shared.ip_echo_url, self.cli.shared.proxy.as_ref()).await {
-            Ok(ip) => {
-                info!(?ip, "found public IP");
-                Ok(ip)
-            }
-            Err(error) => Err(error),
-        }
     }
 }
