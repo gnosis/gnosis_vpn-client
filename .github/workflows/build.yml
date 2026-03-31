@@ -49,6 +49,10 @@ jobs:
   system-test:
     name: Execute system test against rotsee network
     runs-on: ubuntu-22.04
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    permissions:
+      contents: read
+      secrets: read
     steps:
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
