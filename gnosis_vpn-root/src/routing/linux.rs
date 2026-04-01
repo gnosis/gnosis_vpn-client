@@ -216,7 +216,7 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesO
         return Err(e);
     }
     tracing::debug!(
-        "ip route add default via {} dev {} table {TABLE_ID}",
+        "ip route add default via {} table {TABLE_ID} [oif={}]",
         wan_info.gateway,
         wan_info.if_index
     );
@@ -293,7 +293,7 @@ pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, F: NfTabl
     teardown_op(
         &format!("delete table {TABLE_ID} default route"),
         &format!(
-            "ip route del default via {} dev {} table {TABLE_ID}",
+            "ip route del default via {} table {TABLE_ID} [oif={}]",
             wan_info.gateway, wan_info.if_index
         ),
         || netlink.route_del(&table_route),
@@ -609,7 +609,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             match res {
                 Ok(_) => {
                     tracing::debug!(
-                        "ip route add {}/{} via {} dev {}",
+                        "ip route add {}/{} via {} [oif={}]",
                         net,
                         prefix,
                         wan_info.gateway,
@@ -644,7 +644,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         };
         self.netlink.route_add(&vpn_table_route).await?;
         tracing::debug!(
-            "ip route add {} dev {} table {TABLE_ID}",
+            "ip route add {} table {TABLE_ID} [oif={}]",
             vpn_info.cidr,
             vpn_info.if_index
         );
@@ -661,7 +661,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         };
         match self.netlink.route_add(&vpn_main_route).await {
             Ok(_) => {
-                tracing::debug!("ip route add {} dev {}", vpn_info.cidr, vpn_info.if_index);
+                tracing::debug!("ip route add {} [oif={}]", vpn_info.cidr, vpn_info.if_index);
             }
             Err(error) => {
                 // Log warning but continue - default route should still work
@@ -681,7 +681,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             metric: None,
         };
         self.netlink.route_replace(&vpn_default_route).await?;
-        tracing::debug!("ip route add default dev {}", vpn_info.if_index);
+        tracing::debug!("ip route add default [oif={}]", vpn_info.if_index);
 
         tracing::info!("routing is ready");
         Ok(())
@@ -708,7 +708,8 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         match self.network_device_info.take() {
             Some(NetworkDeviceInfo {
                 wan_if_index,
-                vpn_if_index,
+                wan_if_name,
+                vpn_if_index: _,
                 vpn_cidr,
                 wan_gw,
                 wan_metric,
@@ -724,7 +725,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 };
                 teardown_op(
                     "set default route back to interface",
-                    &format!("ip route replace default via {wan_gw} dev {wan_if_index}"),
+                    &format!("ip route replace default via {wan_gw} [oif={wan_if_index}]"),
                     || self.netlink.route_replace(&wan_default),
                 )
                 .await;
@@ -745,7 +746,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 };
                 teardown_op(
                     "delete VPN default route from main table",
-                    &format!("ip route del default dev {vpn_if_index}"),
+                    &format!("ip route del default [oif={vpn_if_index}]"),
                     || self.netlink.route_del(&vpn_default_route),
                 )
                 .await;
@@ -761,7 +762,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 };
                 teardown_op(
                     "delete VPN subnet route from main table",
-                    &format!("ip route del {vpn_cidr} dev {vpn_if_index}"),
+                    &format!("ip route del {vpn_cidr} [oif={vpn_if_index}]"),
                     || self.netlink.route_del(&vpn_main_route),
                 )
                 .await;
@@ -777,7 +778,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 };
                 teardown_op(
                     &format!("delete VPN subnet route from table {TABLE_ID}"),
-                    &format!("ip route del {vpn_cidr} dev {vpn_if_index} table {TABLE_ID}"),
+                    &format!("ip route del {vpn_cidr} table {TABLE_ID} [oif={vpn_if_index}]"),
                     || self.netlink.route_del(&vpn_table_route),
                 )
                 .await;
@@ -787,7 +788,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                     teardown_op(
                         &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
                         &format!(
-                            "ip route del {}/{} via {wan_gw} dev {wan_if_index}",
+                            "ip route del {}/{} via {wan_gw} [oif={wan_if_index}]",
                             route.destination, route.prefix_len
                         ),
                         || self.netlink.route_del(&route),
