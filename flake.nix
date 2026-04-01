@@ -170,6 +170,7 @@
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-ctl)
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-root)
               (craneLib.fileset.commonCargoSources ./gnosis_vpn-worker)
+              (craneLib.fileset.commonCargoSources ./gnosis_vpn-system_tests)
               ./rustfmt.toml
               ./rust-toolchain.toml
               ./taplo.toml
