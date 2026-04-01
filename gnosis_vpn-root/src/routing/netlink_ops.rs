@@ -31,6 +31,7 @@ pub struct RouteSpec {
     pub gateway: Option<Ipv4Addr>,
     pub if_index: u32,
     pub table_id: Option<u32>,
+    pub metric: Option<u32>,
 }
 
 /// Policy routing rule specification.
@@ -108,6 +109,9 @@ impl RealNetlinkOps {
         if let Some(id) = spec.table_id {
             builder = builder.table_id(id);
         }
+        if let Some(metric) = spec.metric {
+            builder = builder.priority(metric);
+        }
         builder.build()
     }
 
@@ -142,12 +146,18 @@ impl RealNetlinkOps {
             _ => None,
         });
 
+        let metric = msg.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Priority(p) => Some(*p),
+            _ => None,
+        });
+
         Some(RouteSpec {
             destination,
             prefix_len: msg.header.destination_prefix_length,
             gateway,
             if_index,
             table_id,
+            metric,
         })
     }
 }

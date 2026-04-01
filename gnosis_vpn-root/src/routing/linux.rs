@@ -206,6 +206,7 @@ pub(crate) async fn setup_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesO
         gateway: Some(wan_info.gateway),
         if_index: wan_info.if_index,
         table_id: Some(TABLE_ID),
+        metric: None, // Doesn't matter in table 108
     };
     if let Err(e) = netlink.route_add(&no_vpn_route).await {
         // Rollback firewall rules on failure
@@ -287,6 +288,7 @@ pub(crate) async fn teardown_fwmark_infrastructure_with<N: NetlinkOps, F: NfTabl
         gateway: Some(wan_info.gateway),
         if_index: wan_info.if_index,
         table_id: Some(TABLE_ID),
+        metric: None,
     };
     teardown_op(
         &format!("delete table {TABLE_ID} default route"),
@@ -317,6 +319,8 @@ struct NetworkDeviceInfo {
     wan_if_index: u32,
     /// Default gateway of the WAN interface
     wan_gw: Ipv4Addr,
+    /// Preserved route metric for teardown restoration
+    wan_metric: Option<u32>,
     /// Index of the VPN interface
     vpn_if_index: u32,
     /// CIDR of the VPN subnet
@@ -338,6 +342,7 @@ pub struct WanInfo {
     pub gateway: Ipv4Addr,
     /// WAN interface's IPv4 address (used for SNAT)
     pub ip_addr: Ipv4Addr,
+    pub metric: Option<u32>,
 }
 
 /// Persistent fwmark infrastructure.
@@ -380,6 +385,7 @@ impl NetworkDeviceInfo {
         Self {
             wan_if_index: wan.if_index,
             wan_gw: wan.gateway,
+            wan_metric: wan.metric,
             vpn_if_index: vpn.if_index,
             vpn_cidr: vpn.cidr,
         }
@@ -456,6 +462,7 @@ async fn get_wan_info<N: NetlinkOps>(netlink: &N) -> Result<WanInfo, Error> {
 
     let if_index = default_route.if_index;
     let gateway = default_route.gateway.ok_or(Error::NoInterface)?;
+    let metric = default_route.metric;
 
     let links = netlink.link_list().await?;
     let if_name = links
@@ -477,6 +484,7 @@ async fn get_wan_info<N: NetlinkOps>(netlink: &N) -> Result<WanInfo, Error> {
         if_name,
         gateway,
         ip_addr,
+        metric,
     })
 }
 
@@ -592,6 +600,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 gateway: Some(wan_info.gateway),
                 if_index: wan_info.if_index,
                 table_id: None,
+                metric: None,
             };
 
             let res = self.netlink.route_add(&route).await;
@@ -631,6 +640,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             gateway: None,
             if_index: vpn_info.if_index,
             table_id: Some(TABLE_ID),
+            metric: None,
         };
         self.netlink.route_add(&vpn_table_route).await?;
         tracing::debug!(
@@ -647,6 +657,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             gateway: None,
             if_index: vpn_info.if_index,
             table_id: None,
+            metric: None,
         };
         match self.netlink.route_add(&vpn_main_route).await {
             Ok(_) => {
@@ -667,6 +678,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             gateway: None,
             if_index: vpn_info.if_index,
             table_id: None,
+            metric: None,
         };
         self.netlink.route_replace(&vpn_default_route).await?;
         tracing::debug!("ip route add default dev {}", vpn_info.if_index);
@@ -699,15 +711,16 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 vpn_if_index,
                 vpn_cidr,
                 wan_gw,
+                wan_metric,
             }) => {
-                // Step 1: Set the default route back to the WAN interface
-                // Use replace() to handle case where VPN route still exists
+                // Step 1: Set the default route back to the WAN interface with original metric
                 let wan_default = RouteSpec {
                     destination: Ipv4Addr::UNSPECIFIED,
                     prefix_len: 0,
                     gateway: Some(wan_gw),
                     if_index: wan_if_index,
                     table_id: None,
+                    metric: wan_metric,
                 };
                 teardown_op(
                     "set default route back to interface",
@@ -723,6 +736,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                     gateway: None,
                     if_index: vpn_if_index,
                     table_id: None,
+                    metric: None,
                 };
                 teardown_op(
                     "delete VPN subnet route from main table",
@@ -738,6 +752,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                     gateway: None,
                     if_index: vpn_if_index,
                     table_id: Some(TABLE_ID),
+                    metric: None,
                 };
                 teardown_op(
                     &format!("delete VPN subnet route from table {TABLE_ID}"),
