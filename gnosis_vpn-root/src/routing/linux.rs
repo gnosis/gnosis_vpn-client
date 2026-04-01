@@ -708,8 +708,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         match self.network_device_info.take() {
             Some(NetworkDeviceInfo {
                 wan_if_index,
-                wan_if_name,
-                vpn_if_index: _,
+                vpn_if_index,
                 vpn_cidr,
                 wan_gw,
                 wan_metric,
