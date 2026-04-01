@@ -692,17 +692,17 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     /// This method only tears down VPN-specific routes and the WireGuard interface.
     ///
     /// The steps:
-    ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace)
-    ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN`
+    ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace, original metric)
+    ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN metric $WAN_METRIC`
+    ///   1b. Delete the VPN default route explicitly (no-op if metric-0 WAN replaced it in step 1)
+    ///      Equivalent command: `ip route del default dev $IF_VPN`
     ///   2. Delete the VPN subnet route from the MAIN table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
-    ///   3. Run `wg-quick down` (while bypass is still active for HOPR traffic)
-    ///   4. Delete the VPN subnet route from TABLE_ID
+    ///   3. Delete the VPN subnet route from TABLE_ID
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
-    ///   5. Delete RFC1918 bypass routes (added during setup)
+    ///   4. Delete RFC1918 bypass routes (added during setup)
     ///      Equivalent command: `ip route del $RFC1918_NET dev $IF_WAN`
-    ///   6. Flush the routing table cache
-    ///      Equivalent command: `ip route flush cache`
+    ///   5. Run `wg-quick down` (while bypass is still active for HOPR traffic)
     ///
     async fn teardown(&mut self, logs: Logs) {
         match self.network_device_info.take() {
@@ -726,6 +726,27 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                     "set default route back to interface",
                     &format!("ip route replace default via {wan_gw} dev {wan_if_index}"),
                     || self.netlink.route_replace(&wan_default),
+                )
+                .await;
+
+                // Step 1b: Explicitly remove the VPN default route.
+                // When WAN had a non-zero metric, route_replace above adds a new WAN route
+                // without touching the VPN metric-0 default. We remove it here rather than
+                // relying on wg-quick down to clean it up via interface deletion.
+                // When WAN had metric 0, route_replace already replaced the VPN route, so
+                // this is a no-op (teardown_op tolerates the "not found" error).
+                let vpn_default_route = RouteSpec {
+                    destination: Ipv4Addr::UNSPECIFIED,
+                    prefix_len: 0,
+                    gateway: None,
+                    if_index: vpn_if_index,
+                    table_id: None,
+                    metric: None,
+                };
+                teardown_op(
+                    "delete VPN default route from main table",
+                    &format!("ip route del default dev {vpn_if_index}"),
+                    || self.netlink.route_del(&vpn_default_route),
                 )
                 .await;
 
@@ -1288,6 +1309,7 @@ mod tests {
         assert_eq!(info.if_name, "eth0");
         assert_eq!(info.gateway, Ipv4Addr::new(192, 168, 1, 1));
         assert_eq!(info.ip_addr, Ipv4Addr::new(192, 168, 1, 100));
+        assert_eq!(info.metric, Some(100));
         Ok(())
     }
 
@@ -1523,6 +1545,51 @@ mod tests {
         // WG should be down
         let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(!wg_state.wg_up);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_teardown_restores_wan_metric() -> anyhow::Result<()> {
+        // When the WAN default route has a non-zero metric (common with NetworkManager),
+        // VPN setup adds a *new* metric-0 default rather than replacing the WAN route.
+        // Teardown must explicitly remove the VPN metric-0 default and restore WAN at its original metric.
+        let netlink = MockNetlinkOps::with_state(NetlinkState {
+            routes: vec![RouteSpec {
+                destination: Ipv4Addr::UNSPECIFIED,
+                prefix_len: 0,
+                gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
+                if_index: 2,
+                table_id: None,
+                metric: Some(100),
+            }],
+            links: vec![
+                LinkInfo { index: 2, name: "eth0".into() },
+                LinkInfo { index: 5, name: wireguard::WG_INTERFACE.into() },
+            ],
+            addrs: vec![AddrInfo {
+                if_index: 2,
+                addr: Ipv4Addr::new(192, 168, 1, 100),
+            }],
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_router(netlink.clone(), wg.clone()).await?;
+
+        router.setup().await?;
+        router.teardown(Logs::Suppress).await;
+
+        let nl_state = netlink.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+
+        // Exactly one default route in the main table, on the WAN interface with original metric
+        let defaults: Vec<_> = nl_state
+            .routes
+            .iter()
+            .filter(|r| r.table_id.is_none() && r.prefix_len == 0)
+            .collect();
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].if_index, 2);
+        assert_eq!(defaults[0].metric, Some(100));
 
         Ok(())
     }
