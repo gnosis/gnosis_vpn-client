@@ -693,10 +693,10 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     ///
     /// The steps:
     ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace, original metric)
-    ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN metric $WAN_METRIC`
+    ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN [metric $WAN_METRIC]`
+    ///      (the metric argument is only included if the original default route had a metric)
     ///   1b. Delete the VPN default route explicitly (no-op if metric-0 WAN replaced it in step 1)
     ///      Equivalent command: `ip route del default dev $IF_VPN`
-    ///   2. Delete the VPN subnet route from the MAIN table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
     ///   3. Delete the VPN subnet route from TABLE_ID
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
