@@ -1034,6 +1034,7 @@ mod tests {
                 gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
                 if_index: 2,
                 table_id: None,
+                metric: Some(100),
             }],
             links: vec![LinkInfo {
                 index: 2,
@@ -1228,6 +1229,7 @@ mod tests {
                 gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
                 if_index: 2,
                 table_id: Some(TABLE_ID),
+                metric: Some(100),
             }],
             rules: vec![RuleSpec {
                 fw_mark: FW_MARK,
@@ -1394,6 +1396,7 @@ mod tests {
                 gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
                 if_index: 2,
                 table_id: None,
+                metric: None,
             }],
             links: vec![
                 LinkInfo {
