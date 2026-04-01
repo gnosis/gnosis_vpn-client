@@ -1564,8 +1564,14 @@ mod tests {
                 metric: Some(100),
             }],
             links: vec![
-                LinkInfo { index: 2, name: "eth0".into() },
-                LinkInfo { index: 5, name: wireguard::WG_INTERFACE.into() },
+                LinkInfo {
+                    index: 2,
+                    name: "eth0".into(),
+                },
+                LinkInfo {
+                    index: 5,
+                    name: wireguard::WG_INTERFACE.into(),
+                },
             ],
             addrs: vec![AddrInfo {
                 if_index: 2,
