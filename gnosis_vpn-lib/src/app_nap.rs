@@ -1,10 +1,10 @@
-/// Prevents macOS App Nap from throttling this process.
-///
-/// On macOS, when the GUI app is backgrounded, the OS may apply App Nap to
-/// daemon child processes, throttling timers and CPU. This module calls
-/// `[NSProcessInfo beginActivityWithOptions:reason:]` to opt out.
-///
-/// On non-macOS platforms, this is a zero-cost no-op.
+//! Prevents macOS App Nap from throttling this process.
+//!
+//! On macOS, when the GUI app is backgrounded, the OS may apply App Nap to
+//! daemon child processes, throttling timers and CPU. This module calls
+//! `[NSProcessInfo beginActivityWithOptions:reason:]` to opt out.
+//!
+//! On non-macOS platforms, this is a zero-cost no-op.
 
 #[cfg(target_os = "macos")]
 mod macos {
