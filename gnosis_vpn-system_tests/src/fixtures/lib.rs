@@ -85,21 +85,22 @@ pub async fn download_file(size_bytes: u64, proxy: Option<&Url>) -> anyhow::Resu
         debug!(url = %download_url, size_bytes, "downloading random file");
     }
 
-    let resp = client
+    let mut resp = client
         .build()?
         .get(download_url.clone())
         .send()
         .await?
         .error_for_status()?;
-
-    let body = resp.bytes().await?;
-
-    if body.is_empty() {
+    let mut total_bytes: u64 = 0;
+    while let Some(chunk) = resp.chunk().await? {
+        total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+    }
+    if total_bytes == 0 {
         warn!("downloaded body from {download_url} was empty");
-    } else if body.len() as u64 != size_bytes {
+    } else if total_bytes != size_bytes {
         warn!(
             expected = size_bytes,
-            actual = body.len(),
+            actual = total_bytes,
             "downloaded body had unexpected size"
         );
     }
