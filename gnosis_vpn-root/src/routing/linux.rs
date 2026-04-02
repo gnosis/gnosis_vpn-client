@@ -456,9 +456,17 @@ const RULE_PRIORITY: u32 = 1;
 /// Get WAN interface info via netlink.
 /// Can be called before VPN interface exists.
 async fn get_wan_info<N: NetlinkOps>(netlink: &N) -> Result<WanInfo, Error> {
-    // The default route is the one with the longest prefix match (= smallest prefix length)
     let routes = netlink.route_list(None).await?;
-    let default_route = routes.iter().min_by_key(|r| r.prefix_len).ok_or(Error::NoInterface)?;
+
+    // Only consider main-table default routes (table_id == None means RT_TABLE_MAIN).
+    // Non-main tables (e.g. TABLE_ID=108) may also contain default routes that must not
+    // be confused with the WAN default. Among equal prefix_len=0 candidates, pick the
+    // one with the lowest metric (None treated as 0, same as the kernel default).
+    let default_route = routes
+        .iter()
+        .filter(|r| r.table_id.is_none() && r.prefix_len == 0)
+        .min_by_key(|r| r.metric.unwrap_or(0))
+        .ok_or(Error::NoInterface)?;
 
     let if_index = default_route.if_index;
     let gateway = default_route.gateway.ok_or(Error::NoInterface)?;
@@ -1319,6 +1327,76 @@ mod tests {
         let netlink = MockNetlinkOps::new();
         let result = get_wan_info(&netlink).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_wan_info_ignores_non_main_table_default_route() {
+        // A default route in a custom table (e.g. TABLE_ID=108) must not be picked
+        // even though it has prefix_len=0; only main-table (table_id=None) routes qualify.
+        let netlink = MockNetlinkOps::with_state(NetlinkState {
+            routes: vec![RouteSpec {
+                destination: Ipv4Addr::UNSPECIFIED,
+                prefix_len: 0,
+                gateway: Some(Ipv4Addr::new(10, 0, 0, 1)),
+                if_index: 2,
+                table_id: Some(TABLE_ID),
+                metric: None,
+            }],
+            links: vec![LinkInfo {
+                index: 2,
+                name: "eth0".into(),
+            }],
+            addrs: vec![AddrInfo {
+                if_index: 2,
+                addr: Ipv4Addr::new(192, 168, 1, 100),
+            }],
+            ..Default::default()
+        });
+        let result = get_wan_info(&netlink).await;
+        assert!(result.is_err(), "should fail when only non-main-table default routes exist");
+    }
+
+    #[tokio::test]
+    async fn get_wan_info_picks_lowest_metric_when_multiple_defaults() -> anyhow::Result<()> {
+        // When multiple main-table default routes exist (e.g. multi-WAN), pick the one
+        // with the lowest metric — that is the one the kernel prefers.
+        let netlink = MockNetlinkOps::with_state(NetlinkState {
+            routes: vec![
+                RouteSpec {
+                    destination: Ipv4Addr::UNSPECIFIED,
+                    prefix_len: 0,
+                    gateway: Some(Ipv4Addr::new(192, 168, 1, 1)),
+                    if_index: 2,
+                    table_id: None,
+                    metric: Some(200),
+                },
+                RouteSpec {
+                    destination: Ipv4Addr::UNSPECIFIED,
+                    prefix_len: 0,
+                    gateway: Some(Ipv4Addr::new(10, 0, 0, 1)),
+                    if_index: 3,
+                    table_id: None,
+                    metric: Some(100),
+                },
+            ],
+            links: vec![
+                LinkInfo { index: 2, name: "eth0".into() },
+                LinkInfo { index: 3, name: "eth1".into() },
+            ],
+            addrs: vec![
+                AddrInfo { if_index: 2, addr: Ipv4Addr::new(192, 168, 1, 100) },
+                AddrInfo { if_index: 3, addr: Ipv4Addr::new(10, 0, 0, 100) },
+            ],
+            ..Default::default()
+        });
+        let info = get_wan_info(&netlink)
+            .await
+            .map_err(|e| anyhow::anyhow!("get_wan_info failed: {e}"))?;
+
+        assert_eq!(info.if_index, 3, "should pick the route with the lowest metric");
+        assert_eq!(info.gateway, Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(info.metric, Some(100));
+        Ok(())
     }
 
     // ====================================================================
