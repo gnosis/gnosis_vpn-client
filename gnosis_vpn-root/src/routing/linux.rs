@@ -1353,7 +1353,10 @@ mod tests {
             ..Default::default()
         });
         let result = get_wan_info(&netlink).await;
-        assert!(result.is_err(), "should fail when only non-main-table default routes exist");
+        assert!(
+            result.is_err(),
+            "should fail when only non-main-table default routes exist"
+        );
     }
 
     #[tokio::test]
@@ -1380,12 +1383,24 @@ mod tests {
                 },
             ],
             links: vec![
-                LinkInfo { index: 2, name: "eth0".into() },
-                LinkInfo { index: 3, name: "eth1".into() },
+                LinkInfo {
+                    index: 2,
+                    name: "eth0".into(),
+                },
+                LinkInfo {
+                    index: 3,
+                    name: "eth1".into(),
+                },
             ],
             addrs: vec![
-                AddrInfo { if_index: 2, addr: Ipv4Addr::new(192, 168, 1, 100) },
-                AddrInfo { if_index: 3, addr: Ipv4Addr::new(10, 0, 0, 100) },
+                AddrInfo {
+                    if_index: 2,
+                    addr: Ipv4Addr::new(192, 168, 1, 100),
+                },
+                AddrInfo {
+                    if_index: 3,
+                    addr: Ipv4Addr::new(10, 0, 0, 100),
+                },
             ],
             ..Default::default()
         });
