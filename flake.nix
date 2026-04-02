@@ -109,39 +109,26 @@
             excludes = [ ];
           };
 
-          treefmt = {
-            settings.global.excludes = [
-              "LICENSE"
-              "LATEST"
-              "target/*"
-              "modules/*"
-            ];
-
-            programs.deno.enable = true;
-            settings.formatter.deno.excludes = [
-              "*.toml"
-              "*.yml"
-              "*.yaml"
-            ];
-            programs.rustfmt.enable = true;
-            programs.shellcheck.enable = true;
-            programs.shfmt = {
-              enable = true;
-              indent_size = 4;
-            };
-            programs.taplo.enable = true; # TOML formatter
-            programs.yamlfmt.enable = true;
-            # trying setting from https://github.com/google/yamlfmt/blob/main/docs/config-file.md
-            settings.formatter.yamlfmt.settings = {
-              formatter.type = "basic";
-              formatter.max_line_length = 120;
-              formatter.trim_trailing_whitespace = true;
-              formatter.include_document_start = true;
-            };
-          };
         in
         {
-          inherit treefmt;
+          # nix-lib's flake module sets up treefmt and formatter automatically.
+          # Use nix-lib.treefmt to extend it with project-specific settings.
+          # nix-lib already covers: rustfmt, nixfmt, taplo, yamlfmt, shfmt, prettier, ruff-format.
+          nix-lib.treefmt = {
+            globalExcludes = [
+              "modules/*"
+            ];
+            extraFormatters = {
+              programs.deno.enable = true;
+              settings.formatter.deno.excludes = [
+                "*.toml"
+                "*.yml"
+                "*.yaml"
+              ];
+              programs.shellcheck.enable = true;
+              programs.shfmt.indent_size = 4;
+            };
+          };
 
           checks = {
             inherit (gnosisvpnPackages)
@@ -155,8 +142,16 @@
           };
 
           packages = {
-            binary-gnosis_vpn = gnosisvpnPackages.binary-gnosis_vpn;
-            binary-gnosis_vpn-dev = gnosisvpnPackages.binary-gnosis_vpn-dev;
+            inherit (gnosisvpnPackages)
+              binary-gnosis_vpn
+              binary-gnosis_vpn-dev
+              binary-gnosis_vpn-x86_64-linux
+              binary-gnosis_vpn-x86_64-linux-dev
+              binary-gnosis_vpn-aarch64-linux
+              binary-gnosis_vpn-aarch64-linux-dev
+              binary-gnosis_vpn-aarch64-darwin
+              binary-gnosis_vpn-aarch64-darwin-dev
+              ;
             inherit pre-commit-check;
             default = gnosisvpnPackages.binary-gnosis_vpn;
           };
@@ -182,7 +177,6 @@
             }
           );
 
-          formatter = config.treefmt.build.wrapper;
         };
       flake = { };
     };

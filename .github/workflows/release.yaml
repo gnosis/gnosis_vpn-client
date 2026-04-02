@@ -137,11 +137,9 @@ jobs:
           rm Cargo.toml.bak
           nix develop --command cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.source == null) | .name' | xargs -I{} nix develop --command cargo update -p {}
           echo "bump_version=${bump_version}" >> $GITHUB_OUTPUT
-          echo v${{ steps.environment.outputs.release_version }} > LATEST
-          echo "LATEST updated to v${{ steps.environment.outputs.release_version }}"
       - uses: EndBug/add-and-commit@v9
         with:
-          add: '["Cargo.*", "LATEST" ]'
+          add: '["Cargo.*" ]'
           message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
           pathspec_error_handling: exitImmediately
           default_author: github_actions
