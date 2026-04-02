@@ -114,7 +114,7 @@ impl NetlinkOps for MockNetlinkOps {
         s.check_fail("route_del")?;
 
         let before = s.routes.len();
-        // Linux kernel matches by destination + table + interface when deleting.
+        // Linux kernel matches by destination + prefix_len + table + interface when deleting.
         // When metric is set in the spec, build_route_message includes the priority,
         // so the kernel also matches on metric — only that specific route is deleted.
         s.routes.retain(|r| {
