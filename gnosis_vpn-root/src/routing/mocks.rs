@@ -115,11 +115,14 @@ impl NetlinkOps for MockNetlinkOps {
 
         let before = s.routes.len();
         // Linux kernel matches by destination + table + interface when deleting.
+        // When metric is set in the spec, build_route_message includes the priority,
+        // so the kernel also matches on metric — only that specific route is deleted.
         s.routes.retain(|r| {
             !(r.destination == route.destination
                 && r.prefix_len == route.prefix_len
                 && r.table_id == route.table_id
-                && r.if_index == route.if_index)
+                && r.if_index == route.if_index
+                && route.metric.map_or(true, |m| r.metric == Some(m)))
         });
         if s.routes.len() == before {
             return Err(Error::General("route not found".into()));
