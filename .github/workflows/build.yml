@@ -45,7 +45,7 @@ jobs:
         env:
           USER: runner
       - name: Run flake checks
-        run: nix flake check -L --show-trace
+        run: nix flake check -L --show-trace --max-jobs 1
   system-test:
     name: Execute system test against rotsee network
     runs-on: ubuntu-22.04
