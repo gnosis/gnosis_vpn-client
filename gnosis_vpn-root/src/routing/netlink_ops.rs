@@ -141,10 +141,20 @@ impl RealNetlinkOps {
             _ => None,
         });
 
-        let table_id = msg.attributes.iter().find_map(|a| match a {
+        // RTA_TABLE attribute is only present for table IDs >= 256; for smaller IDs
+        // (including custom tables like 108) the kernel encodes the table in the route
+        // header's rtm_table field and omits the attribute entirely.
+        const RT_TABLE_MAIN: u32 = 254;
+        let rta_table = msg.attributes.iter().find_map(|a| match a {
             RouteAttribute::Table(id) => Some(*id),
             _ => None,
         });
+        let raw_table = rta_table.unwrap_or_else(|| u32::from(msg.header.table));
+        let table_id = if raw_table == RT_TABLE_MAIN {
+            None
+        } else {
+            Some(raw_table)
+        };
 
         let metric = msg.attributes.iter().find_map(|a| match a {
             RouteAttribute::Priority(p) => Some(*p),
