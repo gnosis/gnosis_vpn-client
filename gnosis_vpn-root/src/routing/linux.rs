@@ -695,14 +695,15 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace, original metric)
     ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN [metric $WAN_METRIC]`
     ///      (the metric argument is only included if the original default route had a metric)
-    ///   1b. Delete the VPN default route explicitly (no-op if metric-0 WAN replaced it in step 1)
+    ///   2. Delete the VPN default route explicitly (no-op if metric-0 WAN replaced it in step 1)
     ///      Equivalent command: `ip route del default dev $IF_VPN`
+    ///   3. Delete the VPN subnet route from the MAIN routing table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
-    ///   3. Delete the VPN subnet route from TABLE_ID
+    ///   4. Delete the VPN subnet route from TABLE_ID
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN table $TABLE_ID`
-    ///   4. Delete RFC1918 bypass routes (added during setup)
+    ///   5. Delete RFC1918 bypass routes (added during setup)
     ///      Equivalent command: `ip route del $RFC1918_NET dev $IF_WAN`
-    ///   5. Run `wg-quick down` (while bypass is still active for HOPR traffic)
+    ///   6. Run `wg-quick down` (while bypass is still active for HOPR traffic)
     ///
     async fn teardown(&mut self, logs: Logs) {
         match self.network_device_info.take() {
@@ -729,7 +730,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 )
                 .await;
 
-                // Step 1b: Explicitly remove the VPN default route.
+                // Step 2: Explicitly remove the VPN default route.
                 // When WAN had a non-zero metric, route_replace above adds a new WAN route
                 // without touching the VPN metric-0 default. We remove it here rather than
                 // relying on wg-quick down to clean it up via interface deletion.
@@ -750,7 +751,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 )
                 .await;
 
-                // Step 2: Delete the VPN subnet route from the main table
+                // Step 3: Delete the VPN subnet route from the main table
                 let vpn_main_route = RouteSpec {
                     destination: vpn_cidr.first_address(),
                     prefix_len: vpn_cidr.network_length(),
@@ -766,7 +767,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 )
                 .await;
 
-                // Step 3: Delete the TABLE_ID routing table VPN route
+                // Step 4: Delete the TABLE_ID routing table VPN route
                 let vpn_table_route = RouteSpec {
                     destination: vpn_cidr.first_address(),
                     prefix_len: vpn_cidr.network_length(),
@@ -782,7 +783,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                 )
                 .await;
 
-                // Step 4: Delete RFC1918 bypass routes that were added during setup
+                // Step 5: Delete RFC1918 bypass routes that were added during setup
                 for route in self.added_routes.drain(..) {
                     teardown_op(
                         &format!("delete RFC1918 bypass route {}/{}", route.destination, route.prefix_len),
@@ -795,7 +796,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
                     .await;
                 }
 
-                // Step 5: Run wg-quick down while bypass infrastructure is still active
+                // Step 6: Run wg-quick down while bypass infrastructure is still active
                 // HOPR traffic continues: firewall marks -> fwmark rule -> TABLE_ID -> WAN
                 match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
                     Ok(_) => tracing::debug!("wg-quick down"),
