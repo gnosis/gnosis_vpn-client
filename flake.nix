@@ -82,7 +82,13 @@
           );
 
           gnosisvpnPackages = import ./nix/gnosisvpn.nix {
-            inherit lib nixLib self craneLib advisory-db;
+            inherit
+              lib
+              nixLib
+              self
+              craneLib
+              advisory-db
+              ;
           };
 
           pre-commit-check = pre-commit.lib.${system}.run {

@@ -25,9 +25,18 @@ let
   };
 
   sources = {
-    main = nixLib.mkSrc { inherit fs; root = ../.; };
-    test = nixLib.mkTestSrc { inherit fs; root = ../.; };
-    deps = nixLib.mkDepsSrc { inherit fs; root = ../.; };
+    main = nixLib.mkSrc {
+      inherit fs;
+      root = ../.;
+    };
+    test = nixLib.mkTestSrc {
+      inherit fs;
+      root = ../.;
+    };
+    deps = nixLib.mkDepsSrc {
+      inherit fs;
+      root = ../.;
+    };
     # Includes audit and license config files needed by crane-based checks
     checks = nixLib.mkSrc {
       inherit fs;
@@ -40,7 +49,11 @@ let
   };
 
   mkGnosisvpnBuildArgs =
-    { src, depsSrc, extraCargoArgs ? "" }:
+    {
+      src,
+      depsSrc,
+      extraCargoArgs ? "",
+    }:
     {
       inherit src depsSrc rev;
       # prependPackageName=false: skip the automatic `-p gnosis_vpn` that nix-lib
@@ -56,12 +69,10 @@ in
   # Local builds
 
   # binary-gnosis_vpn (renamed from gnosis_vpn-release)
-  binary-gnosis_vpn = builders.local.callPackage nixLib.mkRustPackage (
-    mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    }
-  );
+  binary-gnosis_vpn = builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
+    src = sources.main;
+    depsSrc = sources.deps;
+  });
 
   # binary-gnosis_vpn-dev (renamed from gnosis_vpn-dev)
   binary-gnosis_vpn-dev = builders.local.callPackage nixLib.mkRustPackage (
@@ -69,55 +80,63 @@ in
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // { CARGO_PROFILE = "dev"; }
+    // {
+      CARGO_PROFILE = "dev";
+    }
   );
 
   # Cross-compiled — x86_64 Linux
-  binary-gnosis_vpn-x86_64-linux = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-    mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    }
-  );
+  binary-gnosis_vpn-x86_64-linux =
+    builders.x86_64-linux.callPackage nixLib.mkRustPackage
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
 
   binary-gnosis_vpn-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
     (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // { CARGO_PROFILE = "dev"; }
+    // {
+      CARGO_PROFILE = "dev";
+    }
   );
 
   # Cross-compiled — aarch64 Linux
-  binary-gnosis_vpn-aarch64-linux = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-    mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    }
-  );
+  binary-gnosis_vpn-aarch64-linux =
+    builders.aarch64-linux.callPackage nixLib.mkRustPackage
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
 
   binary-gnosis_vpn-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
     (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // { CARGO_PROFILE = "dev"; }
+    // {
+      CARGO_PROFILE = "dev";
+    }
   );
 
   # macOS — aarch64
-  binary-gnosis_vpn-aarch64-darwin = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
-    mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    }
-  );
+  binary-gnosis_vpn-aarch64-darwin =
+    builders.aarch64-darwin.callPackage nixLib.mkRustPackage
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
 
   binary-gnosis_vpn-aarch64-darwin-dev = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
     (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // { CARGO_PROFILE = "dev"; }
+    // {
+      CARGO_PROFILE = "dev";
+    }
   );
 
   # Tests / QA
@@ -127,7 +146,9 @@ in
       depsSrc = sources.deps;
       extraCargoArgs = "--bin gnosis_vpn-system_tests";
     })
-    // { runTests = true; }
+    // {
+      runTests = true;
+    }
   );
 
   gnosis_vpn-clippy = builders.local.callPackage nixLib.mkRustPackage (
@@ -135,7 +156,9 @@ in
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // { runClippy = true; }
+    // {
+      runClippy = true;
+    }
   );
 
   gnosis_vpn-docs = builders.local.callPackage nixLib.mkRustPackage (
@@ -143,7 +166,9 @@ in
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // { buildDocs = true; }
+    // {
+      buildDocs = true;
+    }
   );
 
   # Audit dependencies

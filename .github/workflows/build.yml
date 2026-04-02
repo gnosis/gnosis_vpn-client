@@ -54,7 +54,7 @@ jobs:
       apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   checks:
-    name: Lint, format and unit test
+    name: Checks
     runs-on: depot-ubuntu-22.04-4
     steps:
       - name: Checkout repository
@@ -70,7 +70,7 @@ jobs:
       - name: Run flake checks
         run: nix flake check -L --show-trace --max-jobs 1
   system-test:
-    name: Execute system test against rotsee network
+    name: System tests
     runs-on: depot-ubuntu-22.04-4
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
