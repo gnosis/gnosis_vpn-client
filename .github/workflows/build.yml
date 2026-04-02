@@ -101,5 +101,5 @@ jobs:
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
-          SYSTEM_TEST_WORKER_BINARY: ./result/bin/gnosis_vpn-worker
-        run: just system-tests ./result-tests/bin/gnosis_vpn-system_tests
+          SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result/bin/gnosis_vpn-worker
+        run: just system-tests ${{ github.workspace }}/result-tests/bin/gnosis_vpn-system_tests
