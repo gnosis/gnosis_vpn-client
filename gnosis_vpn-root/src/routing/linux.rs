@@ -700,10 +700,11 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     /// This method only tears down VPN-specific routes and the WireGuard interface.
     ///
     /// The steps:
-    ///   1. Restore the default route in the MAIN routing table to WAN (atomic replace, original metric)
+    ///   1. Reinstate the original WAN default route in the MAIN routing table (atomic replace, original metric).
+    ///      This ensures the WAN default exists with its original metric alongside any VPN default.
     ///      Equivalent command: `ip route replace default via $WAN_GW dev $IF_WAN [metric $WAN_METRIC]`
     ///      (the metric argument is only included if the original default route had a metric)
-    ///   2. Delete the VPN default route explicitly (no-op if metric-0 WAN replaced it in step 1)
+    ///   2. Delete the VPN default route explicitly so WAN becomes the effective default (if present).
     ///      Equivalent command: `ip route del default dev $IF_VPN`
     ///   3. Delete the VPN subnet route from the MAIN routing table
     ///      Equivalent command: `ip route del $VPN_SUBNET dev $IF_VPN`
