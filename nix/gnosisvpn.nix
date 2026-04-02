@@ -12,6 +12,7 @@
   lib,
   nixLib,
   self,
+  pkgs,
   craneLib,
   advisory-db,
 }:
@@ -48,6 +49,17 @@ let
     };
   };
 
+  # Linux static builds require libmnl, libnftnl, and sqlite in addition to
+  # the openssl+cacert that nix-lib provides by default.
+  linuxExtraBuildInputs = lib.optionals pkgs.stdenv.isLinux (
+    with pkgs.pkgsStatic;
+    [
+      libmnl
+      libnftnl
+      sqlite
+    ]
+  );
+
   mkGnosisvpnBuildArgs =
     {
       src,
@@ -63,6 +75,7 @@ let
       prependPackageName = false;
       cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}";
       cargoToml = ../Cargo.toml;
+      extraBuildInputs = linuxExtraBuildInputs;
     };
 in
 {
@@ -121,24 +134,6 @@ in
     }
   );
 
-  # macOS — aarch64
-  binary-gnosis_vpn-aarch64-darwin =
-    builders.aarch64-darwin.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-gnosis_vpn-aarch64-darwin-dev = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      CARGO_PROFILE = "dev";
-    }
-  );
-
   # Tests / QA
   gnosis_vpn-test = builders.local.callPackage nixLib.mkRustPackage (
     (mkGnosisvpnBuildArgs {
@@ -185,4 +180,23 @@ in
   gnosis_vpn-licenses = craneLib.cargoDeny {
     src = sources.checks;
   };
+}
+// lib.optionalAttrs pkgs.stdenv.isDarwin {
+  # macOS — aarch64 (only available on Darwin hosts; cctools is Darwin-only)
+  binary-gnosis_vpn-aarch64-darwin =
+    builders.aarch64-darwin.callPackage nixLib.mkRustPackage
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
+
+  binary-gnosis_vpn-aarch64-darwin-dev = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
+    (mkGnosisvpnBuildArgs {
+      src = sources.main;
+      depsSrc = sources.deps;
+    })
+    // {
+      CARGO_PROFILE = "dev";
+    }
+  );
 }
