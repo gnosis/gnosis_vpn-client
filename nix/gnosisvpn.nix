@@ -156,7 +156,7 @@ in
     }
   );
 
-  gnosis_vpn-docs = builders.local.callPackage nixLib.mkRustPackage (
+  gnosis_vpn-docs = builders.localNightly.callPackage nixLib.mkRustPackage (
     (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;

@@ -133,7 +133,6 @@
 
           checks = {
             inherit (gnosisvpnPackages)
-              binary-gnosis_vpn-dev
               gnosis_vpn-clippy
               gnosis_vpn-docs
               gnosis_vpn-test
@@ -142,25 +141,24 @@
               ;
           };
 
-          packages =
-            {
-              inherit (gnosisvpnPackages)
-                binary-gnosis_vpn
-                binary-gnosis_vpn-dev
-                binary-gnosis_vpn-x86_64-linux
-                binary-gnosis_vpn-x86_64-linux-dev
-                binary-gnosis_vpn-aarch64-linux
-                binary-gnosis_vpn-aarch64-linux-dev
-                ;
-              inherit pre-commit-check;
-              default = gnosisvpnPackages.binary-gnosis_vpn;
-            }
-            // lib.optionalAttrs pkgs.stdenv.isDarwin {
-              inherit (gnosisvpnPackages)
-                binary-gnosis_vpn-aarch64-darwin
-                binary-gnosis_vpn-aarch64-darwin-dev
-                ;
-            };
+          packages = {
+            inherit (gnosisvpnPackages)
+              binary-gnosis_vpn
+              binary-gnosis_vpn-dev
+              binary-gnosis_vpn-x86_64-linux
+              binary-gnosis_vpn-x86_64-linux-dev
+              binary-gnosis_vpn-aarch64-linux
+              binary-gnosis_vpn-aarch64-linux-dev
+              ;
+            inherit pre-commit-check;
+            default = gnosisvpnPackages.binary-gnosis_vpn;
+          }
+          // lib.optionalAttrs pkgs.stdenv.isDarwin {
+            inherit (gnosisvpnPackages)
+              binary-gnosis_vpn-aarch64-darwin
+              binary-gnosis_vpn-aarch64-darwin-dev
+              ;
+          };
 
           devShells.default = craneLib.devShell (
             {
