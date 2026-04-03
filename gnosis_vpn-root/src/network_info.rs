@@ -50,7 +50,7 @@ fn format_route(route: &Option<RouteInfo>) -> String {
     match route {
         None => "none".to_string(),
         Some(r) => format!(
-            "{{interface={} gateway={} ip={}}}",
+            "(interface={} gateway={} ip={})",
             r.interface,
             r.gateway.as_deref().unwrap_or("?"),
             r.ip.as_deref().unwrap_or("?"),
