@@ -30,7 +30,11 @@ impl NetworkInfo {
         let ipv4_route = gather_ipv4_route().await;
         let ipv6_route = gather_ipv6_route().await;
         let dns_nameservers = gather_dns_nameservers().await;
-        Self { ipv4_route, ipv6_route, dns_nameservers }
+        Self {
+            ipv4_route,
+            ipv6_route,
+            dns_nameservers,
+        }
     }
 }
 
@@ -204,7 +208,11 @@ fn parse_ipv6_linux_route(output: &str) -> Option<RouteInfo> {
     let interface = after(&tokens, "dev").map(String::from)?;
     let gateway = after(&tokens, "via").map(String::from);
 
-    Some(RouteInfo { interface, gateway, ip: None })
+    Some(RouteInfo {
+        interface,
+        gateway,
+        ip: None,
+    })
 }
 
 /// Parses `ip -6 addr show dev <iface> scope global` output.
@@ -225,7 +233,11 @@ fn parse_ipv6_linux_addr(output: &str) -> Option<String> {
 fn parse_ipv4_macos_route(output: &str) -> Option<RouteInfo> {
     let interface = kv_field(output, "interface:")?;
     let gateway = kv_field(output, "gateway:");
-    Some(RouteInfo { interface, gateway, ip: None })
+    Some(RouteInfo {
+        interface,
+        gateway,
+        ip: None,
+    })
 }
 
 /// Parses `ifconfig <iface>` output on macOS, returning the first inet address.
@@ -245,7 +257,11 @@ fn parse_ipv4_macos_addr(output: &str) -> Option<String> {
 fn parse_ipv6_macos_route(output: &str) -> Option<RouteInfo> {
     let interface = kv_field(output, "interface:")?;
     let gateway = kv_field(output, "gateway:");
-    Some(RouteInfo { interface, gateway, ip: None })
+    Some(RouteInfo {
+        interface,
+        gateway,
+        ip: None,
+    })
 }
 
 /// Parses `ifconfig <iface> inet6` output on macOS.
