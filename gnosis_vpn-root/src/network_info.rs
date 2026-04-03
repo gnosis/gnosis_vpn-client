@@ -496,8 +496,8 @@ mod tests {
         };
         assert_eq!(
             info.to_string(),
-            "ipv4_default_route={interface=eth0 gateway=192.168.1.1 ip=192.168.1.100} \
-             ipv6_default_route={interface=eth0 gateway=fe80::1 ip=2001:db8::1} \
+            "ipv4_default_route=(interface=eth0 gateway=192.168.1.1 ip=192.168.1.100) \
+             ipv6_default_route=(interface=eth0 gateway=fe80::1 ip=2001:db8::1) \
              dns=8.8.8.8,8.8.4.4"
         );
     }
@@ -528,7 +528,7 @@ mod tests {
         };
         assert_eq!(
             info.to_string(),
-            "ipv4_default_route={interface=eth0 gateway=? ip=?} ipv6_default_route=none dns=1.1.1.1"
+            "ipv4_default_route=(interface=eth0 gateway=? ip=?) ipv6_default_route=none dns=1.1.1.1"
         );
     }
 }
