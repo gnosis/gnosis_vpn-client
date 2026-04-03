@@ -22,6 +22,8 @@ jobs:
     if: >-
       github.event_name != 'pull_request' || github.event.pull_request.merged == true || contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))
     runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
     timeout-minutes: 240
     steps:
       - name: Set environment variables
