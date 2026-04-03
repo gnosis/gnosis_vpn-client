@@ -281,9 +281,11 @@ fn parse_ipv6_macos_addr(output: &str) -> Option<String> {
 fn parse_dns_nameservers(content: &str) -> Vec<String> {
     content
         .lines()
+        .map(str::trim)
         .filter(|l| !l.starts_with('#'))
         .filter_map(|l| l.strip_prefix("nameserver "))
-        .map(|s| s.trim().to_string())
+        .filter_map(|s| s.split_whitespace().next())
+        .map(String::from)
         .collect()
 }
 
@@ -472,8 +474,14 @@ mod tests {
     }
 
     #[test]
-    fn dns_trims_trailing_whitespace() {
-        let content = "nameserver 1.1.1.1  \nnameserver  8.8.8.8\n";
+    fn dns_strips_inline_comments() {
+        let content = "nameserver 8.8.8.8 # corp-dns\nnameserver 1.1.1.1\n";
+        assert_eq!(parse_dns_nameservers(content), vec!["8.8.8.8", "1.1.1.1"]);
+    }
+
+    #[test]
+    fn dns_handles_leading_whitespace() {
+        let content = "  nameserver 1.1.1.1\n\tnameserver 8.8.8.8\n";
         assert_eq!(parse_dns_nameservers(content), vec!["1.1.1.1", "8.8.8.8"]);
     }
 
