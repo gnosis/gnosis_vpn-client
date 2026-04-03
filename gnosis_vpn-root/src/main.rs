@@ -379,7 +379,7 @@ async fn keep_alive_timer(
                             keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
                         KeepAliveInstruction::Ignite(duration) => {
-                            tracing::debug!(?duration, "ignite keep alive timer");
+                            tracing::info!(?duration, "ignite keep alive timer");
                             active = true;
                             dur = duration;
                             keepalive.as_mut().reset(time::Instant::now() + dur);
