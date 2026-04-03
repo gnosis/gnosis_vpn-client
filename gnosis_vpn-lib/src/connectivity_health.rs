@@ -256,9 +256,9 @@ impl Display for ConnectivityHealth {
 impl Display for Need {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Need::Channel(addr) => write!(f, "needs peered channel to {}", addr),
+            Need::Channel(addr) => write!(f, "needs peered channel to {}", addr.to_checksum()),
             Need::AnyChannel => write!(f, "needs any peered channel"),
-            Need::Peering(addr) => write!(f, "needs peer {}", addr),
+            Need::Peering(addr) => write!(f, "needs peer {}", addr.to_checksum()),
             Need::Nothing => write!(f, "unable to connect"),
             Need::DestinationMissing => write!(f, "destination missing"),
         }

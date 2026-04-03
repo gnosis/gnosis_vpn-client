@@ -15,7 +15,7 @@ impl Display for Info {
         write!(
             f,
             "Info(node_address: {}({}), safe_address: {})",
-            self.node_address, self.node_peer_id, self.safe_address
+            self.node_address.to_checksum(), self.node_peer_id, self.safe_address.to_checksum()
         )
     }
 }

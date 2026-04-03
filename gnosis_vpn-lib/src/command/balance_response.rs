@@ -137,7 +137,7 @@ impl Display for ChannelBalance {
 impl Display for ChannelDestination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ChannelDestination::Unconfigured(addr) => write!(f, "{addr} (unconfigured)"),
+            ChannelDestination::Unconfigured(addr) => write!(f, "{} (unconfigured)", addr.to_checksum()),
             ChannelDestination::Configured((id, addr)) => write!(f, "{checksum} ({id})", checksum = addr.to_checksum()),
         }
     }
