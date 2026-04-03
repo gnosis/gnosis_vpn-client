@@ -3,7 +3,7 @@ use exitcode::{self, ExitCode};
 use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
-use gnosis_vpn_lib::connection::destination::RoutingOptions;
+use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -286,7 +286,11 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 node_addr = stats.node_address.to_checksum()
             ));
             for n in nodes.clone() {
-                str_resp.push_str(&format!(" {n} --VIA-->"));
+                let formatted = match n {
+                    NodeId::Chain(addr) => addr.to_checksum(),
+                    NodeId::Offchain(peer_id) => peer_id.to_string(),
+                };
+                str_resp.push_str(&format!(" {formatted} --VIA-->"));
             }
             // safe to truncate as nodes cannot be empty - ensured by type definition
             str_resp.truncate(str_resp.len() - 8);
