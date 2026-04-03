@@ -101,7 +101,9 @@ fn pretty_print(resp: &Response) {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
                 "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
-                info.node_address.to_checksum(), info.node_peer_id, info.safe_address.to_checksum()
+                info.node_address.to_checksum(),
+                info.node_peer_id,
+                info.safe_address.to_checksum()
             ));
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}\n"));
             if channels_out.is_empty() {
@@ -294,7 +296,10 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
             }
             // safe to truncate as nodes cannot be empty - ensured by type definition
             str_resp.truncate(str_resp.len() - 8);
-            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address.to_checksum()));
+            str_resp.push_str(&format!(
+                "--TO--> {addr}(exit)\n",
+                addr = stats.destination.address.to_checksum()
+            ));
         }
         RoutingOptions::Hops(nr) => {
             let nr_val: usize = nr.into();

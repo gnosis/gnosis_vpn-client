@@ -404,7 +404,10 @@ impl Display for RunMode {
                 funding_tool,
                 error,
             } => {
-                let mut msg = format!("Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}", node_address.to_checksum());
+                let mut msg = format!(
+                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
+                    node_address.to_checksum()
+                );
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
                         format!("{msg}, funding tool: {tool}, error: {error})")
@@ -415,7 +418,9 @@ impl Display for RunMode {
                 };
                 write!(f, "{}", msg)
             }
-            RunMode::DeployingSafe { node_address } => write!(f, "Deploying Safe (node: {})", node_address.to_checksum()),
+            RunMode::DeployingSafe { node_address } => {
+                write!(f, "Deploying Safe (node: {})", node_address.to_checksum())
+            }
             RunMode::Warmup {
                 hopr_init_status,
                 hopr_status,
