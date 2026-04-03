@@ -28,6 +28,7 @@ use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
+mod network_info;
 mod routing;
 mod wg_tooling;
 
@@ -426,6 +427,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
+
+    let network_info = network_info::NetworkInfo::gather().await;
+    tracing::info!(%network_info, "host network info");
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
