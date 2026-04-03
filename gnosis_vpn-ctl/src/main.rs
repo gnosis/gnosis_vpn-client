@@ -101,7 +101,7 @@ fn pretty_print(resp: &Response) {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
                 "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
-                info.node_address, info.node_peer_id, info.safe_address
+                info.node_address.to_checksum(), info.node_peer_id, info.safe_address.to_checksum()
             ));
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}\n"));
             if channels_out.is_empty() {
@@ -283,14 +283,14 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
         RoutingOptions::IntermediatePath(ref nodes) => {
             str_resp.push_str(&format!(
                 "{node_addr}(me) -{title}-VIA-->",
-                node_addr = stats.node_address
+                node_addr = stats.node_address.to_checksum()
             ));
             for n in nodes.clone() {
                 str_resp.push_str(&format!(" {n} --VIA-->"));
             }
             // safe to truncate as nodes cannot be empty - ensured by type definition
             str_resp.truncate(str_resp.len() - 8);
-            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address));
+            str_resp.push_str(&format!("--TO--> {addr}(exit)\n", addr = stats.destination.address.to_checksum()));
         }
         RoutingOptions::Hops(nr) => {
             let nr_val: usize = nr.into();
@@ -298,24 +298,24 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 0 => {
                     str_resp.push_str(&format!(
                         "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address,
+                        node_addr = stats.node_address.to_checksum(),
+                        addr = stats.destination.address.to_checksum(),
                         exit = stats.destination.id,
                     ));
                 }
                 1 => {
                     str_resp.push_str(&format!(
                         "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address,
+                        node_addr = stats.node_address.to_checksum(),
+                        addr = stats.destination.address.to_checksum(),
                         exit = stats.destination.id,
                     ));
                 }
                 _ => {
                     str_resp.push_str(&format!(
                         "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
-                        node_addr = stats.node_address,
-                        addr = stats.destination.address,
+                        node_addr = stats.node_address.to_checksum(),
+                        addr = stats.destination.address.to_checksum(),
                         nr = nr_val,
                         exit = stats.destination.id,
                     ));
