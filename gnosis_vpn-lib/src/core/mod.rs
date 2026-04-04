@@ -637,14 +637,14 @@ impl Core {
                     .collect::<Vec<_>>();
                 match res {
                     Ok(()) => {
-                        tracing::info!(%address, "channel funded");
+                        tracing::info!(address = %address.to_checksum(), "channel funded");
                         for d in destinations.iter() {
                             self.update_health(d.id.clone(), |h| h.channel_funded(address));
                         }
                         self.act_on_target(results_sender);
                     }
                     Err(err) => {
-                        tracing::error!(?err, %address, "failed to ensure channel funding");
+                        tracing::error!(?err, address = %address.to_checksum(), "failed to ensure channel funding");
                         for d in destinations.iter() {
                             self.update_health(d.id.clone(), |h| h.with_error(err.to_string()));
                         }
@@ -1205,7 +1205,7 @@ impl Core {
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn spawn_channel_funding(&mut self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if self.ongoing_channel_fundings.contains(&address) {
-            tracing::debug!(%address, "channel funding already ongoing - skipping");
+            tracing::debug!(address = %address.to_checksum(), "channel funding already ongoing - skipping");
             return;
         }
         self.ongoing_channel_fundings.push(address);
