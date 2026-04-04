@@ -403,7 +403,7 @@ async fn run_fund_channel(
     ticket_value: Balance<WxHOPR>,
 ) -> Result<(), hopr_api::ChannelError> {
     let amount = balance::funding_amount(ticket_value);
-    tracing::debug!(%address, %amount, "starting fund channel runner");
+    tracing::debug!(address = %address.to_checksum(), %amount, "starting fund channel runner");
     (|| async {
         hopr.ensure_channel_open(address, amount).await?;
         Ok(())
