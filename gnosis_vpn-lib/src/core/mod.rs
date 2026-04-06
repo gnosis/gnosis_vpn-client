@@ -19,11 +19,10 @@ use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::Destination;
-use crate::connectivity_health::{self, ConnectivityHealth};
-use crate::destination_health::{self, DestinationHealth};
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
+use crate::route_health::{self, RouteHealth};
 use crate::ticket_stats::TicketStats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
@@ -80,8 +79,7 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     ticket_value: Option<Balance<WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
-    destination_healths: HashMap<String, DestinationHealth>,
-    connectivity_health: HashMap<String, ConnectivityHealth>,
+    route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
@@ -137,17 +135,13 @@ impl Core {
         wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        let mut connectivity_health = HashMap::new();
+        let cancel_on_shutdown = CancellationToken::new();
+        let mut route_healths = HashMap::new();
         for (id, dest) in config.destinations.clone() {
-            connectivity_health.insert(
+            route_healths.insert(
                 id,
-                ConnectivityHealth::from_destination(&dest, worker_params.allow_insecure()),
+                RouteHealth::new(&dest, worker_params.allow_insecure(), cancel_on_shutdown.clone()),
             );
-        }
-
-        let mut destination_healths = HashMap::new();
-        for id in config.destinations.keys().cloned() {
-            destination_healths.insert(id, DestinationHealth::Init);
         }
 
         let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
@@ -166,7 +160,7 @@ impl Core {
             // cancellation tokens
             cancel_balances: CancellationToken::new(),
             cancel_connection: CancellationToken::new(),
-            cancel_on_shutdown: CancellationToken::new(),
+            cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: CancellationToken::new(),
 
             // user provided data
@@ -181,8 +175,7 @@ impl Core {
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             ongoing_channel_fundings: Vec::new(),
-            connectivity_health,
-            destination_healths,
+            route_healths,
             responder_unit: None,
             responder_duration: None,
         };
@@ -360,9 +353,8 @@ impl Core {
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                                 if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
-                                    let min_channel_count = connectivity_health::count_distinct_channels(
-                                        &self.connectivity_health.values().collect::<Vec<_>>(),
-                                    );
+                                    let min_channel_count =
+                                        route_health::count_distinct_channels(self.route_healths.values());
                                     let issues = balances.to_funding_issues(min_channel_count, ticket_value);
                                     RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
                                 } else {
@@ -401,8 +393,14 @@ impl Core {
                                 command::DestinationState {
                                     destination,
                                     connection_state,
-                                    connectivity: self.connectivity_health.get(&v.id).cloned().unwrap_or_default(),
-                                    exit_health: self.destination_healths.get(&v.id).cloned().unwrap_or_default(),
+                                    route_health: self
+                                        .route_healths
+                                        .get(&v.id)
+                                        .map(|rh| rh.state().clone())
+                                        .unwrap_or_else(|| route_health::RouteHealthState::Unrecoverable {
+                                            id: v.id.clone(),
+                                            reason: route_health::UnrecoverableReason::InvalidId,
+                                        }),
                                 }
                             })
                             .collect();
@@ -412,26 +410,26 @@ impl Core {
 
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
-                            if let Some(connectivity) = self.connectivity_health.get(&dest.id) {
-                                if connectivity.is_ready_to_connect() {
+                            if let Some(rh) = self.route_healths.get(&dest.id) {
+                                if rh.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
                                     self.target_destination = Some(dest.clone());
                                     self.act_on_target(results_sender);
-                                } else if connectivity.is_unrecoverable() {
+                                } else if rh.is_unrecoverable() {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::unable(
                                         dest.clone(),
-                                        connectivity.clone(),
+                                        rh.state().clone(),
                                     )));
                                 } else {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::waiting(
                                         dest.clone(),
-                                        connectivity.clone(),
+                                        rh.state().clone(),
                                     )));
                                     self.target_destination = Some(dest.clone());
                                 }
                             } else {
-                                tracing::warn!(%id, "no connectivity health found for destination - this should not happen");
+                                tracing::warn!(%id, "no route health found for destination - this should not happen");
                                 let _ = resp.send(Response::connect(command::ConnectResponse::destination_not_found()));
                             }
                         }
@@ -467,7 +465,7 @@ impl Core {
                                 &balances,
                                 &ticket_value,
                                 &self.config.destinations.clone(),
-                                self.connectivity_health.values().collect::<Vec<_>>().as_slice(),
+                                self.route_healths.values().collect::<Vec<_>>().as_slice(),
                                 self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
                             let _ = resp.send(Response::Balance(Some(res)));
@@ -600,23 +598,36 @@ impl Core {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
-                    for (target, health) in self.connectivity_health.clone() {
-                        let updated_health = health.peers(&all_peers);
-                        // only spawn channel funding when we are peered
-                        if let Some(addr) = updated_health.needs_channel_funding()
-                            && !updated_health.needs_peer()
+                    let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                    for id in dest_ids {
+                        if let Some(dest) = self.config.destinations.get(&id).cloned()
+                            && let Some(rh) = self.route_healths.get_mut(&id)
                         {
-                            self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
+                            let transition = rh.peers(
+                                &all_peers,
+                                self.hopr.as_ref().unwrap(),
+                                &dest,
+                                &self.config.connection,
+                                results_sender,
+                            );
+                            match transition {
+                                route_health::PeerTransition::NowNeedsFunding => {
+                                    if let Some(addr) = rh.needs_channel_funding() {
+                                        self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
+                                    }
+                                }
+                                route_health::PeerTransition::BecameReady => {}
+                                route_health::PeerTransition::LostPeer => {}
+                                route_health::PeerTransition::NoChange => {}
+                            }
                         }
-                        self.connectivity_health.insert(target, updated_health);
                     }
 
-                    let delay =
-                        if connectivity_health::needs_peers(&self.connectivity_health.values().collect::<Vec<_>>()) {
-                            Duration::from_secs(10)
-                        } else {
-                            Duration::from_secs(90)
-                        };
+                    let delay = if route_health::any_needs_peers(self.route_healths.values()) {
+                        Duration::from_secs(10)
+                    } else {
+                        Duration::from_secs(90)
+                    };
                     self.spawn_connected_peers(results_sender, delay);
                     self.act_on_target(results_sender);
                 }
@@ -628,30 +639,42 @@ impl Core {
 
             Results::FundChannel { address, res } => {
                 self.ongoing_channel_fundings.retain(|a| a != &address);
-                let destinations = self
+                let dest_ids: Vec<String> = self
                     .config
                     .destinations
                     .iter()
                     .filter_map(|(_, d)| {
                         if d.has_intermediate_channel(address) {
-                            Some(d.clone())
+                            Some(d.id.clone())
                         } else {
                             None
                         }
                     })
-                    .collect::<Vec<_>>();
+                    .collect();
                 match res {
                     Ok(()) => {
                         tracing::info!(address = %address.to_checksum(), "channel funded");
-                        for d in destinations.iter() {
-                            self.update_health(d.id.clone(), |h| h.channel_funded(address));
+                        for id in &dest_ids {
+                            if let (Some(rh), Some(dest)) =
+                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                            {
+                                rh.channel_funded(
+                                    address,
+                                    self.hopr.as_ref().unwrap(),
+                                    dest,
+                                    &self.config.connection,
+                                    results_sender,
+                                );
+                            }
                         }
                         self.act_on_target(results_sender);
                     }
                     Err(err) => {
                         tracing::error!(?err, address = %address.to_checksum(), "failed to ensure channel funding");
-                        for d in destinations.iter() {
-                            self.update_health(d.id.clone(), |h| h.with_error(err.to_string()));
+                        for id in &dest_ids {
+                            if let Some(rh) = self.route_healths.get_mut(id) {
+                                rh.with_error(err.to_string());
+                            }
                         }
                     }
                 }
@@ -666,7 +689,9 @@ impl Core {
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::Event::Setback(e) => {
-                            self.update_health(conn.destination.id, |h| h.with_error(e.to_string()));
+                            if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
+                                rh.with_error(e.to_string());
+                            }
                         }
                     },
                     phase => {
@@ -699,7 +724,9 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.update_health(conn.destination.id.clone(), |h| h.no_error());
+                    if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
+                        rh.no_error();
+                    }
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -713,7 +740,9 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
-                    self.update_health(conn.destination.id.clone(), |h| h.with_error(err.to_string()));
+                    if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
+                        rh.with_error(err.to_string());
+                    }
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
                     {
@@ -778,12 +807,20 @@ impl Core {
                 }
             },
 
-            Results::HealthCheck { id, health } => {
-                tracing::info!(%id, %health, "received health check");
-                let res_next_interval = health.next_interval(matches!(self.phase, Phase::Connected(_)).into());
-                self.destination_healths.insert(id.clone(), health);
-                if let (Some(int), Some(dest)) = (res_next_interval, self.config.destinations.get(&id)) {
-                    self.spawn_health_check_runner(dest.clone(), results_sender, int);
+            Results::HealthCheck { id, exit } => {
+                tracing::info!(%id, %exit, "received health check");
+                let connected = matches!(self.phase, Phase::Connected(_));
+                if let Some(dest) = self.config.destinations.get(&id).cloned()
+                    && let Some(rh) = self.route_healths.get_mut(&id)
+                {
+                    rh.health_check_result(
+                        exit,
+                        connected,
+                        self.hopr.as_ref().unwrap(),
+                        &dest,
+                        &self.config.connection,
+                        results_sender,
+                    );
                 }
             }
         };
@@ -1245,38 +1282,6 @@ impl Core {
         }
     }
 
-    fn spawn_health_check_runner(
-        &self,
-        destination: Destination,
-        results_sender: &mpsc::Sender<Results>,
-        delay: Duration,
-    ) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_on_shutdown.clone();
-            let results_sender = results_sender.clone();
-            let config_connection = self.config.connection.clone();
-            let old_health = self
-                .destination_healths
-                .get(&destination.id)
-                .cloned()
-                .unwrap_or_default();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        let runner = destination_health::Runner::new(
-                            destination.clone(),
-                            config_connection,
-                            old_health,
-                            hopr.clone(),
-                        );
-                        runner.start(results_sender).await;
-                    })
-                    .await
-            });
-        }
-    }
-
     fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
@@ -1346,18 +1351,17 @@ impl Core {
         match (self.target_destination.clone(), self.phase.clone()) {
             // Connecting from ready
             (Some(dest), Phase::HoprRunning) => {
-                // Checking health
-                if let Some(health) = self.connectivity_health.get(&dest.id) {
-                    if health.is_ready_to_connect() {
+                if let Some(rh) = self.route_healths.get(&dest.id) {
+                    if rh.is_ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
                         self.spawn_connection_runner(dest.clone(), results_sender);
-                    } else if health.is_unrecoverable() {
-                        tracing::error!(destination = %dest, ?health, "refusing connection because of destination health");
+                    } else if rh.is_unrecoverable() {
+                        tracing::error!(destination = %dest,route_health = ?rh.state(),  "refusing connection because of route health");
                     } else {
-                        tracing::warn!(destination = %dest, ?health, "waiting for better destination health before connecting");
+                        tracing::warn!(destination = %dest,route_health = ?rh.state(),  "waiting for better route health before connecting");
                     }
                 } else {
-                    tracing::warn!(destination = %dest, "refusing connection: destination has no health tracker");
+                    tracing::warn!(destination = %dest, "refusing connection: destination has no route health tracker");
                 }
             }
             // Connecting to different destination while already connected
@@ -1399,14 +1403,30 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
-        if connectivity_health::needs_peers(&self.connectivity_health.values().collect::<Vec<_>>()) {
+        if route_health::any_needs_peers(self.route_healths.values()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         }
+        // Only spawn health checks for destinations already ready to connect
+        let ready_ids: Vec<String> = self
+            .route_healths
+            .iter()
+            .filter(|(_, rh)| rh.is_ready_to_connect())
+            .map(|(id, _)| id.clone())
+            .collect();
         let mut delay = Duration::from_millis(133);
-        for (_id, destination) in self.config.destinations.clone() {
-            // delay initial health checks a bit
-            self.spawn_health_check_runner(destination.clone(), results_sender, delay);
-            delay += Duration::from_millis(133);
+        for id in ready_ids {
+            if let Some(dest) = self.config.destinations.get(&id).cloned()
+                && let Some(rh) = self.route_healths.get_mut(&id)
+            {
+                rh.spawn_health_check(
+                    delay,
+                    self.hopr.as_ref().unwrap(),
+                    &dest,
+                    &self.config.connection,
+                    results_sender,
+                );
+                delay += Duration::from_millis(133);
+            }
         }
         self.act_on_target(results_sender);
     }
@@ -1444,19 +1464,6 @@ impl Core {
                 tracing::error!(?err, %stats, "failed to determine ticket value from stats - retrying");
                 self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
             }
-        }
-    }
-
-    fn update_health<F>(&mut self, id: String, cb: F) -> bool
-    where
-        F: Fn(&ConnectivityHealth) -> ConnectivityHealth,
-    {
-        if let Some(health) = self.connectivity_health.get(&id) {
-            self.connectivity_health.insert(id, cb(health));
-            true
-        } else {
-            tracing::warn!(?id, "connection destination has no health tracker");
-            false
         }
     }
 }

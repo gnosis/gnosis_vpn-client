@@ -12,8 +12,7 @@ use std::time::{Duration, SystemTime};
 use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::connectivity_health::ConnectivityHealth;
-use crate::destination_health::DestinationHealth;
+use crate::route_health::RouteHealthState;
 use crate::log_output;
 
 mod balance_response;
@@ -164,11 +163,11 @@ pub enum FundingState {
     WellFunded,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     Connecting(Destination),
-    WaitingToConnect(Destination, ConnectivityHealth),
-    UnableToConnect(Destination, ConnectivityHealth),
+    WaitingToConnect(Destination, RouteHealthState),
+    UnableToConnect(Destination, RouteHealthState),
     DestinationNotFound,
 }
 
@@ -190,8 +189,7 @@ pub enum FundingToolResponse {
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
-    pub connectivity: ConnectivityHealth,
-    pub exit_health: DestinationHealth,
+    pub route_health: RouteHealthState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -279,10 +277,10 @@ impl ConnectResponse {
     pub fn connecting(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
     }
-    pub fn waiting(destination: Destination, health: ConnectivityHealth) -> Self {
+    pub fn waiting(destination: Destination, health: RouteHealthState) -> Self {
         ConnectResponse::WaitingToConnect(destination, health)
     }
-    pub fn unable(destination: Destination, health: ConnectivityHealth) -> Self {
+    pub fn unable(destination: Destination, health: RouteHealthState) -> Self {
         ConnectResponse::UnableToConnect(destination, health)
     }
     pub fn destination_not_found() -> Self {
@@ -527,7 +525,7 @@ impl TryFrom<Command> for WorkerCommand {
 mod tests {
     use super::*;
     use crate::connection::destination::RoutingOptions;
-    use crate::connectivity_health::{ConnectivityHealth, Health, Need};
+    use crate::route_health::{ChannelNeed, ExitHealth};
     use std::collections::HashMap;
 
     fn address(byte: u8) -> Address {
@@ -543,12 +541,12 @@ mod tests {
         )
     }
 
-    fn health() -> ConnectivityHealth {
-        ConnectivityHealth {
+    fn route_health_state() -> RouteHealthState {
+        RouteHealthState::ReadyToConnect {
             id: "test-destination".to_string(),
+            need: ChannelNeed::AnyChannel,
+            exit: ExitHealth::Init,
             last_error: None,
-            health: Health::ReadyToConnect,
-            need: Need::Nothing,
         }
     }
 
@@ -595,16 +593,16 @@ mod tests {
         let resp = ConnectResponse::connecting(dest.clone());
         assert!(matches!(resp, ConnectResponse::Connecting(_)));
 
-        let waiting = ConnectResponse::waiting(dest.clone(), health());
+        let waiting = ConnectResponse::waiting(dest.clone(), route_health_state());
         assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, _)));
 
-        let unable = ConnectResponse::unable(dest.clone(), health());
+        let unable = ConnectResponse::unable(dest.clone(), route_health_state());
         assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
 
-        assert_eq!(
+        assert!(matches!(
             ConnectResponse::destination_not_found(),
             ConnectResponse::DestinationNotFound
-        );
+        ));
         Ok(())
     }
 

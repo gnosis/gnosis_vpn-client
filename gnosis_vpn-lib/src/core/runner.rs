@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::compat::SafeModule;
-use crate::destination_health::DestinationHealth;
+use crate::route_health::ExitHealth;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
@@ -90,7 +90,7 @@ pub enum Results {
     SessionMonitorFailed,
     HealthCheck {
         id: String,
-        health: DestinationHealth,
+        exit: ExitHealth,
     },
 }
 
@@ -523,7 +523,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheck { id, health } => write!(f, "HealthCheck ({}): {}", id, health),
+            Results::HealthCheck { id, exit } => write!(f, "HealthCheck ({}): {}", id, exit),
         }
     }
 }
