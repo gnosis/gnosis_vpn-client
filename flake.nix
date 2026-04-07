@@ -149,7 +149,7 @@
               binary-gnosis_vpn-x86_64-linux-dev
               binary-gnosis_vpn-aarch64-linux
               binary-gnosis_vpn-aarch64-linux-dev
-              gnosis_vpn-test
+              binary-gnosis_vpn-system_tests
               ;
             inherit pre-commit-check;
             default = gnosisvpnPackages.binary-gnosis_vpn;

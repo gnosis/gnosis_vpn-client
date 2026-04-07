@@ -94,7 +94,7 @@ jobs:
         uses: extractions/setup-just@v2
       - name: Build binaries and system test
         run: |
-          nix build .#gnosis_vpn-test
+          nix build .#binary-gnosis_vpn-system_tests
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
@@ -102,4 +102,4 @@ jobs:
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result/bin/gnosis_vpn-worker
-        run: just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests
+        run: sudo just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests
