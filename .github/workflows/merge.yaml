@@ -55,3 +55,18 @@ jobs:
     with:
       branch: ${{ github.event.pull_request.base.ref }}
     secrets: inherit
+  nightly-build:
+    name: Nightly build
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'nightly-build')
+    runs-on: depot-ubuntu-22.04-4
+    needs:
+      - build-binaries
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger nightly build
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
+          repository: gnosis/gnosis_vpn
+          event-type: nightly_build
