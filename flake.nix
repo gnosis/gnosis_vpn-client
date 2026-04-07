@@ -169,6 +169,7 @@
               packages = [
                 pkgs.cargo-machete
                 pkgs.cargo-shear
+                pkgs.just
                 pkgs.rust-analyzer
               ];
 
