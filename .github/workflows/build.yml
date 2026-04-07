@@ -90,7 +90,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y wireguard-tools resolvconf
-          echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/nopasswd-runner
+          echo "$(whoami) ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/nopasswd-runner
+          sudo chmod 0440 /etc/sudoers.d/nopasswd-runner
       - name: Install just
         uses: extractions/setup-just@v2
       - name: Build system service binaries
