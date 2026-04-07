@@ -1,10 +1,10 @@
 # build static linux binary (x86_64)
 build:
-    nix build .#packages.x86_64-linux.gnosis_vpn
+    nix build -L .#binary-gnosis_vpn-x86_64-linux
 
 # build static linux binary (ARM64)
 build-arm64:
-    nix build .#packages.aarch64-linux.gnosis_vpn
+    nix build -L .#binary-gnosis_vpn-aarch64-linux
 
 # build docker image (x86_64)
 docker-build: build

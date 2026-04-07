@@ -112,10 +112,10 @@ Build for a target, e.g. `x86_64-linux` or `aarch64-linux`:
 
 ```bash
 # For x86_64 (AMD64)
-nix build .#packages.x86_64-linux.gnosis_vpn
+nix build -L .#binary-gnosis_vpn-x86_64-linux
 
 # For ARM64
-nix build .#packages.aarch64-linux.gnosis_vpn
+nix build -L .#binary-gnosis_vpn-aarch64-linux
 ```
 
 The resulting binaries are in `result/bin/`:
