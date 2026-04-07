@@ -1,4 +1,3 @@
----
 name: Close release
 on:
   workflow_dispatch:
@@ -24,23 +23,38 @@ permissions:
   contents: read
 jobs:
   build-binaries:
+    name: Binary ${{ matrix.architecture }}
     strategy:
+      fail-fast: false
       matrix:
-        binary:
+        include:
           - architecture: x86_64-linux
             runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
+            build_command: nix build -L .#binary-gnosis_vpn-x86_64-linux
           - architecture: aarch64-linux
             runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
+            build_command: nix build -L .#binary-gnosis_vpn-aarch64-linux
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
-    name: Binary ${{ matrix.binary.architecture }}
-    uses: ./.github/workflows/build-binaries.yaml
+            build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/adapt-gnosisvpn #build-binaries-v2
+    permissions:
+      contents: read
     with:
-      branch: main
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
-      version_type: "release"
-    secrets: inherit
+      source_branch: ${{ github.ref_name }}
+      version_type: release
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: gnosis-vpn-client
+      build_command: ${{ matrix.build_command }}
+      binary: gnosis_vpn
+      runner: ${{ matrix.runner }}
+      timeout_minutes: 240
+    secrets:
+      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
+      apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   release:
     name: Close release
     needs:
