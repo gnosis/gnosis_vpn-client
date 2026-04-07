@@ -54,7 +54,6 @@ docker-enter:
 system-tests test_binary="gnosis_vpn-system_tests":
     #!/usr/bin/env bash
     set -euo pipefail
-    set -x
 
     : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
@@ -74,7 +73,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     # Create a system user and add it to a group with its own name, if it doesn't already exist
     if ! getent passwd "${worker_user}" >/dev/null 2>&1; then
         echo "INFO: Creating system user '${worker_user}'..."
-        useradd --system \
+        sudo useradd --system \
             --user-group \
             --home "${worker_home}" -m \
             "${worker_user}"
@@ -93,20 +92,20 @@ system-tests test_binary="gnosis_vpn-system_tests":
     fi
     
     # Create worker home directory
-    mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
-
-    # Moves the ID, password, safe, and config into the worker's config directory
-    printf %s "${SYSTEM_TEST_HOPRD_ID}" | tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
-    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
-    printf %s "${SYSTEM_TEST_SAFE}" | tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
-    printf %s "${SYSTEM_TEST_CONFIG}" | tee "${config_dir}/config.toml" > /dev/null
+    sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
+    
+    # Moves the ID, password, safe, and config into the worker's config directory 
+    printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
+    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
+    printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
+    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
 
     # Copy the worker binary to the worker's home directory
-    cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
+    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
 
     # Set ownership and permissions for the worker binary and config directory
-    chown -R "${worker_user}:${worker_user}" "${worker_home}"
-    chmod 0755 "${worker_binary}"
+    sudo chown -R "${worker_user}:${worker_user}" "${worker_home}"
+    sudo chmod 0755 "${worker_binary}"
 
     # Run the test binary with the appropriate environment variables
-    CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --proxy "http://10.128.0.1:3128"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --proxy "http://10.128.0.1:3128"
