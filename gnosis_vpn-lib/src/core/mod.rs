@@ -616,7 +616,7 @@ impl Core {
                                         self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
                                     }
                                 }
-                                route_health::PeerTransition::BecameReady => {}
+                                route_health::PeerTransition::BecameRoutable => {}
                                 route_health::PeerTransition::LostPeer => {}
                                 route_health::PeerTransition::NoChange => {}
                             }
@@ -813,6 +813,7 @@ impl Core {
                 if let Some(dest) = self.config.destinations.get(&id).cloned()
                     && let Some(rh) = self.route_healths.get_mut(&id)
                 {
+                    let was_ready = rh.is_ready_to_connect();
                     rh.health_check_result(
                         exit,
                         connected,
@@ -821,6 +822,10 @@ impl Core {
                         &self.config.connection,
                         results_sender,
                     );
+                    // Trigger connection if we just became ready
+                    if !was_ready && rh.is_ready_to_connect() {
+                        self.act_on_target(results_sender);
+                    }
                 }
             }
         };
@@ -1406,15 +1411,15 @@ impl Core {
         if route_health::any_needs_peers(self.route_healths.values()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         }
-        // Only spawn health checks for destinations already ready to connect
-        let ready_ids: Vec<String> = self
+        // Spawn health checks for destinations that are routable (peer+channel OK)
+        let routable_ids: Vec<String> = self
             .route_healths
             .iter()
-            .filter(|(_, rh)| rh.is_ready_to_connect())
+            .filter(|(_, rh)| rh.is_routable())
             .map(|(id, _)| id.clone())
             .collect();
         let mut delay = Duration::from_millis(133);
-        for id in ready_ids {
+        for id in routable_ids {
             if let Some(dest) = self.config.destinations.get(&id).cloned()
                 && let Some(rh) = self.route_healths.get_mut(&id)
             {

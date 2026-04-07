@@ -80,6 +80,14 @@ pub enum RouteHealthState {
         exit: ExitHealth,
         last_error: Option<String>,
     },
+    /// Peer and channel requirements are met. Health checks are running.
+    Routable {
+        id: String,
+        need: ChannelNeed,
+        exit: ExitHealth,
+        last_error: Option<String>,
+    },
+    /// Exit health confirmed healthy. Safe to connect.
     ReadyToConnect {
         id: String,
         need: ChannelNeed,
@@ -94,8 +102,8 @@ pub enum PeerTransition {
     NoChange,
     /// Core should spawn channel funding.
     NowNeedsFunding,
-    /// Connectivity is green. Health check spawned internally.
-    BecameReady,
+    /// Route became routable. Health check spawned internally.
+    BecameRoutable,
     /// Peer lost. Health check cancelled internally.
     LostPeer,
 }
@@ -173,6 +181,7 @@ impl RouteHealth {
             RouteHealthState::Unrecoverable { id, .. }
             | RouteHealthState::NeedsPeering { id, .. }
             | RouteHealthState::NeedsFunding { id, .. }
+            | RouteHealthState::Routable { id, .. }
             | RouteHealthState::ReadyToConnect { id, .. } => id,
         }
     }
@@ -196,6 +205,13 @@ impl RouteHealth {
         matches!(
             self.state,
             RouteHealthState::NeedsFunding { need: ChannelNeed::AnyChannel, .. }
+        )
+    }
+
+    pub fn is_routable(&self) -> bool {
+        matches!(
+            self.state,
+            RouteHealthState::Routable { .. } | RouteHealthState::ReadyToConnect { .. }
         )
     }
 
@@ -224,10 +240,10 @@ impl RouteHealth {
         // Determine the transition from immutable state inspection
         enum Action {
             NoChange,
-            BecameReady { id: String, need: ChannelNeed, exit: ExitHealth, last_error: Option<String> },
+            BecameRoutable { id: String, need: ChannelNeed, exit: ExitHealth, last_error: Option<String> },
             NowNeedsFunding { id: String, need: ChannelNeed, exit: ExitHealth, last_error: Option<String> },
             LostPeerFromFunding { id: String, need: ChannelNeed, exit: ExitHealth, last_error: Option<String> },
-            LostPeerFromReady { id: String, need: ChannelNeed, funded: bool, exit: ExitHealth, last_error: Option<String> },
+            LostPeer { id: String, need: ChannelNeed, funded: bool, exit: ExitHealth, last_error: Option<String> },
         }
 
         let action = match &self.state {
@@ -240,7 +256,7 @@ impl RouteHealth {
                 if !is_peered {
                     Action::NoChange
                 } else if *funded || matches!(need, ChannelNeed::Peering(_)) {
-                    Action::BecameReady {
+                    Action::BecameRoutable {
                         id: id.clone(), need: need.clone(), exit: exit.clone(), last_error: last_error.clone(),
                     }
                 } else {
@@ -263,7 +279,8 @@ impl RouteHealth {
                     }
                 }
             }
-            RouteHealthState::ReadyToConnect { id, need, exit, last_error } => {
+            RouteHealthState::Routable { id, need, exit, last_error }
+            | RouteHealthState::ReadyToConnect { id, need, exit, last_error } => {
                 let still_peered = match need {
                     ChannelNeed::Channel(addr) => addresses.contains(addr),
                     ChannelNeed::AnyChannel => !addresses.is_empty(),
@@ -273,7 +290,7 @@ impl RouteHealth {
                     Action::NoChange
                 } else {
                     let funded = !matches!(need, ChannelNeed::Peering(_));
-                    Action::LostPeerFromReady {
+                    Action::LostPeer {
                         id: id.clone(), need: need.clone(), funded, exit: exit.clone(), last_error: last_error.clone(),
                     }
                 }
@@ -284,10 +301,10 @@ impl RouteHealth {
         // Apply mutations after the immutable borrow is released
         match action {
             Action::NoChange => PeerTransition::NoChange,
-            Action::BecameReady { id, need, exit, last_error } => {
-                self.state = RouteHealthState::ReadyToConnect { id, need, exit, last_error };
+            Action::BecameRoutable { id, need, exit, last_error } => {
+                self.state = RouteHealthState::Routable { id, need, exit, last_error };
                 self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
-                PeerTransition::BecameReady
+                PeerTransition::BecameRoutable
             }
             Action::NowNeedsFunding { id, need, exit, last_error } => {
                 self.state = RouteHealthState::NeedsFunding { id, need, exit, last_error };
@@ -297,7 +314,7 @@ impl RouteHealth {
                 self.state = RouteHealthState::NeedsPeering { id, need, funded: false, exit, last_error };
                 PeerTransition::LostPeer
             }
-            Action::LostPeerFromReady { id, need, funded, exit, last_error } => {
+            Action::LostPeer { id, need, funded, exit, last_error } => {
                 self.cancel_health_check();
                 self.state = RouteHealthState::NeedsPeering { id, need, funded, exit, last_error };
                 PeerTransition::LostPeer
@@ -324,7 +341,7 @@ impl RouteHealth {
         if should_advance
             && let RouteHealthState::NeedsFunding { id, need, exit, last_error } = self.state.clone()
         {
-            self.state = RouteHealthState::ReadyToConnect { id, need, exit, last_error };
+            self.state = RouteHealthState::Routable { id, need, exit, last_error };
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
         }
     }
@@ -338,8 +355,10 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
+        // Only process results when in Routable or ReadyToConnect
         let merged = match &self.state {
-            RouteHealthState::ReadyToConnect { exit: old_exit, .. } => {
+            RouteHealthState::Routable { exit: old_exit, .. }
+            | RouteHealthState::ReadyToConnect { exit: old_exit, .. } => {
                 match (old_exit, &new_exit) {
                     (
                         ExitHealth::Unhealthy { previous_failures, .. },
@@ -357,7 +376,25 @@ impl RouteHealth {
 
         if let Some(merged) = merged {
             let next_interval = merged.next_interval(connected);
+            let is_healthy = matches!(merged, ExitHealth::Healthy { .. });
+
             self.set_exit(merged);
+
+            // Transition between Routable ↔ ReadyToConnect based on exit health
+            match &self.state {
+                RouteHealthState::Routable { id, need, exit, last_error } if is_healthy => {
+                    self.state = RouteHealthState::ReadyToConnect {
+                        id: id.clone(), need: need.clone(), exit: exit.clone(), last_error: last_error.clone(),
+                    };
+                }
+                RouteHealthState::ReadyToConnect { id, need, exit, last_error } if !is_healthy => {
+                    self.state = RouteHealthState::Routable {
+                        id: id.clone(), need: need.clone(), exit: exit.clone(), last_error: last_error.clone(),
+                    };
+                }
+                _ => {}
+            }
+
             if let Some(delay) = next_interval {
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
@@ -368,6 +405,7 @@ impl RouteHealth {
         match &mut self.state {
             RouteHealthState::NeedsPeering { last_error, .. }
             | RouteHealthState::NeedsFunding { last_error, .. }
+            | RouteHealthState::Routable { last_error, .. }
             | RouteHealthState::ReadyToConnect { last_error, .. } => {
                 *last_error = Some(err);
             }
@@ -379,6 +417,7 @@ impl RouteHealth {
         match &mut self.state {
             RouteHealthState::NeedsPeering { last_error, .. }
             | RouteHealthState::NeedsFunding { last_error, .. }
+            | RouteHealthState::Routable { last_error, .. }
             | RouteHealthState::ReadyToConnect { last_error, .. } => {
                 *last_error = None;
             }
@@ -390,6 +429,7 @@ impl RouteHealth {
         match &mut self.state {
             RouteHealthState::NeedsPeering { exit, .. }
             | RouteHealthState::NeedsFunding { exit, .. }
+            | RouteHealthState::Routable { exit, .. }
             | RouteHealthState::ReadyToConnect { exit, .. } => {
                 *exit = new_exit;
             }
@@ -639,6 +679,12 @@ impl Display for RouteHealthState {
                     ChannelNeed::AnyChannel => write!(f, "Needs any funded channel"),
                     ChannelNeed::Peering(_) => write!(f, "Needs funding"),
                 }
+            }
+            RouteHealthState::Routable { exit, last_error, .. } => {
+                if let Some(err) = last_error {
+                    write!(f, "Last error: {err}, ")?;
+                }
+                write!(f, "Routable, exit: {exit}")
             }
             RouteHealthState::ReadyToConnect { exit, last_error, .. } => {
                 if let Some(err) = last_error {
