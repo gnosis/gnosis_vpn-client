@@ -92,10 +92,7 @@ jobs:
           sudo apt-get install -y wireguard-tools resolvconf
       - name: Install just
         uses: extractions/setup-just@v2
-      - name: Build system service binaries
-        run: |
-          nix build .#binary-gnosis_vpn-dev
-      - name: Build system test binary
+      - name: Build binaries and system test
         run: |
           nix build .#gnosis_vpn-test --out-link result-tests
       - name: Run the system test
