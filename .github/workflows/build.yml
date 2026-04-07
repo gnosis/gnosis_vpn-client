@@ -61,17 +61,12 @@ jobs:
     runs-on: depot-ubuntu-22.04-4
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@v17
+        uses: hoprnet/hopr-workflows/actions/nix-action@nix-action-v1
         with:
-          name: gnosis-vpn-client
-        env:
-          USER: runner
-      - name: Run flake checks
-        run: nix flake check -L --show-trace --max-jobs 1
+          source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          command: nix flake check -L --show-trace --max-jobs 1
   system-test:
     name: System tests
     # NOTE: Do not switch to a depot runner here. The system-test recipe requires passwordless
