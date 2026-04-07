@@ -54,12 +54,16 @@ docker-enter:
 system-tests test_binary="gnosis_vpn-system_tests":
     #!/usr/bin/env bash
     set -euo pipefail
+    set -x
 
     : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
+
+    # Refresh the sudo credential timestamp to avoid password prompt by expiration during long builds
+    sudo -v
 
     worker_user="gnosisvpn"
 

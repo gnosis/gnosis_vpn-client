@@ -74,6 +74,9 @@ jobs:
         run: nix flake check -L --show-trace --max-jobs 1
   system-test:
     name: System tests
+    # NOTE: Do not switch to a depot runner here. The system-test recipe requires passwordless
+    # sudo (for useradd, chown, etc.). Depot containers restrict these syscalls even for root.
+    # Standard GitHub-hosted runners support passwordless sudo for all commands out of the box.
     runs-on: ubuntu-22.04
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:

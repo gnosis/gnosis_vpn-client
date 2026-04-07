@@ -140,6 +140,7 @@ in
     (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
+      extraCargoArgs = "--bin gnosis_vpn-system_tests";
     })
     // {
       CARGO_PROFILE = "dev";
