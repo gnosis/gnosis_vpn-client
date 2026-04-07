@@ -22,7 +22,7 @@ pub fn elapsed(timestamp: &SystemTime) -> String {
 }
 
 pub fn address(address: &Address) -> String {
-    let str = address.to_string();
+    let str = address.to_checksum();
     format!("{}..{}", &str[..6], &str[38..])
 }
 

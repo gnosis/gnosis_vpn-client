@@ -11,6 +11,8 @@ on:
 concurrency:
   group: ${{ github.ref }}-build
   cancel-in-progress: true
+permissions:
+  contents: read
 env:
   CARGO_TERM_COLOR: always
 jobs:

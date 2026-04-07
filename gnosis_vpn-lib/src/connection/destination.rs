@@ -83,7 +83,7 @@ impl Display for Destination {
             id = self.id,
             meta = self.meta_str(),
             path = self.pretty_print_path(),
-            address = self.address,
+            address = self.address.to_checksum(),
             short_addr = short_addr,
         )
     }

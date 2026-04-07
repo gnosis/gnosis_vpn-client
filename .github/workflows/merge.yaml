@@ -10,6 +10,8 @@ on:
 concurrency:
   group: merge
   cancel-in-progress: false
+permissions:
+  contents: read
 jobs:
   build-binaries:
     strategy:
@@ -32,6 +34,8 @@ jobs:
   comment:
     name: Comment PR
     runs-on: depot-ubuntu-22.04-4
+    permissions:
+      pull-requests: write
     needs:
       - build-binaries
     steps:
@@ -67,6 +71,8 @@ jobs:
   cache-deps:
     name: Cache deps
     if: github.event.pull_request.merged == true
+    permissions:
+      contents: read
     uses: ./.github/workflows/cache-deps.yaml
     with:
       branch: ${{ github.event.pull_request.base.ref }}

@@ -28,6 +28,7 @@ use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
+mod network_info;
 mod routing;
 mod wg_tooling;
 
@@ -358,7 +359,7 @@ pub async fn config_watcher(
 
 async fn keep_alive_timer(
     mut keep_alive_instruction_receiver: mpsc::Receiver<KeepAliveInstruction>,
-) -> Result<(CancellationToken, mpsc::Receiver<()>), exitcode::ExitCode> {
+) -> Result<(CancellationToken, mpsc::Receiver<Duration>), exitcode::ExitCode> {
     let cancel = CancellationToken::new();
     let owned_cancel = cancel.clone();
     let (sender, receiver) = mpsc::channel(1);
@@ -379,7 +380,7 @@ async fn keep_alive_timer(
                             keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
                         KeepAliveInstruction::Ignite(duration) => {
-                            tracing::debug!(?duration, "ignite keep alive timer");
+                            tracing::info!(?duration, "ignite keep alive timer");
                             active = true;
                             dur = duration;
                             keepalive.as_mut().reset(time::Instant::now() + dur);
@@ -393,7 +394,7 @@ async fn keep_alive_timer(
                 }
                 _ = keepalive.as_mut(), if active => {
                     active = false;
-                    let _ = sender.send(()).await;
+                    let _ = sender.send(dur).await;
                 }
             }
         }
@@ -426,6 +427,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
+
+    let network_info = network_info::NetworkInfo::gather().await;
+    tracing::info!(%network_info, "host network info");
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
@@ -660,7 +664,7 @@ impl DaemonState {
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
         mut socket_listener: mpsc::Receiver<SocketCmd>,
         mut config_receiver: mpsc::Receiver<()>,
-        mut keep_alive_expired: mpsc::Receiver<()>,
+        mut keep_alive_expired: mpsc::Receiver<Duration>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
         loop {
@@ -674,7 +678,7 @@ impl DaemonState {
                 },
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
-                Some(_) = keep_alive_expired.recv() => self.keep_alive_expired().await?,
+                Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -1027,8 +1031,8 @@ impl DaemonState {
         }
     }
 
-    async fn keep_alive_expired(&mut self) -> Result<(), exitcode::ExitCode> {
-        tracing::info!("keepalive timer expired - shutting down worker process");
+    async fn keep_alive_expired(&mut self, duration: Duration) -> Result<(), exitcode::ExitCode> {
+        tracing::info!(?duration, "keepalive timer expired - shutting down worker process");
         if matches!(self.shutdown_ongoing, Shutdown::None)
             && let Some(ref mut child) = self.worker_child
         {
