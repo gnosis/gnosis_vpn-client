@@ -764,6 +764,7 @@ impl Core {
                     }
                 }
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
+                self.act_on_target(results_sender);
             }
 
             Results::SessionMonitorFailed => match self.phase.clone() {
