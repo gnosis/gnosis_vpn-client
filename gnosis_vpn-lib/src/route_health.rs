@@ -547,21 +547,15 @@ impl RouteHealth {
         }
     }
 
-    /// Transition ReadyToConnect → Connected, cancel TCP health checks.
+    /// Transition ReadyToConnect → Connected, cancel TCP health checks, clear errors.
     pub fn connected(&mut self) {
-        if let RouteHealthState::ReadyToConnect {
-            id,
-            need,
-            last_error,
-            ..
-        } = self.state.clone()
-        {
+        if let RouteHealthState::ReadyToConnect { id, need, .. } = self.state.clone() {
             self.cancel_health_check();
             self.state = RouteHealthState::Connected {
                 id,
                 need,
                 exit: ExitHealth::Init,
-                last_error,
+                last_error: None,
             };
         }
     }
@@ -623,19 +617,6 @@ impl RouteHealth {
             | RouteHealthState::ReadyToConnect { last_error, .. }
             | RouteHealthState::Connected { last_error, .. } => {
                 *last_error = Some(err);
-            }
-            RouteHealthState::Unrecoverable { .. } => {}
-        }
-    }
-
-    pub fn no_error(&mut self) {
-        match &mut self.state {
-            RouteHealthState::NeedsPeering { last_error, .. }
-            | RouteHealthState::NeedsFunding { last_error, .. }
-            | RouteHealthState::Routable { last_error, .. }
-            | RouteHealthState::ReadyToConnect { last_error, .. }
-            | RouteHealthState::Connected { last_error, .. } => {
-                *last_error = None;
             }
             RouteHealthState::Unrecoverable { .. } => {}
         }

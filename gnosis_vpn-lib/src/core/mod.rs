@@ -723,7 +723,6 @@ impl Core {
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
-                        rh.no_error();
                         rh.connected();
                     }
                     let route = format!(
