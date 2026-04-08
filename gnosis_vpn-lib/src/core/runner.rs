@@ -24,11 +24,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::compat::SafeModule;
-use crate::route_health::ExitHealth;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
+use crate::route_health::ExitHealth;
 use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, remote_data};

@@ -6,8 +6,8 @@ use std::fmt::{self, Display};
 
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
-use crate::route_health::{self, RouteHealth};
 use crate::info::Info;
+use crate::route_health::{self, RouteHealth};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {

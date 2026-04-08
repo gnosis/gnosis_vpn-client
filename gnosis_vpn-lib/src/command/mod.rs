@@ -12,8 +12,8 @@ use std::time::{Duration, SystemTime};
 use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::route_health::RouteHealthState;
 use crate::log_output;
+use crate::route_health::RouteHealthState;
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
