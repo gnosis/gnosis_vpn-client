@@ -113,8 +113,7 @@ pub struct RouteHealth {
     state: RouteHealthState,
     health_check_cancel: CancellationToken,
     cancel_on_shutdown: CancellationToken,
-    pings_since_health: u32,
-    pings_since_version: u32,
+    check_cycle: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,10 +168,7 @@ impl RouteHealth {
             state,
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown,
-            // Exceeds any configured threshold so the first check runs all three tiers.
-            // Safe: compared with >= before any increment.
-            pings_since_health: u32::MAX,
-            pings_since_version: u32::MAX,
+            check_cycle: 0,
         }
     }
 }
@@ -594,23 +590,12 @@ impl RouteHealth {
         self.cancel_health_check();
 
         let intervals = &options.health_check_intervals;
-        let run_version = self.pings_since_version >= intervals.version_every_n_pings;
-        let run_health = self.pings_since_health >= intervals.health_every_n_pings;
-
-        if run_version {
-            self.pings_since_version = 0;
-        } else {
-            self.pings_since_version += 1;
-        }
-        if run_health {
-            self.pings_since_health = 0;
-        } else {
-            self.pings_since_health += 1;
-        }
+        let cycle = self.check_cycle;
+        self.check_cycle = cycle.wrapping_add(1);
 
         let scope = CheckScope {
-            version: run_version,
-            health: run_health,
+            version: cycle % intervals.version_every_n_pings == 0,
+            health: cycle % intervals.health_every_n_pings == 0,
         };
 
         let token = self.health_check_cancel.clone();
@@ -982,8 +967,7 @@ mod tests {
             state: state_fn("test".to_string(), need),
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown: CancellationToken::new(),
-            pings_since_health: 0,
-            pings_since_version: 0,
+            check_cycle: 0,
         }
     }
 
