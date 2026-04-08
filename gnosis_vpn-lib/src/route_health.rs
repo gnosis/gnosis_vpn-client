@@ -169,7 +169,8 @@ impl RouteHealth {
             state,
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown,
-            // Start at max so the first check runs all three tiers
+            // Exceeds any configured threshold so the first check runs all three tiers.
+            // Safe: compared with >= before any increment.
             pings_since_health: u32::MAX,
             pings_since_version: u32::MAX,
         }
@@ -593,20 +594,24 @@ impl RouteHealth {
         self.cancel_health_check();
 
         let intervals = &options.health_check_intervals;
-        self.pings_since_health += 1;
-        self.pings_since_version += 1;
+        let run_version = self.pings_since_version >= intervals.version_every_n_pings;
+        let run_health = self.pings_since_health >= intervals.health_every_n_pings;
+
+        if run_version {
+            self.pings_since_version = 0;
+        } else {
+            self.pings_since_version += 1;
+        }
+        if run_health {
+            self.pings_since_health = 0;
+        } else {
+            self.pings_since_health += 1;
+        }
 
         let scope = CheckScope {
-            version: self.pings_since_version >= intervals.version_every_n_pings,
-            health: self.pings_since_health >= intervals.health_every_n_pings,
+            version: run_version,
+            health: run_health,
         };
-
-        if scope.version {
-            self.pings_since_version = 0;
-        }
-        if scope.health {
-            self.pings_since_health = 0;
-        }
 
         let token = self.health_check_cancel.clone();
         let shutdown = self.cancel_on_shutdown.clone();
