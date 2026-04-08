@@ -594,8 +594,8 @@ impl RouteHealth {
         self.check_cycle = cycle.wrapping_add(1);
 
         let scope = CheckScope {
-            version: cycle % intervals.version_every_n_pings == 0,
-            health: cycle % intervals.health_every_n_pings == 0,
+            version: cycle.is_multiple_of(intervals.version_every_n_pings),
+            health: cycle.is_multiple_of(intervals.health_every_n_pings),
         };
 
         let token = self.health_check_cancel.clone();

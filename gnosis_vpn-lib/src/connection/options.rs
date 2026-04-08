@@ -94,9 +94,9 @@ impl Options {
 impl Default for HealthCheckIntervals {
     fn default() -> Self {
         Self {
-            ping: Duration::from_secs(30),
-            health_every_n_pings: 2,
-            version_every_n_pings: 10,
+            ping: Duration::from_secs(15),
+            health_every_n_pings: 4,
+            version_every_n_pings: 20,
         }
     }
 }

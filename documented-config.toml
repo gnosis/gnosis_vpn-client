@@ -70,9 +70,9 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # adjust health check intervals
 # ping runs every cycle, health and version piggyback every Nth cycle
 # [connection.health_check_intervals]
-# ping = "30s"
-# health_every_n_pings = 2
-# version_every_n_pings = 10
+# ping = "15s"
+# health_every_n_pings = 4
+# version_every_n_pings = 20
 
 # adjust session internal options
 # [connection.max_surb_upstream]
