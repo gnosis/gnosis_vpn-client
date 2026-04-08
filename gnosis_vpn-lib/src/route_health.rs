@@ -1,6 +1,5 @@
-/// Consolidated health model per destination route.
+/// Health model per destination route.
 /// Tracks both network reachability (peers, channels) and exit node health (via TCP sessions).
-/// Replaces the former `connectivity_health` and `destination_health` modules.
 use edgli::hopr_lib::SessionClientConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -582,9 +581,7 @@ impl RouteHealth {
     ) {
         self.cancel_health_check();
 
-        let token = CancellationToken::new();
-        self.health_check_cancel = token.clone();
-
+        let token = self.health_check_cancel.clone();
         let shutdown = self.cancel_on_shutdown.clone();
         let hopr = hopr.clone();
         let dest = dest.clone();
