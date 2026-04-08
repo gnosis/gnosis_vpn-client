@@ -58,6 +58,7 @@ pub(super) struct Connection {
     buffer: Option<BufferOptions>,
     max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     announced_peer_minimum_score: Option<f64>,
+    health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -87,6 +88,14 @@ struct PingOptions {
     timeout: Option<Duration>,
     ttl: Option<u32>,
     seq_count: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct HealthCheckIntervalOptions {
+    #[serde(default, with = "humantime_serde::option")]
+    ping: Option<Duration>,
+    health_every_n_pings: Option<u32>,
+    version_every_n_pings: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -229,6 +238,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                 wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
+                        continue;
+                    }
+                    if k == "health_check_intervals" {
+                        if let Some(hci) = v.as_table() {
+                            for (k, _v) in hci.iter() {
+                                if k == "ping" || k == "health_every_n_pings" || k == "version_every_n_pings" {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.health_check_intervals.{k}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "announced_peer_minimum_score" {
                         continue;
                     }
                     wrong_keys.push(format!("connection.{k}"));
@@ -435,6 +458,16 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.announced_peer_minimum_score)
             .unwrap_or(Connection::default_announced_peer_minimum_score());
 
+        let def_intervals = options::HealthCheckIntervals::default();
+        let health_check_intervals = connection
+            .and_then(|c| c.health_check_intervals.as_ref())
+            .map(|h| options::HealthCheckIntervals {
+                ping: h.ping.unwrap_or(def_intervals.ping),
+                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
+                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+            })
+            .unwrap_or(def_intervals);
+
         options::Options::new(
             sessions,
             ping_opts,
@@ -442,6 +475,7 @@ impl From<Option<Connection>> for options::Options {
             max_surb_upstream,
             timeouts,
             announced_peer_minimum_score,
+            health_check_intervals,
         )
     }
 }

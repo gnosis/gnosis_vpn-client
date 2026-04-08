@@ -15,6 +15,18 @@ pub struct Options {
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
     pub announced_peer_minimum_score: f64,
+    pub health_check_intervals: HealthCheckIntervals,
+}
+
+/// Controls how often each tier of health check runs.
+/// Ping runs every cycle. Health and version piggyback every Nth cycle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HealthCheckIntervals {
+    pub ping: Duration,
+    /// Run exit health check every Nth ping cycle.
+    pub health_every_n_pings: u32,
+    /// Run version check every Nth ping cycle.
+    pub version_every_n_pings: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,6 +77,7 @@ impl Options {
         max_surb_upstream: MaxSurbUpstream,
         timeouts: Timeouts,
         announced_peer_minimum_score: f64,
+        health_check_intervals: HealthCheckIntervals,
     ) -> Self {
         Self {
             sessions,
@@ -73,6 +86,17 @@ impl Options {
             max_surb_upstream,
             timeouts,
             announced_peer_minimum_score,
+            health_check_intervals,
+        }
+    }
+}
+
+impl Default for HealthCheckIntervals {
+    fn default() -> Self {
+        Self {
+            ping: Duration::from_secs(30),
+            health_every_n_pings: 2,
+            version_every_n_pings: 10,
         }
     }
 }

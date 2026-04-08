@@ -20,8 +20,6 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
-const CONNECTED_INTERVAL: Duration = Duration::from_mins(3);
-const DISCONNECTED_INTERVAL: Duration = Duration::from_secs(90);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,9 +48,10 @@ pub enum ExitHealth {
     },
     Healthy {
         checked_at: SystemTime,
-        health: gvpn_client::Health,
+        version: Option<gvpn_client::Versions>,
+        ping_rtt: Duration,
+        health: Option<gvpn_client::Health>,
         total_time: Duration,
-        round_trip_time: Duration,
     },
     Unhealthy {
         checked_at: SystemTime,
@@ -114,6 +113,8 @@ pub struct RouteHealth {
     state: RouteHealthState,
     health_check_cancel: CancellationToken,
     cancel_on_shutdown: CancellationToken,
+    pings_since_health: u32,
+    pings_since_version: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +169,9 @@ impl RouteHealth {
             state,
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown,
+            // Start at max so the first check runs all three tiers
+            pings_since_health: u32::MAX,
+            pings_since_version: u32::MAX,
         }
     }
 }
@@ -464,7 +468,6 @@ impl RouteHealth {
     pub fn health_check_result(
         &mut self,
         new_exit: ExitHealth,
-        connected: bool,
         hopr: &Arc<Hopr>,
         dest: &Destination,
         options: &Options,
@@ -487,7 +490,8 @@ impl RouteHealth {
         };
 
         if let Some(merged) = merged {
-            let next_interval = merged.next_interval(connected);
+            let ping_interval = options.health_check_intervals.ping;
+            let next_interval = merged.next_interval(ping_interval);
             let is_healthy = matches!(merged, ExitHealth::Healthy { .. });
 
             self.set_exit(merged);
@@ -570,6 +574,13 @@ impl RouteHealth {
 // Health check spawn / cancel
 // ---------------------------------------------------------------------------
 
+/// Which checks to include in a health check cycle.
+#[derive(Clone, Debug)]
+struct CheckScope {
+    version: bool,
+    health: bool,
+}
+
 impl RouteHealth {
     pub fn spawn_health_check(
         &mut self,
@@ -580,6 +591,22 @@ impl RouteHealth {
         sender: &mpsc::Sender<Results>,
     ) {
         self.cancel_health_check();
+
+        let intervals = &options.health_check_intervals;
+        self.pings_since_health += 1;
+        self.pings_since_version += 1;
+
+        let scope = CheckScope {
+            version: self.pings_since_version >= intervals.version_every_n_pings,
+            health: self.pings_since_health >= intervals.health_every_n_pings,
+        };
+
+        if scope.version {
+            self.pings_since_version = 0;
+        }
+        if scope.health {
+            self.pings_since_health = 0;
+        }
 
         let token = self.health_check_cancel.clone();
         let shutdown = self.cancel_on_shutdown.clone();
@@ -594,7 +621,7 @@ impl RouteHealth {
                 _ = shutdown.cancelled() => {}
                 _ = async {
                     time::sleep(delay).await;
-                    run_health_check(&hopr, &dest, &options, &sender).await;
+                    run_health_check(&hopr, &dest, &options, &scope, &sender).await;
                 } => {}
             }
         });
@@ -610,10 +637,15 @@ impl RouteHealth {
 // Health check runner (async, runs in spawned task)
 // ---------------------------------------------------------------------------
 
-async fn run_health_check(hopr: &Hopr, destination: &Destination, options: &Options, sender: &mpsc::Sender<Results>) {
+async fn run_health_check(
+    hopr: &Hopr,
+    destination: &Destination,
+    options: &Options,
+    scope: &CheckScope,
+    sender: &mpsc::Sender<Results>,
+) {
     let id = destination.id.clone();
 
-    // Signal: check is running
     let _ = sender
         .send(Results::HealthCheck {
             id: id.clone(),
@@ -626,7 +658,6 @@ async fn run_health_check(hopr: &Hopr, destination: &Destination, options: &Opti
     let checked_at = SystemTime::now();
     let measure_total = Instant::now();
 
-    // Open TCP session (no SURB balancer)
     let res_session = open_health_session(hopr, destination, options).await;
     let session = match res_session {
         Ok(session) => session,
@@ -645,27 +676,87 @@ async fn run_health_check(hopr: &Hopr, destination: &Destination, options: &Opti
         }
     };
 
-    // Request health status
+    let socket_addr = session.bound_host;
+    let timeout = options.timeouts.http;
+    let client = reqwest::Client::new();
+
+    // Step 1: Version check (when due)
+    let mut version = None;
+    if scope.version {
+        match gvpn_client::versions(&client, socket_addr, timeout).await {
+            Ok(v) => {
+                tracing::debug!(%destination, versions = %v, "exit server version check passed");
+                version = Some(v);
+            }
+            Err(err) => {
+                close_health_session(hopr, &session).await;
+                let _ = sender
+                    .send(Results::HealthCheck {
+                        id,
+                        exit: ExitHealth::Unhealthy {
+                            checked_at,
+                            error: format!("Version check error: {err}"),
+                            previous_failures: 0,
+                        },
+                    })
+                    .await;
+                return;
+            }
+        }
+    }
+
+    // Step 2: Ping (always runs)
     let measure_rtt = Instant::now();
-    let res_health = request_health(options, &session).await;
-    let rtt = measure_rtt.elapsed();
+    if let Err(err) = gvpn_client::ping(&client, socket_addr, timeout).await {
+        close_health_session(hopr, &session).await;
+        let _ = sender
+            .send(Results::HealthCheck {
+                id,
+                exit: ExitHealth::Unhealthy {
+                    checked_at,
+                    error: format!("Ping error: {err}"),
+                    previous_failures: 0,
+                },
+            })
+            .await;
+        return;
+    }
+    let ping_rtt = measure_rtt.elapsed();
 
-    // Close session promptly
+    // Step 3: Exit health (when due)
+    let mut health = None;
+    if scope.health {
+        match request_health(options, &session).await {
+            Ok(h) => {
+                tracing::debug!(%destination, health = %h, "exit health check passed");
+                health = Some(h);
+            }
+            Err(err) => {
+                close_health_session(hopr, &session).await;
+                let _ = sender
+                    .send(Results::HealthCheck {
+                        id,
+                        exit: ExitHealth::Unhealthy {
+                            checked_at,
+                            error: format!("Health request error: {err}"),
+                            previous_failures: 0,
+                        },
+                    })
+                    .await;
+                return;
+            }
+        }
+    }
+
     close_health_session(hopr, &session).await;
-
     let total_time = measure_total.elapsed();
-    let new_exit = match res_health {
-        Ok(health) => ExitHealth::Healthy {
-            checked_at,
-            health,
-            total_time,
-            round_trip_time: rtt,
-        },
-        Err(err) => ExitHealth::Unhealthy {
-            checked_at,
-            error: format!("Health request error: {err}"),
-            previous_failures: 0,
-        },
+
+    let new_exit = ExitHealth::Healthy {
+        checked_at,
+        version,
+        ping_rtt,
+        health,
+        total_time,
     };
 
     let _ = sender.send(Results::HealthCheck { id, exit: new_exit }).await;
@@ -721,7 +812,7 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl ExitHealth {
-    pub fn next_interval(&self, connected: bool) -> Option<Duration> {
+    pub fn next_interval(&self, ping_interval: Duration) -> Option<Duration> {
         match self {
             ExitHealth::Init | ExitHealth::Checking { .. } => None,
             ExitHealth::Unhealthy { previous_failures, .. } => {
@@ -729,13 +820,7 @@ impl ExitHealth {
                     (FAILURE_INTERVAL + FAILURE_INTERVAL * (*previous_failures)).min(MAX_INTERVAL_BETWEEN_FAILURES);
                 Some(interval)
             }
-            ExitHealth::Healthy { .. } => {
-                if connected {
-                    Some(CONNECTED_INTERVAL)
-                } else {
-                    Some(DISCONNECTED_INTERVAL)
-                }
-            }
+            ExitHealth::Healthy { .. } => Some(ping_interval),
         }
     }
 }
@@ -855,18 +940,25 @@ impl Display for ExitHealth {
             }
             ExitHealth::Healthy {
                 checked_at,
+                version,
+                ping_rtt,
                 health,
                 total_time,
-                round_trip_time,
             } => {
                 write!(
                     f,
-                    "{} ago: total time {:.2} s, round trip: {:.2} s, {}",
+                    "{} ago: total {:.2} s, ping {:.2} s",
                     log_output::elapsed(checked_at),
                     total_time.as_secs_f32(),
-                    round_trip_time.as_secs_f32(),
-                    health,
-                )
+                    ping_rtt.as_secs_f32(),
+                )?;
+                if let Some(h) = health {
+                    write!(f, ", {h}")?;
+                }
+                if let Some(v) = version {
+                    write!(f, ", {v}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -885,6 +977,8 @@ mod tests {
             state: state_fn("test".to_string(), need),
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown: CancellationToken::new(),
+            pings_since_health: 0,
+            pings_since_version: 0,
         }
     }
 

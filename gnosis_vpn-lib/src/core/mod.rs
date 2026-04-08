@@ -809,14 +809,12 @@ impl Core {
 
             Results::HealthCheck { id, exit } => {
                 tracing::info!(%id, %exit, "received health check");
-                let connected = matches!(self.phase, Phase::Connected(_));
                 if let Some(dest) = self.config.destinations.get(&id).cloned()
                     && let Some(rh) = self.route_healths.get_mut(&id)
                 {
                     let was_ready = rh.is_ready_to_connect();
                     rh.health_check_result(
                         exit,
-                        connected,
                         self.hopr.as_ref().unwrap(),
                         &dest,
                         &self.config.connection,
