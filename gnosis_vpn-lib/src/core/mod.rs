@@ -629,7 +629,6 @@ impl Core {
                         Duration::from_secs(90)
                     };
                     self.spawn_connected_peers(results_sender, delay);
-                    self.act_on_target(results_sender);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch connected peers");
@@ -667,7 +666,6 @@ impl Core {
                                 );
                             }
                         }
-                        self.act_on_target(results_sender);
                     }
                     Err(err) => {
                         tracing::error!(?err, address = %address.to_checksum(), "failed to ensure channel funding");
@@ -765,7 +763,6 @@ impl Core {
                     }
                 }
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
-                self.act_on_target(results_sender);
             }
 
             Results::SessionMonitorFailed => match self.phase.clone() {
@@ -1408,30 +1405,9 @@ impl Core {
         self.phase = Phase::HoprRunning;
         if route_health::any_needs_peers(self.route_healths.values()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
+        } else {
+            self.act_on_target(results_sender);
         }
-        // Spawn health checks for destinations that are routable (peer+channel OK)
-        let routable_ids: Vec<String> = self
-            .route_healths
-            .iter()
-            .filter(|(_, rh)| rh.is_routable())
-            .map(|(id, _)| id.clone())
-            .collect();
-        let mut delay = Duration::from_millis(133);
-        for id in routable_ids {
-            if let Some(dest) = self.config.destinations.get(&id).cloned()
-                && let Some(rh) = self.route_healths.get_mut(&id)
-            {
-                rh.spawn_health_check(
-                    delay,
-                    self.hopr.as_ref().unwrap(),
-                    &dest,
-                    &self.config.connection,
-                    results_sender,
-                );
-                delay += Duration::from_millis(133);
-            }
-        }
-        self.act_on_target(results_sender);
     }
 
     fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
