@@ -732,6 +732,7 @@ impl Core {
                     );
                     log_output::print_session_established(route.as_str());
                     self.spawn_session_monitoring(session, results_sender);
+                    self.spawn_tunnel_ping_probe(results_sender);
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -772,6 +773,16 @@ impl Core {
                 }
                 phase => {
                     tracing::error!(?phase, "session monitor failed in unexpected phase");
+                }
+            },
+
+            Results::TunnelPingFailed => match self.phase.clone() {
+                Phase::Connected(conn) => {
+                    tracing::warn!(%conn, "tunnel ping probe failed - reconnecting");
+                    self.disconnect_from_connection(&conn, results_sender);
+                }
+                phase => {
+                    tracing::error!(?phase, "tunnel ping probe failed in unexpected phase");
                 }
             },
 
@@ -1343,6 +1354,21 @@ impl Core {
                     .await
             });
         }
+    }
+
+    fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
+        let intervals = &self.config.connection.health_check_intervals;
+        let cancel = self.cancel_connection.clone();
+        let interval = intervals.tunnel_ping;
+        let max_failures = intervals.tunnel_ping_max_failures;
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    runner::monitor_tunnel_ping(interval, max_failures, results_sender).await;
+                })
+                .await
+        });
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]

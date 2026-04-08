@@ -27,6 +27,10 @@ pub struct HealthCheckIntervals {
     pub health_every_n_pings: u32,
     /// Run version check every Nth ping cycle.
     pub version_every_n_pings: u32,
+    /// Interval between ICMP tunnel ping probes when connected.
+    pub tunnel_ping: Duration,
+    /// Consecutive tunnel ping failures before triggering reconnect.
+    pub tunnel_ping_max_failures: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,6 +101,8 @@ impl Default for HealthCheckIntervals {
             ping: Duration::from_secs(15),
             health_every_n_pings: 4,
             version_every_n_pings: 20,
+            tunnel_ping: Duration::from_secs(10),
+            tunnel_ping_max_failures: 3,
         }
     }
 }

@@ -96,6 +96,9 @@ struct HealthCheckIntervalOptions {
     ping: Option<Duration>,
     health_every_n_pings: Option<u32>,
     version_every_n_pings: Option<u32>,
+    #[serde(default, with = "humantime_serde::option")]
+    tunnel_ping: Option<Duration>,
+    tunnel_ping_max_failures: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -243,7 +246,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k, _v) in hci.iter() {
-                                if k == "ping" || k == "health_every_n_pings" || k == "version_every_n_pings" {
+                                if k == "ping"
+                                || k == "health_every_n_pings"
+                                || k == "version_every_n_pings"
+                                || k == "tunnel_ping"
+                                || k == "tunnel_ping_max_failures"
+                            {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.health_check_intervals.{k}"));
@@ -465,6 +473,10 @@ impl From<Option<Connection>> for options::Options {
                 ping: h.ping.unwrap_or(def_intervals.ping),
                 health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
                 version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
+                tunnel_ping_max_failures: h
+                    .tunnel_ping_max_failures
+                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
             })
             .unwrap_or(def_intervals);
 
