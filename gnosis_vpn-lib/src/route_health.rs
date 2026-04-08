@@ -94,6 +94,13 @@ pub enum RouteHealthState {
         exit: ExitHealth,
         last_error: Option<String>,
     },
+    /// Actively connected. TCP health checks suspended, tunnel ping drives ExitHealth.
+    Connected {
+        id: String,
+        need: ChannelNeed,
+        exit: ExitHealth,
+        last_error: Option<String>,
+    },
 }
 
 /// Returned from `peers()` so Core knows what side effects to trigger.
@@ -184,7 +191,8 @@ impl RouteHealth {
             | RouteHealthState::NeedsPeering { id, .. }
             | RouteHealthState::NeedsFunding { id, .. }
             | RouteHealthState::Routable { id, .. }
-            | RouteHealthState::ReadyToConnect { id, .. } => id,
+            | RouteHealthState::ReadyToConnect { id, .. }
+            | RouteHealthState::Connected { id, .. } => id,
         }
     }
 
@@ -219,12 +227,15 @@ impl RouteHealth {
     pub fn is_routable(&self) -> bool {
         matches!(
             self.state,
-            RouteHealthState::Routable { .. } | RouteHealthState::ReadyToConnect { .. }
+            RouteHealthState::Routable { .. } | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connected { .. }
         )
     }
 
     pub fn is_ready_to_connect(&self) -> bool {
-        matches!(self.state, RouteHealthState::ReadyToConnect { .. })
+        matches!(
+            self.state,
+            RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connected { .. }
+        )
     }
 
     pub fn is_unrecoverable(&self) -> bool {
@@ -335,6 +346,12 @@ impl RouteHealth {
                 last_error,
             }
             | RouteHealthState::ReadyToConnect {
+                id,
+                need,
+                exit,
+                last_error,
+            }
+            | RouteHealthState::Connected {
                 id,
                 need,
                 exit,
@@ -530,12 +547,81 @@ impl RouteHealth {
         }
     }
 
+    /// Transition ReadyToConnect → Connected, cancel TCP health checks.
+    pub fn connected(&mut self) {
+        if let RouteHealthState::ReadyToConnect {
+            id,
+            need,
+            last_error,
+            ..
+        } = self.state.clone()
+        {
+            self.cancel_health_check();
+            self.state = RouteHealthState::Connected {
+                id,
+                need,
+                exit: ExitHealth::Init,
+                last_error,
+            };
+        }
+    }
+
+    /// Transition Connected → ReadyToConnect, restart TCP health checks.
+    pub fn disconnected(
+        &mut self,
+        hopr: &Arc<Hopr>,
+        dest: &Destination,
+        options: &Options,
+        sender: &mpsc::Sender<Results>,
+    ) {
+        if let RouteHealthState::Connected {
+            id,
+            need,
+            last_error,
+            ..
+        } = self.state.clone()
+        {
+            self.state = RouteHealthState::ReadyToConnect {
+                id,
+                need,
+                exit: ExitHealth::Init,
+                last_error,
+            };
+            self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+        }
+    }
+
+    /// Update exit health from a tunnel ping result. Returns consecutive failure count.
+    pub fn tunnel_ping_result(&mut self, new_exit: ExitHealth) -> u32 {
+        let merged = match &self.state {
+            RouteHealthState::Connected { exit: old_exit, .. } => match (old_exit, &new_exit) {
+                (ExitHealth::Unhealthy { previous_failures, .. }, ExitHealth::Unhealthy { checked_at, error, .. }) => {
+                    ExitHealth::Unhealthy {
+                        checked_at: *checked_at,
+                        error: error.clone(),
+                        previous_failures: previous_failures + 1,
+                    }
+                }
+                _ => new_exit,
+            },
+            _ => return 0,
+        };
+
+        let failures = match &merged {
+            ExitHealth::Unhealthy { previous_failures, .. } => previous_failures + 1,
+            _ => 0,
+        };
+        self.set_exit(merged);
+        failures
+    }
+
     pub fn with_error(&mut self, err: String) {
         match &mut self.state {
             RouteHealthState::NeedsPeering { last_error, .. }
             | RouteHealthState::NeedsFunding { last_error, .. }
             | RouteHealthState::Routable { last_error, .. }
-            | RouteHealthState::ReadyToConnect { last_error, .. } => {
+            | RouteHealthState::ReadyToConnect { last_error, .. }
+            | RouteHealthState::Connected { last_error, .. } => {
                 *last_error = Some(err);
             }
             RouteHealthState::Unrecoverable { .. } => {}
@@ -547,7 +633,8 @@ impl RouteHealth {
             RouteHealthState::NeedsPeering { last_error, .. }
             | RouteHealthState::NeedsFunding { last_error, .. }
             | RouteHealthState::Routable { last_error, .. }
-            | RouteHealthState::ReadyToConnect { last_error, .. } => {
+            | RouteHealthState::ReadyToConnect { last_error, .. }
+            | RouteHealthState::Connected { last_error, .. } => {
                 *last_error = None;
             }
             RouteHealthState::Unrecoverable { .. } => {}
@@ -559,7 +646,8 @@ impl RouteHealth {
             RouteHealthState::NeedsPeering { exit, .. }
             | RouteHealthState::NeedsFunding { exit, .. }
             | RouteHealthState::Routable { exit, .. }
-            | RouteHealthState::ReadyToConnect { exit, .. } => {
+            | RouteHealthState::ReadyToConnect { exit, .. }
+            | RouteHealthState::Connected { exit, .. } => {
                 *exit = new_exit;
             }
             RouteHealthState::Unrecoverable { .. } => {}
@@ -900,6 +988,12 @@ impl Display for RouteHealthState {
                     write!(f, "Last error: {err}, ")?;
                 }
                 write!(f, "Ready, exit: {exit}")
+            }
+            RouteHealthState::Connected { exit, last_error, .. } => {
+                if let Some(err) = last_error {
+                    write!(f, "Last error: {err}, ")?;
+                }
+                write!(f, "Connected, tunnel: {exit}")
             }
         }
     }

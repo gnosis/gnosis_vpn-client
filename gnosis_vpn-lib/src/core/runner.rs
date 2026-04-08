@@ -88,7 +88,9 @@ pub enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
-    TunnelPingFailed,
+    TunnelPingResult {
+        rtt: Result<Duration, String>,
+    },
     HealthCheck {
         id: String,
         exit: ExitHealth,
@@ -221,20 +223,14 @@ pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, r
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-pub async fn monitor_tunnel_ping(interval: Duration, max_failures: u32, sender: mpsc::Sender<Results>) {
-    run_tunnel_ping_probe(interval, max_failures, &sender).await;
-    let _ = sender.send(Results::TunnelPingFailed).await;
-}
-
-async fn run_tunnel_ping_probe(interval: Duration, max_failures: u32, sender: &mpsc::Sender<Results>) {
+pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
     let ping_opts = ping::Options {
         seq_count: 1,
         ..Default::default()
     };
     let ping_timeout = ping_opts.timeout;
-    let mut consecutive_failures: u32 = 0;
 
-    tracing::debug!(?interval, max_failures, "starting tunnel ping probe");
+    tracing::debug!(?interval, "starting tunnel ping probe");
 
     loop {
         time::sleep(interval).await;
@@ -248,26 +244,15 @@ async fn run_tunnel_ping_probe(interval: Duration, max_failures: u32, sender: &m
             break;
         }
 
-        let result = match time::timeout(ping_timeout * 2, rx).await {
+        let rtt = match time::timeout(ping_timeout * 2, rx).await {
             Ok(Ok(Ok(rtt))) => Ok(rtt),
             Ok(Ok(Err(err))) => Err(err),
             Ok(Err(_)) => Err("ping response channel closed".to_string()),
             Err(_) => Err("ping response timed out".to_string()),
         };
 
-        match result {
-            Ok(rtt) => {
-                consecutive_failures = 0;
-                tracing::info!(rtt_ms = rtt.as_millis(), "tunnel ping ok");
-            }
-            Err(err) => {
-                consecutive_failures += 1;
-                tracing::warn!(consecutive_failures, max_failures, %err, "tunnel ping failed");
-                if consecutive_failures >= max_failures {
-                    tracing::error!(consecutive_failures, "tunnel ping probe exceeded max failures");
-                    break;
-                }
-            }
+        if sender.send(Results::TunnelPingResult { rtt }).await.is_err() {
+            break;
         }
     }
 }
@@ -570,7 +555,10 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
-            Results::TunnelPingFailed => write!(f, "TunnelPingFailed"),
+            Results::TunnelPingResult { rtt } => match rtt {
+                Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
+                Err(err) => write!(f, "TunnelPingResult: Error({})", err),
+            },
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),

@@ -22,7 +22,7 @@ use crate::connection::destination::Destination;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
-use crate::route_health::{self, RouteHealth};
+use crate::route_health::{self, ExitHealth, RouteHealth};
 use crate::ticket_stats::TicketStats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
@@ -724,6 +724,7 @@ impl Core {
                     self.phase = Phase::Connected(conn.clone());
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
                         rh.no_error();
+                        rh.connected();
                     }
                     let route = format!(
                         "{}({})",
@@ -777,15 +778,32 @@ impl Core {
                 }
             },
 
-            Results::TunnelPingFailed => match self.phase.clone() {
-                Phase::Connected(conn) => {
-                    tracing::warn!(%conn, "tunnel ping probe failed - reconnecting");
-                    self.disconnect_from_connection(&conn, results_sender);
+            Results::TunnelPingResult { rtt } => {
+                if let Phase::Connected(conn) = self.phase.clone() {
+                    let new_exit = match rtt {
+                        Ok(ping_rtt) => ExitHealth::Healthy {
+                            checked_at: std::time::SystemTime::now(),
+                            version: None,
+                            ping_rtt,
+                            health: None,
+                            total_time: ping_rtt,
+                        },
+                        Err(err) => ExitHealth::Unhealthy {
+                            checked_at: std::time::SystemTime::now(),
+                            error: err,
+                            previous_failures: 0,
+                        },
+                    };
+                    if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
+                        let failures = rh.tunnel_ping_result(new_exit);
+                        let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
+                        if failures >= max {
+                            tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
+                            self.disconnect_from_connection(&conn, results_sender);
+                        }
+                    }
                 }
-                phase => {
-                    tracing::error!(?phase, "tunnel ping probe failed in unexpected phase");
-                }
-            },
+            }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
                 RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
@@ -1358,15 +1376,13 @@ impl Core {
     }
 
     fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
-        let intervals = &self.config.connection.health_check_intervals;
+        let interval = self.config.connection.health_check_intervals.tunnel_ping;
         let cancel = self.cancel_connection.clone();
-        let interval = intervals.tunnel_ping;
-        let max_failures = intervals.tunnel_ping_max_failures;
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::monitor_tunnel_ping(interval, max_failures, results_sender).await;
+                    runner::tunnel_ping_loop(interval, results_sender).await;
                 })
                 .await
         });
@@ -1420,6 +1436,16 @@ impl Core {
         self.cancel_connection.cancel();
         self.cancel_connection = CancellationToken::new();
         self.phase = Phase::HoprRunning;
+        if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
+            && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
+        {
+            rh.disconnected(
+                self.hopr.as_ref().unwrap(),
+                &dest,
+                &self.config.connection,
+                results_sender,
+            );
+        }
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, results_sender);
         } else {
