@@ -1,5 +1,5 @@
 [workspace]
-members = ["gnosis_vpn*"]
+members  = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
@@ -55,7 +55,7 @@ tracing-subscriber = "0.3.22"
 url = { version = "2.5.7", features = ["serde"] }
 uzers = "0.12.2"
 
-objc2 = "0.6"
+objc2            = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
@@ -63,7 +63,7 @@ gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]
 codegen-units = 1
-lto = "fat"
-opt-level = 3
-panic = "abort"
-strip = true
+lto           = "fat"
+opt-level     = 3
+panic         = "abort"
+strip         = true

@@ -37,7 +37,7 @@ jobs:
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: gnosis-vpn-client
       build_command: ${{ matrix.build_command }}
-      binary: gnosis_vpn
+      binary: gnosis_vpn-client
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
     secrets:
