@@ -73,6 +73,10 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # ping = "15s"
 # health_every_n_pings = 4
 # version_every_n_pings = 20
+# ICMP ping probe interval when connected (verifies tunnel is working)
+# tunnel_ping = "10s"
+# consecutive tunnel ping failures before triggering reconnect
+# tunnel_ping_max_failures = 3
 
 # adjust session internal options
 # [connection.max_surb_upstream]
