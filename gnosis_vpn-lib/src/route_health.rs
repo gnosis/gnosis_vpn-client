@@ -227,7 +227,9 @@ impl RouteHealth {
     pub fn is_routable(&self) -> bool {
         matches!(
             self.state,
-            RouteHealthState::Routable { .. } | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connected { .. }
+            RouteHealthState::Routable { .. }
+                | RouteHealthState::ReadyToConnect { .. }
+                | RouteHealthState::Connected { .. }
         )
     }
 
@@ -569,10 +571,7 @@ impl RouteHealth {
         sender: &mpsc::Sender<Results>,
     ) {
         if let RouteHealthState::Connected {
-            id,
-            need,
-            last_error,
-            ..
+            id, need, last_error, ..
         } = self.state.clone()
         {
             self.state = RouteHealthState::ReadyToConnect {
