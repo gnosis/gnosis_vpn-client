@@ -98,17 +98,24 @@ fn add_from_destinations<'a>(
     ongoing_channel_fundings: &[&Address],
 ) {
     for (id, dest) in destinations {
-        if !channels_out.iter().any(|channel| match &channel.destination {
+        let already_present = channels_out.iter().any(|channel| match &channel.destination {
             ChannelDestination::Configured((existing_id, _)) => existing_id == id,
             ChannelDestination::Unconfigured(_) => false,
-        }) {
-            let destination = ChannelDestination::Configured((id.clone(), dest.address));
-            if ongoing_channel_fundings.contains(&&dest.address) {
-                channels_out.push(ChannelOut {
-                    destination,
-                    balance: ChannelBalance::FundingOngoing,
-                });
-            };
+        });
+        if already_present {
+            continue;
+        }
+
+        // ongoing_channel_fundings contains relay addresses, so match
+        // against the relay in the routing path, not the exit address
+        let relay_is_funding = ongoing_channel_fundings
+            .iter()
+            .find(|&&addr| dest.has_intermediate_channel(*addr));
+        if let Some(&&relay_addr) = relay_is_funding {
+            channels_out.push(ChannelOut {
+                destination: ChannelDestination::Configured((id.clone(), relay_addr)),
+                balance: ChannelBalance::FundingOngoing,
+            });
         }
     }
 }
