@@ -54,7 +54,6 @@ pub struct SessionParameters {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BufferSizes {
     pub bridge: ByteSize,
-    pub health: ByteSize,
     pub ping: ByteSize,
     pub main: ByteSize,
 }
@@ -62,7 +61,6 @@ pub struct BufferSizes {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaxSurbUpstream {
     pub bridge: Bandwidth,
-    pub health: Bandwidth,
     pub ping: Bandwidth,
     pub main: Bandwidth,
 }
@@ -111,7 +109,6 @@ impl Default for MaxSurbUpstream {
     fn default() -> Self {
         Self {
             bridge: Bandwidth::from_kbps(512),
-            health: Bandwidth::from_kbps(256),
             ping: Bandwidth::from_kbps(512),
             main: Bandwidth::from_mbps(16),
         }
@@ -122,7 +119,6 @@ impl Default for BufferSizes {
     fn default() -> Self {
         Self {
             bridge: ByteSize::kb(32),
-            health: ByteSize::kb(16),
             ping: ByteSize::mb(1),
             // maximum allowed buffer size is 10 MB
             main: ByteSize::mb(10),

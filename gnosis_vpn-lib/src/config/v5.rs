@@ -104,7 +104,6 @@ struct HealthCheckIntervalOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct BufferOptions {
     bridge: Option<ByteSize>,
-    health: Option<ByteSize>,
     ping: Option<ByteSize>,
     main: Option<ByteSize>,
 }
@@ -113,8 +112,6 @@ struct BufferOptions {
 struct MaxSurbUpstreamOptions {
     #[serde(default, with = "human_bandwidth::serde")]
     bridge: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    health: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
     ping: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
@@ -247,11 +244,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         if let Some(hci) = v.as_table() {
                             for (k, _v) in hci.iter() {
                                 if k == "ping"
-                                || k == "health_every_n_pings"
-                                || k == "version_every_n_pings"
-                                || k == "tunnel_ping"
-                                || k == "tunnel_ping_max_failures"
-                            {
+                                    || k == "health_every_n_pings"
+                                    || k == "version_every_n_pings"
+                                    || k == "tunnel_ping"
+                                    || k == "tunnel_ping_max_failures"
+                                {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.health_check_intervals.{k}"));
@@ -376,7 +373,6 @@ impl From<BufferOptions> for options::BufferSizes {
         let def = options::BufferSizes::default();
         options::BufferSizes {
             bridge: buffer.bridge.unwrap_or(def.bridge),
-            health: buffer.health.unwrap_or(def.health),
             ping: buffer.ping.unwrap_or(def.ping),
             main: buffer.main.unwrap_or(def.main),
         }
@@ -388,7 +384,6 @@ impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
         let def = options::MaxSurbUpstream::default();
         options::MaxSurbUpstream {
             bridge: surbs.bridge.unwrap_or(def.bridge),
-            health: surbs.health.unwrap_or(def.health),
             ping: surbs.ping.unwrap_or(def.ping),
             main: surbs.main.unwrap_or(def.main),
         }
@@ -646,13 +641,11 @@ seq_count = 1
 
 [connection.max_surb_upstream]
 bridge = "512 Kb/s"
-health = "256 Kb/s"
 ping = "1 Mb/s"
 main = "16 Mb/s"
 
 [connection.buffer]
 bridge = "32 kB"
-health = "16 kB"
 ping = "32 kB"
 main = "2 MB"
 

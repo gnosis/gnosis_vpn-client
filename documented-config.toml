@@ -81,13 +81,11 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # adjust session internal options
 # [connection.max_surb_upstream]
 # bridge = "512 Kb/s"
-# health = "256 Kb/s"
 # ping = "1 Mb/s"
 # main = "16 Mb/s"
 #
 # [connection.buffer]
 # bridge = "32 kB"
-# health = "16 kB"
 # ping = "32 kB"
 # main = "10 MB"
 
