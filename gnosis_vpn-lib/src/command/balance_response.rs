@@ -149,3 +149,36 @@ impl Display for ChannelDestination {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn address(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    #[test]
+    fn ongoing_funding_detected_for_relay_in_intermediate_path() {
+        let relay = address(0xAA);
+        let dest = Destination::new(
+            "d1".to_string(),
+            address(0xBB),
+            RoutingOptions::IntermediatePath([NodeId::Chain(relay)].into_iter().collect()),
+            HashMap::new(),
+        );
+        let destinations = HashMap::from([("d1".to_string(), dest)]);
+        let ongoing = vec![&relay];
+
+        let mut channels_out = Vec::new();
+        add_from_destinations(&mut channels_out, destinations.iter(), &ongoing);
+
+        assert_eq!(
+            channels_out,
+            vec![ChannelOut {
+                destination: ChannelDestination::Configured(("d1".to_string(), relay)),
+                balance: ChannelBalance::FundingOngoing,
+            }]
+        );
+    }
+}
