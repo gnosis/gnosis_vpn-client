@@ -11,11 +11,6 @@ on:
           - patch
           - minor
           - major
-      trigger_snapshot:
-        description: "Trigger installer snapshot in gnosis_vpn"
-        required: false
-        type: boolean
-        default: false
 concurrency:
   group: release
   cancel-in-progress: false
