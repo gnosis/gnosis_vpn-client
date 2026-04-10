@@ -25,14 +25,11 @@
 
     # HOPR Nix Library (provides reusable Rust build functions and treefmt config)
     nix-lib = {
-      url = "github:hoprnet/nix-lib/v1.1.0";
+      url = "github:hoprnet/nix-lib";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
     };
-
-    # Required by nix-lib's treefmt module for project root detection
-    flake-root.url = "github:srid/flake-root";
   };
 
   outputs =
@@ -50,7 +47,6 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         inputs.nix-lib.flakeModules.default
-        inputs.flake-root.flakeModule
       ];
       systems = [
         "x86_64-linux"
@@ -116,6 +112,7 @@
           # Use nix-lib.treefmt to extend it with project-specific settings.
           # nix-lib already covers: rustfmt, nixfmt, taplo, yamlfmt, shfmt, prettier, ruff-format.
           nix-lib.treefmt = {
+            projectRootFile = "LICENSE";
             globalExcludes = [
               "modules/*"
             ];
