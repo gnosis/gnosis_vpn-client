@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       release_type:
-        description: "Next version type"
+        description: Version type after release
         required: true
         type: choice
         default: "patch"
@@ -67,7 +67,7 @@ jobs:
         uses: hoprnet/hopr-workflows/actions/release-version@release-version-v3
         with:
           source_branch: ${{ github.ref_name }}
-          file: src-tauri/Cargo.toml
+          file: Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_cache_name: gnosis-vpn-client
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -77,4 +77,4 @@ jobs:
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
           gcp_artifact_package: gnosis_vpn-client
-          github_token: ${{ secrets.BOT_TOKEN }}
+          github_token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
