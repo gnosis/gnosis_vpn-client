@@ -36,7 +36,7 @@ jobs:
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/adapt-gnosisvpn #build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
     with:
