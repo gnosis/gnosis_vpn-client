@@ -98,17 +98,24 @@ fn add_from_destinations<'a>(
     ongoing_channel_fundings: &[&Address],
 ) {
     for (id, dest) in destinations {
-        if !channels_out.iter().any(|channel| match &channel.destination {
+        let already_present = channels_out.iter().any(|channel| match &channel.destination {
             ChannelDestination::Configured((existing_id, _)) => existing_id == id,
             ChannelDestination::Unconfigured(_) => false,
-        }) {
-            let destination = ChannelDestination::Configured((id.clone(), dest.address));
-            if ongoing_channel_fundings.contains(&&dest.address) {
-                channels_out.push(ChannelOut {
-                    destination,
-                    balance: ChannelBalance::FundingOngoing,
-                });
-            };
+        });
+        if already_present {
+            continue;
+        }
+
+        // ongoing_channel_fundings contains relay addresses, so match
+        // against the relay in the routing path, not the exit address
+        let relay_is_funding = ongoing_channel_fundings
+            .iter()
+            .find(|&&addr| dest.has_intermediate_channel(*addr));
+        if let Some(&&relay_addr) = relay_is_funding {
+            channels_out.push(ChannelOut {
+                destination: ChannelDestination::Configured((id.clone(), relay_addr)),
+                balance: ChannelBalance::FundingOngoing,
+            });
         }
     }
 }
@@ -140,5 +147,38 @@ impl Display for ChannelDestination {
             ChannelDestination::Unconfigured(addr) => write!(f, "{} (unconfigured)", addr.to_checksum()),
             ChannelDestination::Configured((id, addr)) => write!(f, "{checksum} ({id})", checksum = addr.to_checksum()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn address(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    #[test]
+    fn ongoing_funding_detected_for_relay_in_intermediate_path() {
+        let relay = address(0xAA);
+        let dest = Destination::new(
+            "d1".to_string(),
+            address(0xBB),
+            RoutingOptions::IntermediatePath([NodeId::Chain(relay)].into_iter().collect()),
+            HashMap::new(),
+        );
+        let destinations = HashMap::from([("d1".to_string(), dest)]);
+        let ongoing = vec![&relay];
+
+        let mut channels_out = Vec::new();
+        add_from_destinations(&mut channels_out, destinations.iter(), &ongoing);
+
+        assert_eq!(
+            channels_out,
+            vec![ChannelOut {
+                destination: ChannelDestination::Configured(("d1".to_string(), relay)),
+                balance: ChannelBalance::FundingOngoing,
+            }]
+        );
     }
 }
