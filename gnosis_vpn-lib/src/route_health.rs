@@ -45,6 +45,7 @@ pub enum ExitHealth {
     Init,
     Checking {
         since: SystemTime,
+        last_error: Option<String>,
     },
     Healthy {
         checked_at: SystemTime,
@@ -500,6 +501,12 @@ impl RouteHealth {
                         previous_failures: previous_failures + 1,
                     })
                 }
+                (ExitHealth::Unhealthy { error, .. }, ExitHealth::Checking { since, .. }) => {
+                    Some(ExitHealth::Checking {
+                        since: *since,
+                        last_error: Some(error.clone()),
+                    })
+                }
                 _ => Some(new_exit),
             },
             _ => None,
@@ -709,6 +716,7 @@ async fn run_health_check(
             id: id.clone(),
             exit: ExitHealth::Checking {
                 since: SystemTime::now(),
+                last_error: None,
             },
         })
         .await;
@@ -983,8 +991,12 @@ impl Display for ExitHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ExitHealth::Init => write!(f, "waiting for check"),
-            ExitHealth::Checking { since } => {
-                write!(f, "checking since {}", log_output::elapsed(since))
+            ExitHealth::Checking { since, last_error } => {
+                write!(f, "checking since {}", log_output::elapsed(since))?;
+                if let Some(err) = last_error {
+                    write!(f, ", last error: {err}")?;
+                }
+                Ok(())
             }
             ExitHealth::Unhealthy {
                 checked_at,
