@@ -517,6 +517,13 @@ impl RouteHealth {
             let next_interval = merged.next_interval(ping_interval);
             let is_healthy = matches!(merged, ExitHealth::Healthy { .. });
 
+            // Only advance the check cycle on success so that a failed check
+            // retries with the same scope (version/health) instead of
+            // downgrading to a ping-only check on the next attempt.
+            if is_healthy {
+                self.check_cycle = self.check_cycle.wrapping_add(1);
+            }
+
             self.set_exit(merged);
 
             // Transition between Routable ↔ ReadyToConnect based on exit health
@@ -666,7 +673,6 @@ impl RouteHealth {
 
         let intervals = &options.health_check_intervals;
         let cycle = self.check_cycle;
-        self.check_cycle = cycle.wrapping_add(1);
 
         let scope = CheckScope {
             version: cycle.is_multiple_of(intervals.version_every_n_pings),
