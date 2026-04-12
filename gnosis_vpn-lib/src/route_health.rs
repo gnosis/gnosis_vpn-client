@@ -20,6 +20,7 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+const COMPATIBLE_VERSIONS: &[&str] = &["v1"];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -758,6 +759,26 @@ async fn run_health_check(
     if scope.version {
         match gvpn_client::versions(&client, socket_addr, timeout).await {
             Ok(v) => {
+                let is_compatible = v.versions.iter().any(|sv| {
+                    COMPATIBLE_VERSIONS.contains(&sv.as_str())
+                });
+                if !is_compatible {
+                    close_health_session(hopr, &session).await;
+                    let _ = sender
+                        .send(Results::HealthCheck {
+                            id,
+                            exit: ExitHealth::Unhealthy {
+                                checked_at,
+                                error: format!(
+                                    "Incompatible exit server versions: {v}, compatible: {:?}",
+                                    COMPATIBLE_VERSIONS
+                                ),
+                                previous_failures: 0,
+                            },
+                        })
+                        .await;
+                    return;
+                }
                 tracing::debug!(%destination, versions = %v, "exit server version check passed");
                 version = Some(v);
             }
