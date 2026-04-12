@@ -686,6 +686,7 @@ impl RouteHealth {
                 _ = shutdown.cancelled() => {}
                 _ = async {
                     time::sleep(delay).await;
+                    tracing::info!(%dest, ?scope, "starting health check");
                     run_health_check(&hopr, &dest, &options, &scope, &sender).await;
                 } => {}
             }
