@@ -94,6 +94,7 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
+        ticket_value: Option<Balance<WxHOPR>>,
     },
     /// Safe deployment ongoing
     DeployingSafe { node_address: Address },
@@ -243,6 +244,7 @@ impl RunMode {
         pre_safe: &Option<balance::PreSafe>,
         funding_tool: Option<String>,
         error: Option<String>,
+        ticket_value: Option<Balance<WxHOPR>>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
@@ -250,6 +252,7 @@ impl RunMode {
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
             error,
+            ticket_value,
         }
     }
 
@@ -403,6 +406,7 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
+                ..
             } => {
                 let mut msg = format!(
                     "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",

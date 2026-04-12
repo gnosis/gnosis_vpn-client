@@ -97,6 +97,7 @@ fn pretty_print(resp: &Response) {
             channels_out,
             issues,
             info,
+            ticket_value: _,
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(

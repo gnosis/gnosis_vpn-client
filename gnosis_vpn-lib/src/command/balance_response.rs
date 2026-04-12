@@ -35,6 +35,7 @@ pub struct BalanceResponse {
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
+    pub ticket_value: Balance<WxHOPR>,
 }
 
 impl BalanceResponse {
@@ -61,6 +62,7 @@ impl BalanceResponse {
             channels_out,
             issues,
             info,
+            ticket_value: *ticket_value,
         }
     }
 }

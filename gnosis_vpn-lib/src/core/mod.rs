@@ -344,7 +344,7 @@ impl Core {
                                     }
                                 };
                                 let error = if errors.is_empty() { None } else { Some(errors) };
-                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, error)
+                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, error, self.ticket_value)
                             }
                             Phase::DeployingSafe {
                                 node_balance: _,
@@ -794,6 +794,7 @@ impl Core {
             Ok(safeless_interactor) => {
                 tracing::info!("safeless interactor created successfully");
                 self.safeless_interactor = Some(Arc::new(safeless_interactor));
+                self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
             }
             Err(err) => {
@@ -1407,28 +1408,29 @@ impl Core {
 
     fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
         tracing::info!("received ticket stats from runner");
-        match (stats.ticket_value(), self.hopr.as_ref()) {
-            (Ok(tv), Some(edgli)) => {
+        match stats.ticket_value() {
+            Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
                 self.ticket_value = Some(tv);
-                match edgli.start_telemetry_reactor(tv) {
-                    Ok(strategy_process) => {
-                        tracing::info!("started edge node telemetry reactor");
-                        self.strategy_handle = Some(strategy_process);
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            ?err,
-                            "failed to start edge node telemetry reactor - retrying ticket stats"
-                        );
-                        self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                if self.strategy_handle.is_none() {
+                    if let Some(edgli) = self.hopr.as_ref() {
+                        match edgli.start_telemetry_reactor(tv) {
+                            Ok(strategy_process) => {
+                                tracing::info!("started edge node telemetry reactor");
+                                self.strategy_handle = Some(strategy_process);
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    ?err,
+                                    "failed to start edge node telemetry reactor - retrying ticket stats"
+                                );
+                                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                            }
+                        }
                     }
                 }
             }
-            (Ok(_), None) => {
-                tracing::error!("edgeclient not available when starting telemetry reactor");
-            }
-            (Err(err), _) => {
+            Err(err) => {
                 tracing::error!(%stats, ?err, "failed to determine ticket value from stats - retrying");
                 self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
             }
