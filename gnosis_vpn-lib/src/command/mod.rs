@@ -406,12 +406,15 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                ..
+                ticket_value,
             } => {
                 let mut msg = format!(
                     "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
                     node_address.to_checksum()
                 );
+                if let Some(tv) = ticket_value {
+                    msg = format!("{msg}, ticket value: {tv}");
+                }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
                         format!("{msg}, funding tool: {tool}, error: {error})")
