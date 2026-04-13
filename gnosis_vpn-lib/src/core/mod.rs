@@ -344,7 +344,13 @@ impl Core {
                                     }
                                 };
                                 let error = if errors.is_empty() { None } else { Some(errors) };
-                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, error, self.ticket_value)
+                                RunMode::preparing_safe(
+                                    self.node_address,
+                                    &balance,
+                                    funding_tool,
+                                    error,
+                                    self.ticket_value,
+                                )
                             }
                             Phase::DeployingSafe {
                                 node_balance: _,
@@ -1412,20 +1418,20 @@ impl Core {
             Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
                 self.ticket_value = Some(tv);
-                if self.strategy_handle.is_none() {
-                    if let Some(edgli) = self.hopr.as_ref() {
-                        match edgli.start_telemetry_reactor(tv) {
-                            Ok(strategy_process) => {
-                                tracing::info!("started edge node telemetry reactor");
-                                self.strategy_handle = Some(strategy_process);
-                            }
-                            Err(err) => {
-                                tracing::error!(
-                                    ?err,
-                                    "failed to start edge node telemetry reactor - retrying ticket stats"
-                                );
-                                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
-                            }
+                if self.strategy_handle.is_none()
+                    && let Some(edgli) = self.hopr.as_ref()
+                {
+                    match edgli.start_telemetry_reactor(tv) {
+                        Ok(strategy_process) => {
+                            tracing::info!("started edge node telemetry reactor");
+                            self.strategy_handle = Some(strategy_process);
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                ?err,
+                                "failed to start edge node telemetry reactor - retrying ticket stats"
+                            );
+                            self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
                         }
                     }
                 }
