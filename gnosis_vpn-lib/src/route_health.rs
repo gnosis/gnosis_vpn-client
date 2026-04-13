@@ -49,7 +49,7 @@ pub enum ExitHealth {
     },
     Healthy {
         checked_at: SystemTime,
-        version: gvpn_client::Versions,
+        versions: gvpn_client::Versions,
         ping_rtt: Duration,
         health: gvpn_client::Health,
     },
@@ -81,8 +81,6 @@ pub enum RouteHealthState {
     /// Exit health confirmed healthy. Safe to connect.
     ReadyToConnect {
         exit: ExitHealth,
-        // API version
-        version: String,
     },
     /// Actively connected. TCP health checks suspended, tunnel ping drives ExitHealth.
     Connected {
@@ -106,7 +104,7 @@ pub enum HealthCheckOutcome {
     },
     Completed {
         checked_at: SystemTime,
-        version: Option<gvpn_client::Versions>,
+        versions: Option<gvpn_client::Versions>,
         ping_rtt: Duration,
         health: Option<gvpn_client::Health>,
     },
@@ -360,7 +358,7 @@ impl RouteHealth {
             }
             HealthCheckOutcome::Completed {
                 checked_at,
-                version,
+                versions,
                 ping_rtt,
                 health,
             } => {
@@ -368,7 +366,7 @@ impl RouteHealth {
                 // when this cycle skipped fetching them.
                 let (prior_version, prior_health) = match &prior {
                     Some(ExitHealth::Healthy {
-                        version: v, health: h, ..
+                        versions: v, health: h, ..
                     }) => (Some(v.clone()), Some(h.clone())),
                     _ => (None, None),
                 };
@@ -914,11 +912,23 @@ mod tests {
         let addr_1: Address = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
         let addr_2: Address = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
 
-        let rh1 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering { funded: false });
-        let rh2 = make_route_health(StaticNeed::Channel(addr_2), RouteHealthState::NeedsPeering { funded: false });
-        let rh3 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering { funded: false });
+        let rh1 = make_route_health(
+            StaticNeed::Channel(addr_1),
+            RouteHealthState::NeedsPeering { funded: false },
+        );
+        let rh2 = make_route_health(
+            StaticNeed::Channel(addr_2),
+            RouteHealthState::NeedsPeering { funded: false },
+        );
+        let rh3 = make_route_health(
+            StaticNeed::Channel(addr_1),
+            RouteHealthState::NeedsPeering { funded: false },
+        );
         let rh4 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsPeering { funded: false });
-        let rh5 = make_route_health(StaticNeed::Peering(addr_1), RouteHealthState::NeedsPeering { funded: false });
+        let rh5 = make_route_health(
+            StaticNeed::Peering(addr_1),
+            RouteHealthState::NeedsPeering { funded: false },
+        );
 
         let all = vec![&rh1, &rh2, &rh3, &rh4, &rh5];
         assert_eq!(count_distinct_channels(all.into_iter()), 2);
