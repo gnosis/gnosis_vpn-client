@@ -27,7 +27,7 @@ const COMPATIBLE_VERSIONS: &[&str] = &["v1"];
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ChannelNeed {
+pub enum StaticNeed {
     Channel(Address),
     AnyChannel,
     Peering(Address),
@@ -46,18 +46,15 @@ pub enum ExitHealth {
     Init,
     Checking {
         since: SystemTime,
-        last_error: Option<String>,
     },
     Healthy {
         checked_at: SystemTime,
-        version: Option<gvpn_client::Versions>,
+        version: gvpn_client::Versions,
         ping_rtt: Duration,
-        health: Option<gvpn_client::Health>,
-        total_time: Duration,
+        health: gvpn_client::Health,
     },
     Unhealthy {
         checked_at: SystemTime,
-        error: String,
         previous_failures: u32,
     },
 }
@@ -66,42 +63,23 @@ pub enum ExitHealth {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RouteHealthState {
     Unrecoverable {
-        id: String,
         reason: UnrecoverableReason,
     },
-    NeedsPeering {
-        id: String,
-        need: ChannelNeed,
-        funded: bool,
-        exit: ExitHealth,
-        last_error: Option<String>,
-    },
-    NeedsFunding {
-        id: String,
-        need: ChannelNeed,
-        exit: ExitHealth,
-        last_error: Option<String>,
-    },
-    /// Peer and channel requirements are met. Health checks are running.
+    NeedsPeering,
+    NeedsFunding,
+    /// Static need met
     Routable {
-        id: String,
-        need: ChannelNeed,
         exit: ExitHealth,
-        last_error: Option<String>,
     },
     /// Exit health confirmed healthy. Safe to connect.
     ReadyToConnect {
-        id: String,
-        need: ChannelNeed,
         exit: ExitHealth,
-        last_error: Option<String>,
+        // API version
+        version: String,
     },
     /// Actively connected. TCP health checks suspended, tunnel ping drives ExitHealth.
     Connected {
-        id: String,
-        need: ChannelNeed,
         exit: ExitHealth,
-        last_error: Option<String>,
     },
 }
 
@@ -119,10 +97,13 @@ pub enum PeerTransition {
 
 /// Full runtime type — owns the health check lifecycle.
 pub struct RouteHealth {
+    id: String,
+    static_need: StaticNeed,
     state: RouteHealthState,
     health_check_cancel: CancellationToken,
     cancel_on_shutdown: CancellationToken,
     check_cycle: u32,
+    last_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -759,9 +740,7 @@ async fn run_health_check(
     if scope.version {
         match gvpn_client::versions(&client, socket_addr, timeout).await {
             Ok(v) => {
-                let is_compatible = v.versions.iter().any(|sv| {
-                    COMPATIBLE_VERSIONS.contains(&sv.as_str())
-                });
+                let is_compatible = v.versions.iter().any(|sv| COMPATIBLE_VERSIONS.contains(&sv.as_str()));
                 if !is_compatible {
                     close_health_session(hopr, &session).await;
                     let _ = sender
