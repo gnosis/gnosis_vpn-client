@@ -66,7 +66,13 @@ pub enum RouteHealthState {
     Unrecoverable {
         reason: UnrecoverableReason,
     },
-    NeedsPeering,
+    /// `funded` remembers whether the channel funding step has already been
+    /// completed for this route. On re-peering after a transient peer loss we
+    /// can then skip straight to `Routable` instead of triggering redundant
+    /// funding ops on every flap.
+    NeedsPeering {
+        funded: bool,
+    },
     NeedsFunding,
     /// Static need met
     Routable {
@@ -170,9 +176,9 @@ fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> Route
                 reason: UnrecoverableReason::NotAllowed,
             }
         }
-        RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering,
+        RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering { funded: false },
         RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(_)) => RouteHealthState::NeedsPeering,
+            Some(NodeId::Chain(_)) => RouteHealthState::NeedsPeering { funded: false },
             Some(NodeId::Offchain(_)) => RouteHealthState::Unrecoverable {
                 reason: UnrecoverableReason::InvalidId,
             },
@@ -201,7 +207,7 @@ impl RouteHealth {
     }
 
     pub fn needs_peer(&self) -> bool {
-        matches!(self.state, RouteHealthState::NeedsPeering)
+        matches!(self.state, RouteHealthState::NeedsPeering { .. })
     }
 
     pub fn needs_channel_funding(&self) -> Option<Address> {
@@ -255,12 +261,15 @@ impl RouteHealth {
         };
 
         match &self.state {
-            RouteHealthState::NeedsPeering => {
+            RouteHealthState::NeedsPeering { funded } => {
                 if !is_peered {
                     return PeerTransition::NoChange;
                 }
-                // Peering needs do not require funding
-                if matches!(self.static_need, StaticNeed::Peering(_)) {
+                // Peering needs do not require funding. Channel/AnyChannel needs
+                // can also skip funding when we already funded earlier in this
+                // route's lifetime (transient peer flap).
+                let skip_funding = matches!(self.static_need, StaticNeed::Peering(_)) || *funded;
+                if skip_funding {
                     self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
                     self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
                     PeerTransition::BecameRoutable
@@ -273,7 +282,8 @@ impl RouteHealth {
                 if is_peered {
                     PeerTransition::NoChange
                 } else {
-                    self.state = RouteHealthState::NeedsPeering;
+                    // Funding never completed, so leave `funded: false`.
+                    self.state = RouteHealthState::NeedsPeering { funded: false };
                     PeerTransition::LostPeer
                 }
             }
@@ -284,7 +294,9 @@ impl RouteHealth {
                     PeerTransition::NoChange
                 } else {
                     self.cancel_health_check();
-                    self.state = RouteHealthState::NeedsPeering;
+                    // We previously made it past funding (or never needed it),
+                    // so remember that to avoid re-funding on re-peer.
+                    self.state = RouteHealthState::NeedsPeering { funded: true };
                     PeerTransition::LostPeer
                 }
             }
@@ -795,7 +807,7 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
     for rh in healths {
         let still_needs_channel = matches!(
             rh.state,
-            RouteHealthState::NeedsPeering | RouteHealthState::NeedsFunding
+            RouteHealthState::NeedsPeering { .. } | RouteHealthState::NeedsFunding
         );
         if !still_needs_channel {
             continue;
@@ -823,7 +835,8 @@ impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RouteHealthState::Unrecoverable { reason } => write!(f, "{reason:?}"),
-            RouteHealthState::NeedsPeering => write!(f, "Needs peering"),
+            RouteHealthState::NeedsPeering { funded: false } => write!(f, "Needs peering"),
+            RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
             RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
             RouteHealthState::Routable { exit } => write!(f, "Routable, exit: {exit}"),
             RouteHealthState::ReadyToConnect { exit, version } => {
@@ -901,11 +914,11 @@ mod tests {
         let addr_1: Address = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
         let addr_2: Address = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
 
-        let rh1 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering);
-        let rh2 = make_route_health(StaticNeed::Channel(addr_2), RouteHealthState::NeedsPeering);
-        let rh3 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering);
-        let rh4 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsPeering);
-        let rh5 = make_route_health(StaticNeed::Peering(addr_1), RouteHealthState::NeedsPeering);
+        let rh1 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering { funded: false });
+        let rh2 = make_route_health(StaticNeed::Channel(addr_2), RouteHealthState::NeedsPeering { funded: false });
+        let rh3 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering { funded: false });
+        let rh4 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsPeering { funded: false });
+        let rh5 = make_route_health(StaticNeed::Peering(addr_1), RouteHealthState::NeedsPeering { funded: false });
 
         let all = vec![&rh1, &rh2, &rh3, &rh4, &rh5];
         assert_eq!(count_distinct_channels(all.into_iter()), 2);
