@@ -55,6 +55,7 @@ pub enum ExitHealth {
     },
     Unhealthy {
         checked_at: SystemTime,
+        error: String,
         previous_failures: u32,
     },
 }
@@ -80,6 +81,28 @@ pub enum RouteHealthState {
     /// Actively connected. TCP health checks suspended, tunnel ping drives ExitHealth.
     Connected {
         exit: ExitHealth,
+    },
+}
+
+/// Wire-only type used to carry a health-check outcome from the async runner
+/// back to `health_check_result`. `version` and `health` are optional here
+/// because a given cycle may skip fetching them (see `CheckScope`); the main
+/// thread fills in the skipped fields from the previously stored
+/// `ExitHealth::Healthy` before constructing the final `ExitHealth`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HealthCheckOutcome {
+    Started {
+        since: SystemTime,
+    },
+    Failed {
+        checked_at: SystemTime,
+        error: String,
+    },
+    Completed {
+        checked_at: SystemTime,
+        version: Option<gvpn_client::Versions>,
+        ping_rtt: Duration,
+        health: Option<gvpn_client::Health>,
     },
 }
 
@@ -112,54 +135,51 @@ pub struct RouteHealth {
 
 impl RouteHealth {
     pub fn new(dest: &Destination, allow_insecure: bool, cancel_on_shutdown: CancellationToken) -> Self {
-        let state = match dest.routing.clone() {
-            RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => {
-                if allow_insecure {
-                    RouteHealthState::NeedsPeering {
-                        id: dest.id.clone(),
-                        need: ChannelNeed::Peering(dest.address),
-                        funded: false,
-                        exit: ExitHealth::Init,
-                        last_error: None,
-                    }
-                } else {
-                    RouteHealthState::Unrecoverable {
-                        id: dest.id.clone(),
-                        reason: UnrecoverableReason::NotAllowed,
-                    }
-                }
-            }
-            RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering {
-                id: dest.id.clone(),
-                need: ChannelNeed::AnyChannel,
-                funded: false,
-                exit: ExitHealth::Init,
-                last_error: None,
-            },
-            RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-                Some(NodeId::Chain(address)) => RouteHealthState::NeedsPeering {
-                    id: dest.id.clone(),
-                    need: ChannelNeed::Channel(address),
-                    funded: false,
-                    exit: ExitHealth::Init,
-                    last_error: None,
-                },
-                Some(NodeId::Offchain(_)) => RouteHealthState::Unrecoverable {
-                    id: dest.id.clone(),
-                    reason: UnrecoverableReason::InvalidId,
-                },
-                None => RouteHealthState::Unrecoverable {
-                    id: dest.id.clone(),
-                    reason: UnrecoverableReason::InvalidPath,
-                },
-            },
-        };
+        let static_need = derive_static_need(&dest.routing, dest.address);
+        let state = derive_initial_state(&dest.routing, allow_insecure);
         Self {
+            id: dest.id.clone(),
+            static_need,
             state,
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown,
             check_cycle: 0,
+            last_error: None,
         }
+    }
+}
+
+/// Derive the static need from routing alone. For invalid routing variants
+/// (empty path / offchain-first), we fall back to `AnyChannel` — the resulting
+/// state will be `Unrecoverable` so the field is never observed.
+fn derive_static_need(routing: &RoutingOptions, dest_address: Address) -> StaticNeed {
+    match routing.clone() {
+        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => StaticNeed::Peering(dest_address),
+        RoutingOptions::Hops(_) => StaticNeed::AnyChannel,
+        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
+            Some(NodeId::Chain(address)) => StaticNeed::Channel(address),
+            _ => StaticNeed::AnyChannel,
+        },
+    }
+}
+
+fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> RouteHealthState {
+    match routing.clone() {
+        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 && !allow_insecure => {
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed,
+            }
+        }
+        RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering,
+        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
+            Some(NodeId::Chain(_)) => RouteHealthState::NeedsPeering,
+            Some(NodeId::Offchain(_)) => RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::InvalidId,
+            },
+            None => RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::InvalidPath,
+            },
+        },
     }
 }
 
@@ -169,42 +189,30 @@ impl RouteHealth {
 
 impl RouteHealth {
     pub fn id(&self) -> &str {
-        match &self.state {
-            RouteHealthState::Unrecoverable { id, .. }
-            | RouteHealthState::NeedsPeering { id, .. }
-            | RouteHealthState::NeedsFunding { id, .. }
-            | RouteHealthState::Routable { id, .. }
-            | RouteHealthState::ReadyToConnect { id, .. }
-            | RouteHealthState::Connected { id, .. } => id,
-        }
+        &self.id
     }
 
     pub fn state(&self) -> &RouteHealthState {
         &self.state
     }
 
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
     pub fn needs_peer(&self) -> bool {
-        matches!(self.state, RouteHealthState::NeedsPeering { .. })
+        matches!(self.state, RouteHealthState::NeedsPeering)
     }
 
     pub fn needs_channel_funding(&self) -> Option<Address> {
-        match &self.state {
-            RouteHealthState::NeedsFunding {
-                need: ChannelNeed::Channel(addr),
-                ..
-            } => Some(*addr),
+        match (&self.state, &self.static_need) {
+            (RouteHealthState::NeedsFunding, StaticNeed::Channel(addr)) => Some(*addr),
             _ => None,
         }
     }
 
     pub fn needs_any_channel_funding(&self) -> bool {
-        matches!(
-            self.state,
-            RouteHealthState::NeedsFunding {
-                need: ChannelNeed::AnyChannel,
-                ..
-            }
-        )
+        matches!(self.state, RouteHealthState::NeedsFunding) && matches!(self.static_need, StaticNeed::AnyChannel)
     }
 
     pub fn is_routable(&self) -> bool {
@@ -241,192 +249,46 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) -> PeerTransition {
-        // Determine the transition from immutable state inspection
-        enum Action {
-            NoChange,
-            BecameRoutable {
-                id: String,
-                need: ChannelNeed,
-                exit: ExitHealth,
-                last_error: Option<String>,
-            },
-            NowNeedsFunding {
-                id: String,
-                need: ChannelNeed,
-                exit: ExitHealth,
-                last_error: Option<String>,
-            },
-            LostPeerFromFunding {
-                id: String,
-                need: ChannelNeed,
-                exit: ExitHealth,
-                last_error: Option<String>,
-            },
-            LostPeer {
-                id: String,
-                need: ChannelNeed,
-                funded: bool,
-                exit: ExitHealth,
-                last_error: Option<String>,
-            },
-        }
-
-        let action = match &self.state {
-            RouteHealthState::NeedsPeering {
-                id,
-                need,
-                funded,
-                exit,
-                last_error,
-            } => {
-                let is_peered = match need {
-                    ChannelNeed::Channel(addr) => addresses.contains(addr),
-                    ChannelNeed::AnyChannel => !addresses.is_empty(),
-                    ChannelNeed::Peering(addr) => addresses.contains(addr),
-                };
-                if !is_peered {
-                    Action::NoChange
-                } else if *funded || matches!(need, ChannelNeed::Peering(_)) {
-                    Action::BecameRoutable {
-                        id: id.clone(),
-                        need: need.clone(),
-                        exit: exit.clone(),
-                        last_error: last_error.clone(),
-                    }
-                } else {
-                    Action::NowNeedsFunding {
-                        id: id.clone(),
-                        need: need.clone(),
-                        exit: exit.clone(),
-                        last_error: last_error.clone(),
-                    }
-                }
-            }
-            RouteHealthState::NeedsFunding {
-                id,
-                need,
-                exit,
-                last_error,
-            } => {
-                let still_peered = match need {
-                    ChannelNeed::Channel(addr) => addresses.contains(addr),
-                    ChannelNeed::AnyChannel => !addresses.is_empty(),
-                    ChannelNeed::Peering(_) => unreachable!("Peering never enters NeedsFunding"),
-                };
-                if still_peered {
-                    Action::NoChange
-                } else {
-                    Action::LostPeerFromFunding {
-                        id: id.clone(),
-                        need: need.clone(),
-                        exit: exit.clone(),
-                        last_error: last_error.clone(),
-                    }
-                }
-            }
-            RouteHealthState::Routable {
-                id,
-                need,
-                exit,
-                last_error,
-            }
-            | RouteHealthState::ReadyToConnect {
-                id,
-                need,
-                exit,
-                last_error,
-            }
-            | RouteHealthState::Connected {
-                id,
-                need,
-                exit,
-                last_error,
-            } => {
-                let still_peered = match need {
-                    ChannelNeed::Channel(addr) => addresses.contains(addr),
-                    ChannelNeed::AnyChannel => !addresses.is_empty(),
-                    ChannelNeed::Peering(addr) => addresses.contains(addr),
-                };
-                if still_peered {
-                    Action::NoChange
-                } else {
-                    let funded = !matches!(need, ChannelNeed::Peering(_));
-                    Action::LostPeer {
-                        id: id.clone(),
-                        need: need.clone(),
-                        funded,
-                        exit: exit.clone(),
-                        last_error: last_error.clone(),
-                    }
-                }
-            }
-            RouteHealthState::Unrecoverable { .. } => Action::NoChange,
+        let is_peered = match &self.static_need {
+            StaticNeed::Channel(addr) | StaticNeed::Peering(addr) => addresses.contains(addr),
+            StaticNeed::AnyChannel => !addresses.is_empty(),
         };
 
-        // Apply mutations after the immutable borrow is released
-        match action {
-            Action::NoChange => PeerTransition::NoChange,
-            Action::BecameRoutable {
-                id,
-                need,
-                exit,
-                last_error,
-            } => {
-                self.state = RouteHealthState::Routable {
-                    id,
-                    need,
-                    exit,
-                    last_error,
-                };
-                self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
-                PeerTransition::BecameRoutable
+        match &self.state {
+            RouteHealthState::NeedsPeering => {
+                if !is_peered {
+                    return PeerTransition::NoChange;
+                }
+                // Peering needs do not require funding
+                if matches!(self.static_need, StaticNeed::Peering(_)) {
+                    self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
+                    self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+                    PeerTransition::BecameRoutable
+                } else {
+                    self.state = RouteHealthState::NeedsFunding;
+                    PeerTransition::NowNeedsFunding
+                }
             }
-            Action::NowNeedsFunding {
-                id,
-                need,
-                exit,
-                last_error,
-            } => {
-                self.state = RouteHealthState::NeedsFunding {
-                    id,
-                    need,
-                    exit,
-                    last_error,
-                };
-                PeerTransition::NowNeedsFunding
+            RouteHealthState::NeedsFunding => {
+                if is_peered {
+                    PeerTransition::NoChange
+                } else {
+                    self.state = RouteHealthState::NeedsPeering;
+                    PeerTransition::LostPeer
+                }
             }
-            Action::LostPeerFromFunding {
-                id,
-                need,
-                exit,
-                last_error,
-            } => {
-                self.state = RouteHealthState::NeedsPeering {
-                    id,
-                    need,
-                    funded: false,
-                    exit,
-                    last_error,
-                };
-                PeerTransition::LostPeer
+            RouteHealthState::Routable { .. }
+            | RouteHealthState::ReadyToConnect { .. }
+            | RouteHealthState::Connected { .. } => {
+                if is_peered {
+                    PeerTransition::NoChange
+                } else {
+                    self.cancel_health_check();
+                    self.state = RouteHealthState::NeedsPeering;
+                    PeerTransition::LostPeer
+                }
             }
-            Action::LostPeer {
-                id,
-                need,
-                funded,
-                exit,
-                last_error,
-            } => {
-                self.cancel_health_check();
-                self.state = RouteHealthState::NeedsPeering {
-                    id,
-                    need,
-                    funded,
-                    exit,
-                    last_error,
-                };
-                PeerTransition::LostPeer
-            }
+            RouteHealthState::Unrecoverable { .. } => PeerTransition::NoChange,
         }
     }
 
@@ -438,127 +300,155 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        let should_advance = match &self.state {
-            RouteHealthState::NeedsFunding { need, .. } => match need {
-                ChannelNeed::Channel(addr) => *addr == address,
-                ChannelNeed::AnyChannel => true,
-                ChannelNeed::Peering(_) => false,
-            },
-            _ => false,
+        if !matches!(self.state, RouteHealthState::NeedsFunding) {
+            return;
+        }
+        let satisfies_need = match &self.static_need {
+            StaticNeed::Channel(addr) => *addr == address,
+            StaticNeed::AnyChannel => true,
+            StaticNeed::Peering(_) => false,
         };
-        if should_advance
-            && let RouteHealthState::NeedsFunding {
-                id,
-                need,
-                exit,
-                last_error,
-            } = self.state.clone()
-        {
-            self.state = RouteHealthState::Routable {
-                id,
-                need,
-                exit,
-                last_error,
-            };
+        if satisfies_need {
+            self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
         }
     }
 
     pub fn health_check_result(
         &mut self,
-        new_exit: ExitHealth,
+        outcome: HealthCheckOutcome,
         hopr: &Arc<Hopr>,
         dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        // Only process results when in Routable or ReadyToConnect
-        let merged = match &self.state {
-            RouteHealthState::Routable { exit: old_exit, .. }
-            | RouteHealthState::ReadyToConnect { exit: old_exit, .. } => match (old_exit, &new_exit) {
-                (ExitHealth::Unhealthy { previous_failures, .. }, ExitHealth::Unhealthy { checked_at, error, .. }) => {
-                    Some(ExitHealth::Unhealthy {
-                        checked_at: *checked_at,
-                        error: error.clone(),
-                        previous_failures: previous_failures + 1,
-                    })
+        // Only process outcomes when actively running health checks
+        if !matches!(
+            self.state,
+            RouteHealthState::Routable { .. } | RouteHealthState::ReadyToConnect { .. }
+        ) {
+            return;
+        }
+
+        // Lift outcome into an ExitHealth, filling in skipped fields from the
+        // previously stored Healthy state.
+        let prior = self.exit_ref().cloned();
+        let merged = match outcome {
+            HealthCheckOutcome::Started { since } => ExitHealth::Checking { since },
+            HealthCheckOutcome::Failed { checked_at, error } => {
+                let previous_failures = match &prior {
+                    Some(ExitHealth::Unhealthy { previous_failures, .. }) => previous_failures + 1,
+                    _ => 0,
+                };
+                ExitHealth::Unhealthy {
+                    checked_at,
+                    error,
+                    previous_failures,
                 }
-                (ExitHealth::Unhealthy { error, .. }, ExitHealth::Checking { since, .. }) => {
-                    Some(ExitHealth::Checking {
-                        since: *since,
-                        last_error: Some(error.clone()),
-                    })
+            }
+            HealthCheckOutcome::Completed {
+                checked_at,
+                version,
+                ping_rtt,
+                health,
+            } => {
+                // Carry forward version/health from the previous Healthy
+                // when this cycle skipped fetching them.
+                let (prior_version, prior_health) = match &prior {
+                    Some(ExitHealth::Healthy {
+                        version: v, health: h, ..
+                    }) => (Some(v.clone()), Some(h.clone())),
+                    _ => (None, None),
+                };
+                match (version.or(prior_version), health.or(prior_health)) {
+                    (Some(version), Some(health)) => ExitHealth::Healthy {
+                        checked_at,
+                        version,
+                        ping_rtt,
+                        health,
+                    },
+                    // Missing data we cannot recover from prior state — treat
+                    // as a check failure so the state machine retries and
+                    // captures fresh values.
+                    _ => ExitHealth::Unhealthy {
+                        checked_at,
+                        error: "health check skipped version/health without a prior Healthy to carry forward"
+                            .to_string(),
+                        previous_failures: match &prior {
+                            Some(ExitHealth::Unhealthy { previous_failures, .. }) => previous_failures + 1,
+                            _ => 0,
+                        },
+                    },
                 }
-                _ => Some(new_exit),
-            },
-            _ => None,
+            }
         };
 
-        if let Some(merged) = merged {
-            let ping_interval = options.health_check_intervals.ping;
-            let next_interval = merged.next_interval(ping_interval);
-            let is_healthy = matches!(merged, ExitHealth::Healthy { .. });
+        // Reflect the latest health-check error in the top-level last_error
+        match &merged {
+            ExitHealth::Healthy { .. } => self.last_error = None,
+            ExitHealth::Unhealthy { error, .. } => self.last_error = Some(error.clone()),
+            ExitHealth::Init | ExitHealth::Checking { .. } => {}
+        }
 
-            // Only advance the check cycle on success so that a failed check
-            // retries with the same scope (version/health) instead of
-            // downgrading to a ping-only check on the next attempt.
-            if is_healthy {
-                self.check_cycle = self.check_cycle.wrapping_add(1);
+        let ping_interval = options.health_check_intervals.ping;
+        let next_interval = merged.next_interval(ping_interval);
+        let is_healthy = matches!(merged, ExitHealth::Healthy { .. });
+
+        // Only advance the check cycle on success so that a failed check
+        // retries with the same scope (version/health) instead of
+        // downgrading to a ping-only check on the next attempt.
+        if is_healthy {
+            self.check_cycle = self.check_cycle.wrapping_add(1);
+        }
+
+        // Determine the negotiated API version on success (intersection of
+        // server-supported and locally compatible versions). Falls back to the
+        // server's reported `latest` if no overlap is captured here — this
+        // path is only reached when `is_healthy`, which already implies the
+        // version check passed.
+        let api_version = match &merged {
+            ExitHealth::Healthy { version, .. } => version
+                .versions
+                .iter()
+                .find(|v| COMPATIBLE_VERSIONS.contains(&v.as_str()))
+                .cloned()
+                .unwrap_or_else(|| version.latest.clone()),
+            _ => String::new(),
+        };
+
+        self.set_exit(merged);
+
+        // Transition Routable ↔ ReadyToConnect based on exit health
+        match &self.state {
+            RouteHealthState::Routable { exit } if is_healthy => {
+                self.state = RouteHealthState::ReadyToConnect {
+                    exit: exit.clone(),
+                    version: api_version,
+                };
             }
-
-            self.set_exit(merged);
-
-            // Transition between Routable ↔ ReadyToConnect based on exit health
-            match &self.state {
-                RouteHealthState::Routable {
-                    id,
-                    need,
-                    exit,
-                    last_error,
-                } if is_healthy => {
-                    self.state = RouteHealthState::ReadyToConnect {
-                        id: id.clone(),
-                        need: need.clone(),
-                        exit: exit.clone(),
-                        last_error: last_error.clone(),
-                    };
-                }
-                RouteHealthState::ReadyToConnect {
-                    id,
-                    need,
-                    exit,
-                    last_error,
-                } if !is_healthy => {
-                    self.state = RouteHealthState::Routable {
-                        id: id.clone(),
-                        need: need.clone(),
-                        exit: exit.clone(),
-                        last_error: last_error.clone(),
-                    };
-                }
-                _ => {}
+            RouteHealthState::ReadyToConnect { exit, .. } if !is_healthy => {
+                self.state = RouteHealthState::Routable { exit: exit.clone() };
             }
+            _ => {}
+        }
 
-            if let Some(delay) = next_interval {
-                self.spawn_health_check(delay, hopr, dest, options, sender);
-            }
+        if let Some(delay) = next_interval {
+            self.spawn_health_check(delay, hopr, dest, options, sender);
         }
     }
 
     /// Transition ReadyToConnect → Connected, cancel TCP health checks, clear errors.
     pub fn connected(&mut self) {
-        if let RouteHealthState::ReadyToConnect { id, need, .. } = self.state.clone() {
+        if matches!(self.state, RouteHealthState::ReadyToConnect { .. }) {
             self.cancel_health_check();
-            self.state = RouteHealthState::Connected {
-                id,
-                need,
-                exit: ExitHealth::Init,
-                last_error: None,
-            };
+            self.last_error = None;
+            self.state = RouteHealthState::Connected { exit: ExitHealth::Init };
         }
     }
 
-    /// Transition Connected → ReadyToConnect, restart TCP health checks.
+    /// Transition Connected → Routable, restart TCP health checks.
+    /// Goes via Routable (not ReadyToConnect) because the API version is
+    /// only known after a fresh successful health check.
     pub fn disconnected(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -566,67 +456,65 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if let RouteHealthState::Connected {
-            id, need, last_error, ..
-        } = self.state.clone()
-        {
-            self.state = RouteHealthState::ReadyToConnect {
-                id,
-                need,
-                exit: ExitHealth::Init,
-                last_error,
-            };
+        if matches!(self.state, RouteHealthState::Connected { .. }) {
+            self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
         }
     }
 
-    /// Update exit health from a tunnel ping result. Returns consecutive failure count.
-    pub fn tunnel_ping_result(&mut self, new_exit: ExitHealth) -> u32 {
-        let merged = match &self.state {
-            RouteHealthState::Connected { exit: old_exit, .. } => match (old_exit, &new_exit) {
-                (ExitHealth::Unhealthy { previous_failures, .. }, ExitHealth::Unhealthy { checked_at, error, .. }) => {
-                    ExitHealth::Unhealthy {
-                        checked_at: *checked_at,
-                        error: error.clone(),
-                        previous_failures: previous_failures + 1,
-                    }
-                }
-                _ => new_exit,
-            },
-            _ => return 0,
-        };
-
-        let failures = match &merged {
-            ExitHealth::Unhealthy { previous_failures, .. } => previous_failures + 1,
-            _ => 0,
-        };
-        self.set_exit(merged);
-        failures
+    /// Update exit health from a tunnel ping result. Returns the consecutive
+    /// failure count after applying this result. On success, exit health is
+    /// left unchanged because a tunnel ping by itself does not produce the
+    /// `version` / `health` data required to construct an `ExitHealth::Healthy`.
+    pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
+        if !matches!(self.state, RouteHealthState::Connected { .. }) {
+            return 0;
+        }
+        match rtt {
+            Ok(_) => {
+                self.last_error = None;
+                0
+            }
+            Err(err) => {
+                let prev = match self.exit_ref() {
+                    Some(ExitHealth::Unhealthy { previous_failures, .. }) => *previous_failures + 1,
+                    _ => 1,
+                };
+                self.set_exit(ExitHealth::Unhealthy {
+                    checked_at: SystemTime::now(),
+                    error: err.clone(),
+                    previous_failures: prev,
+                });
+                self.last_error = Some(err);
+                prev
+            }
+        }
     }
 
     pub fn with_error(&mut self, err: String) {
-        match &mut self.state {
-            RouteHealthState::NeedsPeering { last_error, .. }
-            | RouteHealthState::NeedsFunding { last_error, .. }
-            | RouteHealthState::Routable { last_error, .. }
-            | RouteHealthState::ReadyToConnect { last_error, .. }
-            | RouteHealthState::Connected { last_error, .. } => {
-                *last_error = Some(err);
-            }
-            RouteHealthState::Unrecoverable { .. } => {}
+        if matches!(self.state, RouteHealthState::Unrecoverable { .. }) {
+            return;
+        }
+        self.last_error = Some(err);
+    }
+
+    fn exit_ref(&self) -> Option<&ExitHealth> {
+        match &self.state {
+            RouteHealthState::Routable { exit }
+            | RouteHealthState::ReadyToConnect { exit, .. }
+            | RouteHealthState::Connected { exit } => Some(exit),
+            _ => None,
         }
     }
 
     fn set_exit(&mut self, new_exit: ExitHealth) {
         match &mut self.state {
-            RouteHealthState::NeedsPeering { exit, .. }
-            | RouteHealthState::NeedsFunding { exit, .. }
-            | RouteHealthState::Routable { exit, .. }
+            RouteHealthState::Routable { exit }
             | RouteHealthState::ReadyToConnect { exit, .. }
-            | RouteHealthState::Connected { exit, .. } => {
+            | RouteHealthState::Connected { exit } => {
                 *exit = new_exit;
             }
-            RouteHealthState::Unrecoverable { .. } => {}
+            _ => {}
         }
     }
 }
@@ -703,15 +591,13 @@ async fn run_health_check(
     let _ = sender
         .send(Results::HealthCheck {
             id: id.clone(),
-            exit: ExitHealth::Checking {
+            outcome: HealthCheckOutcome::Started {
                 since: SystemTime::now(),
-                last_error: None,
             },
         })
         .await;
 
     let checked_at = SystemTime::now();
-    let measure_total = Instant::now();
 
     let res_session = open_health_session(hopr, destination, options).await;
     let session = match res_session {
@@ -720,10 +606,9 @@ async fn run_health_check(
             let _ = sender
                 .send(Results::HealthCheck {
                     id,
-                    exit: ExitHealth::Unhealthy {
+                    outcome: HealthCheckOutcome::Failed {
                         checked_at,
                         error: format!("Session creation error: {err}"),
-                        previous_failures: 0,
                     },
                 })
                 .await;
@@ -746,13 +631,12 @@ async fn run_health_check(
                     let _ = sender
                         .send(Results::HealthCheck {
                             id,
-                            exit: ExitHealth::Unhealthy {
+                            outcome: HealthCheckOutcome::Failed {
                                 checked_at,
                                 error: format!(
                                     "Incompatible exit server versions: {v}, compatible: {:?}",
                                     COMPATIBLE_VERSIONS
                                 ),
-                                previous_failures: 0,
                             },
                         })
                         .await;
@@ -766,10 +650,9 @@ async fn run_health_check(
                 let _ = sender
                     .send(Results::HealthCheck {
                         id,
-                        exit: ExitHealth::Unhealthy {
+                        outcome: HealthCheckOutcome::Failed {
                             checked_at,
                             error: format!("Version check error: {err}"),
-                            previous_failures: 0,
                         },
                     })
                     .await;
@@ -785,10 +668,9 @@ async fn run_health_check(
         let _ = sender
             .send(Results::HealthCheck {
                 id,
-                exit: ExitHealth::Unhealthy {
+                outcome: HealthCheckOutcome::Failed {
                     checked_at,
                     error: format!("Ping error: {err}"),
-                    previous_failures: 0,
                 },
             })
             .await;
@@ -809,10 +691,9 @@ async fn run_health_check(
                 let _ = sender
                     .send(Results::HealthCheck {
                         id,
-                        exit: ExitHealth::Unhealthy {
+                        outcome: HealthCheckOutcome::Failed {
                             checked_at,
                             error: format!("Health request error: {err}"),
-                            previous_failures: 0,
                         },
                     })
                     .await;
@@ -822,17 +703,18 @@ async fn run_health_check(
     }
 
     close_health_session(hopr, &session).await;
-    let total_time = measure_total.elapsed();
 
-    let new_exit = ExitHealth::Healthy {
-        checked_at,
-        version,
-        ping_rtt,
-        health,
-        total_time,
-    };
-
-    let _ = sender.send(Results::HealthCheck { id, exit: new_exit }).await;
+    let _ = sender
+        .send(Results::HealthCheck {
+            id,
+            outcome: HealthCheckOutcome::Completed {
+                checked_at,
+                version,
+                ping_rtt,
+                health,
+            },
+        })
+        .await;
 }
 
 async fn open_health_session(
@@ -911,28 +793,21 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
     let mut has_any_channel = false;
 
     for rh in healths {
-        match &rh.state {
-            RouteHealthState::NeedsFunding {
-                need: ChannelNeed::Channel(addr),
-                ..
-            }
-            | RouteHealthState::NeedsPeering {
-                need: ChannelNeed::Channel(addr),
-                ..
-            } => {
+        let still_needs_channel = matches!(
+            rh.state,
+            RouteHealthState::NeedsPeering | RouteHealthState::NeedsFunding
+        );
+        if !still_needs_channel {
+            continue;
+        }
+        match &rh.static_need {
+            StaticNeed::Channel(addr) => {
                 addresses.insert(*addr);
             }
-            RouteHealthState::NeedsFunding {
-                need: ChannelNeed::AnyChannel,
-                ..
-            }
-            | RouteHealthState::NeedsPeering {
-                need: ChannelNeed::AnyChannel,
-                ..
-            } => {
+            StaticNeed::AnyChannel => {
                 has_any_channel = true;
             }
-            _ => {}
+            StaticNeed::Peering(_) => {}
         }
     }
 
@@ -947,49 +822,14 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
 impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RouteHealthState::Unrecoverable { reason, .. } => write!(f, "{reason:?}"),
-            RouteHealthState::NeedsPeering { need, last_error, .. } => {
-                if let Some(err) = last_error {
-                    write!(f, "Last error: {err}, ")?;
-                }
-                match need {
-                    ChannelNeed::Channel(addr) => {
-                        write!(f, "Needs peered channel to {}", addr.to_checksum())
-                    }
-                    ChannelNeed::AnyChannel => write!(f, "Needs any peered channel"),
-                    ChannelNeed::Peering(addr) => write!(f, "Needs peer {}", addr.to_checksum()),
-                }
+            RouteHealthState::Unrecoverable { reason } => write!(f, "{reason:?}"),
+            RouteHealthState::NeedsPeering => write!(f, "Needs peering"),
+            RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
+            RouteHealthState::Routable { exit } => write!(f, "Routable, exit: {exit}"),
+            RouteHealthState::ReadyToConnect { exit, version } => {
+                write!(f, "Ready (API {version}), exit: {exit}")
             }
-            RouteHealthState::NeedsFunding { need, last_error, .. } => {
-                if let Some(err) = last_error {
-                    write!(f, "Last error: {err}, ")?;
-                }
-                match need {
-                    ChannelNeed::Channel(addr) => {
-                        write!(f, "Needs funded channel to {}", addr.to_checksum())
-                    }
-                    ChannelNeed::AnyChannel => write!(f, "Needs any funded channel"),
-                    ChannelNeed::Peering(_) => write!(f, "Needs funding"),
-                }
-            }
-            RouteHealthState::Routable { exit, last_error, .. } => {
-                if let Some(err) = last_error {
-                    write!(f, "Last error: {err}, ")?;
-                }
-                write!(f, "Routable, exit: {exit}")
-            }
-            RouteHealthState::ReadyToConnect { exit, last_error, .. } => {
-                if let Some(err) = last_error {
-                    write!(f, "Last error: {err}, ")?;
-                }
-                write!(f, "Ready, exit: {exit}")
-            }
-            RouteHealthState::Connected { exit, last_error, .. } => {
-                if let Some(err) = last_error {
-                    write!(f, "Last error: {err}, ")?;
-                }
-                write!(f, "Connected, tunnel: {exit}")
-            }
+            RouteHealthState::Connected { exit } => write!(f, "Connected, tunnel: {exit}"),
         }
     }
 }
@@ -998,12 +838,8 @@ impl Display for ExitHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ExitHealth::Init => write!(f, "waiting for check"),
-            ExitHealth::Checking { since, last_error } => {
-                write!(f, "checking since {}", log_output::elapsed(since))?;
-                if let Some(err) = last_error {
-                    write!(f, ", last error: {err}")?;
-                }
-                Ok(())
+            ExitHealth::Checking { since } => {
+                write!(f, "checking since {}", log_output::elapsed(since))
             }
             ExitHealth::Unhealthy {
                 checked_at,
@@ -1026,22 +862,15 @@ impl Display for ExitHealth {
                 version,
                 ping_rtt,
                 health,
-                total_time,
             } => {
                 write!(
                     f,
-                    "{} ago: total {:.2} s, ping {:.2} s",
+                    "{} ago: ping {:.2} s, {}, {}",
                     log_output::elapsed(checked_at),
-                    total_time.as_secs_f32(),
                     ping_rtt.as_secs_f32(),
-                )?;
-                if let Some(h) = health {
-                    write!(f, ", {h}")?;
-                }
-                if let Some(v) = version {
-                    write!(f, ", {v}")?;
-                }
-                Ok(())
+                    health,
+                    version,
+                )
             }
         }
     }
@@ -1055,30 +884,14 @@ impl Display for ExitHealth {
 mod tests {
     use super::*;
 
-    fn make_route_health(need: ChannelNeed, state_fn: fn(String, ChannelNeed) -> RouteHealthState) -> RouteHealth {
+    fn make_route_health(static_need: StaticNeed, state: RouteHealthState) -> RouteHealth {
         RouteHealth {
-            state: state_fn("test".to_string(), need),
+            id: "test".to_string(),
+            static_need,
+            state,
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown: CancellationToken::new(),
             check_cycle: 0,
-        }
-    }
-
-    fn needs_peering(id: String, need: ChannelNeed) -> RouteHealthState {
-        RouteHealthState::NeedsPeering {
-            id,
-            need,
-            funded: false,
-            exit: ExitHealth::Init,
-            last_error: None,
-        }
-    }
-
-    fn needs_funding(id: String, need: ChannelNeed) -> RouteHealthState {
-        RouteHealthState::NeedsFunding {
-            id,
-            need,
-            exit: ExitHealth::Init,
             last_error: None,
         }
     }
@@ -1088,11 +901,11 @@ mod tests {
         let addr_1: Address = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
         let addr_2: Address = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
 
-        let rh1 = make_route_health(ChannelNeed::Channel(addr_1), needs_peering);
-        let rh2 = make_route_health(ChannelNeed::Channel(addr_2), needs_peering);
-        let rh3 = make_route_health(ChannelNeed::Channel(addr_1), needs_peering);
-        let rh4 = make_route_health(ChannelNeed::AnyChannel, needs_peering);
-        let rh5 = make_route_health(ChannelNeed::Peering(addr_1), needs_peering);
+        let rh1 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering);
+        let rh2 = make_route_health(StaticNeed::Channel(addr_2), RouteHealthState::NeedsPeering);
+        let rh3 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsPeering);
+        let rh4 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsPeering);
+        let rh5 = make_route_health(StaticNeed::Peering(addr_1), RouteHealthState::NeedsPeering);
 
         let all = vec![&rh1, &rh2, &rh3, &rh4, &rh5];
         assert_eq!(count_distinct_channels(all.into_iter()), 2);
@@ -1110,8 +923,8 @@ mod tests {
     fn test_count_distinct_channels_funding() -> anyhow::Result<()> {
         let addr_1: Address = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
 
-        let rh1 = make_route_health(ChannelNeed::Channel(addr_1), needs_funding);
-        let rh2 = make_route_health(ChannelNeed::AnyChannel, needs_funding);
+        let rh1 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsFunding);
+        let rh2 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsFunding);
 
         let all = vec![&rh1, &rh2];
         assert_eq!(count_distinct_channels(all.into_iter()), 1);

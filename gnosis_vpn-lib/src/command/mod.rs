@@ -525,7 +525,7 @@ impl TryFrom<Command> for WorkerCommand {
 mod tests {
     use super::*;
     use crate::connection::destination::RoutingOptions;
-    use crate::route_health::{ChannelNeed, ExitHealth};
+    use crate::route_health::ExitHealth;
     use std::collections::HashMap;
 
     fn address(byte: u8) -> Address {
@@ -543,10 +543,8 @@ mod tests {
 
     fn route_health_state() -> RouteHealthState {
         RouteHealthState::ReadyToConnect {
-            id: "test-destination".to_string(),
-            need: ChannelNeed::AnyChannel,
             exit: ExitHealth::Init,
-            last_error: None,
+            version: "v1".to_string(),
         }
     }
 

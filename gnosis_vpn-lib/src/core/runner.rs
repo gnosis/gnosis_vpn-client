@@ -28,7 +28,7 @@ use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
-use crate::route_health::ExitHealth;
+use crate::route_health::HealthCheckOutcome;
 use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, ping, remote_data};
@@ -93,7 +93,7 @@ pub enum Results {
     },
     HealthCheck {
         id: String,
-        exit: ExitHealth,
+        outcome: HealthCheckOutcome,
     },
 }
 
@@ -564,7 +564,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheck { id, exit } => write!(f, "HealthCheck ({}): {}", id, exit),
+            Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
         }
     }
 }

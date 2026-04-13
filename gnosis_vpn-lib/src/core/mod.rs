@@ -22,7 +22,7 @@ use crate::connection::destination::Destination;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
-use crate::route_health::{self, ExitHealth, RouteHealth};
+use crate::route_health::{self, RouteHealth};
 use crate::ticket_stats::TicketStats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
@@ -398,7 +398,6 @@ impl Core {
                                         .get(&v.id)
                                         .map(|rh| rh.state().clone())
                                         .unwrap_or_else(|| route_health::RouteHealthState::Unrecoverable {
-                                            id: v.id.clone(),
                                             reason: route_health::UnrecoverableReason::InvalidId,
                                         }),
                                 }
@@ -778,28 +777,14 @@ impl Core {
             },
 
             Results::TunnelPingResult { rtt } => {
-                if let Phase::Connected(conn) = self.phase.clone() {
-                    let new_exit = match rtt {
-                        Ok(ping_rtt) => ExitHealth::Healthy {
-                            checked_at: std::time::SystemTime::now(),
-                            version: None,
-                            ping_rtt,
-                            health: None,
-                            total_time: ping_rtt,
-                        },
-                        Err(err) => ExitHealth::Unhealthy {
-                            checked_at: std::time::SystemTime::now(),
-                            error: err,
-                            previous_failures: 0,
-                        },
-                    };
-                    if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
-                        let failures = rh.tunnel_ping_result(new_exit);
-                        let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
-                        if failures >= max {
-                            tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
-                            self.disconnect_from_connection(&conn, results_sender);
-                        }
+                if let Phase::Connected(conn) = self.phase.clone()
+                    && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
+                {
+                    let failures = rh.tunnel_ping_result(rtt);
+                    let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
+                    if failures >= max {
+                        tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
+                        self.disconnect_from_connection(&conn, results_sender);
                     }
                 }
             }
@@ -833,14 +818,14 @@ impl Core {
                 }
             },
 
-            Results::HealthCheck { id, exit } => {
-                tracing::info!(%id, %exit, "received health check");
+            Results::HealthCheck { id, outcome } => {
+                tracing::info!(%id, ?outcome, "received health check");
                 if let Some(dest) = self.config.destinations.get(&id).cloned()
                     && let Some(rh) = self.route_healths.get_mut(&id)
                 {
                     let was_ready = rh.is_ready_to_connect();
                     rh.health_check_result(
-                        exit,
+                        outcome,
                         self.hopr.as_ref().unwrap(),
                         &dest,
                         &self.config.connection,
