@@ -399,18 +399,13 @@ impl RouteHealth {
                         ping_rtt,
                         health,
                     },
-                    // Missing data we cannot recover from prior state — treat
-                    // as a check failure so the state machine retries and
-                    // captures fresh values.
-                    _ => ExitHealth::Unhealthy {
-                        checked_at,
-                        error: "health check skipped version/health without a prior Healthy to carry forward"
-                            .to_string(),
-                        previous_failures: match &prior {
-                            Some(ExitHealth::Unhealthy { previous_failures, .. }) => previous_failures + 1,
-                            _ => 0,
-                        },
-                    },
+                    // check_cycle only advances on success, so a ping-only cycle
+                    // (scope.version/health = false) can only run after a prior
+                    // Healthy. Reaching here means that invariant was broken.
+                    _ => unreachable!(
+                        "ping-only cycle ran without a prior Healthy; \
+                         check_cycle must only advance on success"
+                    ),
                 }
             }
         };
