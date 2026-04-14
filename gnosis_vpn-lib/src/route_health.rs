@@ -237,9 +237,7 @@ impl RouteHealth {
     pub fn is_routable(&self) -> bool {
         matches!(
             self.state,
-            RouteHealthState::Routable
-                | RouteHealthState::ReadyToConnect { .. }
-                | RouteHealthState::Connected { .. }
+            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connected { .. }
         )
     }
 
@@ -767,8 +765,10 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
     let mut has_any_channel = false;
 
     for rh in healths {
-        let still_needs_channel =
-            matches!(rh.state, RouteHealthState::NeedsPeering { .. } | RouteHealthState::NeedsFunding);
+        let still_needs_channel = matches!(
+            rh.state,
+            RouteHealthState::NeedsPeering { .. } | RouteHealthState::NeedsFunding
+        );
         if !still_needs_channel {
             continue;
         }
@@ -814,12 +814,11 @@ impl Display for RouteHealthState {
             RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
             RouteHealthState::NeedsPeering { funded: false } => write!(f, "Needs peering"),
             RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
-            RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
-            RouteHealthState::Routable => write!(f, "Routable"),
+            RouteHealthState::NeedsFunding => write!(f, "Needs channel funding"),
+            RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
             RouteHealthState::ReadyToConnect { exit } => {
                 let selected = select_api_version(&exit.versions.versions).unwrap_or(&exit.versions.latest);
-                let available = exit.versions.versions.join(", ");
-                write!(f, "Ready (API {selected} of [{available}]), exit: {exit}")
+                write!(f, "Ready to connect via API {selected}, exit health: {exit}")
             }
             RouteHealthState::Connected { exit } => write!(f, "Connected, tunnel: {exit}"),
         }
