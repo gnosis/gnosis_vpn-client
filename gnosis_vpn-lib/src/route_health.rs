@@ -54,23 +54,12 @@ pub enum UnrecoverableReason {
     IncompatibleApiVersion { server_versions: Vec<String> },
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub enum ExitHealth {
-    #[default]
-    Init,
-    Checking {
-        since: SystemTime,
-    },
-    Healthy {
-        checked_at: SystemTime,
-        versions: gvpn_client::Versions,
-        ping_rtt: Duration,
-        health: gvpn_client::Health,
-    },
-    Unhealthy {
-        checked_at: SystemTime,
-        previous_failures: u32,
-    },
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExitHealth {
+    pub checked_at: SystemTime,
+    pub versions: gvpn_client::Versions,
+    pub ping_rtt: Duration,
+    pub health: gvpn_client::Health,
 }
 
 /// Serializable state — sent to CLI via command API.
@@ -87,10 +76,8 @@ pub enum RouteHealthState {
         funded: bool,
     },
     NeedsFunding,
-    /// Static need met
-    Routable {
-        exit: ExitHealth,
-    },
+    /// Static need met. Health checking in progress.
+    Routable,
     /// Exit health confirmed healthy. Safe to connect.
     ReadyToConnect {
         exit: ExitHealth,
@@ -146,6 +133,8 @@ pub struct RouteHealth {
     health_check_cancel: CancellationToken,
     cancel_on_shutdown: CancellationToken,
     check_cycle: u32,
+    checking_since: Option<SystemTime>,
+    consecutive_failures: u32,
     last_error: Option<String>,
 }
 
@@ -164,6 +153,8 @@ impl RouteHealth {
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown,
             check_cycle: 0,
+            checking_since: None,
+            consecutive_failures: 0,
             last_error: None,
         }
     }
@@ -220,6 +211,14 @@ impl RouteHealth {
         self.last_error.as_deref()
     }
 
+    pub fn checking_since(&self) -> Option<SystemTime> {
+        self.checking_since
+    }
+
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+
     pub fn needs_peer(&self) -> bool {
         matches!(self.state, RouteHealthState::NeedsPeering { .. })
     }
@@ -238,7 +237,7 @@ impl RouteHealth {
     pub fn is_routable(&self) -> bool {
         matches!(
             self.state,
-            RouteHealthState::Routable { .. }
+            RouteHealthState::Routable
                 | RouteHealthState::ReadyToConnect { .. }
                 | RouteHealthState::Connected { .. }
         )
@@ -284,7 +283,7 @@ impl RouteHealth {
                 // route's lifetime (transient peer flap).
                 let skip_funding = matches!(self.static_need, StaticNeed::Peering(_)) || *funded;
                 if skip_funding {
-                    self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
+                    self.state = RouteHealthState::Routable;
                     self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
                     PeerTransition::BecameRoutable
                 } else {
@@ -301,13 +300,15 @@ impl RouteHealth {
                     PeerTransition::LostPeer
                 }
             }
-            RouteHealthState::Routable { .. }
+            RouteHealthState::Routable
             | RouteHealthState::ReadyToConnect { .. }
             | RouteHealthState::Connected { .. } => {
                 if is_peered {
                     PeerTransition::NoChange
                 } else {
                     self.cancel_health_check();
+                    self.checking_since = None;
+                    self.consecutive_failures = 0;
                     // We previously made it past funding (or never needed it),
                     // so remember that to avoid re-funding on re-peer.
                     self.state = RouteHealthState::NeedsPeering { funded: true };
@@ -335,7 +336,7 @@ impl RouteHealth {
             StaticNeed::Peering(_) => false,
         };
         if satisfies_need {
-            self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
+            self.state = RouteHealthState::Routable;
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
         }
     }
@@ -348,37 +349,40 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        // Only process outcomes when actively running health checks
         if !matches!(
             self.state,
-            RouteHealthState::Routable { .. } | RouteHealthState::ReadyToConnect { .. }
+            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. }
         ) {
             return;
         }
 
-        // Unrecoverable outcomes permanently terminate health checking for this route.
+        if let HealthCheckOutcome::Started { since } = outcome {
+            self.checking_since = Some(since);
+            return;
+        }
+
+        self.checking_since = None;
+
         if let HealthCheckOutcome::Unrecoverable { reason } = outcome {
             self.cancel_health_check();
             self.state = RouteHealthState::Unrecoverable { reason };
             return;
         }
 
-        // Lift outcome into an ExitHealth, filling in skipped fields from the
-        // previously stored Healthy state.
-        let prior = self.exit_ref().cloned();
-        let merged = match outcome {
-            HealthCheckOutcome::Started { since } => ExitHealth::Checking { since },
-            HealthCheckOutcome::Unrecoverable { .. } => unreachable!("handled above"),
-            HealthCheckOutcome::Failed { checked_at, error } => {
-                let previous_failures = match &prior {
-                    Some(ExitHealth::Unhealthy { previous_failures, .. }) => previous_failures + 1,
-                    _ => 0,
-                };
+        match outcome {
+            HealthCheckOutcome::Started { .. } | HealthCheckOutcome::Unrecoverable { .. } => {
+                unreachable!("handled above")
+            }
+            HealthCheckOutcome::Failed { error, .. } => {
+                self.consecutive_failures += 1;
                 self.last_error = Some(error);
-                ExitHealth::Unhealthy {
-                    checked_at,
-                    previous_failures,
+
+                if matches!(self.state, RouteHealthState::ReadyToConnect { .. }) {
+                    self.state = RouteHealthState::Routable;
                 }
+
+                let delay = self.failure_backoff();
+                self.spawn_health_check(delay, hopr, dest, options, sender);
             }
             HealthCheckOutcome::Completed {
                 checked_at,
@@ -386,75 +390,54 @@ impl RouteHealth {
                 ping_rtt,
                 health,
             } => {
-                // Carry forward version/health from the previous Healthy
+                // Carry forward version/health from the previous exit
                 // when this cycle skipped fetching them.
-                let (prior_version, prior_health) = match &prior {
-                    Some(ExitHealth::Healthy {
-                        versions: v, health: h, ..
-                    }) => (Some(v.clone()), Some(h.clone())),
-                    _ => (None, None),
+                let prior = self.exit_ref().cloned();
+                let (prior_versions, prior_health) = match &prior {
+                    Some(exit) => (Some(exit.versions.clone()), Some(exit.health.clone())),
+                    None => (None, None),
                 };
-                match (versions.or(prior_version), health.or(prior_health)) {
-                    (Some(versions), Some(health)) => ExitHealth::Healthy {
-                        checked_at,
-                        versions,
-                        ping_rtt,
-                        health,
-                    },
+                match (versions.or(prior_versions), health.or(prior_health)) {
+                    (Some(versions), Some(health)) => {
+                        let exit = ExitHealth {
+                            checked_at,
+                            versions,
+                            ping_rtt,
+                            health,
+                        };
+                        self.consecutive_failures = 0;
+                        self.last_error = None;
+                        self.check_cycle = self.check_cycle.wrapping_add(1);
+                        self.state = RouteHealthState::ReadyToConnect { exit };
+
+                        let delay = options.health_check_intervals.ping;
+                        self.spawn_health_check(delay, hopr, dest, options, sender);
+                    }
                     // check_cycle only advances on success, so a ping-only cycle
-                    // (scope.version/health = false) can only run after a prior
-                    // Healthy. Reaching here means that invariant was broken.
+                    // can only run after a prior success. Reaching here means
+                    // that invariant was broken.
                     _ => unreachable!(
                         "ping-only cycle ran without a prior Healthy; \
                          check_cycle must only advance on success"
                     ),
                 }
             }
-        };
-
-        if matches!(merged, ExitHealth::Healthy { .. }) {
-            self.last_error = None;
-        }
-
-        let ping_interval = options.health_check_intervals.ping;
-        let next_interval = merged.next_interval(ping_interval);
-        let is_healthy = matches!(merged, ExitHealth::Healthy { .. });
-
-        // Only advance the check cycle on success so that a failed check
-        // retries with the same scope (version/health) instead of
-        // downgrading to a ping-only check on the next attempt.
-        if is_healthy {
-            self.check_cycle = self.check_cycle.wrapping_add(1);
-        }
-
-        self.set_exit(merged);
-
-        // Transition Routable ↔ ReadyToConnect based on exit health
-        match &self.state {
-            RouteHealthState::Routable { exit } if is_healthy => {
-                self.state = RouteHealthState::ReadyToConnect { exit: exit.clone() };
-            }
-            RouteHealthState::ReadyToConnect { exit, .. } if !is_healthy => {
-                self.state = RouteHealthState::Routable { exit: exit.clone() };
-            }
-            _ => {}
-        }
-
-        if let Some(delay) = next_interval {
-            self.spawn_health_check(delay, hopr, dest, options, sender);
         }
     }
 
     /// Transition ReadyToConnect → Connected, cancel TCP health checks, clear errors.
     pub fn connected(&mut self) {
-        if matches!(self.state, RouteHealthState::ReadyToConnect { .. }) {
+        if let RouteHealthState::ReadyToConnect { exit } = &self.state {
+            let exit = exit.clone();
             self.cancel_health_check();
+            self.checking_since = None;
+            self.consecutive_failures = 0;
             self.last_error = None;
-            self.state = RouteHealthState::Connected { exit: ExitHealth::Init };
+            self.state = RouteHealthState::Connected { exit };
         }
     }
 
-    /// Transition Connected → ReadyToConnect (if exit is still Healthy) or Routable,
+    /// Transition Connected → ReadyToConnect (if no recent failures) or Routable,
     /// and restart TCP health checks.
     pub fn disconnected(
         &mut self,
@@ -463,59 +446,38 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if let RouteHealthState::Connected { exit } =
-            std::mem::replace(&mut self.state, RouteHealthState::Routable { exit: ExitHealth::Init })
-        {
-            let is_healthy = matches!(exit, ExitHealth::Healthy { .. });
-            if is_healthy {
+        if let RouteHealthState::Connected { exit } = &self.state {
+            let exit = exit.clone();
+            if self.consecutive_failures == 0 {
                 self.state = RouteHealthState::ReadyToConnect { exit };
             } else {
-                self.state = RouteHealthState::Routable { exit };
+                self.state = RouteHealthState::Routable;
             }
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
         }
     }
 
     /// Update exit health from a tunnel ping result. Returns the consecutive
-    /// failure count after applying this result. On success, if exit is already
-    /// `Healthy`, the `ping_rtt` is refreshed with the new measurement.
-    /// A tunnel ping alone cannot transition from `Init`/`Checking` to `Healthy`
-    /// because it does not produce the `version` / `health` data required.
+    /// failure count after applying this result. On success the `ping_rtt` is
+    /// refreshed with the new measurement. On failure the exit data is
+    /// preserved and `consecutive_failures` is incremented.
     pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
-        if !matches!(self.state, RouteHealthState::Connected { .. }) {
-            return 0;
-        }
-        match rtt {
-            Ok(rtt) => {
-                self.last_error = None;
-                if let Some(ExitHealth::Healthy {
-                    checked_at,
-                    versions,
-                    health,
-                    ..
-                }) = self.exit_ref().cloned()
-                {
-                    self.set_exit(ExitHealth::Healthy {
-                        checked_at,
-                        versions,
-                        ping_rtt: rtt,
-                        health,
-                    });
+        if let RouteHealthState::Connected { exit } = &mut self.state {
+            match rtt {
+                Ok(rtt) => {
+                    self.last_error = None;
+                    self.consecutive_failures = 0;
+                    exit.ping_rtt = rtt;
+                    0
                 }
-                0
+                Err(err) => {
+                    self.consecutive_failures += 1;
+                    self.last_error = Some(err);
+                    self.consecutive_failures
+                }
             }
-            Err(err) => {
-                let prev = match self.exit_ref() {
-                    Some(ExitHealth::Unhealthy { previous_failures, .. }) => *previous_failures + 1,
-                    _ => 1,
-                };
-                self.set_exit(ExitHealth::Unhealthy {
-                    checked_at: SystemTime::now(),
-                    previous_failures: prev,
-                });
-                self.last_error = Some(err);
-                prev
-            }
+        } else {
+            0
         }
     }
 
@@ -528,21 +490,8 @@ impl RouteHealth {
 
     fn exit_ref(&self) -> Option<&ExitHealth> {
         match &self.state {
-            RouteHealthState::Routable { exit }
-            | RouteHealthState::ReadyToConnect { exit, .. }
-            | RouteHealthState::Connected { exit } => Some(exit),
+            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connected { exit } => Some(exit),
             _ => None,
-        }
-    }
-
-    fn set_exit(&mut self, new_exit: ExitHealth) {
-        match &mut self.state {
-            RouteHealthState::Routable { exit }
-            | RouteHealthState::ReadyToConnect { exit, .. }
-            | RouteHealthState::Connected { exit } => {
-                *exit = new_exit;
-            }
-            _ => {}
         }
     }
 }
@@ -614,7 +563,6 @@ async fn run_health_check(
     scope: &CheckScope,
     sender: &mpsc::Sender<Results>,
 ) {
-    tracing::warn!(?scope, ?options, "FOOBAR0");
     let id = destination.id.clone();
 
     let _ = sender
@@ -629,7 +577,6 @@ async fn run_health_check(
     let checked_at = SystemTime::now();
 
     let res_session = open_health_session(hopr, destination, options).await;
-    tracing::warn!("FOOBAR1");
     let session = match res_session {
         Ok(session) => session,
         Err(err) => {
@@ -645,7 +592,6 @@ async fn run_health_check(
             return;
         }
     };
-    tracing::warn!("FOOBAR2");
 
     let socket_addr = session.bound_host;
     let timeout = options.timeouts.http;
@@ -655,7 +601,6 @@ async fn run_health_check(
     let mut versions = None;
     if scope.version {
         let res_versions = gvpn_client::versions(&client, socket_addr, timeout).await;
-        tracing::warn!("FOOBAR3");
         match res_versions {
             Ok(v) => {
                 if select_api_version(&v.versions).is_none() {
@@ -694,7 +639,6 @@ async fn run_health_check(
 
     // Step 2: Exit health (when due)
     let mut health = None;
-    tracing::warn!("FOOBAR4");
     if scope.health {
         match request_health(options, &session).await {
             Ok(h) => {
@@ -721,7 +665,6 @@ async fn run_health_check(
     let measure_rtt = Instant::now();
     let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
     let ping_rtt = measure_rtt.elapsed();
-    tracing::warn!("FOOBAR5");
     close_health_session(hopr, &session).await;
 
     match res_ping {
@@ -802,20 +745,12 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 }
 
 // ---------------------------------------------------------------------------
-// ExitHealth scheduling
+// RouteHealth scheduling
 // ---------------------------------------------------------------------------
 
-impl ExitHealth {
-    fn next_interval(&self, ping_interval: Duration) -> Option<Duration> {
-        match self {
-            ExitHealth::Init | ExitHealth::Checking { .. } => None,
-            ExitHealth::Unhealthy { previous_failures, .. } => {
-                let interval =
-                    (FAILURE_INTERVAL + FAILURE_INTERVAL * (*previous_failures)).min(MAX_INTERVAL_BETWEEN_FAILURES);
-                Some(interval)
-            }
-            ExitHealth::Healthy { .. } => Some(ping_interval),
-        }
+impl RouteHealth {
+    fn failure_backoff(&self) -> Duration {
+        (FAILURE_INTERVAL + FAILURE_INTERVAL * self.consecutive_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
     }
 }
 
@@ -832,10 +767,8 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
     let mut has_any_channel = false;
 
     for rh in healths {
-        let still_needs_channel = matches!(
-            rh.state,
-            RouteHealthState::NeedsPeering { .. } | RouteHealthState::NeedsFunding
-        );
+        let still_needs_channel =
+            matches!(rh.state, RouteHealthState::NeedsPeering { .. } | RouteHealthState::NeedsFunding);
         if !still_needs_channel {
             continue;
         }
@@ -882,15 +815,12 @@ impl Display for RouteHealthState {
             RouteHealthState::NeedsPeering { funded: false } => write!(f, "Needs peering"),
             RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
             RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
-            RouteHealthState::Routable { exit } => write!(f, "Routable, exit: {exit}"),
-            RouteHealthState::ReadyToConnect { exit } => match exit {
-                ExitHealth::Healthy { versions, .. } => {
-                    let selected = select_api_version(&versions.versions).unwrap_or(&versions.latest);
-                    let available = versions.versions.join(", ");
-                    write!(f, "Ready (API {selected} of [{available}]), exit: {exit}")
-                }
-                _ => write!(f, "Ready, exit: {exit}"),
-            },
+            RouteHealthState::Routable => write!(f, "Routable"),
+            RouteHealthState::ReadyToConnect { exit } => {
+                let selected = select_api_version(&exit.versions.versions).unwrap_or(&exit.versions.latest);
+                let available = exit.versions.versions.join(", ");
+                write!(f, "Ready (API {selected} of [{available}]), exit: {exit}")
+            }
             RouteHealthState::Connected { exit } => write!(f, "Connected, tunnel: {exit}"),
         }
     }
@@ -898,41 +828,14 @@ impl Display for RouteHealthState {
 
 impl Display for ExitHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ExitHealth::Init => write!(f, "waiting for check"),
-            ExitHealth::Checking { since } => {
-                write!(f, "checking since {}", log_output::elapsed(since))
-            }
-            ExitHealth::Unhealthy {
-                checked_at,
-                previous_failures,
-            } if *previous_failures > 0 => {
-                write!(
-                    f,
-                    "failed {} times in a row {} ago",
-                    previous_failures + 1,
-                    log_output::elapsed(checked_at),
-                )
-            }
-            ExitHealth::Unhealthy { checked_at, .. } => {
-                write!(f, "failed {} ago", log_output::elapsed(checked_at))
-            }
-            ExitHealth::Healthy {
-                checked_at,
-                versions,
-                ping_rtt,
-                health,
-            } => {
-                write!(
-                    f,
-                    "{} ago: ping {:.2} s, {}, {}",
-                    log_output::elapsed(checked_at),
-                    ping_rtt.as_secs_f32(),
-                    health,
-                    versions,
-                )
-            }
-        }
+        write!(
+            f,
+            "{} ago: ping {:.2} s, {}, {}",
+            log_output::elapsed(&self.checked_at),
+            self.ping_rtt.as_secs_f32(),
+            self.health,
+            self.versions,
+        )
     }
 }
 
@@ -952,6 +855,8 @@ mod tests {
             health_check_cancel: CancellationToken::new(),
             cancel_on_shutdown: CancellationToken::new(),
             check_cycle: 0,
+            checking_since: None,
+            consecutive_failures: 0,
             last_error: None,
         }
     }

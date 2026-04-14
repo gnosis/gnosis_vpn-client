@@ -402,6 +402,8 @@ impl Core {
                                                 reason: route_health::UnrecoverableReason::InvalidId,
                                             },
                                             last_error: None,
+                                            checking_since: None,
+                                            consecutive_failures: 0,
                                         }),
                                 }
                             })

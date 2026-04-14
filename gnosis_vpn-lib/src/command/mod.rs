@@ -189,6 +189,8 @@ pub enum FundingToolResponse {
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
+    pub checking_since: Option<SystemTime>,
+    pub consecutive_failures: u32,
 }
 
 impl From<&RouteHealth> for RouteHealthView {
@@ -196,6 +198,8 @@ impl From<&RouteHealth> for RouteHealthView {
         RouteHealthView {
             state: rh.state().clone(),
             last_error: rh.last_error().map(str::to_owned),
+            checking_since: rh.checking_since(),
+            consecutive_failures: rh.consecutive_failures(),
         }
     }
 }
@@ -539,6 +543,12 @@ impl TryFrom<Command> for WorkerCommand {
 impl Display for RouteHealthView {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.state)?;
+        if let Some(since) = &self.checking_since {
+            write!(f, " (checking since {})", crate::log_output::elapsed(since))?;
+        }
+        if self.consecutive_failures > 0 {
+            write!(f, " ({} consecutive failures)", self.consecutive_failures)?;
+        }
         if let Some(err) = &self.last_error {
             write!(f, " (last error: {err})")?;
         }
@@ -550,6 +560,7 @@ impl Display for RouteHealthView {
 mod tests {
     use super::*;
     use crate::connection::destination::RoutingOptions;
+    use crate::gvpn_client;
     use crate::route_health::ExitHealth;
     use std::collections::HashMap;
 
@@ -567,7 +578,28 @@ mod tests {
     }
 
     fn route_health_state() -> RouteHealthState {
-        RouteHealthState::ReadyToConnect { exit: ExitHealth::Init }
+        RouteHealthState::ReadyToConnect {
+            exit: ExitHealth {
+                checked_at: SystemTime::now(),
+                versions: gvpn_client::Versions {
+                    versions: vec!["v1".to_string()],
+                    latest: "v1".to_string(),
+                },
+                ping_rtt: Duration::from_millis(100),
+                health: gvpn_client::Health {
+                    slots: gvpn_client::Slots {
+                        available: 10,
+                        connected: 1,
+                    },
+                    load_avg: gvpn_client::LoadAvg {
+                        one: 0.1,
+                        five: 0.2,
+                        fifteen: 0.3,
+                        nproc: 4,
+                    },
+                },
+            },
+        }
     }
 
     #[test]
