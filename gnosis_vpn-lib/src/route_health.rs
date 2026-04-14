@@ -713,8 +713,8 @@ async fn open_health_session(
     hopr.open_session(
         destination.address,
         options.sessions.health.target.clone(),
-        Some(3),
-        Some(1),
+        None,
+        None,
         cfg,
     )
     .await
