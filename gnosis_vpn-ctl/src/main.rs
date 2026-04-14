@@ -84,8 +84,11 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str(&format!(
                     "{id} Route health: {rh}\n",
                     id = dest.id,
-                    rh = dest_state.route_health,
+                    rh = dest_state.route_health.state,
                 ));
+                if let Some(err) = &dest_state.route_health.last_error {
+                    str_resp.push_str(&format!("{id} Last error: {err}\n", id = dest.id));
+                }
             }
             println!("{str_resp}");
         }

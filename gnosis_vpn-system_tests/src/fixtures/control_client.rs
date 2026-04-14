@@ -296,7 +296,7 @@ impl DestinationReadiness {
         let mut not_ready = Vec::new();
 
         for state in states {
-            if matches!(state.route_health, RouteHealthState::ReadyToConnect { .. }) {
+            if matches!(state.route_health.state, RouteHealthState::ReadyToConnect { .. }) {
                 ready.push(state.destination);
             } else {
                 not_ready.push(state.destination);

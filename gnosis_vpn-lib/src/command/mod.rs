@@ -13,7 +13,7 @@ use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
-use crate::route_health::RouteHealthState;
+use crate::route_health::{RouteHealth, RouteHealthState};
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
@@ -186,10 +186,25 @@ pub enum FundingToolResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RouteHealthView {
+    pub state: RouteHealthState,
+    pub last_error: Option<String>,
+}
+
+impl From<&RouteHealth> for RouteHealthView {
+    fn from(rh: &RouteHealth) -> Self {
+        RouteHealthView {
+            state: rh.state().clone(),
+            last_error: rh.last_error().map(str::to_owned),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
-    pub route_health: RouteHealthState,
+    pub route_health: RouteHealthView,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

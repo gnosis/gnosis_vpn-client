@@ -396,9 +396,12 @@ impl Core {
                                     route_health: self
                                         .route_healths
                                         .get(&v.id)
-                                        .map(|rh| rh.state().clone())
-                                        .unwrap_or_else(|| route_health::RouteHealthState::Unrecoverable {
-                                            reason: route_health::UnrecoverableReason::InvalidId,
+                                        .map(command::RouteHealthView::from)
+                                        .unwrap_or_else(|| command::RouteHealthView {
+                                            state: route_health::RouteHealthState::Unrecoverable {
+                                                reason: route_health::UnrecoverableReason::InvalidId,
+                                            },
+                                            last_error: None,
                                         }),
                                 }
                             })
