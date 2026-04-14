@@ -460,9 +460,8 @@ impl RouteHealth {
         }
     }
 
-    /// Transition Connected → Routable, restart TCP health checks.
-    /// Goes via Routable (not ReadyToConnect) because the API version is
-    /// only known after a fresh successful health check.
+    /// Transition Connected → ReadyToConnect (if exit is still Healthy) or Routable,
+    /// and restart TCP health checks.
     pub fn disconnected(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -470,8 +469,13 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if matches!(self.state, RouteHealthState::Connected { .. }) {
-            self.state = RouteHealthState::Routable { exit: ExitHealth::Init };
+        if let RouteHealthState::Connected { exit } = std::mem::replace(&mut self.state, RouteHealthState::Routable { exit: ExitHealth::Init }) {
+            let is_healthy = matches!(exit, ExitHealth::Healthy { .. });
+            if is_healthy {
+                self.state = RouteHealthState::ReadyToConnect { exit };
+            } else {
+                self.state = RouteHealthState::Routable { exit };
+            }
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
         }
     }
