@@ -29,7 +29,10 @@ const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
 /// Add new versions here when introducing a new API module.
 fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
     const SUPPORTED: &[&str] = &["v1"]; // v1 → gvpn_client
-    SUPPORTED.iter().copied().find(|&v| server_versions.iter().any(|sv| sv == v))
+    SUPPORTED
+        .iter()
+        .copied()
+        .find(|&v| server_versions.iter().any(|sv| sv == v))
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +467,9 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if let RouteHealthState::Connected { exit } = std::mem::replace(&mut self.state, RouteHealthState::Routable { exit: ExitHealth::Init }) {
+        if let RouteHealthState::Connected { exit } =
+            std::mem::replace(&mut self.state, RouteHealthState::Routable { exit: ExitHealth::Init })
+        {
             let is_healthy = matches!(exit, ExitHealth::Healthy { .. });
             if is_healthy {
                 self.state = RouteHealthState::ReadyToConnect { exit };
@@ -487,10 +492,19 @@ impl RouteHealth {
         match rtt {
             Ok(rtt) => {
                 self.last_error = None;
-                if let Some(ExitHealth::Healthy { checked_at, versions, health, .. }) =
-                    self.exit_ref().cloned()
+                if let Some(ExitHealth::Healthy {
+                    checked_at,
+                    versions,
+                    health,
+                    ..
+                }) = self.exit_ref().cloned()
                 {
-                    self.set_exit(ExitHealth::Healthy { checked_at, versions, ping_rtt: rtt, health });
+                    self.set_exit(ExitHealth::Healthy {
+                        checked_at,
+                        versions,
+                        ping_rtt: rtt,
+                        health,
+                    });
                 }
                 0
             }
@@ -788,8 +802,8 @@ impl ExitHealth {
         match self {
             ExitHealth::Init | ExitHealth::Checking { .. } => None,
             ExitHealth::Unhealthy { previous_failures, .. } => {
-                let interval = (FAILURE_INTERVAL + FAILURE_INTERVAL * (*previous_failures))
-                    .min(MAX_INTERVAL_BETWEEN_FAILURES);
+                let interval =
+                    (FAILURE_INTERVAL + FAILURE_INTERVAL * (*previous_failures)).min(MAX_INTERVAL_BETWEEN_FAILURES);
                 Some(interval)
             }
             ExitHealth::Healthy { .. } => Some(ping_interval),
@@ -843,7 +857,11 @@ impl Display for UnrecoverableReason {
             UnrecoverableReason::InvalidId => write!(f, "path contains offchain node ID (unsupported)"),
             UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
             UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
-                write!(f, "exit server offers no compatible API version (server offers: {})", server_versions.join(", "))
+                write!(
+                    f,
+                    "exit server offers no compatible API version (server offers: {})",
+                    server_versions.join(", ")
+                )
             }
         }
     }

@@ -536,6 +536,15 @@ impl TryFrom<Command> for WorkerCommand {
     }
 }
 
+impl Display for RouteHealthView {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.last_error {
+            Some(err) => write!(f, "{:?} (last error: {err})", self.state),
+            None => write!(f, "{:?}", self.state),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,9 +566,7 @@ mod tests {
     }
 
     fn route_health_state() -> RouteHealthState {
-        RouteHealthState::ReadyToConnect {
-            exit: ExitHealth::Init,
-        }
+        RouteHealthState::ReadyToConnect { exit: ExitHealth::Init }
     }
 
     #[test]
