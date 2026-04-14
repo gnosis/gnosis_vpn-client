@@ -477,16 +477,22 @@ impl RouteHealth {
     }
 
     /// Update exit health from a tunnel ping result. Returns the consecutive
-    /// failure count after applying this result. On success, exit health is
-    /// left unchanged because a tunnel ping by itself does not produce the
-    /// `version` / `health` data required to construct an `ExitHealth::Healthy`.
+    /// failure count after applying this result. On success, if exit is already
+    /// `Healthy`, the `ping_rtt` is refreshed with the new measurement.
+    /// A tunnel ping alone cannot transition from `Init`/`Checking` to `Healthy`
+    /// because it does not produce the `version` / `health` data required.
     pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
         if !matches!(self.state, RouteHealthState::Connected { .. }) {
             return 0;
         }
         match rtt {
-            Ok(_) => {
+            Ok(rtt) => {
                 self.last_error = None;
+                if let Some(ExitHealth::Healthy { checked_at, versions, health, .. }) =
+                    self.exit_ref().cloned()
+                {
+                    self.set_exit(ExitHealth::Healthy { checked_at, versions, ping_rtt: rtt, health });
+                }
                 0
             }
             Err(err) => {
