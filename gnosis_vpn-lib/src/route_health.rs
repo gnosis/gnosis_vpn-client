@@ -48,7 +48,7 @@ pub enum UnrecoverableReason {
     NotAllowed,
     InvalidId,
     InvalidPath,
-    IncompatibleApiVersion,
+    IncompatibleApiVersion { server_versions: Vec<String> },
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -646,7 +646,9 @@ async fn run_health_check(
                         .send(Results::HealthCheck {
                             id,
                             outcome: HealthCheckOutcome::Unrecoverable {
-                                reason: UnrecoverableReason::IncompatibleApiVersion,
+                                reason: UnrecoverableReason::IncompatibleApiVersion {
+                                    server_versions: v.versions.clone(),
+                                },
                             },
                         })
                         .await;
@@ -777,15 +779,6 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl ExitHealth {
-    pub fn api_version(&self) -> String {
-        match self {
-            ExitHealth::Healthy { versions, .. } => select_api_version(&versions.versions)
-                .map(str::to_owned)
-                .unwrap_or_else(|| versions.latest.clone()),
-            _ => String::new(),
-        }
-    }
-
     fn next_interval(&self, ping_interval: Duration) -> Option<Duration> {
         match self {
             ExitHealth::Init | ExitHealth::Checking { .. } => None,
@@ -844,8 +837,8 @@ impl Display for UnrecoverableReason {
             UnrecoverableReason::NotAllowed => write!(f, "direct peering not allowed (insecure peering disabled)"),
             UnrecoverableReason::InvalidId => write!(f, "path contains offchain node ID (unsupported)"),
             UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
-            UnrecoverableReason::IncompatibleApiVersion => {
-                write!(f, "exit server offers no compatible API version")
+            UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
+                write!(f, "exit server offers no compatible API version (server offers: {})", server_versions.join(", "))
             }
         }
     }
@@ -859,10 +852,14 @@ impl Display for RouteHealthState {
             RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
             RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
             RouteHealthState::Routable { exit } => write!(f, "Routable, exit: {exit}"),
-            RouteHealthState::ReadyToConnect { exit } => {
-                let version = exit.api_version();
-                write!(f, "Ready (API {version}), exit: {exit}")
-            }
+            RouteHealthState::ReadyToConnect { exit } => match exit {
+                ExitHealth::Healthy { versions, .. } => {
+                    let selected = select_api_version(&versions.versions).unwrap_or(&versions.latest);
+                    let available = versions.versions.join(", ");
+                    write!(f, "Ready (API {selected} of [{available}]), exit: {exit}")
+                }
+                _ => write!(f, "Ready, exit: {exit}"),
+            },
             RouteHealthState::Connected { exit } => write!(f, "Connected, tunnel: {exit}"),
         }
     }
