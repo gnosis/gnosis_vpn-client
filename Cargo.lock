@@ -3154,7 +3154,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "ping",
- "rand 0.10.0",
+ "rand 0.10.1",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
@@ -3206,7 +3206,7 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
- "rand 0.10.0",
+ "rand 0.10.1",
  "reqwest 0.13.2",
  "tokio",
  "tracing",
@@ -3603,7 +3603,7 @@ version = "0.4.1"
 source = "git+https://github.com/hoprnet/hoprnet?rev=e8e0b63d26e67206e8192384ad8eb7a7de22a1c6#e8e0b63d26e67206e8192384ad8eb7a7de22a1c6"
 dependencies = [
  "generic-array 1.3.5",
- "rand 0.10.0",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -3674,7 +3674,7 @@ dependencies = [
  "hopr-internal-types",
  "hopr-network-types",
  "moka",
- "rand 0.10.0",
+ "rand 0.10.1",
  "smart-default",
  "tracing",
  "validator",
@@ -4130,7 +4130,7 @@ dependencies = [
  "humantime-serde",
  "libp2p-identity",
  "moka",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "smart-default",
  "strum 0.28.0",
@@ -6673,9 +6673,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
  "chacha20 0.10.0",
  "getrandom 0.4.2",
@@ -8361,7 +8361,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
