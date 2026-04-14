@@ -8,8 +8,8 @@ exclude = ["modules/**"]
 reorder_keys = false
 
 [[rule]]
-include = ["*.toml", "**/Cargo.toml"]
-keys = ["dependencies"]
+include = ["**/Cargo.toml", "*.toml"]
+keys    = ["dependencies"]
 
 [rule.formatting]
 reorder_keys = true

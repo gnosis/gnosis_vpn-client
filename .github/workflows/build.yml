@@ -15,41 +15,63 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build:
-    name: Build
-    runs-on: depot-ubuntu-22.04-4
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@v17
-        with:
-          name: gnosis-vpn-client
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-        env:
-          USER: runner
-      - name: Build
-        run: nix build .#gnosis_vpn-dev -L
+  build-binaries:
+    name: Binary ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64-linux
+            runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
+            build_command: nix build -L .#binary-gnosis_vpn-x86_64-linux
+            build_debug_command: nix build -L .#binary-gnosis_vpn-x86_64-linux-dev
+            required_label: ""
+          - architecture: aarch64-linux
+            runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
+            build_command: nix build -L .#binary-gnosis_vpn-aarch64-linux
+            build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-linux-dev
+            required_label: "binary:aarch64-linux"
+          - architecture: aarch64-darwin
+            runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
+            build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
+            build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
+            required_label: "binary:aarch64-darwin"
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
+    permissions:
+      contents: read
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      version_type: commit
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: gnosis-vpn-client
+      build_command: ${{ matrix.build_command }}
+      build_debug_command: ${{ matrix.build_debug_command }}
+      binary: gnosis_vpn-client
+      runner: ${{ matrix.runner }}
+      timeout_minutes: 240
+      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
+    secrets:
+      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
+      apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   checks:
-    name: Lint, format and unit test
+    name: Checks
     runs-on: depot-ubuntu-22.04-4
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@v17
+        uses: hoprnet/hopr-workflows/actions/nix-action@nix-action-v1
         with:
-          name: gnosis-vpn-client
-        env:
-          USER: runner
-      - name: Run flake checks
-        run: nix flake check -L --show-trace --max-jobs 1
+          source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          command: nix flake check -L --show-trace --max-jobs 1
   system-test:
-    name: Execute system test against rotsee network
+    name: System tests
+    # NOTE: Do not switch to a depot runner here. The system-test recipe requires passwordless
+    # sudo (for useradd, chown, etc.). Depot containers restrict these syscalls even for root.
+    # Standard GitHub-hosted runners support passwordless sudo for all commands out of the box.
     runs-on: ubuntu-22.04
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
@@ -58,11 +80,7 @@ jobs:
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
           tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
           android: true
           dotnet: true
           haskell: true
@@ -71,46 +89,25 @@ jobs:
           swap-storage: true
       - name: Checkout repository
         uses: actions/checkout@v6
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@v17
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@setup-nix-v1
         with:
-          name: gnosis-vpn-client
-        env:
-          USER: runner
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Install system test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y wireguard-tools resolvconf
       - name: Install just
         uses: extractions/setup-just@v2
-      - name: Build system service and test binary
+      - name: Build binaries and system test
         run: |
-          nix build .#gnosis_vpn-dev
+          nix build .#binary-gnosis_vpn-system_tests
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
-          SYSTEM_TEST_WORKER_BINARY: ./result/bin/gnosis_vpn-worker
-        run: just system-tests ./result/bin/gnosis_vpn-system_tests
-  build-binaries:
-    strategy:
-      matrix:
-        binary:
-          - architecture: x86_64-linux
-            runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
-          - architecture: aarch64-linux
-            runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
-          - architecture: aarch64-darwin
-            runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
-    name: Binary ${{ matrix.binary.architecture }}
-    uses: ./.github/workflows/build-binaries.yaml
-    with:
-      branch: ${{ github.event.pull_request.head.ref }}
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
-      version_type: "commit"
-    secrets: inherit
+          SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result/bin/gnosis_vpn-worker
+        run: just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests

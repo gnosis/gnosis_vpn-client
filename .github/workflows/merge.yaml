@@ -13,60 +13,39 @@ permissions:
   contents: read
 jobs:
   build-binaries:
+    name: Binary ${{ matrix.architecture }}
+    if: github.event.pull_request.merged == true
     strategy:
+      fail-fast: false
       matrix:
-        binary:
+        include:
           - architecture: x86_64-linux
             runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
+            build_command: nix build -L .#binary-gnosis_vpn-x86_64-linux
           - architecture: aarch64-linux
             runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
+            build_command: nix build -L .#binary-gnosis_vpn-aarch64-linux
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
-    name: Binary ${{ matrix.binary.architecture }}
-    uses: ./.github/workflows/build-binaries.yaml
-    with:
-      branch: ${{ github.event.pull_request.base.ref }}
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
-      version_type: "pr"
-    secrets: inherit
-  comment:
-    name: Comment PR
-    runs-on: depot-ubuntu-22.04-4
+            build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
-      pull-requests: write
-    needs:
-      - build-binaries
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Get version
-        id: vars
-        run: |
-          set -x
-          pr_version=$(grep -E '^version\s*=' Cargo.toml | awk -F\" '{print $2}')-pr.${{ github.event.pull_request.number }}
-          echo "pr_version=$pr_version" >> $GITHUB_OUTPUT
-      - name: Create comment
-        uses: peter-evans/create-or-update-comment@v5
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          body: |
-            The binaries for this PR can be downloaded via:
-            ```
-            mkdir ./binaries
-
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-worker-x86_64-linux --destination=./binaries --local-filename=gnosis_vpn-worker-x86_64-linux
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-root-x86_64-linux --destination=./binaries --local-filename=gnosis_vpn-root-x86_64-linux
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-x86_64-linux --destination=./binaries --local-filename=gnosis_vpn-ctl-x86_64-linux
-
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-worker-aarch64-linux --destination=./binaries --local-filename=gnosis_vpn-worker-aarch64-linux
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-root-aarch64-linux --destination=./binaries --local-filename=gnosis_vpn-root-aarch64-linux
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-aarch64-linux --destination=./binaries --local-filename=gnosis_vpn-ctl-aarch64-linux
-
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-worker-aarch64-darwin --destination=./binaries --local-filename=gnosis_vpn-worker-aarch64-darwin
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-root-aarch64-darwin --destination=./binaries --local-filename=gnosis_vpn-root-aarch64-darwin
-            gcloud artifacts files download --project=gnosisvpn-production --location=europe-west3 --repository=rust-binaries gnosis_vpn:${{ steps.vars.outputs.pr_version }}:gnosis_vpn-ctl-aarch64-darwin --destination=./binaries --local-filename=gnosis_vpn-ctl-aarch64-darwin
-            ```
+      contents: read
+    with:
+      source_branch: ${{ github.event.pull_request.base.ref }}
+      version_type: pr
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: gnosis-vpn-client
+      build_command: ${{ matrix.build_command }}
+      binary: gnosis_vpn-client
+      runner: ${{ matrix.runner }}
+      timeout_minutes: 240
+    secrets:
+      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
+      apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   cache-deps:
     name: Cache deps
     if: github.event.pull_request.merged == true
@@ -76,3 +55,18 @@ jobs:
     with:
       branch: ${{ github.event.pull_request.base.ref }}
     secrets: inherit
+  snapshot-build:
+    name: Snapshot build
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'snapshot-build')
+    runs-on: depot-ubuntu-22.04-4
+    needs:
+      - build-binaries
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger snapshot build
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
+          repository: gnosis/gnosis_vpn
+          event-type: snapshot_build

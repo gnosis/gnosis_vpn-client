@@ -1,61 +1,61 @@
 [workspace]
-members = ["gnosis_vpn*"]
+members  = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.82.1"
 edition = "2024"
 license = "LGPL-3.0"
+version = "0.82.1"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
 
 [workspace.dependencies]
-async-trait = "0.1.89"
 anyhow = { version = "1.0.100" }
+async-trait = "0.1.89"
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
 cfg-if = "1.0.4"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
-exitcode = "1.1.2"
-futures = "0.3.31"
-humantime = "2.3.0"
-notify = "8.2.0"
-futures-util = "0.3.31"
-humantime-serde = "1.1.1"
-human-bandwidth = "0.1.4"
-libc = "0.2.183"
-mnl = "0.3.1"
-nftnl = "0.9.1"
-mimalloc = { version = "0.1.48", default-features = false, features = [
-  "secure",
-] }
-multiaddr = "0.18.2"
-ping = "0.7.0"
-rand = "0.10.0"
-reqwest = { version = "0.13.1", features = ["json", "blocking"] }
-rtnetlink = "0.20.0"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
-thiserror = "2.0.18"
-toml = "1.0.2"
-tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
-tracing-subscriber = "0.3.22"
-tokio = { version = "1.50.0", features = ["full"] }
-url = { version = "2.5.7", features = ["serde"] }
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "06b7837d232d9041211c3279d0ad6a6a3d682180", features = [
   "prometheus",
 ] }
+exitcode = "1.1.2"
+futures = "0.3.31"
+futures-util = "0.3.31"
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "e8e0b63d26e67206e8192384ad8eb7a7de22a1c6", features = [
   "runtime-tokio",
 ] }
+human-bandwidth = "0.1.4"
+humantime = "2.3.0"
+humantime-serde = "1.1.1"
+libc = "0.2.183"
+mimalloc = { version = "0.1.48", default-features = false, features = [
+  "secure",
+] }
+mnl = "0.3.1"
+multiaddr = "0.18.2"
+nftnl = "0.9.1"
+notify = "8.2.0"
+ping = "0.7.0"
+rand = "0.10.0"
+reqwest = { version = "0.13.1", features = ["blocking", "json"] }
+rtnetlink = "0.20.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.148"
 serde_with = "3.16.1"
 serde_yaml = "0.9.34"
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["full"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
+toml = "1.0.2"
+tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
+tracing-subscriber = "0.3.22"
+url = { version = "2.5.7", features = ["serde"] }
 uzers = "0.12.2"
 
-objc2 = "0.6"
+objc2            = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
@@ -63,7 +63,7 @@ gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]
 codegen-units = 1
-lto = "fat"
-panic = "abort"
-strip = true
-opt-level = 3
+lto           = "fat"
+opt-level     = 3
+panic         = "abort"
+strip         = true

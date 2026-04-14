@@ -1,10 +1,10 @@
 # build static linux binary (x86_64)
 build:
-    nix build .#packages.x86_64-linux.gnosis_vpn
+    nix build -L .#binary-gnosis_vpn-x86_64-linux
 
 # build static linux binary (ARM64)
 build-arm64:
-    nix build .#packages.aarch64-linux.gnosis_vpn
+    nix build -L .#binary-gnosis_vpn-aarch64-linux
 
 # build docker image (x86_64)
 docker-build: build
@@ -60,6 +60,9 @@ system-tests test_binary="gnosis_vpn-system_tests":
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
+
+    # Refresh the sudo credential timestamp to avoid password prompt by expiration during long builds
+    sudo -v
 
     worker_user="gnosisvpn"
 

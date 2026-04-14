@@ -1,34 +1,34 @@
 [package]
-name = "gnosis_vpn-root"
-version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
+name    = "gnosis_vpn-root"
+version = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait.workspace = true
-cfg-if.workspace = true
-clap.workspace = true
-exitcode.workspace = true
+async-trait.workspace    = true
+cfg-if.workspace         = true
+clap.workspace           = true
+exitcode.workspace       = true
 gnosis_vpn-lib.workspace = true
-humantime.workspace = true
-notify.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-tracing.workspace = true
-url.workspace = true
+humantime.workspace      = true
+notify.workspace         = true
+serde_json.workspace     = true
+thiserror.workspace      = true
+tokio.workspace          = true
+tokio-util.workspace     = true
+tracing.workspace        = true
+url.workspace            = true
 
 # Target-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-cidr = { workspace = true }
+cidr      = { workspace = true }
+futures   = { workspace = true }
+mimalloc  = { workspace = true }
+mnl       = { workspace = true }
+nftnl     = { workspace = true }
 rtnetlink = { workspace = true }
-nftnl = { workspace = true }
-mnl = { workspace = true }
-futures = { workspace = true }
-mimalloc = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
