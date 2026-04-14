@@ -370,10 +370,10 @@ impl RouteHealth {
                     }) => (Some(v.clone()), Some(h.clone())),
                     _ => (None, None),
                 };
-                match (version.or(prior_version), health.or(prior_health)) {
-                    (Some(version), Some(health)) => ExitHealth::Healthy {
+                match (versions.or(prior_version), health.or(prior_health)) {
+                    (Some(versions), Some(health)) => ExitHealth::Healthy {
                         checked_at,
-                        version,
+                        versions,
                         ping_rtt,
                         health,
                     },
@@ -411,30 +411,12 @@ impl RouteHealth {
             self.check_cycle = self.check_cycle.wrapping_add(1);
         }
 
-        // Determine the negotiated API version on success (intersection of
-        // server-supported and locally compatible versions). Falls back to the
-        // server's reported `latest` if no overlap is captured here — this
-        // path is only reached when `is_healthy`, which already implies the
-        // version check passed.
-        let api_version = match &merged {
-            ExitHealth::Healthy { version, .. } => version
-                .versions
-                .iter()
-                .find(|v| COMPATIBLE_VERSIONS.contains(&v.as_str()))
-                .cloned()
-                .unwrap_or_else(|| version.latest.clone()),
-            _ => String::new(),
-        };
-
         self.set_exit(merged);
 
         // Transition Routable ↔ ReadyToConnect based on exit health
         match &self.state {
             RouteHealthState::Routable { exit } if is_healthy => {
-                self.state = RouteHealthState::ReadyToConnect {
-                    exit: exit.clone(),
-                    version: api_version,
-                };
+                self.state = RouteHealthState::ReadyToConnect { exit: exit.clone() };
             }
             RouteHealthState::ReadyToConnect { exit, .. } if !is_healthy => {
                 self.state = RouteHealthState::Routable { exit: exit.clone() };
@@ -631,7 +613,7 @@ async fn run_health_check(
     let client = reqwest::Client::new();
 
     // Step 1: Version check (when due)
-    let mut version = None;
+    let mut versions = None;
     if scope.version {
         match gvpn_client::versions(&client, socket_addr, timeout).await {
             Ok(v) => {
@@ -653,7 +635,7 @@ async fn run_health_check(
                     return;
                 }
                 tracing::debug!(%destination, versions = %v, "exit server version check passed");
-                version = Some(v);
+                versions = Some(v);
             }
             Err(err) => {
                 close_health_session(hopr, &session).await;
@@ -719,7 +701,7 @@ async fn run_health_check(
             id,
             outcome: HealthCheckOutcome::Completed {
                 checked_at,
-                version,
+                versions,
                 ping_rtt,
                 health,
             },
@@ -777,12 +759,24 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl ExitHealth {
-    pub fn next_interval(&self, ping_interval: Duration) -> Option<Duration> {
+    pub fn api_version(&self) -> String {
+        match self {
+            ExitHealth::Healthy { versions, .. } => versions
+                .versions
+                .iter()
+                .find(|v| COMPATIBLE_VERSIONS.contains(&v.as_str()))
+                .cloned()
+                .unwrap_or_else(|| versions.latest.clone()),
+            _ => String::new(),
+        }
+    }
+
+    fn next_interval(&self, ping_interval: Duration) -> Option<Duration> {
         match self {
             ExitHealth::Init | ExitHealth::Checking { .. } => None,
             ExitHealth::Unhealthy { previous_failures, .. } => {
-                let interval =
-                    (FAILURE_INTERVAL + FAILURE_INTERVAL * (*previous_failures)).min(MAX_INTERVAL_BETWEEN_FAILURES);
+                let interval = (FAILURE_INTERVAL + FAILURE_INTERVAL * (*previous_failures))
+                    .min(MAX_INTERVAL_BETWEEN_FAILURES);
                 Some(interval)
             }
             ExitHealth::Healthy { .. } => Some(ping_interval),
@@ -837,7 +831,8 @@ impl Display for RouteHealthState {
             RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
             RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
             RouteHealthState::Routable { exit } => write!(f, "Routable, exit: {exit}"),
-            RouteHealthState::ReadyToConnect { exit, version } => {
+            RouteHealthState::ReadyToConnect { exit } => {
+                let version = exit.api_version();
                 write!(f, "Ready (API {version}), exit: {exit}")
             }
             RouteHealthState::Connected { exit } => write!(f, "Connected, tunnel: {exit}"),
@@ -870,7 +865,7 @@ impl Display for ExitHealth {
             }
             ExitHealth::Healthy {
                 checked_at,
-                version,
+                versions,
                 ping_rtt,
                 health,
             } => {
@@ -880,7 +875,7 @@ impl Display for ExitHealth {
                     log_output::elapsed(checked_at),
                     ping_rtt.as_secs_f32(),
                     health,
-                    version,
+                    versions,
                 )
             }
         }

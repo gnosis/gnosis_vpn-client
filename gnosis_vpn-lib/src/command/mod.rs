@@ -544,7 +544,6 @@ mod tests {
     fn route_health_state() -> RouteHealthState {
         RouteHealthState::ReadyToConnect {
             exit: ExitHealth::Init,
-            version: "v1".to_string(),
         }
     }
 
