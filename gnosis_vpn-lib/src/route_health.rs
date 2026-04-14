@@ -69,7 +69,6 @@ pub enum ExitHealth {
     },
     Unhealthy {
         checked_at: SystemTime,
-        error: String,
         previous_failures: u32,
     },
 }
@@ -375,9 +374,9 @@ impl RouteHealth {
                     Some(ExitHealth::Unhealthy { previous_failures, .. }) => previous_failures + 1,
                     _ => 0,
                 };
+                self.last_error = Some(error);
                 ExitHealth::Unhealthy {
                     checked_at,
-                    error,
                     previous_failures,
                 }
             }
@@ -413,11 +412,8 @@ impl RouteHealth {
             }
         };
 
-        // Reflect the latest health-check error in the top-level last_error
-        match &merged {
-            ExitHealth::Healthy { .. } => self.last_error = None,
-            ExitHealth::Unhealthy { error, .. } => self.last_error = Some(error.clone()),
-            ExitHealth::Init | ExitHealth::Checking { .. } => {}
+        if matches!(merged, ExitHealth::Healthy { .. }) {
+            self.last_error = None;
         }
 
         let ping_interval = options.health_check_intervals.ping;
@@ -515,7 +511,6 @@ impl RouteHealth {
                 };
                 self.set_exit(ExitHealth::Unhealthy {
                     checked_at: SystemTime::now(),
-                    error: err.clone(),
                     previous_failures: prev,
                 });
                 self.last_error = Some(err);
@@ -897,19 +892,17 @@ impl Display for ExitHealth {
             }
             ExitHealth::Unhealthy {
                 checked_at,
-                error,
                 previous_failures,
             } if *previous_failures > 0 => {
                 write!(
                     f,
-                    "failed {} times in a row {} ago: {}",
+                    "failed {} times in a row {} ago",
                     previous_failures + 1,
                     log_output::elapsed(checked_at),
-                    error,
                 )
             }
-            ExitHealth::Unhealthy { checked_at, error, .. } => {
-                write!(f, "failed {} ago: {}", log_output::elapsed(checked_at), error)
+            ExitHealth::Unhealthy { checked_at, .. } => {
+                write!(f, "failed {} ago", log_output::elapsed(checked_at))
             }
             ExitHealth::Healthy {
                 checked_at,

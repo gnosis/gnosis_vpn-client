@@ -538,10 +538,11 @@ impl TryFrom<Command> for WorkerCommand {
 
 impl Display for RouteHealthView {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.last_error {
-            Some(err) => write!(f, "{:?} (last error: {err})", self.state),
-            None => write!(f, "{:?}", self.state),
+        write!(f, "{}", self.state)?;
+        if let Some(err) = &self.last_error {
+            write!(f, " (last error: {err})")?;
         }
+        Ok(())
     }
 }
 
