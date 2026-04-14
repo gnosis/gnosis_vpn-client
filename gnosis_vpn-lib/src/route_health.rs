@@ -20,7 +20,17 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
-const COMPATIBLE_VERSIONS: &[&str] = &["v1"];
+
+/// Returns the first supported API version found in `server_versions`, or `None`
+/// if there is no compatible version.
+///
+/// This is the single place that maps API version strings to gvpn_client modules.
+/// Currently only "v1" is supported — all gvpn_client functions use the /api/v1/ prefix.
+/// Add new versions here when introducing a new API module.
+fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
+    const SUPPORTED: &[&str] = &["v1"]; // v1 → gvpn_client
+    SUPPORTED.iter().copied().find(|&v| server_versions.iter().any(|sv| sv == v))
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,6 +48,7 @@ pub enum UnrecoverableReason {
     NotAllowed,
     InvalidId,
     InvalidPath,
+    IncompatibleApiVersion,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -97,6 +108,9 @@ pub enum RouteHealthState {
 pub enum HealthCheckOutcome {
     Started {
         since: SystemTime,
+    },
+    Unrecoverable {
+        reason: UnrecoverableReason,
     },
     Failed {
         checked_at: SystemTime,
@@ -340,11 +354,19 @@ impl RouteHealth {
             return;
         }
 
+        // Unrecoverable outcomes permanently terminate health checking for this route.
+        if let HealthCheckOutcome::Unrecoverable { reason } = outcome {
+            self.cancel_health_check();
+            self.state = RouteHealthState::Unrecoverable { reason };
+            return;
+        }
+
         // Lift outcome into an ExitHealth, filling in skipped fields from the
         // previously stored Healthy state.
         let prior = self.exit_ref().cloned();
         let merged = match outcome {
             HealthCheckOutcome::Started { since } => ExitHealth::Checking { since },
+            HealthCheckOutcome::Unrecoverable { .. } => unreachable!("handled above"),
             HealthCheckOutcome::Failed { checked_at, error } => {
                 let previous_failures = match &prior {
                     Some(ExitHealth::Unhealthy { previous_failures, .. }) => previous_failures + 1,
@@ -617,18 +639,14 @@ async fn run_health_check(
     if scope.version {
         match gvpn_client::versions(&client, socket_addr, timeout).await {
             Ok(v) => {
-                let is_compatible = v.versions.iter().any(|sv| COMPATIBLE_VERSIONS.contains(&sv.as_str()));
-                if !is_compatible {
+                if select_api_version(&v.versions).is_none() {
                     close_health_session(hopr, &session).await;
+                    tracing::warn!(%destination, server_versions = %v, "exit server offers no compatible API version");
                     let _ = sender
                         .send(Results::HealthCheck {
                             id,
-                            outcome: HealthCheckOutcome::Failed {
-                                checked_at,
-                                error: format!(
-                                    "Incompatible exit server versions: {v}, compatible: {:?}",
-                                    COMPATIBLE_VERSIONS
-                                ),
+                            outcome: HealthCheckOutcome::Unrecoverable {
+                                reason: UnrecoverableReason::IncompatibleApiVersion,
                             },
                         })
                         .await;
@@ -761,11 +779,8 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 impl ExitHealth {
     pub fn api_version(&self) -> String {
         match self {
-            ExitHealth::Healthy { versions, .. } => versions
-                .versions
-                .iter()
-                .find(|v| COMPATIBLE_VERSIONS.contains(&v.as_str()))
-                .cloned()
+            ExitHealth::Healthy { versions, .. } => select_api_version(&versions.versions)
+                .map(str::to_owned)
                 .unwrap_or_else(|| versions.latest.clone()),
             _ => String::new(),
         }
@@ -823,10 +838,23 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
 // Display
 // ---------------------------------------------------------------------------
 
+impl Display for UnrecoverableReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UnrecoverableReason::NotAllowed => write!(f, "direct peering not allowed (insecure peering disabled)"),
+            UnrecoverableReason::InvalidId => write!(f, "path contains offchain node ID (unsupported)"),
+            UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
+            UnrecoverableReason::IncompatibleApiVersion => {
+                write!(f, "exit server offers no compatible API version")
+            }
+        }
+    }
+}
+
 impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RouteHealthState::Unrecoverable { reason } => write!(f, "{reason:?}"),
+            RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
             RouteHealthState::NeedsPeering { funded: false } => write!(f, "Needs peering"),
             RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
             RouteHealthState::NeedsFunding => write!(f, "Needs funding"),
