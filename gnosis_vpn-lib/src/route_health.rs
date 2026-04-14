@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 use crate::connection::options::Options;
-use crate::core::runner::Results;
+use crate::core::runner::{Results, to_surb_balancer_config};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::{gvpn_client, log_output};
@@ -614,6 +614,7 @@ async fn run_health_check(
     scope: &CheckScope,
     sender: &mpsc::Sender<Results>,
 ) {
+    tracing::warn!(?scope, ?options, "FOOBAR0");
     let id = destination.id.clone();
 
     let _ = sender
@@ -628,6 +629,7 @@ async fn run_health_check(
     let checked_at = SystemTime::now();
 
     let res_session = open_health_session(hopr, destination, options).await;
+    tracing::warn!("FOOBAR1");
     let session = match res_session {
         Ok(session) => session,
         Err(err) => {
@@ -643,6 +645,7 @@ async fn run_health_check(
             return;
         }
     };
+    tracing::warn!("FOOBAR2");
 
     let socket_addr = session.bound_host;
     let timeout = options.timeouts.http;
@@ -651,7 +654,9 @@ async fn run_health_check(
     // Step 1: Version check (when due)
     let mut versions = None;
     if scope.version {
-        match gvpn_client::versions(&client, socket_addr, timeout).await {
+        let res_versions = gvpn_client::versions(&client, socket_addr, timeout).await;
+        tracing::warn!("FOOBAR3");
+        match res_versions {
             Ok(v) => {
                 if select_api_version(&v.versions).is_none() {
                     close_health_session(hopr, &session).await;
@@ -687,29 +692,13 @@ async fn run_health_check(
         }
     }
 
-    // Step 2: Ping (always runs)
-    let measure_rtt = Instant::now();
-    if let Err(err) = gvpn_client::ping(&client, socket_addr, timeout).await {
-        close_health_session(hopr, &session).await;
-        let _ = sender
-            .send(Results::HealthCheck {
-                id,
-                outcome: HealthCheckOutcome::Failed {
-                    checked_at,
-                    error: format!("Ping error: {err}"),
-                },
-            })
-            .await;
-        return;
-    }
-    let ping_rtt = measure_rtt.elapsed();
-
-    // Step 3: Exit health (when due)
+    // Step 2: Exit health (when due)
     let mut health = None;
+    tracing::warn!("FOOBAR4");
     if scope.health {
         match request_health(options, &session).await {
             Ok(h) => {
-                tracing::debug!(%destination, health = %h, "exit health check passed");
+                tracing::debug!(%destination, health = %h, "received exit health status");
                 health = Some(h);
             }
             Err(err) => {
@@ -728,19 +717,41 @@ async fn run_health_check(
         }
     }
 
+    // Step 3: Ping (always runs)
+    let measure_rtt = Instant::now();
+    let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
+    let ping_rtt = measure_rtt.elapsed();
+    tracing::warn!("FOOBAR5");
     close_health_session(hopr, &session).await;
 
-    let _ = sender
-        .send(Results::HealthCheck {
-            id,
-            outcome: HealthCheckOutcome::Completed {
-                checked_at,
-                versions,
-                ping_rtt,
-                health,
-            },
-        })
-        .await;
+    match res_ping {
+        Ok(_) => {
+            tracing::debug!(%destination, ping_rtt = ?ping_rtt, "exit ping successful");
+            let _ = sender
+                .send(Results::HealthCheck {
+                    id,
+                    outcome: HealthCheckOutcome::Completed {
+                        checked_at,
+                        versions,
+                        ping_rtt,
+                        health,
+                    },
+                })
+                .await;
+        }
+        Err(err) => {
+            tracing::info!(%destination, error = %err, "exit ping failed");
+            let _ = sender
+                .send(Results::HealthCheck {
+                    id,
+                    outcome: HealthCheckOutcome::Failed {
+                        checked_at,
+                        error: format!("Ping error: {err}"),
+                    },
+                })
+                .await;
+        }
+    }
 }
 
 async fn open_health_session(
@@ -748,11 +759,13 @@ async fn open_health_session(
     destination: &Destination,
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
+    let surb_config = to_surb_balancer_config(options.buffer_sizes.bridge, options.max_surb_upstream.bridge)
+        .map_err(|e| HoprError::Construction(e.to_string()))?;
     let cfg = SessionClientConfig {
         capabilities: options.sessions.health.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
-        surb_management: None,
+        surb_management: Some(surb_config),
         ..Default::default()
     };
     tracing::debug!(%destination, "opening TCP session for health check");
