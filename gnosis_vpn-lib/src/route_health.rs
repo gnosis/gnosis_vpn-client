@@ -717,7 +717,7 @@ impl RouteHealth {
                 _ = shutdown.cancelled() => {}
                 _ = async {
                     time::sleep(delay).await;
-                    run_health_check(&hopr, &dest, &options, &scope, &sender).await;
+                    run_health_check(hopr, &dest, &options, &scope, &sender).await;
                 } => {}
             }
         });
@@ -744,7 +744,7 @@ impl RouteHealth {
 /// failing aborts the cycle and yields a `Failed` or `Unrecoverable`
 /// outcome; only a fully successful run produces `Completed`.
 async fn run_health_check(
-    hopr: &Hopr,
+    hopr: Arc<Hopr>,
     destination: &Destination,
     options: &Options,
     scope: &CheckScope,
@@ -760,7 +760,7 @@ async fn run_health_check(
         })
         .await;
 
-    let res_session = open_health_session(hopr, destination, options).await;
+    let res_session = HealthSession::open(hopr, destination, options).await;
     let session = match res_session {
         Ok(session) => session,
         Err(err) => {
@@ -778,7 +778,10 @@ async fn run_health_check(
     };
 
     // Step 1: Version check (when due)
-    let socket_addr = session.bound_host;
+    // From here on, early returns drop `session`, whose Drop detaches a
+    // close task — so we do not leak the TCP bridge even if the surrounding
+    // future is cancelled via `tokio::select!`.
+    let socket_addr = session.meta.bound_host;
     let timeout = options.timeouts.http;
     let client = reqwest::Client::new();
     let mut versions = None;
@@ -787,7 +790,6 @@ async fn run_health_check(
         match res_versions {
             Ok(v) => {
                 if select_api_version(&v.versions).is_none() {
-                    close_health_session(hopr, &session).await;
                     tracing::warn!(%destination, server_versions = %v, "exit server offers no compatible API version");
                     let _ = sender
                         .send(Results::HealthCheck {
@@ -806,7 +808,6 @@ async fn run_health_check(
             }
             Err(err) => {
                 tracing::warn!(%id, ?err, "version check failed");
-                close_health_session(hopr, &session).await;
                 let _ = sender
                     .send(Results::HealthCheck {
                         id,
@@ -832,7 +833,6 @@ async fn run_health_check(
             }
             Err(err) => {
                 tracing::warn!(%id, ?err, "exit health request failed");
-                close_health_session(hopr, &session).await;
                 let _ = sender
                     .send(Results::HealthCheck {
                         id,
@@ -852,7 +852,7 @@ async fn run_health_check(
     let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
     let ping_rtt = measure_rtt.elapsed();
 
-    close_health_session(hopr, &session).await;
+    session.close().await;
 
     match res_ping {
         Ok(_) => {
@@ -884,34 +884,73 @@ async fn run_health_check(
     }
 }
 
-/// Open a TCP bridge session to the exit dedicated to health checks.
+/// RAII guard for the short-lived TCP bridge session used during a
+/// health check.
 ///
-/// Uses the configured bridge capabilities/target but disables SURB
-/// management — the session is short-lived and not used for user traffic.
-async fn open_health_session(
-    hopr: &Hopr,
-    destination: &Destination,
-    options: &Options,
-) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
-        capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: destination.routing.clone(),
-        return_path_options: destination.routing.clone(),
-        surb_management: None,
-        ..Default::default()
-    };
-    tracing::debug!(%destination, "opening TCP session for health check");
-    hopr.open_session(
-        destination.address,
-        options.sessions.bridge.target.clone(),
-        None,
-        None,
-        cfg,
-    )
-    .await
+/// Guarantees the session is closed even if the surrounding future is
+/// dropped — e.g. cancelled via `tokio::select!` on the shutdown or
+/// per-check cancellation token. The success path calls
+/// [`HealthSession::close`] to await the close inline so the
+/// `Completed` outcome is reported only after cleanup. Any other path —
+/// early `return` on error or future cancellation — falls through to
+/// `Drop`, which detaches a close task on the tokio runtime so the exit
+/// port is not leaked.
+struct HealthSession {
+    hopr: Arc<Hopr>,
+    meta: SessionClientMetadata,
+    closed: bool,
 }
 
-/// Close a session opened by [`open_health_session`]. Errors are logged
+impl HealthSession {
+    /// Open a TCP bridge session to the exit dedicated to health checks.
+    ///
+    /// Uses the configured bridge capabilities/target but disables SURB
+    /// management — the session is short-lived and not used for user traffic.
+    async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
+        let cfg = SessionClientConfig {
+            capabilities: options.sessions.bridge.capabilities,
+            forward_path_options: destination.routing.clone(),
+            return_path_options: destination.routing.clone(),
+            surb_management: None,
+            ..Default::default()
+        };
+        tracing::debug!(%destination, "opening TCP session for health check");
+        let meta = hopr
+            .open_session(
+                destination.address,
+                options.sessions.bridge.target.clone(),
+                None,
+                None,
+                cfg,
+            )
+            .await?;
+        Ok(Self { hopr, meta, closed: false })
+    }
+
+    /// Close the session, awaiting completion. Disarms the `Drop` guard.
+    async fn close(mut self) {
+        close_health_session(&self.hopr, &self.meta).await;
+        self.closed = true;
+    }
+}
+
+impl Drop for HealthSession {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        // Explicit `close()` never ran — detach a close task so the exit
+        // port is not leaked. Fire and forget; errors are logged inside
+        // `close_health_session`.
+        let hopr = self.hopr.clone();
+        let meta = self.meta.clone();
+        tokio::spawn(async move {
+            close_health_session(&hopr, &meta).await;
+        });
+    }
+}
+
+/// Close a session opened by [`HealthSession::open`]. Errors are logged
 /// and swallowed — a leaked session does not justify failing the check.
 async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
     tracing::debug!(bound_host = ?session.bound_host, "closing TCP session from health check");
