@@ -322,7 +322,7 @@ impl Connection {
             Capability::Segmentation,
             Capability::Retransmission,
             Capability::RetransmissionAckOnly,
-            Capability::NoDelay,
+            Capability::NoRateControl,
         ]
     }
 
