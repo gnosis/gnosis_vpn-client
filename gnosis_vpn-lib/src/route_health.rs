@@ -82,7 +82,8 @@ pub enum RouteHealthState {
     ReadyToConnect {
         exit: ExitHealth,
     },
-    /// Connecting or connected. Exit health checks continue (version/ping skipped).
+    /// Connecting or connected. Exit health and ping checks continue at reduced
+    /// frequency (version skipped).
     Connecting {
         exit: ExitHealth,
         tunnel_ping_rtt: Option<Duration>,
@@ -395,17 +396,26 @@ impl RouteHealth {
                 let delay = self.failure_backoff();
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
-            HealthCheckOutcome::Completed { checked_at, health, .. } if is_connecting => {
-                if let RouteHealthState::Connecting { exit, .. } = &mut self.state
-                    && let Some(h) = health
-                {
-                    exit.health = h;
+            HealthCheckOutcome::Completed {
+                checked_at,
+                ping_rtt,
+                health,
+                ..
+            } if is_connecting => {
+                if let RouteHealthState::Connecting { exit, .. } = &mut self.state {
+                    if let Some(h) = health {
+                        exit.health = h;
+                    }
+                    if let Some(rtt) = ping_rtt {
+                        exit.ping_rtt = rtt;
+                    }
                     exit.checked_at = checked_at;
                 }
                 self.consecutive_failures = 0;
                 self.last_error = None;
                 self.check_cycle = self.check_cycle.wrapping_add(1);
-                let delay = options.health_check_intervals.ping;
+                let intervals = &options.health_check_intervals;
+                let delay = intervals.ping * intervals.health_every_n_pings;
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
             HealthCheckOutcome::Completed {
@@ -566,10 +576,15 @@ impl RouteHealth {
         let cycle = self.check_cycle;
 
         let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
-        let scope = CheckScope {
-            version: !is_connecting && cycle.is_multiple_of(intervals.version_every_n_pings),
-            health: cycle.is_multiple_of(intervals.health_every_n_pings),
-            ping: true,
+        let scope = if is_connecting {
+            // During connecting, health + ping run together at reduced frequency.
+            CheckScope { version: false, health: true, ping: true }
+        } else {
+            CheckScope {
+                version: cycle.is_multiple_of(intervals.version_every_n_pings),
+                health: cycle.is_multiple_of(intervals.health_every_n_pings),
+                ping: true,
+            }
         };
 
         let token = self.health_check_cancel.clone();
