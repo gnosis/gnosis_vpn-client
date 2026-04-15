@@ -186,8 +186,10 @@ pub struct RouteHealth {
     cancel_on_shutdown: CancellationToken,
     check_cycle: u32,
     checking_since: Option<SystemTime>,
-    consecutive_failures: u32,
-    last_error: Option<String>,
+    exit_failures: u32,
+    exit_last_error: Option<String>,
+    tunnel_ping_failures: u32,
+    tunnel_ping_last_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -210,8 +212,10 @@ impl RouteHealth {
             cancel_on_shutdown,
             check_cycle: 0,
             checking_since: None,
-            consecutive_failures: 0,
-            last_error: None,
+            exit_failures: 0,
+            exit_last_error: None,
+            tunnel_ping_failures: 0,
+            tunnel_ping_last_error: None,
         }
     }
 }
@@ -268,7 +272,7 @@ impl RouteHealth {
     }
 
     pub fn last_error(&self) -> Option<&str> {
-        self.last_error.as_deref()
+        self.exit_last_error.as_deref()
     }
 
     pub fn checking_since(&self) -> Option<SystemTime> {
@@ -276,7 +280,15 @@ impl RouteHealth {
     }
 
     pub fn consecutive_failures(&self) -> u32 {
-        self.consecutive_failures
+        self.exit_failures
+    }
+
+    pub fn tunnel_ping_failures(&self) -> u32 {
+        self.tunnel_ping_failures
+    }
+
+    pub fn tunnel_ping_last_error(&self) -> Option<&str> {
+        self.tunnel_ping_last_error.as_deref()
     }
 
     pub fn needs_peer(&self) -> bool {
@@ -377,7 +389,8 @@ impl RouteHealth {
                 } else {
                     self.cancel_health_check();
                     self.checking_since = None;
-                    self.consecutive_failures = 0;
+                    self.exit_failures = 0;
+                    self.tunnel_ping_failures = 0;
                     // We previously made it past funding (or never needed it),
                     // so remember that to avoid re-funding on re-peer.
                     self.state = RouteHealthState::NeedsPeering { funded: true };
@@ -473,14 +486,14 @@ impl RouteHealth {
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
             HealthCheckOutcome::Failed { error, .. } if is_connecting => {
-                self.consecutive_failures += 1;
-                self.last_error = Some(error);
+                self.exit_failures += 1;
+                self.exit_last_error = Some(error);
                 let delay = self.failure_backoff();
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
             HealthCheckOutcome::Failed { error, .. } => {
-                self.consecutive_failures += 1;
-                self.last_error = Some(error);
+                self.exit_failures += 1;
+                self.exit_last_error = Some(error);
 
                 if matches!(self.state, RouteHealthState::ReadyToConnect { .. }) {
                     self.state = RouteHealthState::Routable;
@@ -504,8 +517,8 @@ impl RouteHealth {
                     }
                     exit.checked_at = checked_at;
                 }
-                self.consecutive_failures = 0;
-                self.last_error = None;
+                self.exit_failures = 0;
+                self.exit_last_error = None;
                 self.check_cycle = self.check_cycle.wrapping_add(1);
                 let intervals = &options.health_check_intervals;
                 let delay = intervals.ping * intervals.health_every_n_pings;
@@ -540,8 +553,8 @@ impl RouteHealth {
                             ping_rtt,
                             health,
                         };
-                        self.consecutive_failures = 0;
-                        self.last_error = None;
+                        self.exit_failures = 0;
+                        self.exit_last_error = None;
                         self.check_cycle = self.check_cycle.wrapping_add(1);
                         self.state = RouteHealthState::ReadyToConnect { exit };
 
@@ -578,8 +591,8 @@ impl RouteHealth {
             let exit = exit.clone();
             self.cancel_health_check();
             self.checking_since = None;
-            self.consecutive_failures = 0;
-            self.last_error = None;
+            self.exit_failures = 0;
+            self.exit_last_error = None;
             self.state = RouteHealthState::Connecting {
                 exit,
                 tunnel_ping_rtt: None,
@@ -604,7 +617,7 @@ impl RouteHealth {
     ) {
         if let RouteHealthState::Connecting { exit, .. } = &self.state {
             let exit = exit.clone();
-            if self.consecutive_failures == 0 {
+            if self.exit_failures == 0 {
                 self.state = RouteHealthState::ReadyToConnect { exit };
             } else {
                 self.state = RouteHealthState::Routable;
@@ -613,23 +626,23 @@ impl RouteHealth {
         }
     }
 
-    /// Update exit health from a tunnel ping result. Returns the consecutive
+    /// Update exit health from a tunnel ping result. Returns the tunnel ping
     /// failure count after applying this result. On success the `ping_rtt` is
     /// refreshed with the new measurement. On failure the exit data is
-    /// preserved and `consecutive_failures` is incremented.
+    /// preserved and `tunnel_ping_failures` is incremented.
     pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
         if let RouteHealthState::Connecting { tunnel_ping_rtt, .. } = &mut self.state {
             match rtt {
                 Ok(rtt) => {
-                    self.last_error = None;
-                    self.consecutive_failures = 0;
+                    self.tunnel_ping_failures = 0;
+                    self.tunnel_ping_last_error = None;
                     *tunnel_ping_rtt = Some(rtt);
                     0
                 }
                 Err(err) => {
-                    self.consecutive_failures += 1;
-                    self.last_error = Some(err);
-                    self.consecutive_failures
+                    self.tunnel_ping_failures += 1;
+                    self.tunnel_ping_last_error = Some(err);
+                    self.tunnel_ping_failures
                 }
             }
         } else {
@@ -646,7 +659,7 @@ impl RouteHealth {
         if matches!(self.state, RouteHealthState::Unrecoverable { .. }) {
             return;
         }
-        self.last_error = Some(err);
+        self.exit_last_error = Some(err);
     }
 
     fn exit_ref(&self) -> Option<&ExitHealth> {
@@ -968,10 +981,10 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
-    /// Delay before the next retry after a failed cycle: linear growth in
-    /// `consecutive_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
+    /// Delay before the next retry after a failed exit-health cycle: linear growth in
+    /// `exit_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
     fn failure_backoff(&self) -> Duration {
-        (FAILURE_INTERVAL + FAILURE_INTERVAL * self.consecutive_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+        (FAILURE_INTERVAL + FAILURE_INTERVAL * self.exit_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
     }
 }
 
@@ -1123,8 +1136,10 @@ mod tests {
             cancel_on_shutdown: CancellationToken::new(),
             check_cycle: 0,
             checking_since: None,
-            consecutive_failures: 0,
-            last_error: None,
+            exit_failures: 0,
+            exit_last_error: None,
+            tunnel_ping_failures: 0,
+            tunnel_ping_last_error: None,
         }
     }
 
