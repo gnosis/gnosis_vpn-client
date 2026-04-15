@@ -558,7 +558,6 @@ impl RouteHealth {
 struct CheckScope {
     version: bool,
     health: bool,
-    ping: bool,
 }
 
 impl RouteHealth {
@@ -577,13 +576,12 @@ impl RouteHealth {
 
         let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
         let scope = if is_connecting {
-            // During connecting, health + ping run together at reduced frequency.
-            CheckScope { version: false, health: true, ping: true }
+            // During connecting, health runs every cycle at reduced frequency.
+            CheckScope { version: false, health: true }
         } else {
             CheckScope {
                 version: cycle.is_multiple_of(intervals.version_every_n_pings),
                 health: cycle.is_multiple_of(intervals.health_every_n_pings),
-                ping: true,
             }
         };
 
@@ -722,31 +720,26 @@ async fn run_health_check(
         }
     }
 
-    // Step 3: Ping (when due)
-    let mut ping_rtt = None;
-    if scope.ping {
-        let measure_rtt = Instant::now();
-        let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
-        ping_rtt = Some(measure_rtt.elapsed());
-        close_health_session(hopr, &session).await;
+    // Step 3: Ping (always)
+    let measure_rtt = Instant::now();
+    let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
+    let ping_rtt = measure_rtt.elapsed();
+    close_health_session(hopr, &session).await;
 
-        if let Err(err) = res_ping {
-            tracing::info!(%destination, error = %err, "exit ping failed");
-            let _ = sender
-                .send(Results::HealthCheck {
-                    id,
-                    outcome: HealthCheckOutcome::Failed {
-                        checked_at,
-                        error: format!("Ping error: {err}"),
-                    },
-                })
-                .await;
-            return;
-        }
-        tracing::debug!(%destination, ping_rtt = ?ping_rtt, "exit ping successful");
-    } else {
-        close_health_session(hopr, &session).await;
+    if let Err(err) = res_ping {
+        tracing::info!(%destination, error = %err, "exit ping failed");
+        let _ = sender
+            .send(Results::HealthCheck {
+                id,
+                outcome: HealthCheckOutcome::Failed {
+                    checked_at,
+                    error: format!("Ping error: {err}"),
+                },
+            })
+            .await;
+        return;
     }
+    tracing::debug!(%destination, ?ping_rtt, "exit ping successful");
 
     let _ = sender
         .send(Results::HealthCheck {
@@ -754,7 +747,7 @@ async fn run_health_check(
             outcome: HealthCheckOutcome::Completed {
                 checked_at,
                 versions,
-                ping_rtt,
+                ping_rtt: Some(ping_rtt),
                 health,
             },
         })
