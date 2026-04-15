@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 use crate::connection::options::Options;
-use crate::core::runner::{Results, to_surb_balancer_config};
+use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 use crate::{gvpn_client, log_output};
@@ -601,7 +601,6 @@ impl RouteHealth {
                 _ = shutdown.cancelled() => {}
                 _ = async {
                     time::sleep(delay).await;
-                    tracing::info!(%dest, ?scope, "starting health check");
                     run_health_check(&hopr, &dest, &options, &scope, &sender).await;
                 } => {}
             }
@@ -626,17 +625,14 @@ async fn run_health_check(
     sender: &mpsc::Sender<Results>,
 ) {
     let id = destination.id.clone();
-
+    let checked_at = SystemTime::now();
+    tracing::info!(%id, %scope, "starting health check");
     let _ = sender
         .send(Results::HealthCheck {
             id: id.clone(),
-            outcome: HealthCheckOutcome::Started {
-                since: SystemTime::now(),
-            },
+            outcome: HealthCheckOutcome::Started { since: checked_at },
         })
         .await;
-
-    let checked_at = SystemTime::now();
 
     let res_session = open_health_session(hopr, destination, options).await;
     let session = match res_session {
@@ -655,18 +651,13 @@ async fn run_health_check(
         }
     };
 
-    tracing::warn!(?session, "FOO_SESSION");
-    tracing::warn!(?scope, "FOO_SCOPE");
-
+    // Step 1: Version check (when due)
     let socket_addr = session.bound_host;
     let timeout = options.timeouts.http;
-
-    // Step 1: Version check (when due)
+    let client = reqwest::Client::new();
     let mut versions = None;
     if scope.version {
-        let client = reqwest::Client::new();
         let res_versions = gvpn_client::versions(&client, socket_addr, timeout).await;
-        tracing::warn!(?res_versions, "FOO_CALL1 VERSIONS");
         match res_versions {
             Ok(v) => {
                 if select_api_version(&v.versions).is_none() {
@@ -688,6 +679,7 @@ async fn run_health_check(
                 versions = Some(v);
             }
             Err(err) => {
+                tracing::warn!(%id, ?err, "version check failed");
                 close_health_session(hopr, &session).await;
                 let _ = sender
                     .send(Results::HealthCheck {
@@ -706,17 +698,14 @@ async fn run_health_check(
     // Step 2: Exit health (when due)
     let mut health = None;
     if scope.health {
-        let client = reqwest::Client::new();
-        let socket_addr = session.bound_host;
-        let timeout = options.timeouts.http;
         let res_health = gvpn_client::health(&client, socket_addr, timeout).await;
-        tracing::warn!(?res_health, "FOO_CALL2 HEALTH");
         match res_health {
             Ok(h) => {
                 tracing::debug!(%destination, health = %h, "received exit health status");
                 health = Some(h);
             }
             Err(err) => {
+                tracing::warn!(%id, ?err, "exit health request failed");
                 close_health_session(hopr, &session).await;
                 let _ = sender
                     .send(Results::HealthCheck {
@@ -734,19 +723,8 @@ async fn run_health_check(
 
     // Step 3: Ping (always)
     let measure_rtt = Instant::now();
-    let client_ping = reqwest::Client::new();
-    let res_ping = gvpn_client::ping(&client_ping, socket_addr, timeout).await;
-    tracing::warn!(?res_ping, "FOO_CALL3 PING");
-    let initial_ping_rtt = measure_rtt.elapsed();
-    tracing::warn!(?initial_ping_rtt, "FOO_INITIAL_PING_RTT");
-
-    // Step 4: Only for debugging showcase - remove
-    let measure_rtt_2 = Instant::now();
-    let client_ping2 = reqwest::Client::new();
-    let res_ping_2 = gvpn_client::ping(&client_ping2, socket_addr, timeout).await;
-    tracing::warn!(?res_ping_2, "FOO_CALL4 PING2");
-    let ping_rtt = measure_rtt_2.elapsed();
-    tracing::warn!(?ping_rtt, "FOO_SECOND_PING_RTT");
+    let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
+    let ping_rtt = measure_rtt.elapsed();
 
     close_health_session(hopr, &session).await;
 
@@ -766,7 +744,7 @@ async fn run_health_check(
                 .await;
         }
         Err(err) => {
-            tracing::info!(%destination, error = %err, "exit ping failed");
+            tracing::warn!(%destination, error = %err, "exit ping failed");
             let _ = sender
                 .send(Results::HealthCheck {
                     id,
@@ -785,29 +763,19 @@ async fn open_health_session(
     destination: &Destination,
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let surb_config = to_surb_balancer_config(options.buffer_sizes.bridge, options.max_surb_upstream.bridge)
-        .map_err(|e| HoprError::Construction(e.to_string()))?;
-
-    let p_surb_config = Some(surb_config);
-    let p_session_pool = Some(1);
-    let p_max_client_sessions = Some(4);
-    tracing::warn!(?p_surb_config, "FOO_SESSION_CONFIG");
-    tracing::warn!(?p_session_pool, "FOO_SESSION_POOL");
-    tracing::warn!(?p_max_client_sessions, "FOO_MAX_CLIENT_SESSIONS");
-
     let cfg = SessionClientConfig {
         capabilities: options.sessions.health.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
-        surb_management: p_surb_config,
+        surb_management: None,
         ..Default::default()
     };
     tracing::debug!(%destination, "opening TCP session for health check");
     hopr.open_session(
         destination.address,
         options.sessions.health.target.clone(),
-        p_session_pool,
-        p_max_client_sessions,
+        None,
+        None,
         cfg,
     )
     .await
@@ -872,6 +840,29 @@ pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth
 // ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
+
+impl Display for CheckScope {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CheckScope {
+                version: true,
+                health: true,
+            } => write!(f, "Scope(version,health,ping)"),
+            CheckScope {
+                version: true,
+                health: false,
+            } => write!(f, "Scope(version,ping)"),
+            CheckScope {
+                version: false,
+                health: true,
+            } => write!(f, "Scope(health,ping)"),
+            CheckScope {
+                version: false,
+                health: false,
+            } => write!(f, "Scope(ping)"),
+        }
+    }
+}
 
 impl Display for UnrecoverableReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
