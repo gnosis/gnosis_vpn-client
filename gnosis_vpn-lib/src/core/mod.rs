@@ -726,9 +726,6 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
-                        rh.connected();
-                    }
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -1316,6 +1313,9 @@ impl Core {
                 self.worker_params.clone(),
             );
             let results_sender = results_sender.clone();
+            if let Some(rh) = self.route_healths.get_mut(&destination.id) {
+                rh.connecting();
+            }
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
                 cancel
@@ -1428,7 +1428,7 @@ impl Core {
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
         {
-            rh.disconnected(
+            rh.disconnecting(
                 self.hopr.as_ref().unwrap(),
                 &dest,
                 &self.config.connection,

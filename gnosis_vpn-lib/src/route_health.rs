@@ -424,8 +424,8 @@ impl RouteHealth {
         }
     }
 
-    /// Transition ReadyToConnect → Connected, cancel TCP health checks, clear errors.
-    pub fn connected(&mut self) {
+    /// Suspend TCP health checks when a connection attempt begins.
+    pub fn connecting(&mut self) {
         if let RouteHealthState::ReadyToConnect { exit } = &self.state {
             let exit = exit.clone();
             self.cancel_health_check();
@@ -439,9 +439,8 @@ impl RouteHealth {
         }
     }
 
-    /// Transition Connected → ReadyToConnect (if no recent failures) or Routable,
-    /// and restart TCP health checks.
-    pub fn disconnected(
+    /// Resume TCP health checks when disconnecting begins.
+    pub fn disconnecting(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
