@@ -889,10 +889,15 @@ impl Display for RouteHealthState {
             RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
             RouteHealthState::NeedsFunding => write!(f, "Needs channel funding"),
             RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
-            RouteHealthState::ReadyToConnect { exit } => {
-                let selected = select_api_version(&exit.versions.versions).unwrap_or(&exit.versions.latest);
-                write!(f, "Ready to connect via API {selected}, exit health: {exit}")
-            }
+            RouteHealthState::ReadyToConnect { exit } => match select_api_version(&exit.versions.versions) {
+                Some(selected) => {
+                    write!(f, "Ready to connect via API {selected}, exit health: {exit}")
+                }
+                // should never happen
+                None => {
+                    write!(f, "API version unsupported, exit health: {exit}")
+                }
+            },
             RouteHealthState::Connecting { exit, tunnel_ping_rtt } => match tunnel_ping_rtt {
                 Some(rtt) => write!(
                     f,
