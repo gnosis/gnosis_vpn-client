@@ -344,7 +344,13 @@ impl Core {
                                     }
                                 };
                                 let error = if errors.is_empty() { None } else { Some(errors) };
-                                RunMode::preparing_safe(self.node_address, &balance, funding_tool, error)
+                                RunMode::preparing_safe(
+                                    self.node_address,
+                                    &balance,
+                                    funding_tool,
+                                    error,
+                                    self.ticket_value,
+                                )
                             }
                             Phase::DeployingSafe {
                                 node_balance: _,
@@ -564,9 +570,8 @@ impl Core {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
-                    self.ticket_value = None;
                     self.spawn_balances_runner(results_sender, Duration::ZERO);
-                    self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
+                    self.try_start_reactor(results_sender);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -794,6 +799,7 @@ impl Core {
             Ok(safeless_interactor) => {
                 tracing::info!("safeless interactor created successfully");
                 self.safeless_interactor = Some(Arc::new(safeless_interactor));
+                self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
             }
             Err(err) => {
@@ -1405,30 +1411,36 @@ impl Core {
         self.act_on_target(results_sender);
     }
 
+    fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
+        if self.strategy_handle.is_some() {
+            return;
+        }
+        let Some(edgli) = self.hopr.as_ref() else { return };
+        let Some(tv) = self.ticket_value else { return };
+        match edgli.start_telemetry_reactor(tv) {
+            Ok(strategy_process) => {
+                tracing::info!("started edge node telemetry reactor");
+                self.strategy_handle = Some(strategy_process);
+            }
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    "failed to start edge node telemetry reactor - retrying ticket stats"
+                );
+                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+            }
+        }
+    }
+
     fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
         tracing::info!("received ticket stats from runner");
-        match (stats.ticket_value(), self.hopr.as_ref()) {
-            (Ok(tv), Some(edgli)) => {
+        match stats.ticket_value() {
+            Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
                 self.ticket_value = Some(tv);
-                match edgli.start_telemetry_reactor(tv) {
-                    Ok(strategy_process) => {
-                        tracing::info!("started edge node telemetry reactor");
-                        self.strategy_handle = Some(strategy_process);
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            ?err,
-                            "failed to start edge node telemetry reactor - retrying ticket stats"
-                        );
-                        self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
-                    }
-                }
+                self.try_start_reactor(results_sender);
             }
-            (Ok(_), None) => {
-                tracing::error!("edgeclient not available when starting telemetry reactor");
-            }
-            (Err(err), _) => {
+            Err(err) => {
                 tracing::error!(%stats, ?err, "failed to determine ticket value from stats - retrying");
                 self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
             }
