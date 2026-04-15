@@ -591,6 +591,9 @@ async fn run_health_check(
         }
     };
 
+    tracing::warn!(?session, "FOO_SESSION");
+    tracing::warn!(?scope, "FOO_SCOPE");
+
     let socket_addr = session.bound_host;
     let timeout = options.timeouts.http;
     let client = reqwest::Client::new();
@@ -599,6 +602,7 @@ async fn run_health_check(
     let mut versions = None;
     if scope.version {
         let res_versions = gvpn_client::versions(&client, socket_addr, timeout).await;
+        tracing::warn!(?res_versions, "FOO_CALL1 VERSIONS");
         match res_versions {
             Ok(v) => {
                 if select_api_version(&v.versions).is_none() {
@@ -638,7 +642,9 @@ async fn run_health_check(
     // Step 2: Exit health (when due)
     let mut health = None;
     if scope.health {
-        match request_health(options, &session).await {
+        let res_health = request_health(options, &session).await;
+        tracing::warn!(?res_health, "FOO_CALL2 HEALTH");
+        match res_health {
             Ok(h) => {
                 tracing::debug!(%destination, health = %h, "received exit health status");
                 health = Some(h);
@@ -662,7 +668,17 @@ async fn run_health_check(
     // Step 3: Ping (always runs)
     let measure_rtt = Instant::now();
     let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
-    let ping_rtt = measure_rtt.elapsed();
+    tracing::warn!(?res_ping, "FOO_CALL3 PING");
+    let initial_ping_rtt = measure_rtt.elapsed();
+    tracing::warn!(?initial_ping_rtt, "FOO_INITIAL_PING_RTT");
+
+    // Step 4: Only for debugging showcase - remove
+    let measure_rtt_2 = Instant::now();
+    let res_ping_2 = gvpn_client::ping(&client, socket_addr, timeout).await;
+    tracing::warn!(?res_ping_2, "FOO_CALL4 PING2");
+    let ping_rtt = measure_rtt_2.elapsed();
+    tracing::warn!(?ping_rtt, "FOO_SECOND_PING_RTT");
+
     close_health_session(hopr, &session).await;
 
     match res_ping {
@@ -702,19 +718,27 @@ async fn open_health_session(
 ) -> Result<SessionClientMetadata, HoprError> {
     let surb_config = to_surb_balancer_config(options.buffer_sizes.bridge, options.max_surb_upstream.bridge)
         .map_err(|e| HoprError::Construction(e.to_string()))?;
+
+    let p_surb_config = Some(surb_config);
+    let p_session_pool = None;
+    let p_max_client_sessions = None;
+    tracing::warn!(?p_surb_config, "FOO_SESSION_CONFIG");
+    tracing::warn!(?p_session_pool, "FOO_SESSION_POOL");
+    tracing::warn!(?p_max_client_sessions, "FOO_MAX_CLIENT_SESSIONS");
+
     let cfg = SessionClientConfig {
         capabilities: options.sessions.health.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
-        surb_management: Some(surb_config),
+        surb_management: p_surb_config,
         ..Default::default()
     };
     tracing::debug!(%destination, "opening TCP session for health check");
     hopr.open_session(
         destination.address,
         options.sessions.health.target.clone(),
-        None,
-        None,
+        p_session_pool,
+        p_max_client_sessions,
         cfg,
     )
     .await
