@@ -365,12 +365,11 @@ impl RouteHealth {
 
         self.checking_since = None;
 
-        if !is_connecting
-            && let HealthCheckOutcome::Unrecoverable { reason } = outcome {
-                self.cancel_health_check();
-                self.state = RouteHealthState::Unrecoverable { reason };
-                return;
-            }
+        if !is_connecting && let HealthCheckOutcome::Unrecoverable { reason } = outcome {
+            self.cancel_health_check();
+            self.state = RouteHealthState::Unrecoverable { reason };
+            return;
+        }
 
         match outcome {
             HealthCheckOutcome::Started { .. } | HealthCheckOutcome::Unrecoverable { .. } => {
@@ -396,16 +395,13 @@ impl RouteHealth {
                 let delay = self.failure_backoff();
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
-            HealthCheckOutcome::Completed {
-                checked_at,
-                health,
-                ..
-            } if is_connecting => {
+            HealthCheckOutcome::Completed { checked_at, health, .. } if is_connecting => {
                 if let RouteHealthState::Connecting { exit, .. } = &mut self.state
-                    && let Some(h) = health {
-                        exit.health = h;
-                        exit.checked_at = checked_at;
-                    }
+                    && let Some(h) = health
+                {
+                    exit.health = h;
+                    exit.checked_at = checked_at;
+                }
                 self.consecutive_failures = 0;
                 self.last_error = None;
                 self.check_cycle = self.check_cycle.wrapping_add(1);
@@ -570,18 +566,10 @@ impl RouteHealth {
         let cycle = self.check_cycle;
 
         let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
-        let scope = if is_connecting {
-            CheckScope {
-                version: false,
-                health: cycle.is_multiple_of(intervals.health_every_n_pings),
-                ping: false,
-            }
-        } else {
-            CheckScope {
-                version: cycle.is_multiple_of(intervals.version_every_n_pings),
-                health: cycle.is_multiple_of(intervals.health_every_n_pings),
-                ping: true,
-            }
+        let scope = CheckScope {
+            version: !is_connecting && cycle.is_multiple_of(intervals.version_every_n_pings),
+            health: cycle.is_multiple_of(intervals.health_every_n_pings),
+            ping: true,
         };
 
         let token = self.health_check_cancel.clone();
@@ -883,11 +871,12 @@ impl Display for RouteHealthState {
                 let selected = select_api_version(&exit.versions.versions).unwrap_or(&exit.versions.latest);
                 write!(f, "Ready to connect via API {selected}, exit health: {exit}")
             }
-            RouteHealthState::Connecting {
-                exit,
-                tunnel_ping_rtt,
-            } => match tunnel_ping_rtt {
-                Some(rtt) => write!(f, "Connecting, tunnel ping RTT {:.2} s, exit: {exit}", rtt.as_secs_f32()),
+            RouteHealthState::Connecting { exit, tunnel_ping_rtt } => match tunnel_ping_rtt {
+                Some(rtt) => write!(
+                    f,
+                    "Connecting, tunnel ping RTT {:.2} s, exit: {exit}",
+                    rtt.as_secs_f32()
+                ),
                 None => write!(f, "Connecting, tunnel ping pending, exit: {exit}"),
             },
         }
