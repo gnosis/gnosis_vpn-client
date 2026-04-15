@@ -220,7 +220,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "buffer" {
                         if let Some(buffer) = v.as_table() {
                             for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.buffer.{k}"));
@@ -231,7 +231,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "max_surb_upstream" {
                         if let Some(surbs) = v.as_table() {
                             for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
