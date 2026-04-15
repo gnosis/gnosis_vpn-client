@@ -91,7 +91,7 @@ pub enum UnrecoverableReason {
 
 /// A successfully captured snapshot of exit-node health.
 ///
-/// Not every check cycle fetches every field (see [`CheckScope`]); when a
+/// Not every check cycle fetches every field; when a
 /// field is skipped it is carried forward from the previous successful
 /// snapshot so the state always exposes a full picture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,7 +137,7 @@ pub enum RouteHealthState {
 /// by [`RouteHealth::health_check_result`].
 ///
 /// `versions` and `health` are optional because a given cycle may skip
-/// fetching them (see [`CheckScope`]); the main thread fills in the skipped
+/// fetching them (skipped based on the ping cycle interval settings); the main thread fills in the skipped
 /// fields from the previously stored [`ExitHealth`] before constructing the
 /// final snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,7 +429,7 @@ impl RouteHealth {
     ///   failure counter moves). `Unrecoverable` is honored only outside
     ///   `Connecting`.
     /// * Scheduling: success schedules the next cycle at the configured
-    ///   ping interval; failure schedules with [`Self::failure_backoff`].
+    ///   ping interval; failure schedules with an exponential backoff.
     ///
     /// Outcomes that arrive when the state is no longer `Routable` /
     /// `ReadyToConnect` / `Connecting` (e.g. because peering was lost)
@@ -674,7 +674,7 @@ struct CheckScope {
 
 impl RouteHealth {
     /// Cancel any in-flight health check and schedule a new one after
-    /// `delay`. The [`CheckScope`] is decided here from `check_cycle` and
+    /// `delay`. The check scope (which fields to fetch) is decided here from `check_cycle` and
     /// whether we are in `Connecting`. Called both by internal transitions
     /// and externally when a cycle completes.
     pub fn spawn_health_check(
