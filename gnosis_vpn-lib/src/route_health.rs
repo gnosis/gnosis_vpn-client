@@ -1,5 +1,27 @@
-/// Health model per destination route.
-/// Tracks both network reachability (peers, channels) and exit node health (via TCP sessions).
+//! Per-destination route health tracking.
+//!
+//! Each [`RouteHealth`] models the progression of a single destination route
+//! from "just configured" to "usable for a tunnel", and it owns the background
+//! health-check task that keeps that assessment current.
+//!
+//! The progression is split into two concerns:
+//!
+//! * **Network reachability** — do we have the peering/channel relationship
+//!   that the routing option requires? This is driven from outside by Core
+//!   feeding in the current peer set ([`RouteHealth::peers`]) and channel
+//!   funding results ([`RouteHealth::channel_funded`]).
+//! * **Exit-node health** — once reachable, can we actually reach the exit
+//!   server behind the destination, and is it reporting healthy? This is
+//!   driven internally by a background task that opens a short-lived TCP
+//!   session to the exit and performs version, health, and ping checks.
+//!
+//! [`RouteHealthState`] captures the combined state. State changes flow
+//! outward through [`PeerTransition`] return values and through
+//! [`HealthCheckOutcome`] messages posted back on the runner channel.
+//!
+//! Core owns one `RouteHealth` per configured destination and uses the
+//! aggregate view (via [`any_needs_peers`] / [`count_distinct_channels`]) to
+//! decide when to poll peers or fund channels.
 use edgli::hopr_lib::SessionClientConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -39,21 +61,39 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 // Types
 // ---------------------------------------------------------------------------
 
+/// The on-chain precondition a route needs before it can be considered
+/// reachable. Derived once from routing configuration and then constant for
+/// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
+    /// A funded channel to this specific address (first intermediate hop).
     Channel(Address),
+    /// Any funded outgoing channel is sufficient (hop count without a fixed path).
     AnyChannel,
+    /// Direct peering with the destination — no channel needed (0-hop route).
     Peering(Address),
 }
 
+/// Terminal failure modes that cannot be recovered from without a config
+/// change or an exit-server upgrade. Once a route enters
+/// [`RouteHealthState::Unrecoverable`] it stays there.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UnrecoverableReason {
+    /// Direct (0-hop) peering is configured but insecure peering is disabled.
     NotAllowed,
+    /// The configured path contains an offchain node ID, which is not supported.
     InvalidId,
+    /// The configured intermediate path is empty.
     InvalidPath,
+    /// The exit server only offers API versions we do not support.
     IncompatibleApiVersion { server_versions: Vec<String> },
 }
 
+/// A successfully captured snapshot of exit-node health.
+///
+/// Not every check cycle fetches every field (see [`CheckScope`]); when a
+/// field is skipped it is carried forward from the previous successful
+/// snapshot so the state always exposes a full picture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExitHealth {
     pub checked_at: SystemTime,
@@ -62,7 +102,10 @@ pub struct ExitHealth {
     pub health: gvpn_client::Health,
 }
 
-/// Serializable state — sent to CLI via command API.
+/// Combined route state: network reachability plus exit-node health.
+///
+/// Also the wire-format shown to the CLI via the command API, so variant
+/// names and payloads are part of the user-visible surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RouteHealthState {
     Unrecoverable {
@@ -90,11 +133,13 @@ pub enum RouteHealthState {
     },
 }
 
-/// Wire-only type used to carry a health-check outcome from the async runner
-/// back to `health_check_result`. `version` and `health` are optional here
-/// because a given cycle may skip fetching them (see `CheckScope`); the main
-/// thread fills in the skipped fields from the previously stored
-/// `ExitHealth::Healthy` before constructing the final `ExitHealth`.
+/// Message a health-check runner task sends back to the main loop, consumed
+/// by [`RouteHealth::health_check_result`].
+///
+/// `versions` and `health` are optional because a given cycle may skip
+/// fetching them (see [`CheckScope`]); the main thread fills in the skipped
+/// fields from the previously stored [`ExitHealth`] before constructing the
+/// final snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HealthCheckOutcome {
     Started {
@@ -127,7 +172,12 @@ pub enum PeerTransition {
     LostPeer,
 }
 
-/// Full runtime type — owns the health check lifecycle.
+/// Per-destination route health tracker.
+///
+/// Owns the health-check lifecycle: state transitions, the background
+/// task's cancellation token, and failure bookkeeping used for backoff.
+/// Constructed once per destination and lives as long as the destination
+/// is configured.
 pub struct RouteHealth {
     id: String,
     static_need: StaticNeed,
@@ -145,6 +195,10 @@ pub struct RouteHealth {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
+    /// Build an initial tracker for `dest`. `cancel_on_shutdown` is inherited
+    /// by every background task this tracker spawns so that they all stop
+    /// when the core shuts down. `allow_insecure` gates whether a 0-hop route
+    /// is accepted or immediately marked unrecoverable.
     pub fn new(dest: &Destination, allow_insecure: bool, cancel_on_shutdown: CancellationToken) -> Self {
         let static_need = derive_static_need(&dest.routing, dest.address);
         let state = derive_initial_state(&dest.routing, allow_insecure);
@@ -176,6 +230,10 @@ fn derive_static_need(routing: &RoutingOptions, dest_address: Address) -> Static
     }
 }
 
+/// Pick the starting state purely from routing config. Invalid or
+/// disallowed routing variants short-circuit straight to `Unrecoverable`;
+/// everything else starts at `NeedsPeering` and waits for Core to feed in
+/// the peer set.
 fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> RouteHealthState {
     match routing.clone() {
         RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 && !allow_insecure => {
@@ -260,6 +318,17 @@ impl RouteHealth {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
+    /// Apply a fresh snapshot of connected peer addresses.
+    ///
+    /// Advances or regresses the state depending on whether the route's
+    /// [`StaticNeed`] is currently satisfied. When a previously funded route
+    /// loses its peer we transition back to `NeedsPeering { funded: true }`
+    /// so that re-peering can skip funding. When the route first becomes
+    /// routable we spawn the initial health check.
+    ///
+    /// The returned [`PeerTransition`] tells Core which external side effect
+    /// (if any) needs to run — Core handles funding, the tracker handles
+    /// health-check spawn/cancel internally.
     pub fn peers(
         &mut self,
         addresses: &HashSet<Address>,
@@ -319,6 +388,12 @@ impl RouteHealth {
         }
     }
 
+    /// Notify that a channel funding operation succeeded for `address`.
+    ///
+    /// If this route was waiting on that funding (or on any funding, for
+    /// `AnyChannel` needs) it becomes routable and the first health check
+    /// is scheduled immediately. Calls that do not apply to this route are
+    /// ignored.
     pub fn channel_funded(
         &mut self,
         address: Address,
@@ -341,6 +416,24 @@ impl RouteHealth {
         }
     }
 
+    /// Consume an outcome from a background health-check cycle and schedule
+    /// the next one.
+    ///
+    /// Handles three concerns together:
+    ///
+    /// * Lifecycle: `Started` records the "checking since" timestamp;
+    ///   terminal outcomes clear it.
+    /// * State transitions: a successful full cycle promotes `Routable` →
+    ///   `ReadyToConnect`; a failure demotes `ReadyToConnect` back to
+    ///   `Routable` (during `Connecting` the state is kept and only the
+    ///   failure counter moves). `Unrecoverable` is honored only outside
+    ///   `Connecting`.
+    /// * Scheduling: success schedules the next cycle at the configured
+    ///   ping interval; failure schedules with [`Self::failure_backoff`].
+    ///
+    /// Outcomes that arrive when the state is no longer `Routable` /
+    /// `ReadyToConnect` / `Connecting` (e.g. because peering was lost)
+    /// are dropped.
     pub fn health_check_result(
         &mut self,
         outcome: HealthCheckOutcome,
@@ -467,8 +560,13 @@ impl RouteHealth {
         }
     }
 
-    /// Transition to Connecting state. Version and ping checks are suspended
-    /// but exit health checks continue every nth cycle.
+    /// Transition `ReadyToConnect` → `Connecting` when Core starts bringing
+    /// up the tunnel.
+    ///
+    /// While connecting we stop verifying the API version and reduce the
+    /// check cadence: only an exit-health query runs in each cycle, on top
+    /// of the tunnel-level ping Core performs. Other states are left
+    /// unchanged so this is safe to call speculatively.
     pub fn connecting(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -491,7 +589,12 @@ impl RouteHealth {
         }
     }
 
-    /// Resume full health checks when disconnecting begins.
+    /// Leave `Connecting` and resume normal health checking.
+    ///
+    /// The resulting state depends on whether the route is still considered
+    /// healthy: no recent failures → `ReadyToConnect` with the last known
+    /// `ExitHealth`; otherwise fall back to `Routable` and rebuild from the
+    /// next check. A fresh cycle is scheduled immediately.
     pub fn disconnecting(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -534,6 +637,11 @@ impl RouteHealth {
         }
     }
 
+    /// Record an error message on this route without changing state.
+    ///
+    /// Used to surface transient failures (e.g. from Core-side operations
+    /// like channel funding) in the CLI output. Ignored in `Unrecoverable`
+    /// states to preserve the original failure reason.
     pub fn with_error(&mut self, err: String) {
         if matches!(self.state, RouteHealthState::Unrecoverable { .. }) {
             return;
@@ -553,7 +661,11 @@ impl RouteHealth {
 // Health check spawn / cancel
 // ---------------------------------------------------------------------------
 
-/// Which checks to include in a health check cycle.
+/// Which sub-checks to include in a single health-check cycle.
+///
+/// Ping is always performed; version and exit-health are gated by
+/// per-N-pings settings. This keeps the steady-state chatter on the exit
+/// server down while still catching drift on a bounded schedule.
 #[derive(Clone, Debug)]
 struct CheckScope {
     version: bool,
@@ -561,6 +673,10 @@ struct CheckScope {
 }
 
 impl RouteHealth {
+    /// Cancel any in-flight health check and schedule a new one after
+    /// `delay`. The [`CheckScope`] is decided here from `check_cycle` and
+    /// whether we are in `Connecting`. Called both by internal transitions
+    /// and externally when a cycle completes.
     pub fn spawn_health_check(
         &mut self,
         delay: Duration,
@@ -607,6 +723,9 @@ impl RouteHealth {
         });
     }
 
+    /// Cancel the running health-check task, if any, and replace the
+    /// cancellation token so future spawns are independent. Safe to call
+    /// when no check is running.
     pub fn cancel_health_check(&mut self) {
         self.health_check_cancel.cancel();
         self.health_check_cancel = CancellationToken::new();
@@ -617,6 +736,13 @@ impl RouteHealth {
 // Health check runner (async, runs in spawned task)
 // ---------------------------------------------------------------------------
 
+/// One health-check cycle, executed in a spawned task.
+///
+/// Opens a short-lived TCP bridge session to the exit, runs the sub-checks
+/// selected by `scope` (version → exit health → ping), closes the session,
+/// and sends a single [`HealthCheckOutcome`] back on `sender`. Any step
+/// failing aborts the cycle and yields a `Failed` or `Unrecoverable`
+/// outcome; only a fully successful run produces `Completed`.
 async fn run_health_check(
     hopr: &Hopr,
     destination: &Destination,
@@ -758,6 +884,10 @@ async fn run_health_check(
     }
 }
 
+/// Open a TCP bridge session to the exit dedicated to health checks.
+///
+/// Uses the configured bridge capabilities/target but disables SURB
+/// management — the session is short-lived and not used for user traffic.
 async fn open_health_session(
     hopr: &Hopr,
     destination: &Destination,
@@ -781,6 +911,8 @@ async fn open_health_session(
     .await
 }
 
+/// Close a session opened by [`open_health_session`]. Errors are logged
+/// and swallowed — a leaked session does not justify failing the check.
 async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
     tracing::debug!(bound_host = ?session.bound_host, "closing TCP session from health check");
     let _ = hopr
@@ -797,6 +929,8 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
+    /// Delay before the next retry after a failed cycle: linear growth in
+    /// `consecutive_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
     fn failure_backoff(&self) -> Duration {
         (FAILURE_INTERVAL + FAILURE_INTERVAL * self.consecutive_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
     }
@@ -806,10 +940,20 @@ impl RouteHealth {
 // Free functions for Core
 // ---------------------------------------------------------------------------
 
+/// True iff at least one route is still waiting on peering. Core uses this
+/// to pick a tighter polling interval for the connected-peers query while
+/// any route is not yet routable.
 pub fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
     healths.into_iter().any(|rh| rh.needs_peer())
 }
 
+/// How many distinct outgoing channels are still required by the given
+/// routes to make them all routable.
+///
+/// Routes with a fixed first-hop address count once per unique address.
+/// `AnyChannel` routes collapse to a single slot since any one funded
+/// channel satisfies them all. Routes that are already past funding, or
+/// are peering-only, contribute nothing.
 pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> usize {
     let mut addresses = HashSet::new();
     let mut has_any_channel = false;
