@@ -52,7 +52,6 @@ pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     http_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
-    health: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
     buffer: Option<BufferOptions>,
@@ -196,7 +195,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "http_timeout" {
                         continue;
                     }
-                    if k == "bridge" || k == "wg" || k == "health" {
+                    if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k2, _v) in prot.iter() {
                                 if k2 == "capabilities" || k2 == "target" {
@@ -328,26 +327,11 @@ impl Connection {
         ]
     }
 
-    pub fn default_health_capabilities() -> Vec<Capability> {
-        vec![
-            Capability::Segmentation,
-            Capability::Retransmission,
-            Capability::RetransmissionAckOnly,
-        ]
-    }
-
     pub fn default_wg_capabilities() -> Vec<Capability> {
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
     pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
-    }
-
-    pub fn default_health_target() -> SessionTarget {
         SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
             [172, 30, 0, 1],
             8000,
@@ -406,17 +390,6 @@ impl From<Option<Connection>> for options::Options {
             .unwrap_or(Connection::default_bridge_capabilities());
         let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
 
-        let health_target = connection
-            .and_then(|c| c.health.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_health_target());
-        let health_caps = connection
-            .and_then(|c| c.health.as_ref())
-            .and_then(|b| b.capabilities.clone())
-            .unwrap_or(Connection::default_health_capabilities());
-        let params_health = options::SessionParameters::new(health_target, to_flags(health_caps));
-
         let wg_target = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.target)
@@ -430,7 +403,6 @@ impl From<Option<Connection>> for options::Options {
 
         let sessions = options::Sessions {
             bridge: params_bridge,
-            health: params_health,
             wg: params_wg,
         };
 
@@ -624,10 +596,6 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 http_timeout = "60s"
 
 [connection.bridge]
-capabilities = [ "segmentation", "retransmission" ]
-target = "127.0.0.1:8000"
-
-[connection.health]
 capabilities = [ "segmentation", "retransmission" ]
 target = "127.0.0.1:8000"
 

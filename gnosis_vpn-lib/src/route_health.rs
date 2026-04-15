@@ -764,7 +764,7 @@ async fn open_health_session(
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
-        capabilities: options.sessions.health.capabilities,
+        capabilities: options.sessions.bridge.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
         surb_management: None,
@@ -773,7 +773,7 @@ async fn open_health_session(
     tracing::debug!(%destination, "opening TCP session for health check");
     hopr.open_session(
         destination.address,
-        options.sessions.health.target.clone(),
+        options.sessions.bridge.target.clone(),
         None,
         None,
         cfg,

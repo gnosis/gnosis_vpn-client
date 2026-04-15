@@ -36,7 +36,6 @@ pub struct HealthCheckIntervals {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sessions {
     pub bridge: SessionParameters,
-    pub health: SessionParameters,
     pub wg: SessionParameters,
 }
 
