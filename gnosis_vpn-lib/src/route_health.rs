@@ -853,7 +853,7 @@ impl Display for ExitHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{} ago: ping {:.2} s, {}, {}",
+            "{} ago: ping RTT {:.2} s, {}, {}",
             log_output::elapsed(&self.checked_at),
             self.ping_rtt.as_secs_f32(),
             self.health,
