@@ -62,16 +62,7 @@ impl Runner {
 
         // 1. open bridge session
         let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
-        let bridge_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge)?;
-        let bridge_session = open_bridge_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            bridge_config,
-            &results_sender,
-        )
-        .await?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
 
         // 2. register wg public key
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
@@ -283,14 +274,13 @@ async fn open_bridge_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
-    surb_management: SurbBalancerConfig,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path_options: destination.routing.clone(),
         return_path_options: destination.routing.clone(),
-        surb_management: Some(surb_management),
+        surb_management: None,
         ..Default::default()
     };
     (|| async {
