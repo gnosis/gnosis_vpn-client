@@ -82,8 +82,8 @@ pub enum RouteHealthState {
     ReadyToConnect {
         exit: ExitHealth,
     },
-    /// Actively connected. Exit health checks continue (version/ping skipped).
-    Connected {
+    /// Connecting or connected. Exit health checks continue (version/ping skipped).
+    Connecting {
         exit: ExitHealth,
         tunnel_ping_rtt: Option<Duration>,
     },
@@ -238,14 +238,14 @@ impl RouteHealth {
     pub fn is_routable(&self) -> bool {
         matches!(
             self.state,
-            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connected { .. }
+            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
         )
     }
 
     pub fn is_ready_to_connect(&self) -> bool {
         matches!(
             self.state,
-            RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connected { .. }
+            RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
         )
     }
 
@@ -301,7 +301,7 @@ impl RouteHealth {
             }
             RouteHealthState::Routable
             | RouteHealthState::ReadyToConnect { .. }
-            | RouteHealthState::Connected { .. } => {
+            | RouteHealthState::Connecting { .. } => {
                 if is_peered {
                     PeerTransition::NoChange
                 } else {
@@ -348,8 +348,8 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        let is_connected = matches!(self.state, RouteHealthState::Connected { .. });
-        if !is_connected
+        let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
+        if !is_connecting
             && !matches!(
                 self.state,
                 RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. }
@@ -365,7 +365,7 @@ impl RouteHealth {
 
         self.checking_since = None;
 
-        if !is_connected
+        if !is_connecting
             && let HealthCheckOutcome::Unrecoverable { reason } = outcome {
                 self.cancel_health_check();
                 self.state = RouteHealthState::Unrecoverable { reason };
@@ -374,12 +374,12 @@ impl RouteHealth {
 
         match outcome {
             HealthCheckOutcome::Started { .. } | HealthCheckOutcome::Unrecoverable { .. } => {
-                // Started handled above. Unrecoverable ignored while connected
+                // Started handled above. Unrecoverable ignored while connecting
                 // (version check is skipped so it shouldn't occur).
                 let delay = self.failure_backoff();
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
-            HealthCheckOutcome::Failed { error, .. } if is_connected => {
+            HealthCheckOutcome::Failed { error, .. } if is_connecting => {
                 self.consecutive_failures += 1;
                 self.last_error = Some(error);
                 let delay = self.failure_backoff();
@@ -400,14 +400,15 @@ impl RouteHealth {
                 checked_at,
                 health,
                 ..
-            } if is_connected => {
-                if let RouteHealthState::Connected { exit, .. } = &mut self.state
+            } if is_connecting => {
+                if let RouteHealthState::Connecting { exit, .. } = &mut self.state
                     && let Some(h) = health {
                         exit.health = h;
                         exit.checked_at = checked_at;
                     }
                 self.consecutive_failures = 0;
                 self.last_error = None;
+                self.check_cycle = self.check_cycle.wrapping_add(1);
                 let delay = options.health_check_intervals.ping;
                 self.spawn_health_check(delay, hopr, dest, options, sender);
             }
@@ -460,8 +461,8 @@ impl RouteHealth {
         }
     }
 
-    /// Transition to Connected state. Version and ping checks are suspended
-    /// but exit health checks continue on the regular interval.
+    /// Transition to Connecting state. Version and ping checks are suspended
+    /// but exit health checks continue every nth cycle.
     pub fn connecting(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -475,7 +476,7 @@ impl RouteHealth {
             self.checking_since = None;
             self.consecutive_failures = 0;
             self.last_error = None;
-            self.state = RouteHealthState::Connected {
+            self.state = RouteHealthState::Connecting {
                 exit,
                 tunnel_ping_rtt: None,
             };
@@ -484,7 +485,7 @@ impl RouteHealth {
         }
     }
 
-    /// Resume TCP health checks when disconnecting begins.
+    /// Resume full health checks when disconnecting begins.
     pub fn disconnecting(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -492,7 +493,7 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if let RouteHealthState::Connected { exit, .. } = &self.state {
+        if let RouteHealthState::Connecting { exit, .. } = &self.state {
             let exit = exit.clone();
             if self.consecutive_failures == 0 {
                 self.state = RouteHealthState::ReadyToConnect { exit };
@@ -508,7 +509,7 @@ impl RouteHealth {
     /// refreshed with the new measurement. On failure the exit data is
     /// preserved and `consecutive_failures` is incremented.
     pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
-        if let RouteHealthState::Connected { tunnel_ping_rtt, .. } = &mut self.state {
+        if let RouteHealthState::Connecting { tunnel_ping_rtt, .. } = &mut self.state {
             match rtt {
                 Ok(rtt) => {
                     self.last_error = None;
@@ -536,7 +537,7 @@ impl RouteHealth {
 
     fn exit_ref(&self) -> Option<&ExitHealth> {
         match &self.state {
-            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connected { exit, .. } => Some(exit),
+            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connecting { exit, .. } => Some(exit),
             _ => None,
         }
     }
@@ -568,11 +569,11 @@ impl RouteHealth {
         let intervals = &options.health_check_intervals;
         let cycle = self.check_cycle;
 
-        let is_connected = matches!(self.state, RouteHealthState::Connected { .. });
-        let scope = if is_connected {
+        let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
+        let scope = if is_connecting {
             CheckScope {
                 version: false,
-                health: true,
+                health: cycle.is_multiple_of(intervals.health_every_n_pings),
                 ping: false,
             }
         } else {
@@ -882,12 +883,12 @@ impl Display for RouteHealthState {
                 let selected = select_api_version(&exit.versions.versions).unwrap_or(&exit.versions.latest);
                 write!(f, "Ready to connect via API {selected}, exit health: {exit}")
             }
-            RouteHealthState::Connected {
+            RouteHealthState::Connecting {
                 exit,
                 tunnel_ping_rtt,
             } => match tunnel_ping_rtt {
-                Some(rtt) => write!(f, "Connected, tunnel ping RTT {:.2} s, exit: {exit}", rtt.as_secs_f32()),
-                None => write!(f, "Connected, tunnel ping pending, exit: {exit}"),
+                Some(rtt) => write!(f, "Connecting, tunnel ping RTT {:.2} s, exit: {exit}", rtt.as_secs_f32()),
+                None => write!(f, "Connecting, tunnel ping pending, exit: {exit}"),
             },
         }
     }
