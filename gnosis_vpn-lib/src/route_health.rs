@@ -937,7 +937,11 @@ impl HealthSession {
                 cfg,
             )
             .await?;
-        Ok(Self { hopr, meta, closed: false })
+        Ok(Self {
+            hopr,
+            meta,
+            closed: false,
+        })
     }
 
     /// Close the session, awaiting completion. Disarms the `Drop` guard.
@@ -1095,12 +1099,8 @@ impl Display for RouteHealthState {
                 }
             },
             RouteHealthState::Connecting { exit, tunnel_ping_rtt } => match tunnel_ping_rtt {
-                Some(rtt) => write!(
-                    f,
-                    "Connecting, tunnel ping RTT {:.2} s, exit: {exit}",
-                    rtt.as_secs_f32()
-                ),
-                None => write!(f, "Connecting, tunnel ping pending, exit: {exit}"),
+                Some(rtt) => write!(f, "main tunnel ping RTT {:.2} s, exit: {exit}", rtt.as_secs_f32()),
+                None => write!(f, "main tunnel ping pending, exit: {exit}"),
             },
         }
     }
@@ -1110,7 +1110,7 @@ impl Display for ExitHealth {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{} ago: ping RTT {:.2} s, {}, {}",
+            "{} ago: ping RTT {:.2} s, {}, API({})",
             log_output::elapsed(&self.checked_at),
             self.ping_rtt.as_secs_f32(),
             self.health,

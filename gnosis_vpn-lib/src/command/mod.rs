@@ -465,7 +465,7 @@ impl Display for RunMode {
 impl Display for ConnectionState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ConnectionState::None => write!(f, "Not Connected"),
+            ConnectionState::None => write!(f, "Not connected"),
             ConnectionState::Connecting(since, phase) => {
                 write!(f, "Connecting (since {}): {:?}", log_output::elapsed(since), phase)
             }
