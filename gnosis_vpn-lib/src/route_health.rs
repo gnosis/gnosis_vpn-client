@@ -82,7 +82,7 @@ pub enum RouteHealthState {
     ReadyToConnect {
         exit: ExitHealth,
     },
-    /// Actively connected. TCP health checks suspended.
+    /// Actively connected. Exit health checks continue (version/ping skipped).
     Connected {
         exit: ExitHealth,
         tunnel_ping_rtt: Option<Duration>,
@@ -109,7 +109,7 @@ pub enum HealthCheckOutcome {
     Completed {
         checked_at: SystemTime,
         versions: Option<gvpn_client::Versions>,
-        ping_rtt: Duration,
+        ping_rtt: Option<Duration>,
         health: Option<gvpn_client::Health>,
     },
 }
@@ -348,10 +348,13 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if !matches!(
-            self.state,
-            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. }
-        ) {
+        let is_connected = matches!(self.state, RouteHealthState::Connected { .. });
+        if !is_connected
+            && !matches!(
+                self.state,
+                RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. }
+            )
+        {
             return;
         }
 
@@ -362,15 +365,25 @@ impl RouteHealth {
 
         self.checking_since = None;
 
-        if let HealthCheckOutcome::Unrecoverable { reason } = outcome {
-            self.cancel_health_check();
-            self.state = RouteHealthState::Unrecoverable { reason };
-            return;
-        }
+        if !is_connected
+            && let HealthCheckOutcome::Unrecoverable { reason } = outcome {
+                self.cancel_health_check();
+                self.state = RouteHealthState::Unrecoverable { reason };
+                return;
+            }
 
         match outcome {
             HealthCheckOutcome::Started { .. } | HealthCheckOutcome::Unrecoverable { .. } => {
-                unreachable!("handled above")
+                // Started handled above. Unrecoverable ignored while connected
+                // (version check is skipped so it shouldn't occur).
+                let delay = self.failure_backoff();
+                self.spawn_health_check(delay, hopr, dest, options, sender);
+            }
+            HealthCheckOutcome::Failed { error, .. } if is_connected => {
+                self.consecutive_failures += 1;
+                self.last_error = Some(error);
+                let delay = self.failure_backoff();
+                self.spawn_health_check(delay, hopr, dest, options, sender);
             }
             HealthCheckOutcome::Failed { error, .. } => {
                 self.consecutive_failures += 1;
@@ -385,19 +398,42 @@ impl RouteHealth {
             }
             HealthCheckOutcome::Completed {
                 checked_at,
+                health,
+                ..
+            } if is_connected => {
+                if let RouteHealthState::Connected { exit, .. } = &mut self.state
+                    && let Some(h) = health {
+                        exit.health = h;
+                        exit.checked_at = checked_at;
+                    }
+                self.consecutive_failures = 0;
+                self.last_error = None;
+                let delay = options.health_check_intervals.ping;
+                self.spawn_health_check(delay, hopr, dest, options, sender);
+            }
+            HealthCheckOutcome::Completed {
+                checked_at,
                 versions,
                 ping_rtt,
                 health,
             } => {
-                // Carry forward version/health from the previous exit
+                // Carry forward version/health/ping_rtt from the previous exit
                 // when this cycle skipped fetching them.
                 let prior = self.exit_ref().cloned();
-                let (prior_versions, prior_health) = match &prior {
-                    Some(exit) => (Some(exit.versions.clone()), Some(exit.health.clone())),
-                    None => (None, None),
+                let (prior_versions, prior_health, prior_ping_rtt) = match &prior {
+                    Some(exit) => (
+                        Some(exit.versions.clone()),
+                        Some(exit.health.clone()),
+                        Some(exit.ping_rtt),
+                    ),
+                    None => (None, None, None),
                 };
-                match (versions.or(prior_versions), health.or(prior_health)) {
-                    (Some(versions), Some(health)) => {
+                match (
+                    versions.or(prior_versions),
+                    health.or(prior_health),
+                    ping_rtt.or(prior_ping_rtt),
+                ) {
+                    (Some(versions), Some(health), Some(ping_rtt)) => {
                         let exit = ExitHealth {
                             checked_at,
                             versions,
@@ -424,8 +460,15 @@ impl RouteHealth {
         }
     }
 
-    /// Suspend TCP health checks when a connection attempt begins.
-    pub fn connecting(&mut self) {
+    /// Transition to Connected state. Version and ping checks are suspended
+    /// but exit health checks continue on the regular interval.
+    pub fn connecting(
+        &mut self,
+        hopr: &Arc<Hopr>,
+        dest: &Destination,
+        options: &Options,
+        sender: &mpsc::Sender<Results>,
+    ) {
         if let RouteHealthState::ReadyToConnect { exit } = &self.state {
             let exit = exit.clone();
             self.cancel_health_check();
@@ -436,6 +479,8 @@ impl RouteHealth {
                 exit,
                 tunnel_ping_rtt: None,
             };
+            let delay = options.health_check_intervals.ping;
+            self.spawn_health_check(delay, hopr, dest, options, sender);
         }
     }
 
@@ -506,6 +551,7 @@ impl RouteHealth {
 struct CheckScope {
     version: bool,
     health: bool,
+    ping: bool,
 }
 
 impl RouteHealth {
@@ -522,9 +568,19 @@ impl RouteHealth {
         let intervals = &options.health_check_intervals;
         let cycle = self.check_cycle;
 
-        let scope = CheckScope {
-            version: cycle.is_multiple_of(intervals.version_every_n_pings),
-            health: cycle.is_multiple_of(intervals.health_every_n_pings),
+        let is_connected = matches!(self.state, RouteHealthState::Connected { .. });
+        let scope = if is_connected {
+            CheckScope {
+                version: false,
+                health: true,
+                ping: false,
+            }
+        } else {
+            CheckScope {
+                version: cycle.is_multiple_of(intervals.version_every_n_pings),
+                health: cycle.is_multiple_of(intervals.health_every_n_pings),
+                ping: true,
+            }
         };
 
         let token = self.health_check_cancel.clone();
@@ -662,28 +718,15 @@ async fn run_health_check(
         }
     }
 
-    // Step 3: Ping (always runs)
-    let measure_rtt = Instant::now();
-    let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
-    let ping_rtt = measure_rtt.elapsed();
-    close_health_session(hopr, &session).await;
+    // Step 3: Ping (when due)
+    let mut ping_rtt = None;
+    if scope.ping {
+        let measure_rtt = Instant::now();
+        let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
+        ping_rtt = Some(measure_rtt.elapsed());
+        close_health_session(hopr, &session).await;
 
-    match res_ping {
-        Ok(_) => {
-            tracing::debug!(%destination, ping_rtt = ?ping_rtt, "exit ping successful");
-            let _ = sender
-                .send(Results::HealthCheck {
-                    id,
-                    outcome: HealthCheckOutcome::Completed {
-                        checked_at,
-                        versions,
-                        ping_rtt,
-                        health,
-                    },
-                })
-                .await;
-        }
-        Err(err) => {
+        if let Err(err) = res_ping {
             tracing::info!(%destination, error = %err, "exit ping failed");
             let _ = sender
                 .send(Results::HealthCheck {
@@ -694,8 +737,24 @@ async fn run_health_check(
                     },
                 })
                 .await;
+            return;
         }
+        tracing::debug!(%destination, ping_rtt = ?ping_rtt, "exit ping successful");
+    } else {
+        close_health_session(hopr, &session).await;
     }
+
+    let _ = sender
+        .send(Results::HealthCheck {
+            id,
+            outcome: HealthCheckOutcome::Completed {
+                checked_at,
+                versions,
+                ping_rtt,
+                health,
+            },
+        })
+        .await;
 }
 
 async fn open_health_session(

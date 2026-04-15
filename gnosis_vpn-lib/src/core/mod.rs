@@ -1314,7 +1314,12 @@ impl Core {
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
-                rh.connecting();
+                rh.connecting(
+                    self.hopr.as_ref().unwrap(),
+                    &destination,
+                    &self.config.connection,
+                    &results_sender,
+                );
             }
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
