@@ -439,8 +439,14 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.health_check_intervals.as_ref())
             .map(|h| options::HealthCheckIntervals {
                 ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
-                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                health_every_n_pings: h
+                    .health_every_n_pings
+                    .unwrap_or(def_intervals.health_every_n_pings)
+                    .max(1),
+                version_every_n_pings: h
+                    .version_every_n_pings
+                    .unwrap_or(def_intervals.version_every_n_pings)
+                    .max(1),
                 tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures

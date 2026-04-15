@@ -66,8 +66,8 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # ping runs every cycle, health and version piggyback every Nth cycle
 # [connection.health_check_intervals]
 # ping = "15s"
-# health_every_n_pings = 4
-# version_every_n_pings = 20
+# health_every_n_pings = 4  # minimum 1
+# version_every_n_pings = 20  # minimum 1
 # ICMP ping probe interval when connected (verifies tunnel is working)
 # tunnel_ping = "10s"
 # consecutive tunnel ping failures before triggering reconnect
