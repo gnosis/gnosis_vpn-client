@@ -660,11 +660,11 @@ async fn run_health_check(
 
     let socket_addr = session.bound_host;
     let timeout = options.timeouts.http;
-    let client = reqwest::Client::new();
 
     // Step 1: Version check (when due)
     let mut versions = None;
     if scope.version {
+        let client = reqwest::Client::new();
         let res_versions = gvpn_client::versions(&client, socket_addr, timeout).await;
         tracing::warn!(?res_versions, "FOO_CALL1 VERSIONS");
         match res_versions {
@@ -706,7 +706,10 @@ async fn run_health_check(
     // Step 2: Exit health (when due)
     let mut health = None;
     if scope.health {
-        let res_health = request_health(options, &session).await;
+        let client = reqwest::Client::new();
+        let socket_addr = session.bound_host;
+        let timeout = options.timeouts.http;
+        let res_health = gvpn_client::health(&client, socket_addr, timeout).await;
         tracing::warn!(?res_health, "FOO_CALL2 HEALTH");
         match res_health {
             Ok(h) => {
@@ -731,14 +734,16 @@ async fn run_health_check(
 
     // Step 3: Ping (always)
     let measure_rtt = Instant::now();
-    let res_ping = gvpn_client::ping(&client, socket_addr, timeout).await;
+    let client_ping = reqwest::Client::new();
+    let res_ping = gvpn_client::ping(&client_ping, socket_addr, timeout).await;
     tracing::warn!(?res_ping, "FOO_CALL3 PING");
     let initial_ping_rtt = measure_rtt.elapsed();
     tracing::warn!(?initial_ping_rtt, "FOO_INITIAL_PING_RTT");
 
     // Step 4: Only for debugging showcase - remove
     let measure_rtt_2 = Instant::now();
-    let res_ping_2 = gvpn_client::ping(&client, socket_addr, timeout).await;
+    let client_ping2 = reqwest::Client::new();
+    let res_ping_2 = gvpn_client::ping(&client_ping2, socket_addr, timeout).await;
     tracing::warn!(?res_ping_2, "FOO_CALL4 PING2");
     let ping_rtt = measure_rtt_2.elapsed();
     tracing::warn!(?ping_rtt, "FOO_SECOND_PING_RTT");
@@ -784,8 +789,8 @@ async fn open_health_session(
         .map_err(|e| HoprError::Construction(e.to_string()))?;
 
     let p_surb_config = Some(surb_config);
-    let p_session_pool = None;
-    let p_max_client_sessions = None;
+    let p_session_pool = Some(1);
+    let p_max_client_sessions = Some(4);
     tracing::warn!(?p_surb_config, "FOO_SESSION_CONFIG");
     tracing::warn!(?p_session_pool, "FOO_SESSION_POOL");
     tracing::warn!(?p_max_client_sessions, "FOO_MAX_CLIENT_SESSIONS");
@@ -806,17 +811,6 @@ async fn open_health_session(
         cfg,
     )
     .await
-}
-
-async fn request_health(
-    options: &Options,
-    session: &SessionClientMetadata,
-) -> Result<gvpn_client::Health, gvpn_client::Error> {
-    let client = reqwest::Client::new();
-    let socket_addr = session.bound_host;
-    let timeout = options.timeouts.http;
-    tracing::debug!(?socket_addr, ?timeout, "requesting health status from exit");
-    gvpn_client::health(&client, socket_addr, timeout).await
 }
 
 async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
