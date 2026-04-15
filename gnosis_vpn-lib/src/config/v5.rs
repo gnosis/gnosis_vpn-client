@@ -323,7 +323,6 @@ impl Connection {
             Capability::Retransmission,
             Capability::RetransmissionAckOnly,
             Capability::NoDelay,
-            Capability::NoRateControl,
         ]
     }
 
@@ -596,7 +595,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 http_timeout = "60s"
 
 [connection.bridge]
-capabilities = [ "segmentation", "retransmission" ]
+capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_delay" ]
 target = "127.0.0.1:8000"
 
 [connection.wg]
