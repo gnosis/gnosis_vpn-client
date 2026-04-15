@@ -82,9 +82,10 @@ pub enum RouteHealthState {
     ReadyToConnect {
         exit: ExitHealth,
     },
-    /// Actively connected. TCP health checks suspended, tunnel ping drives ExitHealth.
+    /// Actively connected. TCP health checks suspended.
     Connected {
         exit: ExitHealth,
+        tunnel_ping_rtt: Option<Duration>,
     },
 }
 
@@ -431,7 +432,10 @@ impl RouteHealth {
             self.checking_since = None;
             self.consecutive_failures = 0;
             self.last_error = None;
-            self.state = RouteHealthState::Connected { exit };
+            self.state = RouteHealthState::Connected {
+                exit,
+                tunnel_ping_rtt: None,
+            };
         }
     }
 
@@ -444,7 +448,7 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if let RouteHealthState::Connected { exit } = &self.state {
+        if let RouteHealthState::Connected { exit, .. } = &self.state {
             let exit = exit.clone();
             if self.consecutive_failures == 0 {
                 self.state = RouteHealthState::ReadyToConnect { exit };
@@ -460,12 +464,12 @@ impl RouteHealth {
     /// refreshed with the new measurement. On failure the exit data is
     /// preserved and `consecutive_failures` is incremented.
     pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
-        if let RouteHealthState::Connected { exit } = &mut self.state {
+        if let RouteHealthState::Connected { tunnel_ping_rtt, .. } = &mut self.state {
             match rtt {
                 Ok(rtt) => {
                     self.last_error = None;
                     self.consecutive_failures = 0;
-                    exit.ping_rtt = rtt;
+                    *tunnel_ping_rtt = Some(rtt);
                     0
                 }
                 Err(err) => {
@@ -488,7 +492,7 @@ impl RouteHealth {
 
     fn exit_ref(&self) -> Option<&ExitHealth> {
         match &self.state {
-            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connected { exit } => Some(exit),
+            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connected { exit, .. } => Some(exit),
             _ => None,
         }
     }
@@ -820,7 +824,13 @@ impl Display for RouteHealthState {
                 let selected = select_api_version(&exit.versions.versions).unwrap_or(&exit.versions.latest);
                 write!(f, "Ready to connect via API {selected}, exit health: {exit}")
             }
-            RouteHealthState::Connected { exit } => write!(f, "Connected, tunnel: {exit}"),
+            RouteHealthState::Connected {
+                exit,
+                tunnel_ping_rtt,
+            } => match tunnel_ping_rtt {
+                Some(rtt) => write!(f, "Connected, tunnel ping RTT {:.2} s, exit: {exit}", rtt.as_secs_f32()),
+                None => write!(f, "Connected, tunnel ping pending, exit: {exit}"),
+            },
         }
     }
 }
