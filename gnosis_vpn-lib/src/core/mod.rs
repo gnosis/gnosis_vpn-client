@@ -712,7 +712,7 @@ impl Core {
                     tracing::warn!(?phase, "unawaited connection established successfully");
                 }
                 (Err(err), Phase::Connecting(conn)) => {
-                    tracing::error!(%conn, ?err, "connection failed");
+                    tracing::error!(?err, %conn, "connection failed");
                     self.update_health(conn.destination.id.clone(), |h| h.with_error(err.to_string()));
                     if let Some(dest) = self.target_destination.clone()
                         && dest == conn.destination
@@ -732,7 +732,7 @@ impl Core {
                         tracing::info!(%wg_public_key, "disconnected successful");
                     }
                     Err(err) => {
-                        tracing::error!(%wg_public_key, ?err, "disconnection failed");
+                        tracing::error!(?err, %wg_public_key, "disconnection failed");
                     }
                 }
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
@@ -1352,9 +1352,9 @@ impl Core {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
                         self.spawn_connection_runner(dest.clone(), results_sender);
                     } else if health.is_unrecoverable() {
-                        tracing::error!(?health, destination = %dest, "refusing connection because of destination health");
+                        tracing::error!(destination = %dest, ?health, "refusing connection because of destination health");
                     } else {
-                        tracing::warn!(?health, destination = %dest, "waiting for better destination health before connecting");
+                        tracing::warn!(destination = %dest, ?health, "waiting for better destination health before connecting");
                     }
                 } else {
                     tracing::warn!(destination = %dest, "refusing connection: destination has no health tracker");
@@ -1441,7 +1441,7 @@ impl Core {
                 self.try_start_reactor(results_sender);
             }
             Err(err) => {
-                tracing::error!(%stats, ?err, "failed to determine ticket value from stats - retrying");
+                tracing::error!(?err, %stats, "failed to determine ticket value from stats - retrying");
                 self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
             }
         }
