@@ -38,7 +38,7 @@ impl ShellCommandExt for Command {
             (false, status) if status.success() => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 if matches!(logs, Logs::Print) {
-                    tracing::warn!(cmd = ?self, %stderr, "Non empty stderr on successful command");
+                    tracing::warn!(%stderr, cmd = ?self, "Non empty stderr on successful command");
                 }
                 Ok(())
             }
@@ -46,7 +46,7 @@ impl ShellCommandExt for Command {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 if matches!(logs, Logs::Print) {
-                    tracing::error!(cmd = ?self, status_code = ?status.code(), %stdout, %stderr, "Error executing command");
+                    tracing::error!(status_code = ?status.code(), %stdout, %stderr, cmd = ?self, "Error executing command");
                 }
                 Err(Error::CommandFailed)
             }
@@ -79,14 +79,14 @@ pub fn stdout_from_output(cmd: String, output: Output, logs: Logs) -> Result<Str
         (false, status) if status.success() => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if matches!(logs, Logs::Print) {
-                tracing::warn!(cmd, %stderr, "Non empty stderr on successful command");
+                tracing::warn!(%stderr, cmd, "Non empty stderr on successful command");
             }
             Ok(stdout.trim().to_string())
         }
         (_, status) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if matches!(logs, Logs::Print) {
-                tracing::error!(cmd, status_code = ?status.code(), %stdout, %stderr, "Error executing command");
+                tracing::error!(status_code = ?status.code(), %stdout, %stderr, cmd, "Error executing command");
             }
             Err(Error::CommandFailed)
         }

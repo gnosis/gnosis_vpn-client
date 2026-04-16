@@ -154,11 +154,11 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             .chain(std::iter::once(vpn_subnet_route.as_str()))
         {
             if let Err(e) = self.route_ops.route_add(route_dest, None, iface).await {
-                tracing::warn!(route = route_dest, %e, "VPN route failed, rolling back");
+                tracing::warn!(%e, route = route_dest, "VPN route failed, rolling back");
                 // Rollback VPN routes added so far
                 for added in self.vpn_routes_added.drain(..).rev() {
                     if let Err(del_err) = self.route_ops.route_del(&added, iface).await {
-                        tracing::warn!(route = %added, %del_err, "failed to rollback VPN route");
+                        tracing::warn!(%del_err, route = %added, "failed to rollback VPN route");
                     }
                 }
                 // Bring down WireGuard
