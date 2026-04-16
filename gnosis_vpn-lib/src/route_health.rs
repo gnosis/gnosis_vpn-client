@@ -446,7 +446,7 @@ impl RouteHealth {
     ///   failure counter moves). `Unrecoverable` is honored only outside
     ///   `Connecting`.
     /// * Scheduling: success schedules the next cycle at the configured
-    ///   ping interval; failure schedules with an exponential backoff.
+    ///   ping interval; failure schedules with a linear backoff.
     ///
     /// Outcomes that arrive when the state is no longer `Routable` /
     /// `ReadyToConnect` / `Connecting` (e.g. because peering was lost)

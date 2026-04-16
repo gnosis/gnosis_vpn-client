@@ -165,6 +165,7 @@ pub enum FundingState {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
+    AlreadyConnected(Destination),
     Connecting(Destination),
     WaitingToConnect(Destination, RouteHealthState),
     UnableToConnect(Destination, RouteHealthState),
@@ -293,6 +294,9 @@ impl RunMode {
 }
 
 impl ConnectResponse {
+    pub fn already_connected(destination: Destination) -> Self {
+        ConnectResponse::AlreadyConnected(destination)
+    }
     pub fn connecting(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
     }

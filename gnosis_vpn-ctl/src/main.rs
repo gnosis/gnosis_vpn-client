@@ -46,6 +46,9 @@ fn json_print(resp: &Response) {
 
 fn pretty_print(resp: &Response) {
     match resp {
+        Response::Connect(command::ConnectResponse::AlreadyConnected(dest)) => {
+            println!("Already connected to {dest}");
+        }
         Response::Connect(command::ConnectResponse::Connecting(dest)) => {
             println!("Connecting to {dest}");
         }
@@ -180,6 +183,7 @@ fn pretty_print(resp: &Response) {
 
 fn determine_exitcode(resp: &Response) -> ExitCode {
     match resp {
+        Response::Connect(command::ConnectResponse::AlreadyConnected(..)) => exitcode::OK,
         Response::Connect(command::ConnectResponse::Connecting(..)) => exitcode::OK,
         Response::Connect(command::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
         Response::Connect(command::ConnectResponse::WaitingToConnect(..)) => exitcode::OK,
