@@ -532,7 +532,7 @@ impl Core {
     /// Results are events from async runners
     #[tracing::instrument(skip(self, results_sender, results), level = "debug", ret)]
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
-        tracing::debug!(phase = ?self.phase, %results, "on runner results");
+        tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
             Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
             Results::HoprConstruction(edgli_state) => {
@@ -670,7 +670,7 @@ impl Core {
                         }
                     },
                     phase => {
-                        tracing::warn!(?phase, %evt, "received connection event in unexpected phase");
+                        tracing::warn!(%evt, ?phase, "received connection event in unexpected phase");
                     }
                 }
             }
@@ -684,7 +684,7 @@ impl Core {
                 {
                     conn.disconnect_evt(evt);
                 } else {
-                    tracing::warn!(?self.phase, %evt, "received disconnection event for unknown connection");
+                    tracing::warn!(%evt, ?self.phase, "received disconnection event for unknown connection");
                 }
                 // potentially reconnect early after wg disconnected
                 // this might only happen when reconnecting to a different destination after a
@@ -722,7 +722,7 @@ impl Core {
                     }
                 }
                 (Err(err), phase) => {
-                    tracing::warn!(?phase, %err, "connection failed in unexpecting state");
+                    tracing::warn!(%err, ?phase, "connection failed in unexpecting state");
                 }
             },
 
@@ -854,7 +854,7 @@ impl Core {
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
             (res, phase) => {
-                tracing::warn!(?phase, ?res, "ignoring presafe node balance result in unexpected phase");
+                tracing::warn!(?res, ?phase, "ignoring presafe node balance result in unexpected phase");
             }
         }
     }
@@ -913,7 +913,7 @@ impl Core {
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
             (res, phase) => {
-                tracing::warn!(?phase, ?res, "ignoring query safe result in unexpected phase");
+                tracing::warn!(?res, ?phase, "ignoring query safe result in unexpected phase");
             }
         }
     }
@@ -949,7 +949,7 @@ impl Core {
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
             (res, phase) => {
-                tracing::warn!(?phase, ?res, "ignoring deploy safe result in unexpected phase");
+                tracing::warn!(?res, ?phase, "ignoring deploy safe result in unexpected phase");
             }
         }
     }
