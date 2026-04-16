@@ -1299,7 +1299,12 @@ impl Core {
         }
     }
 
-    fn spawn_connection_runner(&mut self, destination: Destination, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_connection_runner(
+        &mut self,
+        destination: Destination,
+        exit: route_health::ExitHealth,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
@@ -1318,6 +1323,7 @@ impl Core {
                 rh.connecting(
                     self.hopr.as_ref().unwrap(),
                     &destination,
+                    exit,
                     &self.config.connection,
                     &results_sender,
                 );
@@ -1390,9 +1396,9 @@ impl Core {
             // Connecting from ready
             (Some(dest), Phase::HoprRunning) => {
                 if let Some(rh) = self.route_healths.get(&dest.id) {
-                    if rh.is_ready_to_connect() {
+                    if let Some(exit) = rh.ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), results_sender);
+                        self.spawn_connection_runner(dest.clone(), exit, results_sender);
                     } else if rh.is_unrecoverable() {
                         tracing::error!(destination = %dest,route_health = ?rh.state(),  "refusing connection because of route health");
                     } else {

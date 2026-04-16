@@ -313,11 +313,15 @@ impl RouteHealth {
         )
     }
 
+    pub fn ready_to_connect(&self) -> Option<ExitHealth> {
+        match &self.state {
+            RouteHealthState::ReadyToConnect { exit } => Some(exit.clone()),
+            _ => None,
+        }
+    }
+
     pub fn is_ready_to_connect(&self) -> bool {
-        matches!(
-            self.state,
-            RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
-        )
+        matches!(self.state, RouteHealthState::ReadyToConnect { .. })
     }
 
     pub fn is_unrecoverable(&self) -> bool {
@@ -584,22 +588,19 @@ impl RouteHealth {
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
+        exit: ExitHealth,
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if let RouteHealthState::ReadyToConnect { exit } = &self.state {
-            let exit = exit.clone();
-            self.cancel_health_check();
-            self.checking_since = None;
-            self.exit_failures = 0;
-            self.exit_last_error = None;
-            self.state = RouteHealthState::Connecting {
-                exit,
-                tunnel_ping_rtt: None,
-            };
-            let delay = options.health_check_intervals.ping;
-            self.spawn_health_check(delay, hopr, dest, options, sender);
-        }
+        self.checking_since = None;
+        self.exit_failures = 0;
+        self.exit_last_error = None;
+        self.state = RouteHealthState::Connecting {
+            exit,
+            tunnel_ping_rtt: None,
+        };
+        let delay = options.health_check_intervals.ping;
+        self.spawn_health_check(delay, hopr, dest, options, sender);
     }
 
     /// Leave `Connecting` and resume normal health checking.
