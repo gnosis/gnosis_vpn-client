@@ -72,4 +72,4 @@ jobs:
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
           gcp_artifact_package: gnosis_vpn-client
-          github_token: ${{ secrets.GNOSIS_GITHUB_WORKFLOW_TOKEN }}
+          github_token: ${{ secrets.BOT_TOKEN }}

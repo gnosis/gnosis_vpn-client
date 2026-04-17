@@ -60,7 +60,7 @@ jobs:
     name: Checks
     runs-on: depot-ubuntu-22.04-4
     steps:
-      - name: Checkout repository
+      - name: Run checks
         uses: hoprnet/hopr-workflows/actions/nix-action@nix-action-v1
         with:
           source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
