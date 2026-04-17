@@ -420,7 +420,9 @@ impl Core {
                                 _ => false,
                             };
                             if is_already_active {
-                                let _ = resp.send(Response::connect(command::ConnectResponse::already_connected(dest.clone())));
+                                let _ = resp.send(Response::connect(command::ConnectResponse::already_connected(
+                                    dest.clone(),
+                                )));
                             } else if let Some(rh) = self.route_healths.get(&dest.id) {
                                 if rh.is_ready_to_connect() {
                                     let _ = resp
