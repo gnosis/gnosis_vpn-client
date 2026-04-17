@@ -595,6 +595,8 @@ impl RouteHealth {
         self.checking_since = None;
         self.exit_failures = 0;
         self.exit_last_error = None;
+        self.tunnel_ping_failures = 0;
+        self.tunnel_ping_last_error = None;
         self.state = RouteHealthState::Connecting {
             exit,
             tunnel_ping_rtt: None,
