@@ -1084,29 +1084,3 @@ impl Display for ExitHealth {
         )
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_route_health(static_need: StaticNeed, state: RouteHealthState) -> RouteHealth {
-        let cancel_on_shutdown = CancellationToken::new();
-        RouteHealth {
-            id: "test".to_string(),
-            static_need,
-            state,
-            health_check_cancel: cancel_on_shutdown.child_token(),
-            cancel_on_shutdown,
-            check_cycle: 0,
-            checking_since: None,
-            exit_failures: 0,
-            exit_last_error: None,
-            tunnel_ping_failures: 0,
-            tunnel_ping_last_error: None,
-        }
-    }
-}
