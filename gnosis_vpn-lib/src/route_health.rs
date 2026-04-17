@@ -203,11 +203,12 @@ impl RouteHealth {
     pub fn new(dest: &Destination, allow_insecure: bool, cancel_on_shutdown: CancellationToken) -> Self {
         let static_need = derive_static_need(&dest.routing, dest.address);
         let state = derive_initial_state(&dest.routing, allow_insecure);
+        let health_check_cancel = cancel_on_shutdown.child_token();
         Self {
             id: dest.id.clone(),
             static_need,
             state,
-            health_check_cancel: CancellationToken::new(),
+            health_check_cancel,
             cancel_on_shutdown,
             check_cycle: 0,
             checking_since: None,
@@ -720,21 +721,18 @@ impl RouteHealth {
         };
 
         let token = self.health_check_cancel.clone();
-        let shutdown = self.cancel_on_shutdown.clone();
         let hopr = hopr.clone();
         let dest = dest.clone();
         let options = options.clone();
         let sender = sender.clone();
 
         tokio::spawn(async move {
-            tokio::select! {
-                _ = token.cancelled() => {}
-                _ = shutdown.cancelled() => {}
-                _ = async {
+            token
+                .run_until_cancelled(async {
                     time::sleep(delay).await;
                     run_health_check(hopr, &dest, &options, &scope, &sender).await;
-                } => {}
-            }
+                })
+                .await;
         });
     }
 
@@ -743,7 +741,7 @@ impl RouteHealth {
     /// when no check is running.
     pub fn cancel_health_check(&mut self) {
         self.health_check_cancel.cancel();
-        self.health_check_cancel = CancellationToken::new();
+        self.health_check_cancel = self.cancel_on_shutdown.child_token();
     }
 }
 
@@ -1096,12 +1094,13 @@ mod tests {
     use super::*;
 
     fn make_route_health(static_need: StaticNeed, state: RouteHealthState) -> RouteHealth {
+        let cancel_on_shutdown = CancellationToken::new();
         RouteHealth {
             id: "test".to_string(),
             static_need,
             state,
-            health_check_cancel: CancellationToken::new(),
-            cancel_on_shutdown: CancellationToken::new(),
+            health_check_cancel: cancel_on_shutdown.child_token(),
+            cancel_on_shutdown,
             check_cycle: 0,
             checking_since: None,
             exit_failures: 0,
