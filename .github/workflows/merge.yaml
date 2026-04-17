@@ -57,8 +57,7 @@ jobs:
     secrets: inherit
   snapshot-build:
     name: Snapshot build
-    if: github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'snapshot-build')
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'snapshot-build')
     runs-on: depot-ubuntu-22.04-4
     needs:
       - build-binaries
