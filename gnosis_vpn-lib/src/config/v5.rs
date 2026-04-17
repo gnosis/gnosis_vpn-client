@@ -309,9 +309,7 @@ where
     let value = Option::<i64>::deserialize(deserializer)?;
     match value {
         None => Ok(None),
-        Some(n) if n < 1 => Err(serde::de::Error::custom(
-            "tunnel_ping_max_failures must be at least 1",
-        )),
+        Some(n) if n < 1 => Err(serde::de::Error::custom("tunnel_ping_max_failures must be at least 1")),
         Some(n) => u32::try_from(n)
             .map(Some)
             .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
