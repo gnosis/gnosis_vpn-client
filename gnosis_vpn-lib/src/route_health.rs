@@ -988,7 +988,7 @@ impl RouteHealth {
     /// Delay before the next retry after a failed exit-health cycle: linear growth in
     /// `exit_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
     fn failure_backoff(&self) -> Duration {
-        (FAILURE_INTERVAL + FAILURE_INTERVAL * self.exit_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+        (FAILURE_INTERVAL * self.exit_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
     }
 }
 
