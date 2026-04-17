@@ -93,7 +93,9 @@ struct PingOptions {
 struct HealthCheckIntervalOptions {
     #[serde(default, with = "humantime_serde::option")]
     ping: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_n_pings")]
     health_every_n_pings: Option<u32>,
+    #[serde(default, deserialize_with = "validate_n_pings")]
     version_every_n_pings: Option<u32>,
     #[serde(default, with = "humantime_serde::option")]
     tunnel_ping: Option<Duration>,
@@ -288,6 +290,18 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong_keys
 }
 
+fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<u32>::deserialize(deserializer)?;
+    if value == Some(0) {
+        Err(serde::de::Error::custom("value must be greater than zero"))
+    } else {
+        Ok(value)
+    }
+}
+
 fn validate_tunnel_ping_max_failures<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
     D: Deserializer<'de>,
@@ -454,14 +468,8 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.health_check_intervals.as_ref())
             .map(|h| options::HealthCheckIntervals {
                 ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h
-                    .health_every_n_pings
-                    .unwrap_or(def_intervals.health_every_n_pings)
-                    .max(1),
-                version_every_n_pings: h
-                    .version_every_n_pings
-                    .unwrap_or(def_intervals.version_every_n_pings)
-                    .max(1),
+                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
+                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
                 tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
