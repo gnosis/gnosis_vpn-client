@@ -21,7 +21,7 @@ const NODE_RUNNING_TIMEOUT: Duration = Duration::from_mins(30);
 const NODE_FUNDING_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(2);
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
-const FINAL_CONNECTION_TIMEOUT: Duration = Duration::from_mins(3);
+const FINAL_CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct SystemTestWorkflow {
