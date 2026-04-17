@@ -97,6 +97,7 @@ struct HealthCheckIntervalOptions {
     version_every_n_pings: Option<u32>,
     #[serde(default, with = "humantime_serde::option")]
     tunnel_ping: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
     tunnel_ping_max_failures: Option<u32>,
 }
 
@@ -285,6 +286,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         wrong_keys.push(key.clone());
     }
     wrong_keys
+}
+
+fn validate_tunnel_ping_max_failures<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<u32>::deserialize(deserializer)?;
+    if value == Some(0) {
+        Err(serde::de::Error::custom(
+            "tunnel_ping_max_failures must not be zero",
+        ))
+    } else {
+        Ok(value)
+    }
 }
 
 fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
