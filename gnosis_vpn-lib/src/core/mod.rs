@@ -353,9 +353,7 @@ impl Core {
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                                 if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
-                                    let min_channel_count =
-                                        route_health::count_distinct_channels(self.route_healths.values());
-                                    let issues = balances.to_funding_issues(min_channel_count, ticket_value);
+                                    let issues = balances.to_funding_issues(ticket_value);
                                     RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
                                 } else {
                                     RunMode::running(None, self.hopr.as_ref().map(|h| h.status()))
@@ -478,7 +476,6 @@ impl Core {
                                 &balances,
                                 &ticket_value,
                                 &self.config.destinations.clone(),
-                                self.route_healths.values().collect::<Vec<_>>().as_slice(),
                                 self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
                             let _ = resp.send(Response::Balance(Some(res)));

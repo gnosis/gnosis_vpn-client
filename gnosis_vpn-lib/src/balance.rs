@@ -78,7 +78,7 @@ impl Display for Balances {
 }
 
 impl Balances {
-    pub fn to_funding_issues(&self, _channel_targets_len: usize, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
+    pub fn to_funding_issues(&self, ticket_value: Balance<WxHOPR>) -> Vec<FundingIssue> {
         let mut issues = Vec::new();
 
         if self.node_xdai.is_zero() && self.safe_wxhopr.is_zero() {
@@ -133,7 +133,7 @@ mod tests {
             safe_wxhopr: Balance::<WxHOPR>::zero(),
             channels_out: HashMap::new(),
         };
-        let issues = balances.to_funding_issues(2, Balance::<WxHOPR>::from(5u64));
+        let issues = balances.to_funding_issues(Balance::<WxHOPR>::from(5u64));
 
         assert!(issues.contains(&FundingIssue::Unfunded));
         Ok(())

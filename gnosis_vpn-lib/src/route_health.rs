@@ -20,8 +20,7 @@
 //! [`HealthCheckOutcome`] messages posted back on the runner channel.
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
-//! aggregate view (via [`any_needs_peers`] / [`count_distinct_channels`]) to
-//! decide when to poll peers or fund channels.
+//! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
 use edgli::hopr_lib::SessionClientConfig;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -1006,40 +1005,6 @@ pub fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bo
     healths.into_iter().any(|rh| rh.needs_peer())
 }
 
-/// How many distinct outgoing channels are still required by the given
-/// routes to make them all routable.
-///
-/// Routes with a fixed first-hop address count once per unique address.
-/// `AnyChannel` routes collapse to a single slot since any one funded
-/// channel satisfies them all. Routes that are already past funding, or
-/// are peering-only, contribute nothing.
-pub fn count_distinct_channels<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> usize {
-    let mut addresses = HashSet::new();
-    let mut has_any_channel = false;
-
-    for rh in healths {
-        let still_needs_channel = matches!(
-            rh.state,
-            RouteHealthState::NeedsPeering { .. } | RouteHealthState::NeedsFunding
-        );
-        if !still_needs_channel {
-            continue;
-        }
-        match &rh.static_need {
-            StaticNeed::Channel(addr) => {
-                addresses.insert(*addr);
-            }
-            StaticNeed::AnyChannel => {
-                has_any_channel = true;
-            }
-            StaticNeed::Peering(_) => {}
-        }
-    }
-
-    let count = addresses.len();
-    if count == 0 && has_any_channel { 1 } else { count }
-}
-
 // ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
@@ -1144,53 +1109,5 @@ mod tests {
             tunnel_ping_failures: 0,
             tunnel_ping_last_error: None,
         }
-    }
-
-    #[test]
-    fn test_count_distinct_channels() -> anyhow::Result<()> {
-        let addr_1: Address = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
-        let addr_2: Address = "fb6916095ca1df60bb79ce92ce3ea74c37c5d359".parse()?;
-
-        let rh1 = make_route_health(
-            StaticNeed::Channel(addr_1),
-            RouteHealthState::NeedsPeering { funded: false },
-        );
-        let rh2 = make_route_health(
-            StaticNeed::Channel(addr_2),
-            RouteHealthState::NeedsPeering { funded: false },
-        );
-        let rh3 = make_route_health(
-            StaticNeed::Channel(addr_1),
-            RouteHealthState::NeedsPeering { funded: false },
-        );
-        let rh4 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsPeering { funded: false });
-        let rh5 = make_route_health(
-            StaticNeed::Peering(addr_1),
-            RouteHealthState::NeedsPeering { funded: false },
-        );
-
-        let all = vec![&rh1, &rh2, &rh3, &rh4, &rh5];
-        assert_eq!(count_distinct_channels(all.into_iter()), 2);
-
-        let any_only = vec![&rh4, &rh5];
-        assert_eq!(count_distinct_channels(any_only.into_iter()), 1);
-
-        let peering_only = vec![&rh5];
-        assert_eq!(count_distinct_channels(peering_only.into_iter()), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_count_distinct_channels_funding() -> anyhow::Result<()> {
-        let addr_1: Address = "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".parse()?;
-
-        let rh1 = make_route_health(StaticNeed::Channel(addr_1), RouteHealthState::NeedsFunding);
-        let rh2 = make_route_health(StaticNeed::AnyChannel, RouteHealthState::NeedsFunding);
-
-        let all = vec![&rh1, &rh2];
-        assert_eq!(count_distinct_channels(all.into_iter()), 1);
-
-        Ok(())
     }
 }
