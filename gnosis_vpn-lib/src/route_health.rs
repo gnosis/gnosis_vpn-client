@@ -474,7 +474,10 @@ impl RouteHealth {
                 self.exit_last_error = Some(error);
                 // drop to routable from ready-to-connect, stay in connecting when connecting
                 self.state = match &self.state {
-                    RouteHealthState::ReadyToConnect { .. } => RouteHealthState::Routable,
+                    RouteHealthState::ReadyToConnect { .. } => {
+                        self.check_cycle = 0;
+                        RouteHealthState::Routable
+                    }
                     RouteHealthState::Connecting { exit, tunnel_ping_rtt } => RouteHealthState::Connecting {
                         exit: ExitHealth {
                             checked_at,
