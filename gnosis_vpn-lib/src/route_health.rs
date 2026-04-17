@@ -676,10 +676,12 @@ impl RouteHealth {
         let cycle = self.check_cycle;
 
         let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
+        // during connecting we always only run health checks. the interval was increased
+        // accordingly on task spawn
         let scope = if is_connecting {
             CheckScope {
                 version: false,
-                health: cycle.is_multiple_of(intervals.health_every_n_pings),
+                health: true,
             }
         } else {
             CheckScope {
