@@ -393,6 +393,7 @@ impl RouteHealth {
                 } else {
                     self.cancel_health_check();
                     self.checking_since = None;
+                    self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
                     // We previously made it past funding (or never needed it),
@@ -500,6 +501,7 @@ impl RouteHealth {
                 self.exit_last_error = Some(error);
 
                 if matches!(self.state, RouteHealthState::ReadyToConnect { .. }) {
+                    self.check_cycle = 0;
                     self.state = RouteHealthState::Routable;
                 }
 
@@ -623,6 +625,7 @@ impl RouteHealth {
             if self.exit_failures == 0 {
                 self.state = RouteHealthState::ReadyToConnect { exit };
             } else {
+                self.check_cycle = 0;
                 self.state = RouteHealthState::Routable;
             }
             self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
