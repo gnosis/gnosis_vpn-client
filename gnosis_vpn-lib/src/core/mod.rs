@@ -158,10 +158,10 @@ impl Core {
             incoming_receiver,
 
             // cancellation tokens
-            cancel_balances: CancellationToken::new(),
-            cancel_connection: CancellationToken::new(),
+            cancel_balances: cancel_on_shutdown.child_token(),
+            cancel_connection: cancel_on_shutdown.child_token(),
             cancel_on_shutdown: cancel_on_shutdown.clone(),
-            cancel_presafe_queries: CancellationToken::new(),
+            cancel_presafe_queries: cancel_on_shutdown.child_token(),
 
             // user provided data
             target_destination,
@@ -221,10 +221,7 @@ impl Core {
                 tracing::debug!("incoming shutdown request");
                 self.phase = Phase::ShuttingDown;
                 // no need to recreate cancellation tokens after shutdown
-                self.cancel_balances.cancel();
-                self.cancel_connection.cancel();
                 self.cancel_on_shutdown.cancel();
-                self.cancel_presafe_queries.cancel();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
@@ -498,7 +495,7 @@ impl Core {
                     WorkerCommand::RefreshNode => {
                         // immediately request balances and cancel existing balance loop
                         self.cancel_balances.cancel();
-                        self.cancel_balances = CancellationToken::new();
+                        self.cancel_balances = self.cancel_on_shutdown.child_token();
                         self.spawn_balances_runner(results_sender, Duration::ZERO);
                         let _ = resp.send(Response::RefreshNodeTriggered);
                     }
@@ -927,7 +924,7 @@ impl Core {
             (Ok(Some(safe_module)), Phase::CheckingSafe { .. }) => {
                 tracing::info!(?safe_module, "found safe module");
                 self.cancel_presafe_queries.cancel();
-                self.cancel_presafe_queries = CancellationToken::new();
+                self.cancel_presafe_queries = self.cancel_on_shutdown.child_token();
                 // start edge client with queried safe module
                 self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
@@ -1086,7 +1083,7 @@ impl Core {
                     query_safe: Querying::Success(None),
                 };
                 self.cancel_presafe_queries.cancel();
-                self.cancel_presafe_queries = CancellationToken::new();
+                self.cancel_presafe_queries = self.cancel_on_shutdown.child_token();
                 self.spawn_safe_deployment_runner(&presafe, results_sender);
             }
         }
@@ -1440,7 +1437,7 @@ impl Core {
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.cancel_connection.cancel();
-        self.cancel_connection = CancellationToken::new();
+        self.cancel_connection = self.cancel_on_shutdown.child_token();
         self.phase = Phase::HoprRunning;
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
