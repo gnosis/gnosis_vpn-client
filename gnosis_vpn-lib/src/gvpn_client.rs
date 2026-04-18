@@ -67,6 +67,12 @@ impl Registration {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Versions {
+    pub versions: Vec<String>,
+    pub latest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Health {
     pub slots: Slots,
     pub load_avg: LoadAvg,
@@ -84,6 +90,52 @@ pub struct LoadAvg {
     pub five: f32,
     pub fifteen: f32,
     pub nproc: u16,
+}
+
+pub async fn versions(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<Versions, Error> {
+    let headers = remote_data::json_headers();
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/versions",
+            host = socket_addr.ip(),
+            port = socket_addr.port()
+        )
+        .as_str(),
+    )?;
+    tracing::debug!(?headers, ?url, "get server versions");
+    let resp = client
+        .get(url)
+        .timeout(timeout)
+        .headers(headers)
+        .send()
+        .await
+        .map_err(connect_errors)?
+        .error_for_status()?
+        .json::<Versions>()
+        .await?;
+
+    Ok(resp)
+}
+
+pub async fn ping(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<(), Error> {
+    let url = Url::parse(
+        format!(
+            "http://{host}:{port}/api/v1/ping",
+            host = socket_addr.ip(),
+            port = socket_addr.port()
+        )
+        .as_str(),
+    )?;
+    tracing::debug!(?url, "ping exit server");
+    client
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(connect_errors)?
+        .error_for_status()?;
+
+    Ok(())
 }
 
 pub async fn health(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<Health, Error> {
@@ -216,6 +268,12 @@ impl Display for LoadAvg {
             self.fifteen,
             n = self.nproc
         )
+    }
+}
+
+impl Display for Versions {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "latest: {}, supported: {}", self.latest, self.versions.join(", "))
     }
 }
 

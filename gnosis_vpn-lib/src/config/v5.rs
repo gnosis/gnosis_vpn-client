@@ -52,12 +52,12 @@ pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     http_timeout: Option<Duration>,
     bridge: Option<ConnectionProtocol>,
-    health: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
     buffer: Option<BufferOptions>,
     max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     announced_peer_minimum_score: Option<f64>,
+    health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,9 +90,22 @@ struct PingOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct HealthCheckIntervalOptions {
+    #[serde(default, with = "humantime_serde::option")]
+    ping: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_n_pings")]
+    health_every_n_pings: Option<u32>,
+    #[serde(default, deserialize_with = "validate_n_pings")]
+    version_every_n_pings: Option<u32>,
+    #[serde(default, with = "humantime_serde::option")]
+    tunnel_ping: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
+    tunnel_ping_max_failures: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct BufferOptions {
     bridge: Option<ByteSize>,
-    health: Option<ByteSize>,
     ping: Option<ByteSize>,
     main: Option<ByteSize>,
 }
@@ -101,8 +114,6 @@ struct BufferOptions {
 struct MaxSurbUpstreamOptions {
     #[serde(default, with = "human_bandwidth::serde")]
     bridge: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    health: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
     ping: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
@@ -187,7 +198,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "http_timeout" {
                         continue;
                     }
-                    if k == "bridge" || k == "wg" || k == "health" {
+                    if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k2, _v) in prot.iter() {
                                 if k2 == "capabilities" || k2 == "target" {
@@ -212,7 +223,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "buffer" {
                         if let Some(buffer) = v.as_table() {
                             for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.buffer.{k}"));
@@ -223,12 +234,31 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "max_surb_upstream" {
                         if let Some(surbs) = v.as_table() {
                             for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "health" || k == "ping" || k == "main" {
+                                if k == "bridge" || k == "ping" || k == "main" {
                                     continue;
                                 }
                                 wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
+                        continue;
+                    }
+                    if k == "health_check_intervals" {
+                        if let Some(hci) = v.as_table() {
+                            for (k, _v) in hci.iter() {
+                                if k == "ping"
+                                    || k == "health_every_n_pings"
+                                    || k == "version_every_n_pings"
+                                    || k == "tunnel_ping"
+                                    || k == "tunnel_ping_max_failures"
+                                {
+                                    continue;
+                                }
+                                wrong_keys.push(format!("connection.health_check_intervals.{k}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "announced_peer_minimum_score" {
                         continue;
                     }
                     wrong_keys.push(format!("connection.{k}"));
@@ -258,6 +288,32 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         wrong_keys.push(key.clone());
     }
     wrong_keys
+}
+
+fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<u32>::deserialize(deserializer)?;
+    if value == Some(0) {
+        Err(serde::de::Error::custom("value must be greater than zero"))
+    } else {
+        Ok(value)
+    }
+}
+
+fn validate_tunnel_ping_max_failures<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<i64>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(n) if n < 1 => Err(serde::de::Error::custom("tunnel_ping_max_failures must be at least 1")),
+        Some(n) => u32::try_from(n)
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
+    }
 }
 
 fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
@@ -295,14 +351,7 @@ impl Connection {
             Capability::Segmentation,
             Capability::Retransmission,
             Capability::RetransmissionAckOnly,
-        ]
-    }
-
-    pub fn default_health_capabilities() -> Vec<Capability> {
-        vec![
-            Capability::Segmentation,
-            Capability::Retransmission,
-            Capability::RetransmissionAckOnly,
+            Capability::NoRateControl,
         ]
     }
 
@@ -311,13 +360,6 @@ impl Connection {
     }
 
     pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
-    }
-
-    pub fn default_health_target() -> SessionTarget {
         SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
             [172, 30, 0, 1],
             8000,
@@ -345,7 +387,6 @@ impl From<BufferOptions> for options::BufferSizes {
         let def = options::BufferSizes::default();
         options::BufferSizes {
             bridge: buffer.bridge.unwrap_or(def.bridge),
-            health: buffer.health.unwrap_or(def.health),
             ping: buffer.ping.unwrap_or(def.ping),
             main: buffer.main.unwrap_or(def.main),
         }
@@ -357,7 +398,6 @@ impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
         let def = options::MaxSurbUpstream::default();
         options::MaxSurbUpstream {
             bridge: surbs.bridge.unwrap_or(def.bridge),
-            health: surbs.health.unwrap_or(def.health),
             ping: surbs.ping.unwrap_or(def.ping),
             main: surbs.main.unwrap_or(def.main),
         }
@@ -378,17 +418,6 @@ impl From<Option<Connection>> for options::Options {
             .unwrap_or(Connection::default_bridge_capabilities());
         let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
 
-        let health_target = connection
-            .and_then(|c| c.health.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_health_target());
-        let health_caps = connection
-            .and_then(|c| c.health.as_ref())
-            .and_then(|b| b.capabilities.clone())
-            .unwrap_or(Connection::default_health_capabilities());
-        let params_health = options::SessionParameters::new(health_target, to_flags(health_caps));
-
         let wg_target = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.target)
@@ -402,7 +431,6 @@ impl From<Option<Connection>> for options::Options {
 
         let sessions = options::Sessions {
             bridge: params_bridge,
-            health: params_health,
             wg: params_wg,
         };
 
@@ -435,6 +463,20 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.announced_peer_minimum_score)
             .unwrap_or(Connection::default_announced_peer_minimum_score());
 
+        let def_intervals = options::HealthCheckIntervals::default();
+        let health_check_intervals = connection
+            .and_then(|c| c.health_check_intervals.as_ref())
+            .map(|h| options::HealthCheckIntervals {
+                ping: h.ping.unwrap_or(def_intervals.ping),
+                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
+                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
+                tunnel_ping_max_failures: h
+                    .tunnel_ping_max_failures
+                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
+            })
+            .unwrap_or(def_intervals);
+
         options::Options::new(
             sessions,
             ping_opts,
@@ -442,6 +484,7 @@ impl From<Option<Connection>> for options::Options {
             max_surb_upstream,
             timeouts,
             announced_peer_minimum_score,
+            health_check_intervals,
         )
     }
 }
@@ -581,11 +624,7 @@ path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 http_timeout = "60s"
 
 [connection.bridge]
-capabilities = [ "segmentation", "retransmission" ]
-target = "127.0.0.1:8000"
-
-[connection.health]
-capabilities = [ "segmentation", "retransmission" ]
+capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]
 target = "127.0.0.1:8000"
 
 [connection.wg]
@@ -600,13 +639,11 @@ seq_count = 1
 
 [connection.max_surb_upstream]
 bridge = "512 Kb/s"
-health = "256 Kb/s"
 ping = "1 Mb/s"
 main = "16 Mb/s"
 
 [connection.buffer]
 bridge = "32 kB"
-health = "16 kB"
 ping = "32 kB"
 main = "2 MB"
 

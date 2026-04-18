@@ -12,9 +12,8 @@ use std::time::{Duration, SystemTime};
 use crate::balance::{self, FundingIssue};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::connectivity_health::ConnectivityHealth;
-use crate::destination_health::DestinationHealth;
 use crate::log_output;
+use crate::route_health::{RouteHealth, RouteHealthState};
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
@@ -164,11 +163,12 @@ pub enum FundingState {
     WellFunded,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
+    AlreadyConnected(Destination),
     Connecting(Destination),
-    WaitingToConnect(Destination, ConnectivityHealth),
-    UnableToConnect(Destination, ConnectivityHealth),
+    WaitingToConnect(Destination, RouteHealthState),
+    UnableToConnect(Destination, RouteHealthState),
     DestinationNotFound,
 }
 
@@ -187,11 +187,29 @@ pub enum FundingToolResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RouteHealthView {
+    pub state: RouteHealthState,
+    pub last_error: Option<String>,
+    pub checking_since: Option<SystemTime>,
+    pub consecutive_failures: u32,
+}
+
+impl From<&RouteHealth> for RouteHealthView {
+    fn from(rh: &RouteHealth) -> Self {
+        RouteHealthView {
+            state: rh.state().clone(),
+            last_error: rh.last_error().map(str::to_owned),
+            checking_since: rh.checking_since(),
+            consecutive_failures: rh.consecutive_failures(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
     pub connection_state: ConnectionState,
-    pub connectivity: ConnectivityHealth,
-    pub exit_health: DestinationHealth,
+    pub route_health: RouteHealthView,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -276,13 +294,16 @@ impl RunMode {
 }
 
 impl ConnectResponse {
+    pub fn already_connected(destination: Destination) -> Self {
+        ConnectResponse::AlreadyConnected(destination)
+    }
     pub fn connecting(destination: Destination) -> Self {
         ConnectResponse::Connecting(destination)
     }
-    pub fn waiting(destination: Destination, health: ConnectivityHealth) -> Self {
+    pub fn waiting(destination: Destination, health: RouteHealthState) -> Self {
         ConnectResponse::WaitingToConnect(destination, health)
     }
-    pub fn unable(destination: Destination, health: ConnectivityHealth) -> Self {
+    pub fn unable(destination: Destination, health: RouteHealthState) -> Self {
         ConnectResponse::UnableToConnect(destination, health)
     }
     pub fn destination_not_found() -> Self {
@@ -448,7 +469,7 @@ impl Display for RunMode {
 impl Display for ConnectionState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ConnectionState::None => write!(f, "Not Connected"),
+            ConnectionState::None => write!(f, "Not connected"),
             ConnectionState::Connecting(since, phase) => {
                 write!(f, "Connecting (since {}): {:?}", log_output::elapsed(since), phase)
             }
@@ -523,11 +544,28 @@ impl TryFrom<Command> for WorkerCommand {
     }
 }
 
+impl Display for RouteHealthView {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.state)?;
+        if let Some(since) = &self.checking_since {
+            write!(f, " (checking since {})", crate::log_output::elapsed(since))?;
+        }
+        if self.consecutive_failures > 0 {
+            write!(f, " ({} consecutive failures)", self.consecutive_failures)?;
+        }
+        if let Some(err) = &self.last_error {
+            write!(f, " (last error: {err})")?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::connection::destination::RoutingOptions;
-    use crate::connectivity_health::{ConnectivityHealth, Health, Need};
+    use crate::gvpn_client;
+    use crate::route_health::ExitHealth;
     use std::collections::HashMap;
 
     fn address(byte: u8) -> Address {
@@ -543,12 +581,28 @@ mod tests {
         )
     }
 
-    fn health() -> ConnectivityHealth {
-        ConnectivityHealth {
-            id: "test-destination".to_string(),
-            last_error: None,
-            health: Health::ReadyToConnect,
-            need: Need::Nothing,
+    fn route_health_state() -> RouteHealthState {
+        RouteHealthState::ReadyToConnect {
+            exit: ExitHealth {
+                checked_at: SystemTime::now(),
+                versions: gvpn_client::Versions {
+                    versions: vec!["v1".to_string()],
+                    latest: "v1".to_string(),
+                },
+                ping_rtt: Duration::from_millis(100),
+                health: gvpn_client::Health {
+                    slots: gvpn_client::Slots {
+                        available: 10,
+                        connected: 1,
+                    },
+                    load_avg: gvpn_client::LoadAvg {
+                        one: 0.1,
+                        five: 0.2,
+                        fifteen: 0.3,
+                        nproc: 4,
+                    },
+                },
+            },
         }
     }
 
@@ -595,16 +649,16 @@ mod tests {
         let resp = ConnectResponse::connecting(dest.clone());
         assert!(matches!(resp, ConnectResponse::Connecting(_)));
 
-        let waiting = ConnectResponse::waiting(dest.clone(), health());
+        let waiting = ConnectResponse::waiting(dest.clone(), route_health_state());
         assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, _)));
 
-        let unable = ConnectResponse::unable(dest.clone(), health());
+        let unable = ConnectResponse::unable(dest.clone(), route_health_state());
         assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
 
-        assert_eq!(
+        assert!(matches!(
             ConnectResponse::destination_not_found(),
             ConnectResponse::DestinationNotFound
-        );
+        ));
         Ok(())
     }
 

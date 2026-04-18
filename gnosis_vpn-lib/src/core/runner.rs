@@ -14,7 +14,7 @@ use rand::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
@@ -24,14 +24,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::compat::SafeModule;
-use crate::destination_health::DestinationHealth;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
+use crate::route_health::HealthCheckOutcome;
 use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, connection, event, remote_data};
+use crate::{balance, connection, event, ping, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -88,9 +88,12 @@ pub enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
+    TunnelPingResult {
+        rtt: Result<Duration, String>,
+    },
     HealthCheck {
         id: String,
-        health: DestinationHealth,
+        outcome: HealthCheckOutcome,
     },
 }
 
@@ -218,6 +221,40 @@ pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
 pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
     run_monitor_session(hopr, session).await;
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
+}
+
+pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
+    let ping_opts = ping::Options {
+        seq_count: 1,
+        ..Default::default()
+    };
+    let ping_timeout = ping_opts.timeout;
+
+    tracing::debug!(?interval, "starting tunnel ping probe");
+
+    loop {
+        time::sleep(interval).await;
+
+        let (tx, rx) = oneshot::channel();
+        let request = Results::ConnectionRequestToRoot(event::RunnerToRoot::Ping {
+            options: ping_opts.clone(),
+            resp: tx,
+        });
+        if sender.send(request).await.is_err() {
+            break;
+        }
+
+        let rtt = match time::timeout(ping_timeout * 2, rx).await {
+            Ok(Ok(Ok(rtt))) => Ok(rtt),
+            Ok(Ok(Err(err))) => Err(err),
+            Ok(Err(_)) => Err("ping response channel closed".to_string()),
+            Err(_) => Err("ping response timed out".to_string()),
+        };
+
+        if sender.send(Results::TunnelPingResult { rtt }).await.is_err() {
+            break;
+        }
+    }
 }
 
 pub async fn create_safeless_interactor(
@@ -518,12 +555,16 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
+            Results::TunnelPingResult { rtt } => match rtt {
+                Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
+                Err(err) => write!(f, "TunnelPingResult: Error({})", err),
+            },
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheck { id, health } => write!(f, "HealthCheck ({}): {}", id, health),
+            Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
         }
     }
 }

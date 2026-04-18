@@ -6,7 +6,6 @@ use std::fmt::{self, Display};
 
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
-use crate::connectivity_health::{self, ConnectivityHealth};
 use crate::info::Info;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -44,7 +43,6 @@ impl BalanceResponse {
         balances: &balance::Balances,
         ticket_value: &Balance<WxHOPR>,
         destinations: &HashMap<String, Destination>,
-        connectivity_health: &[&ConnectivityHealth],
         ongoing_channel_fundings: &[&Address],
     ) -> Self {
         let node = balances.node_xdai;
@@ -52,8 +50,7 @@ impl BalanceResponse {
         let mut channels_out = from_balances(balances.channels_out.iter(), destinations.iter());
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
-        let min_channel_count = connectivity_health::count_distinct_channels(connectivity_health);
-        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(min_channel_count, *ticket_value);
+        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(*ticket_value);
         let info = info.clone();
 
         BalanceResponse {

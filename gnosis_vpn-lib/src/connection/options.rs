@@ -15,12 +15,27 @@ pub struct Options {
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
     pub announced_peer_minimum_score: f64,
+    pub health_check_intervals: HealthCheckIntervals,
+}
+
+/// Controls how often each tier of health check runs.
+/// Ping runs every cycle. Health and version piggyback every Nth cycle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HealthCheckIntervals {
+    pub ping: Duration,
+    /// Run exit health check every Nth ping cycle.
+    pub health_every_n_pings: u32,
+    /// Run version check every Nth ping cycle.
+    pub version_every_n_pings: u32,
+    /// Interval between ICMP tunnel ping probes when connected.
+    pub tunnel_ping: Duration,
+    /// Consecutive tunnel ping failures before triggering reconnect.
+    pub tunnel_ping_max_failures: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sessions {
     pub bridge: SessionParameters,
-    pub health: SessionParameters,
     pub wg: SessionParameters,
 }
 
@@ -38,7 +53,6 @@ pub struct SessionParameters {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BufferSizes {
     pub bridge: ByteSize,
-    pub health: ByteSize,
     pub ping: ByteSize,
     pub main: ByteSize,
 }
@@ -46,7 +60,6 @@ pub struct BufferSizes {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaxSurbUpstream {
     pub bridge: Bandwidth,
-    pub health: Bandwidth,
     pub ping: Bandwidth,
     pub main: Bandwidth,
 }
@@ -65,6 +78,7 @@ impl Options {
         max_surb_upstream: MaxSurbUpstream,
         timeouts: Timeouts,
         announced_peer_minimum_score: f64,
+        health_check_intervals: HealthCheckIntervals,
     ) -> Self {
         Self {
             sessions,
@@ -73,6 +87,19 @@ impl Options {
             max_surb_upstream,
             timeouts,
             announced_peer_minimum_score,
+            health_check_intervals,
+        }
+    }
+}
+
+impl Default for HealthCheckIntervals {
+    fn default() -> Self {
+        Self {
+            ping: Duration::from_secs(15),
+            health_every_n_pings: 4,
+            version_every_n_pings: 20,
+            tunnel_ping: Duration::from_secs(10),
+            tunnel_ping_max_failures: 3,
         }
     }
 }
@@ -81,7 +108,6 @@ impl Default for MaxSurbUpstream {
     fn default() -> Self {
         Self {
             bridge: Bandwidth::from_kbps(512),
-            health: Bandwidth::from_kbps(256),
             ping: Bandwidth::from_kbps(512),
             main: Bandwidth::from_mbps(16),
         }
@@ -92,7 +118,6 @@ impl Default for BufferSizes {
     fn default() -> Self {
         Self {
             bridge: ByteSize::kb(32),
-            health: ByteSize::kb(16),
             ping: ByteSize::mb(1),
             // maximum allowed buffer size is 10 MB
             main: ByteSize::mb(10),

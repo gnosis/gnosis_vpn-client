@@ -47,12 +47,7 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
-# capabilities = [ "segmentation", "retransmission", "retransmission_ack_only" ]
-# target = "172.30.0.1:8000"
-
-# determine specific connection parameters for ephemeral exit health check connections
-# [connection.health]
-# capabilities = [ "segmentation", "retransmission", "retransmission_ack_only" ]
+# capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]
 # target = "172.30.0.1:8000"
 
 # determine specific connection parameters for persistent main connection
@@ -67,16 +62,25 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # ttl = 6
 # seq_count = 3
 
+# adjust health check intervals
+# ping runs every cycle, health and version piggyback every Nth cycle
+# [connection.health_check_intervals]
+# ping = "15s"
+# health_every_n_pings = 4  # minimum 1
+# version_every_n_pings = 20  # minimum 1
+# ICMP ping probe interval when connected (verifies tunnel is working)
+# tunnel_ping = "10s"
+# consecutive tunnel ping failures before triggering reconnect
+# tunnel_ping_max_failures = 3
+
 # adjust session internal options
 # [connection.max_surb_upstream]
 # bridge = "512 Kb/s"
-# health = "256 Kb/s"
 # ping = "1 Mb/s"
 # main = "16 Mb/s"
 #
 # [connection.buffer]
 # bridge = "32 kB"
-# health = "16 kB"
 # ping = "32 kB"
 # main = "10 MB"
 
