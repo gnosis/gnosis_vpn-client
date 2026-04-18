@@ -206,6 +206,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             bypass_manager.teardown().await;
         }
         self.bypass_manager = None;
+        self.wg_interface_name = None;
     }
 }
 
