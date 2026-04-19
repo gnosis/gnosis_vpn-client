@@ -108,7 +108,7 @@ pub struct DisconnectingInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestinationState {
     pub destination: Destination,
-    pub route_health: RouteHealthView,
+    pub route_health: Option<RouteHealthView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +138,8 @@ pub enum RunMode {
     },
     /// Shutting down edge client,
     Shutdown,
+    /// Worker process is not running; only config-level information is available
+    NotRunning,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -470,6 +472,7 @@ impl Display for RunMode {
                 None => write!(f, "Ready, {funding}"),
             },
             RunMode::Shutdown => write!(f, "Shutting down"),
+            RunMode::NotRunning => write!(f, "Worker offline"),
         }
     }
 }

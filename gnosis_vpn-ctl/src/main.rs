@@ -93,9 +93,13 @@ fn pretty_print(resp: &Response) {
             str_resp.push_str("---\n");
             for dest_state in destinations {
                 str_resp.push_str(&format!("{}\n", dest_state.destination));
+                let health_str = match &dest_state.route_health {
+                    Some(rh) => format!("{rh}"),
+                    None => "not available".to_string(),
+                };
                 str_resp.push_str(&format!(
                     "{} Route health: {}\n",
-                    dest_state.destination.id, dest_state.route_health,
+                    dest_state.destination.id, health_str,
                 ));
             }
             println!("{str_resp}");

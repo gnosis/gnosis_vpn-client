@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
+use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
@@ -772,6 +773,12 @@ impl DaemonState {
                         .send(KeepAliveInstruction::Reset)
                         .await;
                     Ok(())
+                } else if matches!(w_cmd, WorkerCommand::Status) {
+                    let response = self.status_response_offline();
+                    let _ = resp.send(response).map_err(|error| {
+                        tracing::error!(?error, "socket command response channel closed");
+                    });
+                    Ok(())
                 } else {
                     let _ = resp.send(Response::WorkerOffline).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
@@ -826,10 +833,29 @@ impl DaemonState {
         }
     }
 
+    fn status_response_offline(&self) -> Response {
+        let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
+        vals.sort_by(|a, b| a.id.cmp(&b.id));
+        let destinations = vals
+            .into_iter()
+            .map(|dest| command::DestinationState {
+                destination: dest.clone(),
+                route_health: None,
+            })
+            .collect();
+        Response::status(command::StatusResponse {
+            run_mode: command::RunMode::NotRunning,
+            destinations,
+            connecting: None,
+            connected: None,
+            disconnecting: vec![],
+        })
+    }
+
     async fn incoming_root_command(&mut self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
         match cmd {
-            LibCommand::Status
-            | LibCommand::NerdStats
+            LibCommand::Status => Ok(self.status_response_offline()),
+            LibCommand::NerdStats
             | LibCommand::Connect(_)
             | LibCommand::Disconnect
             | LibCommand::Balance

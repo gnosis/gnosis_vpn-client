@@ -389,19 +389,20 @@ impl Core {
                             .into_iter()
                             .map(|v| command::DestinationState {
                                 destination: v.clone(),
-                                route_health: self
-                                    .route_healths
-                                    .get(&v.id)
-                                    .map(command::RouteHealthView::from)
-                                    // should never be here - mark unrecoverable to indicate misconfiguration
-                                    .unwrap_or_else(|| command::RouteHealthView {
-                                        state: route_health::RouteHealthState::Unrecoverable {
-                                            reason: route_health::UnrecoverableReason::InvalidId,
-                                        },
-                                        last_error: None,
-                                        checking_since: None,
-                                        consecutive_failures: 0,
-                                    }),
+                                route_health: Some(
+                                    self.route_healths
+                                        .get(&v.id)
+                                        .map(command::RouteHealthView::from)
+                                        // should never be here - mark unrecoverable to indicate misconfiguration
+                                        .unwrap_or_else(|| command::RouteHealthView {
+                                            state: route_health::RouteHealthState::Unrecoverable {
+                                                reason: route_health::UnrecoverableReason::InvalidId,
+                                            },
+                                            last_error: None,
+                                            checking_since: None,
+                                            consecutive_failures: 0,
+                                        }),
+                                ),
                             })
                             .collect();
                         let res = Response::status(command::StatusResponse {
