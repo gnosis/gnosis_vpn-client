@@ -73,24 +73,29 @@ fn pretty_print(resp: &Response) {
         Response::Telemetry(None) => {
             println!("No telemetry information available.");
         }
-        Response::Status(command::StatusResponse { run_mode, destinations, connecting, connected, disconnecting }) => {
+        Response::Status(command::StatusResponse {
+            run_mode,
+            destinations,
+            connecting,
+            connected,
+            disconnecting,
+        }) => {
             let mut str_resp = format!("{run_mode}\n");
             if let Some(info) = connecting {
-                str_resp.push_str(&format!("{info}\n"));
+                str_resp.push_str(&format!("---\n{info}\n"));
             }
             if let Some(info) = connected {
-                str_resp.push_str(&format!("{info}\n"));
+                str_resp.push_str(&format!("---\n{info}\n"));
             }
             for info in disconnecting {
-                str_resp.push_str(&format!("{info}\n"));
+                str_resp.push_str(&format!("---\n{info}\n"));
             }
+            str_resp.push_str("---\n");
             for dest_state in destinations {
-                str_resp.push_str("---\n");
                 str_resp.push_str(&format!("{}\n", dest_state.destination));
                 str_resp.push_str(&format!(
                     "{} Route health: {}\n",
-                    dest_state.destination.id,
-                    dest_state.route_health,
+                    dest_state.destination.id, dest_state.route_health,
                 ));
             }
             println!("{str_resp}");

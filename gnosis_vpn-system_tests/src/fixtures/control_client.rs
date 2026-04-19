@@ -233,7 +233,10 @@ impl ControlClient {
                         .and_then(|d| d.destination.get_meta("location"))
                         .unwrap_or_else(|| "<unknown>".to_string());
 
-                    let is_connected = status.connected.as_ref().is_some_and(|c| c.destination_id == destination.id);
+                    let is_connected = status
+                        .connected
+                        .as_ref()
+                        .is_some_and(|c| c.destination_id == destination.id);
                     let connecting_phase = status
                         .connecting
                         .as_ref()
