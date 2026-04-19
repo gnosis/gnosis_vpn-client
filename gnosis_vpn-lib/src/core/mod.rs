@@ -408,6 +408,10 @@ impl Core {
                         let res = Response::status(command::StatusResponse {
                             run_mode: runmode,
                             destinations,
+                            target_destination: self
+                                .target_destination
+                                .as_ref()
+                                .map(|d| d.id.clone()),
                             connecting,
                             connected,
                             disconnecting,

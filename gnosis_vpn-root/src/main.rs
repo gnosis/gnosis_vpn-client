@@ -846,6 +846,7 @@ impl DaemonState {
         Response::status(command::StatusResponse {
             run_mode: command::RunMode::NotRunning,
             destinations,
+            target_destination: self.target_dest_id.clone(),
             connecting: None,
             connected: None,
             disconnecting: vec![],

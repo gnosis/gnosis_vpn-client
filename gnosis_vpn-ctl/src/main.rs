@@ -76,11 +76,19 @@ fn pretty_print(resp: &Response) {
         Response::Status(command::StatusResponse {
             run_mode,
             destinations,
+            target_destination,
             connecting,
             connected,
             disconnecting,
         }) => {
             let mut str_resp = format!("{run_mode}\n");
+            if let Some(id) = target_destination {
+                let is_active = connecting.as_ref().is_some_and(|c| c.destination_id == *id)
+                    || connected.as_ref().is_some_and(|c| c.destination_id == *id);
+                if !is_active {
+                    str_resp.push_str(&format!("---\nWaiting to connect to {id}\n"));
+                }
+            }
             if let Some(info) = connecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
             }

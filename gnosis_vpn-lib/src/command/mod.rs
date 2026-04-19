@@ -80,6 +80,7 @@ pub enum Response {
 pub struct StatusResponse {
     pub run_mode: RunMode,
     pub destinations: Vec<DestinationState>,
+    pub target_destination: Option<String>,
     pub connecting: Option<ConnectingInfo>,
     pub connected: Option<ConnectedInfo>,
     pub disconnecting: Vec<DisconnectingInfo>,
