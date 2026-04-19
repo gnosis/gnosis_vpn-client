@@ -359,52 +359,58 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
+                        let connecting = match &self.phase {
+                            Phase::Connecting(conn) => Some(command::ConnectingInfo {
+                                destination_id: conn.destination.id.clone(),
+                                since: conn.phase.0,
+                                phase: conn.phase.1.clone(),
+                            }),
+                            _ => None,
+                        };
+                        let connected = match &self.phase {
+                            Phase::Connected(conn) => Some(command::ConnectedInfo {
+                                destination_id: conn.destination.id.clone(),
+                                since: conn.phase.0,
+                            }),
+                            _ => None,
+                        };
+                        let disconnecting = self
+                            .ongoing_disconnections
+                            .iter()
+                            .map(|d| command::DisconnectingInfo {
+                                destination_id: d.destination.id.clone(),
+                                since: d.phase.0,
+                                phase: d.phase.1.clone(),
+                            })
+                            .collect();
                         let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
                         vals.sort_by(|a, b| a.id.cmp(&b.id));
                         let destinations = vals
                             .into_iter()
-                            .map(|v| {
-                                let destination = v.clone();
-                                let connection_state = match &self.phase {
-                                    Phase::Connecting(conn) if &conn.destination == v => {
-                                        command::ConnectionState::Connecting(conn.phase.0, conn.phase.1.clone())
-                                    }
-                                    Phase::Connected(conn) if &conn.destination == v => {
-                                        command::ConnectionState::Connected(conn.phase.0)
-                                    }
-                                    _ => {
-                                        if let Some(disconn) =
-                                            self.ongoing_disconnections.iter().find(|d| &d.destination == v)
-                                        {
-                                            command::ConnectionState::Disconnecting(
-                                                disconn.phase.0,
-                                                disconn.phase.1.clone(),
-                                            )
-                                        } else {
-                                            command::ConnectionState::None
-                                        }
-                                    }
-                                };
-                                command::DestinationState {
-                                    destination,
-                                    connection_state,
-                                    route_health: self
-                                        .route_healths
-                                        .get(&v.id)
-                                        .map(command::RouteHealthView::from)
-                                        // should never be here - mark unrecoverable to indicate misconfiguration
-                                        .unwrap_or_else(|| command::RouteHealthView {
-                                            state: route_health::RouteHealthState::Unrecoverable {
-                                                reason: route_health::UnrecoverableReason::InvalidId,
-                                            },
-                                            last_error: None,
-                                            checking_since: None,
-                                            consecutive_failures: 0,
-                                        }),
-                                }
+                            .map(|v| command::DestinationState {
+                                destination: v.clone(),
+                                route_health: self
+                                    .route_healths
+                                    .get(&v.id)
+                                    .map(command::RouteHealthView::from)
+                                    // should never be here - mark unrecoverable to indicate misconfiguration
+                                    .unwrap_or_else(|| command::RouteHealthView {
+                                        state: route_health::RouteHealthState::Unrecoverable {
+                                            reason: route_health::UnrecoverableReason::InvalidId,
+                                        },
+                                        last_error: None,
+                                        checking_since: None,
+                                        consecutive_failures: 0,
+                                    }),
                             })
                             .collect();
-                        let res = Response::status(command::StatusResponse::new(runmode, destinations));
+                        let res = Response::status(command::StatusResponse {
+                            run_mode: runmode,
+                            destinations,
+                            connecting,
+                            connected,
+                            disconnecting,
+                        });
                         let _ = resp.send(res);
                     }
 
