@@ -1,6 +1,6 @@
 use gnosis_vpn_lib::command::{
-    BalanceResponse, Command, ConnectResponse, ConnectionState, DestinationState, DisconnectResponse, Response,
-    RunMode, StartClientResponse, StatusResponse, StopClientResponse,
+    BalanceResponse, Command, ConnectResponse, DestinationState, DisconnectResponse, Response, RunMode,
+    StartClientResponse, StatusResponse, StopClientResponse,
 };
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::route_health::RouteHealthState;
@@ -120,12 +120,15 @@ impl ControlClient {
         lib::wait_for_condition("safe created", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => match status.run_mode {
-                    RunMode::Init => Ok(ConditionCheck::Pending),
+                    RunMode::Init | RunMode::NotRunning => Ok(ConditionCheck::Pending),
                     RunMode::PreparingSafe { .. } => {
                         warn!("safe being prepared");
                         Ok(ConditionCheck::Pending)
                     }
-                    _ => {
+                    RunMode::DeployingSafe { .. }
+                    | RunMode::Warmup { .. }
+                    | RunMode::Running { .. }
+                    | RunMode::Shutdown => {
                         info!("safe is created and ready");
                         Ok(ConditionCheck::Ready(()))
                     }
@@ -226,31 +229,31 @@ impl ControlClient {
         lib::wait_for_condition("connection settlement", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => {
-                    if let Some(state) = status
+                    let location = status
                         .destinations
                         .iter()
-                        .find(|c| c.destination.address == destination.address)
-                    {
-                        let location = state
-                            .destination
-                            .get_meta("location")
-                            .unwrap_or("<unknown>".to_string());
-                        match &state.connection_state {
-                            ConnectionState::Connecting(_, phase) => {
-                                warn!(?phase, ?location, "connection is being established");
-                                Ok(ConditionCheck::Pending)
-                            }
-                            ConnectionState::Connected(_) => {
-                                info!(?location, "connection established successfully");
-                                Ok(ConditionCheck::Ready(()))
-                            }
-                            _ => {
-                                warn!(?location, "connection state is unknown");
-                                Ok(ConditionCheck::Pending)
-                            }
-                        }
+                        .find(|d| d.destination.id == destination.id)
+                        .and_then(|d| d.destination.get_meta("location"))
+                        .unwrap_or_else(|| "<unknown>".to_string());
+
+                    let is_connected = status
+                        .connected
+                        .as_ref()
+                        .is_some_and(|c| c.destination_id == destination.id);
+                    let connecting_phase = status
+                        .connecting
+                        .as_ref()
+                        .filter(|c| c.destination_id == destination.id)
+                        .map(|c| &c.phase);
+
+                    if is_connected {
+                        info!(?location, "connection established successfully");
+                        Ok(ConditionCheck::Ready(()))
+                    } else if let Some(phase) = connecting_phase {
+                        warn!(?phase, ?location, "connection is being established");
+                        Ok(ConditionCheck::Pending)
                     } else {
-                        warn!("destination not found in status response");
+                        warn!(?location, "connection state is unknown");
                         Ok(ConditionCheck::Pending)
                     }
                 }
@@ -296,7 +299,11 @@ impl DestinationReadiness {
         let mut not_ready = Vec::new();
 
         for state in states {
-            if matches!(state.route_health.state, RouteHealthState::ReadyToConnect { .. }) {
+            let is_ready = state
+                .route_health
+                .as_ref()
+                .is_some_and(|rh| matches!(rh.state, RouteHealthState::ReadyToConnect { .. }));
+            if is_ready {
                 ready.push(state.destination);
             } else {
                 not_ready.push(state.destination);

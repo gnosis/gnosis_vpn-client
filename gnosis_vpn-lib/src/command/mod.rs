@@ -80,6 +80,36 @@ pub enum Response {
 pub struct StatusResponse {
     pub run_mode: RunMode,
     pub destinations: Vec<DestinationState>,
+    pub target_destination: Option<String>,
+    pub connecting: Option<ConnectingInfo>,
+    pub connected: Option<ConnectedInfo>,
+    pub disconnecting: Vec<DisconnectingInfo>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnectingInfo {
+    pub destination_id: String,
+    pub since: SystemTime,
+    pub phase: connection::up::Phase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnectedInfo {
+    pub destination_id: String,
+    pub since: SystemTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DisconnectingInfo {
+    pub destination_id: String,
+    pub since: SystemTime,
+    pub phase: connection::down::Phase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DestinationState {
+    pub destination: Destination,
+    pub route_health: Option<RouteHealthView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,6 +139,8 @@ pub enum RunMode {
     },
     /// Shutting down edge client,
     Shutdown,
+    /// Worker process is not running; only config-level information is available
+    NotRunning,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,21 +235,6 @@ impl From<&RouteHealth> for RouteHealthView {
             consecutive_failures: rh.consecutive_failures(),
         }
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DestinationState {
-    pub destination: Destination,
-    pub connection_state: ConnectionState,
-    pub route_health: RouteHealthView,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ConnectionState {
-    None,
-    Connecting(SystemTime, connection::up::Phase),
-    Connected(SystemTime),
-    Disconnecting(SystemTime, connection::down::Phase),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -318,12 +335,6 @@ impl DisconnectResponse {
 
     pub fn not_connected() -> Self {
         DisconnectResponse::NotConnected
-    }
-}
-
-impl StatusResponse {
-    pub fn new(run_mode: RunMode, destinations: Vec<DestinationState>) -> Self {
-        StatusResponse { run_mode, destinations }
     }
 }
 
@@ -462,24 +473,43 @@ impl Display for RunMode {
                 None => write!(f, "Ready, {funding}"),
             },
             RunMode::Shutdown => write!(f, "Shutting down"),
+            RunMode::NotRunning => write!(f, "Worker offline"),
         }
     }
 }
 
-impl Display for ConnectionState {
+impl Display for ConnectingInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ConnectionState::None => write!(f, "Not connected"),
-            ConnectionState::Connecting(since, phase) => {
-                write!(f, "Connecting (since {}): {:?}", log_output::elapsed(since), phase)
-            }
-            ConnectionState::Connected(since) => {
-                write!(f, "Connected (since {})", log_output::elapsed(since))
-            }
-            ConnectionState::Disconnecting(since, phase) => {
-                write!(f, "Disconnecting (since {}): {:?}", log_output::elapsed(since), phase)
-            }
-        }
+        write!(
+            f,
+            "Connecting to {} (since {}, phase {})",
+            self.destination_id,
+            log_output::elapsed(&self.since),
+            self.phase
+        )
+    }
+}
+
+impl Display for ConnectedInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Connected to {} (since {})",
+            self.destination_id,
+            log_output::elapsed(&self.since)
+        )
+    }
+}
+
+impl Display for DisconnectingInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Disconnecting from {} (since {}, phase {})",
+            self.destination_id,
+            log_output::elapsed(&self.since),
+            self.phase
+        )
     }
 }
 
