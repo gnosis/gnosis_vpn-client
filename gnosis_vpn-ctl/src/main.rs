@@ -102,10 +102,7 @@ fn pretty_print(resp: &Response) {
             for dest_state in destinations {
                 str_resp.push_str(&format!("{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
-                    str_resp.push_str(&format!(
-                        "{} Route health: {}\n",
-                        dest_state.destination.id, rh,
-                    ));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh,));
                 }
             }
             println!("{str_resp}");
