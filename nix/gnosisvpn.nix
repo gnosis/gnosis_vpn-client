@@ -61,37 +61,63 @@ let
   );
 
   # Parameters required for musl static builds that nix-lib does not cover.
-  # nix-lib handles: CARGO_BUILD_TARGET, linker, +crt-static, openssl.
-  # These must be applied via overrideAttrs since rust-package.nix drops
-  # unknown attrs before they reach mkDerivation.
-  linuxStaticEnv = {
+  # nix-lib handles: CARGO_BUILD_TARGET, CARGO_TARGET_*_LINKER, +crt-static, openssl paths.
+  # These must be applied via overrideAttrs since rust-package.nix drops unknown attrs
+  # before they reach mkDerivation.
+  linuxStaticEnvBase = {
     # musl is incompatible with the fortify hardening flag
     hardeningDisable = [ "fortify" ];
     # tell libsqlite3-sys to locate sqlite via pkg-config
     LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
-    # give mnl-sys / nftnl-sys direct lib dirs; pkg-config can fail cross builds
+    # give mnl-sys / nftnl-sys direct lib dirs; pkg-config can fail in cross contexts
     LIBMNL_LIB_DIR = "${pkgs.pkgsStatic.libmnl}/lib";
     LIBNFTNL_LIB_DIR = "${pkgs.pkgsStatic.libnftnl}/lib";
-    # openssl is handled by nix-lib; expose sqlite/libmnl/libnftnl to pkg-config
     PKG_CONFIG_PATH = lib.concatStringsSep ":" [
+      "${pkgs.pkgsStatic.openssl.dev}/lib/pkgconfig"
       "${pkgs.pkgsStatic.sqlite.dev}/lib/pkgconfig"
       "${pkgs.pkgsStatic.libmnl}/lib/pkgconfig"
       "${pkgs.pkgsStatic.libnftnl}/lib/pkgconfig"
     ];
   };
 
-  # Stamps linuxStaticEnv onto both the package and its internal cargoArtifacts
-  # so the deps-only cache and the final build share the same environment.
-  withLinuxStaticEnv =
-    drv:
+  # Stamps env onto both the package and its internal cargoArtifacts so the
+  # deps-only cache and the final build share the same environment.
+  mkWithStaticEnv =
+    env: drv:
     drv.overrideAttrs (
       prev:
-      linuxStaticEnv
+      env
       // {
         cargoArtifacts =
-          if prev.cargoArtifacts != null then prev.cargoArtifacts.overrideAttrs (_: linuxStaticEnv) else null;
+          if prev.cargoArtifacts != null then prev.cargoArtifacts.overrideAttrs (_: env) else null;
       }
     );
+
+  # CC/CXX are arch-specific: cc-rs uses them to compile C code in build.rs scripts.
+  withX86_64LinuxStaticEnv = mkWithStaticEnv (
+    linuxStaticEnvBase
+    // {
+      CC_x86_64_unknown_linux_musl = "${pkgs.pkgsStatic.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
+      CXX_x86_64_unknown_linux_musl = "${pkgs.pkgsStatic.stdenv.cc}/bin/x86_64-unknown-linux-musl-g++";
+    }
+  );
+
+  withAarch64LinuxStaticEnv = mkWithStaticEnv (
+    linuxStaticEnvBase
+    // {
+      CC_aarch64_unknown_linux_musl = "${pkgs.pkgsStatic.stdenv.cc}/bin/aarch64-unknown-linux-musl-gcc";
+      CXX_aarch64_unknown_linux_musl = "${pkgs.pkgsStatic.stdenv.cc}/bin/aarch64-unknown-linux-musl-g++";
+    }
+  );
+
+  # Darwin: append +crt-static and system libiconv to nix-lib's existing RUSTFLAGS.
+  withDarwinStaticFlags =
+    drv:
+    drv.overrideAttrs (prev: {
+      CARGO_BUILD_RUSTFLAGS = "${
+        prev.CARGO_BUILD_RUSTFLAGS or ""
+      } -C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+    });
 
   mkGnosisvpnBuildArgs =
     {
@@ -132,14 +158,14 @@ in
   );
 
   # Cross-compiled — x86_64 Linux
-  binary-gnosis_vpn-x86_64-linux = withLinuxStaticEnv (
+  binary-gnosis_vpn-x86_64-linux = withX86_64LinuxStaticEnv (
     builders.x86_64-linux.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
   );
 
-  binary-gnosis_vpn-x86_64-linux-dev = withLinuxStaticEnv (
+  binary-gnosis_vpn-x86_64-linux-dev = withX86_64LinuxStaticEnv (
     builders.x86_64-linux.callPackage nixLib.mkRustPackage (
       (mkGnosisvpnBuildArgs {
         src = sources.main;
@@ -152,14 +178,14 @@ in
   );
 
   # Cross-compiled — aarch64 Linux
-  binary-gnosis_vpn-aarch64-linux = withLinuxStaticEnv (
+  binary-gnosis_vpn-aarch64-linux = withAarch64LinuxStaticEnv (
     builders.aarch64-linux.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
   );
 
-  binary-gnosis_vpn-aarch64-linux-dev = withLinuxStaticEnv (
+  binary-gnosis_vpn-aarch64-linux-dev = withAarch64LinuxStaticEnv (
     builders.aarch64-linux.callPackage nixLib.mkRustPackage (
       (mkGnosisvpnBuildArgs {
         src = sources.main;
@@ -232,20 +258,22 @@ in
 }
 // lib.optionalAttrs pkgs.stdenv.isDarwin {
   # macOS — aarch64 (only available on Darwin hosts; cctools is Darwin-only)
-  binary-gnosis_vpn-aarch64-darwin =
-    builders.aarch64-darwin.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-gnosis_vpn-aarch64-darwin-dev = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+  binary-gnosis_vpn-aarch64-darwin = withDarwinStaticFlags (
+    builders.aarch64-darwin.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // {
-      CARGO_PROFILE = "dev";
-    }
+  );
+
+  binary-gnosis_vpn-aarch64-darwin-dev = withDarwinStaticFlags (
+    builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      })
+      // {
+        CARGO_PROFILE = "dev";
+      }
+    )
   );
 }
