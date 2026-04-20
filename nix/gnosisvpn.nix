@@ -132,7 +132,7 @@ let
 
       postInstall =
         lib.optionalString (prev ? postInstall && prev.postInstall != null) prev.postInstall
-        + lib.optionalString pkgs.stdenv.isDarwin ''
+        + ''
           for bin in $(find "$out/bin" -type f); do
             linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
 
