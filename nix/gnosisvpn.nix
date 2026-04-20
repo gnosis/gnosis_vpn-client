@@ -76,8 +76,6 @@ let
       cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}";
       cargoToml = ../Cargo.toml;
       extraBuildInputs = linuxExtraBuildInputs;
-    }
-    // lib.optionalAttrs pkgs.stdenv.isLinux {
       CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
     };
 in
