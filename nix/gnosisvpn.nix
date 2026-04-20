@@ -69,7 +69,7 @@ let
         ]
       );
       linuxRustflagsArg = lib.optionalString stdenv.hostPlatform.isLinux
-        " --config ${lib.escapeShellArg "build.rustflags=[\"-C\",\"target-feature=+crt-static\"]"}";
+        "--config ${lib.escapeShellArg "build.rustflags=[\"-C\",\"target-feature=+crt-static\"]"}";
     in
     {
       inherit src depsSrc rev;
@@ -78,7 +78,9 @@ let
       # since the workspace uses a wildcard `members = ["gnosis_vpn*"]`.
       # The --bin flags below are sufficient to select the right binaries.
       prependPackageName = false;
-      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}${linuxRustflagsArg}";
+      cargoExtraArgs =
+        "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}"
+        + lib.optionalString stdenv.hostPlatform.isLinux " ${linuxRustflagsArg}";
       cargoToml = ../Cargo.toml;
       extraBuildInputs = linuxExtraBuildInputs;
     };
