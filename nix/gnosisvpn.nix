@@ -49,23 +49,28 @@ let
     };
   };
 
-  # Linux static builds require libmnl, libnftnl, and sqlite in addition to
-  # the openssl+cacert that nix-lib provides by default.
-  linuxExtraBuildInputs = lib.optionals pkgs.stdenv.isLinux (
-    with pkgs.pkgsStatic;
-    [
-      libmnl
-      libnftnl
-      sqlite
-    ]
-  );
-
   mkGnosisvpnBuildArgs =
     {
+      pkgs,
+      stdenv,
       src,
       depsSrc,
       extraCargoArgs ? "",
     }:
+    let
+      # Linux static builds require libmnl, libnftnl, and sqlite in addition to
+      # the openssl+cacert that nix-lib provides by default.
+      linuxExtraBuildInputs = lib.optionals stdenv.hostPlatform.isLinux (
+        with pkgs.pkgsStatic;
+        [
+          libmnl
+          libnftnl
+          sqlite
+        ]
+      );
+      linuxRustflagsArg = lib.optionalString stdenv.hostPlatform.isLinux
+        " --config build.rustflags='[\"-C\",\"target-feature=+crt-static\"]'";
+    in
     {
       inherit src depsSrc rev;
       # prependPackageName=false: skip the automatic `-p gnosis_vpn` that nix-lib
@@ -73,24 +78,25 @@ let
       # since the workspace uses a wildcard `members = ["gnosis_vpn*"]`.
       # The --bin flags below are sufficient to select the right binaries.
       prependPackageName = false;
-      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}";
+      cargoExtraArgs = "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}${linuxRustflagsArg}";
       cargoToml = ../Cargo.toml;
       extraBuildInputs = linuxExtraBuildInputs;
-      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
     };
+
+  mkGnosisvpnBuildArgsFor = builder: args: builder.callPackage mkGnosisvpnBuildArgs args;
 in
 {
   # Local builds
 
   # binary-gnosis_vpn (renamed from gnosis_vpn-release)
-  binary-gnosis_vpn = builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
+  binary-gnosis_vpn = builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgsFor builders.local {
     src = sources.main;
     depsSrc = sources.deps;
   });
 
   # binary-gnosis_vpn-dev (renamed from gnosis_vpn-dev)
   binary-gnosis_vpn-dev = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.local {
       src = sources.main;
       depsSrc = sources.deps;
     })
@@ -102,13 +108,13 @@ in
   # Cross-compiled — x86_64 Linux
   binary-gnosis_vpn-x86_64-linux =
     builders.x86_64-linux.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
+      (mkGnosisvpnBuildArgsFor builders.x86_64-linux {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
   binary-gnosis_vpn-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.x86_64-linux {
       src = sources.main;
       depsSrc = sources.deps;
     })
@@ -120,13 +126,13 @@ in
   # Cross-compiled — aarch64 Linux
   binary-gnosis_vpn-aarch64-linux =
     builders.aarch64-linux.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
+      (mkGnosisvpnBuildArgsFor builders.aarch64-linux {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
   binary-gnosis_vpn-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.aarch64-linux {
       src = sources.main;
       depsSrc = sources.deps;
     })
@@ -138,7 +144,7 @@ in
   # System test package: all service binaries + the system test runner in one derivation.
   # Used by CI to run the system test against a live network in a single nix build command.
   binary-gnosis_vpn-system_tests = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.local {
       src = sources.main;
       depsSrc = sources.deps;
       extraCargoArgs = "--bin gnosis_vpn-system_tests";
@@ -150,7 +156,7 @@ in
 
   # Tests / QA
   gnosis_vpn-test = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.local {
       src = sources.test;
       depsSrc = sources.deps;
     })
@@ -160,7 +166,7 @@ in
   );
 
   gnosis_vpn-clippy = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.local {
       src = sources.main;
       depsSrc = sources.deps;
     })
@@ -170,7 +176,7 @@ in
   );
 
   gnosis_vpn-docs = builders.localNightly.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.localNightly {
       src = sources.main;
       depsSrc = sources.deps;
     })
@@ -198,13 +204,13 @@ in
   # macOS — aarch64 (only available on Darwin hosts; cctools is Darwin-only)
   binary-gnosis_vpn-aarch64-darwin =
     builders.aarch64-darwin.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
+      (mkGnosisvpnBuildArgsFor builders.aarch64-darwin {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
   binary-gnosis_vpn-aarch64-darwin-dev = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+    (mkGnosisvpnBuildArgsFor builders.aarch64-darwin {
       src = sources.main;
       depsSrc = sources.deps;
     })
