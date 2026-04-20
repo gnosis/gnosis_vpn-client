@@ -122,9 +122,9 @@ let
     }
   );
 
-  # Darwin: append +crt-static and system libiconv to nix-lib's existing RUSTFLAGS,
-  # then rewrite any Nix store libiconv references to /usr/lib so the binary works
-  # outside of Nix.
+  # Darwin: set CARGO_BUILD_RUSTFLAGS with +crt-static and system libiconv flags,
+  # overriding any value previously set by nix-lib, then rewrite any Nix store
+  # libiconv references to /usr/lib so the binary works outside of Nix.
   withDarwinStaticFlags =
     drv:
     drv.overrideAttrs (_: {
