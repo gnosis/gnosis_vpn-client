@@ -60,6 +60,39 @@ let
     ]
   );
 
+  # Parameters required for musl static builds that nix-lib does not cover.
+  # nix-lib handles: CARGO_BUILD_TARGET, linker, +crt-static, openssl.
+  # These must be applied via overrideAttrs since rust-package.nix drops
+  # unknown attrs before they reach mkDerivation.
+  linuxStaticEnv = {
+    # musl is incompatible with the fortify hardening flag
+    hardeningDisable = [ "fortify" ];
+    # tell libsqlite3-sys to locate sqlite via pkg-config
+    LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+    # give mnl-sys / nftnl-sys direct lib dirs; pkg-config can fail cross builds
+    LIBMNL_LIB_DIR = "${pkgs.pkgsStatic.libmnl}/lib";
+    LIBNFTNL_LIB_DIR = "${pkgs.pkgsStatic.libnftnl}/lib";
+    # openssl is handled by nix-lib; expose sqlite/libmnl/libnftnl to pkg-config
+    PKG_CONFIG_PATH = lib.concatStringsSep ":" [
+      "${pkgs.pkgsStatic.sqlite.dev}/lib/pkgconfig"
+      "${pkgs.pkgsStatic.libmnl}/lib/pkgconfig"
+      "${pkgs.pkgsStatic.libnftnl}/lib/pkgconfig"
+    ];
+  };
+
+  # Stamps linuxStaticEnv onto both the package and its internal cargoArtifacts
+  # so the deps-only cache and the final build share the same environment.
+  withLinuxStaticEnv =
+    drv:
+    drv.overrideAttrs (
+      prev:
+      linuxStaticEnv
+      // {
+        cargoArtifacts =
+          if prev.cargoArtifacts != null then prev.cargoArtifacts.overrideAttrs (_: linuxStaticEnv) else null;
+      }
+    );
+
   mkGnosisvpnBuildArgs =
     {
       src,
@@ -99,39 +132,43 @@ in
   );
 
   # Cross-compiled — x86_64 Linux
-  binary-gnosis_vpn-x86_64-linux =
-    builders.x86_64-linux.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-gnosis_vpn-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+  binary-gnosis_vpn-x86_64-linux = withLinuxStaticEnv (
+    builders.x86_64-linux.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // {
-      CARGO_PROFILE = "dev";
-    }
+  );
+
+  binary-gnosis_vpn-x86_64-linux-dev = withLinuxStaticEnv (
+    builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      })
+      // {
+        CARGO_PROFILE = "dev";
+      }
+    )
   );
 
   # Cross-compiled — aarch64 Linux
-  binary-gnosis_vpn-aarch64-linux =
-    builders.aarch64-linux.callPackage nixLib.mkRustPackage
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-gnosis_vpn-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+  binary-gnosis_vpn-aarch64-linux = withLinuxStaticEnv (
+    builders.aarch64-linux.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // {
-      CARGO_PROFILE = "dev";
-    }
+  );
+
+  binary-gnosis_vpn-aarch64-linux-dev = withLinuxStaticEnv (
+    builders.aarch64-linux.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      })
+      // {
+        CARGO_PROFILE = "dev";
+      }
+    )
   );
 
   # System test package: all service binaries + the system test runner in one derivation.
