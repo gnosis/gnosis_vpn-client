@@ -69,7 +69,7 @@ let
         ]
       );
       linuxRustflagsArg = lib.optionalString stdenv.hostPlatform.isLinux
-        " --config build.rustflags='[\"-C\",\"target-feature=+crt-static\"]'";
+        " --config ${lib.escapeShellArg "build.rustflags=[\"-C\",\"target-feature=+crt-static\"]"}";
     in
     {
       inherit src depsSrc rev;
