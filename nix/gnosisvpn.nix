@@ -122,13 +122,29 @@ let
     }
   );
 
-  # Darwin: append +crt-static and system libiconv to nix-lib's existing RUSTFLAGS.
+  # Darwin: set CARGO_BUILD_RUSTFLAGS with +crt-static and system libiconv flags,
+  # overriding any value previously set by nix-lib, then rewrite any Nix store
+  # libiconv references to /usr/lib so the binary works outside of Nix.
   withDarwinStaticFlags =
     drv:
     drv.overrideAttrs (prev: {
-      CARGO_BUILD_RUSTFLAGS = "${
-        prev.CARGO_BUILD_RUSTFLAGS or ""
-      } -C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+
+      postInstall =
+        lib.optionalString (prev ? postInstall && prev.postInstall != null) prev.postInstall
+        + ''
+          for bin in $(find "$out/bin" -type f); do
+            linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
+
+            if [ -n "$linked_iconv" ]; then
+              echo "Rewriting $bin - found nix libiconv reference: $linked_iconv"
+              install_name_tool -change "$linked_iconv" "/usr/lib/libiconv.2.dylib" "$bin"
+              echo "Fixed libiconv path"
+            else
+              echo "Not rewriting $bin - no nix libiconv reference found"
+            fi
+          done
+        '';
     });
 
   mkGnosisvpnBuildArgs =
