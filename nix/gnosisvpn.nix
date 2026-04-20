@@ -127,22 +127,24 @@ let
   # libiconv references to /usr/lib so the binary works outside of Nix.
   withDarwinStaticFlags =
     drv:
-    drv.overrideAttrs (_: {
+    drv.overrideAttrs (prev: {
       CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
 
-      postInstall = lib.optionalString pkgs.stdenv.isDarwin ''
-        for bin in $(find "$out/bin" -type f); do
-          linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
+      postInstall =
+        lib.optionalString (prev ? postInstall && prev.postInstall != null) prev.postInstall
+        + lib.optionalString pkgs.stdenv.isDarwin ''
+          for bin in $(find "$out/bin" -type f); do
+            linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
 
-          if [ -n "$linked_iconv" ]; then
-            echo "Rewriting $bin - found nix libiconv reference: $linked_iconv"
-            install_name_tool -change "$linked_iconv" "/usr/lib/libiconv.2.dylib" "$bin"
-            echo "Fixed libiconv path"
-          else
-            echo "Not rewriting $bin - no nix libiconv reference found"
-          fi
-        done
-      '';
+            if [ -n "$linked_iconv" ]; then
+              echo "Rewriting $bin - found nix libiconv reference: $linked_iconv"
+              install_name_tool -change "$linked_iconv" "/usr/lib/libiconv.2.dylib" "$bin"
+              echo "Fixed libiconv path"
+            else
+              echo "Not rewriting $bin - no nix libiconv reference found"
+            fi
+          done
+        '';
     });
 
   mkGnosisvpnBuildArgs =
