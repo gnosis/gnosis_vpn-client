@@ -70,6 +70,10 @@ let
       );
       linuxRustflagsArg = lib.optionalString stdenv.hostPlatform.isLinux
         "--config ${lib.escapeShellArg "build.rustflags=[\"-C\",\"target-feature=+crt-static\"]"}";
+      # macOS does not support Linux-style static CRT; use dead_strip flags as
+      # the closest alternative to reduce linked dynamic payload.
+      darwinRustflagsArg = lib.optionalString stdenv.hostPlatform.isDarwin
+        "--config ${lib.escapeShellArg "build.rustflags=[\"-C\",\"link-arg=-Wl,-dead_strip\",\"-C\",\"link-arg=-Wl,-dead_strip_dylibs\"]"}";
     in
     {
       inherit src depsSrc rev;
@@ -80,7 +84,8 @@ let
       prependPackageName = false;
       cargoExtraArgs =
         "--bin gnosis_vpn-root --bin gnosis_vpn-worker --bin gnosis_vpn-ctl ${extraCargoArgs}"
-        + lib.optionalString stdenv.hostPlatform.isLinux " ${linuxRustflagsArg}";
+        + lib.optionalString stdenv.hostPlatform.isLinux " ${linuxRustflagsArg}"
+        + lib.optionalString stdenv.hostPlatform.isDarwin " ${darwinRustflagsArg}";
       cargoToml = ../Cargo.toml;
       extraBuildInputs = linuxExtraBuildInputs;
     };
