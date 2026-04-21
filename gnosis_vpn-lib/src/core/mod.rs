@@ -474,7 +474,7 @@ impl Core {
                         if let (Some(hopr), Some(balances), Some(ticket_stats)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_stats.as_ref())
                         {
-                            match command::BalanceResponse::new(
+                            match command::BalanceResponse::try_build(
                                 &hopr.info(),
                                 &balances,
                                 ticket_stats,

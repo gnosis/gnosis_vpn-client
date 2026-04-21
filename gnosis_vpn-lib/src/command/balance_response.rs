@@ -40,7 +40,7 @@ pub struct BalanceResponse {
 }
 
 impl BalanceResponse {
-    pub fn new(
+    pub fn try_build(
         info: &Info,
         balances: &balance::Balances,
         ticket_stats: &TicketStats,
