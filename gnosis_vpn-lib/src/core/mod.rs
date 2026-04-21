@@ -348,13 +348,11 @@ impl Core {
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                if let (Some(balances), Some(stats)) = (&self.balances, &self.ticket_stats) {
-                                    let ticket_value = stats.ticket_value().unwrap_or_default();
-                                    let issues = balances.to_funding_issues(ticket_value);
-                                    RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
-                                } else {
-                                    RunMode::running(None, self.hopr.as_ref().map(|h| h.status()))
-                                }
+                                let issues = self.balances.as_ref().zip(self.ticket_stats.as_ref())
+                                    .and_then(|(balances, stats)| {
+                                        stats.ticket_value().ok().map(|tv| balances.to_funding_issues(tv))
+                                    });
+                                RunMode::running(issues, self.hopr.as_ref().map(|h| h.status()))
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
@@ -476,14 +474,21 @@ impl Core {
                         if let (Some(hopr), Some(balances), Some(ticket_stats)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_stats.as_ref())
                         {
-                            let res = command::BalanceResponse::new(
+                            match command::BalanceResponse::new(
                                 &hopr.info(),
                                 &balances,
                                 ticket_stats,
                                 &self.config.destinations.clone(),
                                 self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
-                            );
-                            let _ = resp.send(Response::Balance(Some(res)));
+                            ) {
+                                Ok(res) => {
+                                    let _ = resp.send(Response::Balance(Some(res)));
+                                }
+                                Err(err) => {
+                                    tracing::error!(?err, "failed to compute balance response");
+                                    let _ = resp.send(Response::Balance(None));
+                                }
+                            }
                         } else {
                             let _ = resp.send(Response::Balance(None));
                         }

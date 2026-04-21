@@ -7,7 +7,7 @@ use std::fmt::{self, Display};
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
 use crate::info::Info;
-use crate::ticket_stats::TicketStats;
+use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
@@ -46,18 +46,17 @@ impl BalanceResponse {
         ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
         ongoing_channel_fundings: &[&Address],
-    ) -> Self {
+    ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
         let mut channels_out = from_balances(balances.channels_out.iter(), destinations.iter());
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
-        // ticket_value() is only used internally to determine funding issues
-        let ticket_value = ticket_stats.ticket_value().unwrap_or_default();
+        let ticket_value = ticket_stats.ticket_value()?;
         let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
         let info = info.clone();
 
-        BalanceResponse {
+        Ok(BalanceResponse {
             node,
             safe,
             channels_out,
@@ -65,7 +64,7 @@ impl BalanceResponse {
             info,
             ticket_price: ticket_stats.ticket_price,
             winning_probability: ticket_stats.winning_probability,
-        }
+        })
     }
 }
 
