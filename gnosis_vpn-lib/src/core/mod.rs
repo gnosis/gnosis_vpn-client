@@ -474,13 +474,14 @@ impl Core {
                         if let (Some(hopr), Some(balances), Some(ticket_stats)) =
                             (self.hopr.clone(), self.balances.clone(), self.ticket_stats.as_ref())
                         {
-                            match command::BalanceResponse::try_build(
+                            let balance_response = command::BalanceResponse::try_build(
                                 &hopr.info(),
                                 &balances,
                                 ticket_stats,
                                 &self.config.destinations.clone(),
                                 self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
-                            ) {
+                            );
+                            match balance_response {
                                 Ok(res) => {
                                     let _ = resp.send(Response::Balance(Some(res)));
                                 }
