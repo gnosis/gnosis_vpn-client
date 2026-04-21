@@ -7,6 +7,7 @@ use std::fmt::{self, Display};
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
 use crate::info::Info;
+use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
@@ -27,40 +28,43 @@ pub enum ChannelBalance {
     Completed(Balance<WxHOPR>),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceResponse {
     pub node: Balance<XDai>,
     pub safe: Balance<WxHOPR>,
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
-    pub ticket_value: Balance<WxHOPR>,
+    pub ticket_price: Balance<WxHOPR>,
+    pub winning_probability: f64,
 }
 
 impl BalanceResponse {
-    pub fn new(
+    pub fn try_build(
         info: &Info,
         balances: &balance::Balances,
-        ticket_value: &Balance<WxHOPR>,
+        ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
         ongoing_channel_fundings: &[&Address],
-    ) -> Self {
+    ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
         let mut channels_out = from_balances(balances.channels_out.iter(), destinations.iter());
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
-        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(*ticket_value);
+        let ticket_value = ticket_stats.ticket_value()?;
+        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
         let info = info.clone();
 
-        BalanceResponse {
+        Ok(BalanceResponse {
             node,
             safe,
             channels_out,
             issues,
             info,
-            ticket_value: *ticket_value,
-        }
+            ticket_price: ticket_stats.ticket_price,
+            winning_probability: ticket_stats.winning_probability,
+        })
     }
 }
 

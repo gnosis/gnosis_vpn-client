@@ -112,7 +112,8 @@ fn pretty_print(resp: &Response) {
             channels_out,
             issues,
             info,
-            ticket_value,
+            ticket_price,
+            winning_probability,
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -122,7 +123,7 @@ fn pretty_print(resp: &Response) {
                 info.safe_address.to_checksum()
             ));
             str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}\nTicket Value: {ticket_value}\n"
+                "---\nNode Balance: {node}\nSafe Balance: {safe}\nTicket Price: {ticket_price}\nWinning Probability: {winning_probability:.4}\n"
             ));
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
