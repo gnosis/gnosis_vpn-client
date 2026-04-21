@@ -348,10 +348,11 @@ impl Core {
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                let issues = self.balances.as_ref().zip(self.ticket_stats.as_ref())
-                                    .and_then(|(balances, stats)| {
+                                let issues = self.balances.as_ref().zip(self.ticket_stats.as_ref()).and_then(
+                                    |(balances, stats)| {
                                         stats.ticket_value().ok().map(|tv| balances.to_funding_issues(tv))
-                                    });
+                                    },
+                                );
                                 RunMode::running(issues, self.hopr.as_ref().map(|h| h.status()))
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
@@ -1486,7 +1487,9 @@ impl Core {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        let Some(tv) = self.ticket_stats.and_then(|s| s.ticket_value().ok()) else { return };
+        let Some(tv) = self.ticket_stats.and_then(|s| s.ticket_value().ok()) else {
+            return;
+        };
         match edgli.start_telemetry_reactor(tv) {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");

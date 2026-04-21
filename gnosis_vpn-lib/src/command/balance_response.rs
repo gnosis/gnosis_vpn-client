@@ -28,7 +28,7 @@ pub enum ChannelBalance {
     Completed(Balance<WxHOPR>),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceResponse {
     pub node: Balance<XDai>,
     pub safe: Balance<WxHOPR>,
