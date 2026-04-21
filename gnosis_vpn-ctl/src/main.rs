@@ -98,9 +98,8 @@ fn pretty_print(resp: &Response) {
             for info in disconnecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
             }
-            str_resp.push_str("---\n");
             for dest_state in destinations {
-                str_resp.push_str(&format!("{}\n", dest_state.destination));
+                str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
                     str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh,));
                 }
