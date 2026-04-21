@@ -1,0 +1,6 @@
+# Redirect users to the main hub for all reporting
+blank_issues_enabled: false
+contact_links:
+  - name: Report an Issue
+    url: https://github.com/gnosis/gnosis_vpn/discussions/new?category=issues-bug-reports
+    about: All issues should be reported in the main Gnosis VPN repository.

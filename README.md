@@ -9,6 +9,17 @@ consisting of:
 - [Gnosis VPN Server](https://github.com/gnosis/gnosis_vpn-server) handling VPN
   server side
 
+## Reporting Issues
+
+To maintain project organization, we use the main **[gnosis_vpn](https://github.com/gnosis/gnosis_vpn)** repository as the central hub for all user feedback.
+
+### How to report an issue for this component
+1. Visit the [gnosis_vpn Discussions](https://github.com/gnosis/gnosis_vpn/discussions/new?category=issues-bug-reports).
+2. Start a new discussion using the bug report template.
+3. Specify that the issue relates to this component (client).
+
+This repository is reserved for tracking actionable work by the team. Once a discussion is triaged and confirmed, we will create an internal issue here to track the implementation or fix.
+
 ## General concept
 
 The client offers three binaries, `gnosis_vpn-root`, `gnosis_vpn-worker` and
