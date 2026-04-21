@@ -14,6 +14,7 @@ use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
+use crate::ticket_stats::TicketStats;
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
@@ -123,7 +124,7 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
-        ticket_value: Option<Balance<WxHOPR>>,
+        ticket_stats: Option<TicketStats>,
     },
     /// Safe deployment ongoing
     DeployingSafe { node_address: Address },
@@ -279,7 +280,7 @@ impl RunMode {
         pre_safe: &Option<balance::PreSafe>,
         funding_tool: Option<String>,
         error: Option<String>,
-        ticket_value: Option<Balance<WxHOPR>>,
+        ticket_stats: Option<TicketStats>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
@@ -287,7 +288,7 @@ impl RunMode {
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
             error,
-            ticket_value,
+            ticket_stats,
         }
     }
 
@@ -438,14 +439,17 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                ticket_value,
+                ticket_stats,
             } => {
                 let mut msg = format!(
                     "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
                     node_address.to_checksum()
                 );
-                if let Some(tv) = ticket_value {
-                    msg = format!("{msg}, ticket value: {tv}");
+                if let Some(ts) = ticket_stats {
+                    msg = format!(
+                        "{msg}, ticket price: {}, winning probability: {:.4}",
+                        ts.ticket_price, ts.winning_probability
+                    );
                 }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {

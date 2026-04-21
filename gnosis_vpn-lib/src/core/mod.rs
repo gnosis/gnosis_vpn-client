@@ -2,7 +2,6 @@ use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
-use edgli::hopr_lib::{Balance, WxHOPR};
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -77,7 +76,7 @@ pub struct Core {
     balances: Option<balance::Balances>,
     safeless_interactor: Option<Arc<SafelessInteractor>>,
     hopr: Option<Arc<Hopr>>,
-    ticket_value: Option<Balance<WxHOPR>>,
+    ticket_stats: Option<TicketStats>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
@@ -171,7 +170,7 @@ impl Core {
             balances: None,
             hopr: None,
             safeless_interactor: None,
-            ticket_value: None,
+            ticket_stats: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             ongoing_channel_fundings: Vec::new(),
@@ -339,7 +338,7 @@ impl Core {
                                     &balance,
                                     funding_tool,
                                     error,
-                                    self.ticket_value,
+                                    self.ticket_stats,
                                 )
                             }
                             Phase::DeployingSafe {
@@ -349,7 +348,8 @@ impl Core {
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                if let (Some(balances), Some(ticket_value)) = (&self.balances, self.ticket_value) {
+                                if let (Some(balances), Some(stats)) = (&self.balances, &self.ticket_stats) {
+                                    let ticket_value = stats.ticket_value().unwrap_or_default();
                                     let issues = balances.to_funding_issues(ticket_value);
                                     RunMode::running(Some(issues), self.hopr.as_ref().map(|h| h.status()))
                                 } else {
@@ -473,13 +473,13 @@ impl Core {
                     }
 
                     WorkerCommand::Balance => {
-                        if let (Some(hopr), Some(balances), Some(ticket_value)) =
-                            (self.hopr.clone(), self.balances.clone(), self.ticket_value)
+                        if let (Some(hopr), Some(balances), Some(ticket_stats)) =
+                            (self.hopr.clone(), self.balances.clone(), self.ticket_stats.as_ref())
                         {
                             let res = command::BalanceResponse::new(
                                 &hopr.info(),
                                 &balances,
-                                &ticket_value,
+                                ticket_stats,
                                 &self.config.destinations.clone(),
                                 self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
@@ -1279,8 +1279,9 @@ impl Core {
             return;
         }
         self.ongoing_channel_fundings.push(address);
-        tracing::debug!(ticket_value = ?self.ticket_value, hopr_present  = self.hopr.is_some(), "checking channel funding");
-        if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), self.ticket_value) {
+        tracing::debug!(ticket_stats = ?self.ticket_stats, hopr_present = self.hopr.is_some(), "checking channel funding");
+        let ticket_value = self.ticket_stats.and_then(|s| s.ticket_value().ok());
+        if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), ticket_value) {
             let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
@@ -1479,7 +1480,7 @@ impl Core {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        let Some(tv) = self.ticket_value else { return };
+        let Some(tv) = self.ticket_stats.and_then(|s| s.ticket_value().ok()) else { return };
         match edgli.start_telemetry_reactor(tv) {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
@@ -1500,7 +1501,7 @@ impl Core {
         match stats.ticket_value() {
             Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
-                self.ticket_value = Some(tv);
+                self.ticket_stats = Some(stats);
                 self.try_start_reactor(results_sender);
             }
             Err(err) => {

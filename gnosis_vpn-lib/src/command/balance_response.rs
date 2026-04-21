@@ -7,6 +7,7 @@ use std::fmt::{self, Display};
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
 use crate::info::Info;
+use crate::ticket_stats::TicketStats;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
@@ -34,14 +35,15 @@ pub struct BalanceResponse {
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
-    pub ticket_value: Balance<WxHOPR>,
+    pub ticket_price: Balance<WxHOPR>,
+    pub winning_probability: f64,
 }
 
 impl BalanceResponse {
     pub fn new(
         info: &Info,
         balances: &balance::Balances,
-        ticket_value: &Balance<WxHOPR>,
+        ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
         ongoing_channel_fundings: &[&Address],
     ) -> Self {
@@ -50,7 +52,9 @@ impl BalanceResponse {
         let mut channels_out = from_balances(balances.channels_out.iter(), destinations.iter());
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
-        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(*ticket_value);
+        // ticket_value() is only used internally to determine funding issues
+        let ticket_value = ticket_stats.ticket_value().unwrap_or_default();
+        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
         let info = info.clone();
 
         BalanceResponse {
@@ -59,7 +63,8 @@ impl BalanceResponse {
             channels_out,
             issues,
             info,
-            ticket_value: *ticket_value,
+            ticket_price: ticket_stats.ticket_price,
+            winning_probability: ticket_stats.winning_probability,
         }
     }
 }

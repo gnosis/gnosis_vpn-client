@@ -1,5 +1,6 @@
 use edgli::hopr_lib::UnitaryFloatOps;
 use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -10,7 +11,7 @@ pub enum Error {
     Hopr(#[from] GeneralError),
 }
 
-#[derive(Copy, Debug, Clone)]
+#[derive(Copy, Debug, Clone, Serialize, Deserialize)]
 pub struct TicketStats {
     pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
