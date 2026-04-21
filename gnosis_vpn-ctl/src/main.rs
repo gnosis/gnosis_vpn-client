@@ -104,7 +104,6 @@ fn pretty_print(resp: &Response) {
                     str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh,));
                 }
             }
-            str_resp.push_str("---\n");
             println!("{str_resp}");
         }
         Response::Balance(Some(command::BalanceResponse {
