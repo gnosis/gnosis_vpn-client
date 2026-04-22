@@ -15,7 +15,7 @@ We use **[Gnosis VPN](https://github.com/gnosis/gnosis_vpn)** repository as the
 central hub for all user feedback.
 
 > [!IMPORTANT]
-> Do not open a direct issue here
+> Do not open an issue here.
 
 Follow these steps instead:
 
