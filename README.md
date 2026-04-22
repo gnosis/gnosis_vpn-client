@@ -11,16 +11,23 @@ consisting of:
 
 ## Reporting Issues
 
-To maintain project organization, we use the main
-**[gnosis_vpn](https://github.com/gnosis/gnosis_vpn)** repository as the central
-hub for all user feedback.
+We use **[Gnosis VPN](https://github.com/gnosis/gnosis_vpn)** repository as the
+central hub for all user feedback.
 
-### How to report an issue for this component
+> [!IMPORTANT]
+> Do not open a direct issue here
 
-1. Visit the
-   [gnosis_vpn Discussions](https://github.com/gnosis/gnosis_vpn/discussions/new?category=issues-bug-reports).
-2. Start a new discussion using the bug report template.
-3. Specify that the issue relates to this component (client).
+Follow these steps instead:
+
+1. Visit
+   [Gnosis VPN Discussions](https://github.com/gnosis/gnosis_vpn/discussions)
+   board.
+1. Search existing Discussions and Issues to see if your topic is already
+   covered.
+1. Start a new discussion in the
+   [Issues & Bug Reports](https://github.com/gnosis/gnosis_vpn/discussions/new?category=issues-bug-reports)
+   category.
+1. Provide details such as versions, operating system, and relevant logs.
 
 This repository is reserved for tracking actionable work by the team. Once a
 discussion is triaged and confirmed, we will create an internal issue here to
