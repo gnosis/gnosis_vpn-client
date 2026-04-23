@@ -38,6 +38,7 @@ mnl = "0.3.1"
 multiaddr = "0.18.2"
 nftnl = "0.9.1"
 notify = "8.2.0"
+pgp = "0.14"
 ping = "0.7.0"
 rand = "0.10.0"
 reqwest = { version = "0.13.1", features = ["blocking", "json"] }
