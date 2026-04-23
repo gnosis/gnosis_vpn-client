@@ -86,6 +86,10 @@ pub enum Command {
     /// Stop worker process to return to idle mode
     #[command()]
     StopClient {},
+
+    /// Fetch and display the latest available version from the update manifest
+    #[command()]
+    LatestVersion {},
 }
 
 impl From<Command> for LibCommand {
@@ -103,6 +107,7 @@ impl From<Command> for LibCommand {
             Command::Info {} => LibCommand::Info,
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
+            Command::LatestVersion {} => unreachable!("handled before socket dispatch"),
         }
     }
 }

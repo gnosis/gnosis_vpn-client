@@ -4,6 +4,7 @@ use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
+use gnosis_vpn_lib::manifest;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -17,6 +18,26 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
+
+    if let cli::Command::LatestVersion {} = args.command {
+        let client = reqwest::Client::new();
+        match manifest::download(&client).await {
+            Ok(manifest) => {
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&manifest).unwrap_or_default());
+                } else if let Some(version) = manifest["version"].as_str() {
+                    println!("{version}");
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&manifest).unwrap_or_default());
+                }
+                process::exit(exitcode::OK);
+            }
+            Err(e) => {
+                eprintln!("Error fetching latest version: {e}");
+                process::exit(exitcode::UNAVAILABLE);
+            }
+        }
+    }
 
     let cmd: Command = args.command.into();
     let resp = match socket::root::process_cmd(&args.socket_path, &cmd).await {

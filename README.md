@@ -73,7 +73,7 @@ steps:
 1. Import the public key (checkout the repository first):
 
    ```bash
-   gpg --import gpg-public-key.asc
+   gpg --import gnosisvpn-public-key.asc
    ```
 
 2. Verify the binary signature (examples for x86_64 and ARM64):
