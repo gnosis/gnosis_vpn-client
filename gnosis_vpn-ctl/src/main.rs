@@ -19,7 +19,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 async fn main() {
     let args = cli::parse();
 
-    if let cli::Command::LatestVersion {} = args.command {
+    if let cli::Command::CheckUpdate {} = args.command {
         let client = reqwest::Client::new();
         match manifest::download(&client).await {
             Ok(manifest) => {
