@@ -3360,7 +3360,6 @@ dependencies = [
  "gnosis_vpn-lib",
  "humantime",
  "mimalloc",
- "reqwest 0.13.2",
  "serde_json",
  "tokio",
 ]

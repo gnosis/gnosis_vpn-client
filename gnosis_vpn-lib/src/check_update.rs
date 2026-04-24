@@ -30,8 +30,8 @@ pub enum Error {
     Request(#[from] reqwest::Error),
     #[error("Error parsing url: {0}")]
     Url(#[from] url::ParseError),
-    #[error("Manifest signature invalid: {0}")]
-    SignatureInvalid(#[from] pgp::errors::Error),
+    #[error("PGP error: {0}")]
+    Pgp(#[from] pgp::errors::Error),
     #[error("Error parsing manifest: {0}")]
     Json(#[from] serde_json::Error),
 }
