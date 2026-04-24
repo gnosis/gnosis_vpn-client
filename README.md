@@ -121,8 +121,8 @@ steps:
 ## Idle shutdown
 
 When `--client-autostart <duration>` (or `GNOSISVPN_CLIENT_AUTOSTART`) is set,
-the service starts the worker automatically on launch and shuts it down after the
-worker has been idle for the given duration.
+the service starts the worker automatically on launch and shuts it down after
+the worker has been idle for the given duration.
 
 The idle countdown behaves as follows:
 
