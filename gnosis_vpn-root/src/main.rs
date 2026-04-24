@@ -26,7 +26,7 @@ use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
+use gnosis_vpn_lib::{check_update, dirs, logging, ping, socket, worker};
 
 mod cli;
 mod network_info;
@@ -870,6 +870,16 @@ impl DaemonState {
                     log_file: self.log_file.clone(),
                 };
                 Ok(Response::Info(info))
+            }
+            LibCommand::CheckUpdate => {
+                let client = reqwest::Client::new();
+                match check_update::download(&client).await {
+                    Ok(manifest) => Ok(Response::CheckUpdate(manifest)),
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to fetch update manifest");
+                        Ok(Response::CheckUpdate(serde_json::Value::Null))
+                    }
+                }
             }
 
             LibCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {

@@ -3419,6 +3419,7 @@ dependencies = [
  "mnl",
  "nftnl",
  "notify",
+ "reqwest 0.13.2",
  "rtnetlink",
  "serde_json",
  "thiserror 2.0.18",

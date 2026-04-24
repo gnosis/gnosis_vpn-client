@@ -107,7 +107,7 @@ impl From<Command> for LibCommand {
             Command::Info {} => LibCommand::Info,
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
-            Command::CheckUpdate {} => unreachable!("handled before socket dispatch"),
+            Command::CheckUpdate {} => LibCommand::CheckUpdate,
         }
     }
 }

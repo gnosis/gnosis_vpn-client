@@ -4,7 +4,6 @@ use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
-use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -18,36 +17,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
-
-    if let cli::Command::CheckUpdate {} = args.command {
-        let client = reqwest::Client::new();
-        match check_update::download(&client).await {
-            Ok(manifest) => {
-                if args.json {
-                    println!("{}", serde_json::to_string_pretty(&manifest).unwrap_or_default());
-                } else {
-                    let channels = &manifest["channels"];
-                    if let Some(stable) = channels["stable"].as_object() {
-                        let version = stable["version"].as_str().unwrap_or("unknown");
-                        let published_at = stable["published_at"].as_str().unwrap_or("unknown");
-                        let url = stable["download_url"].as_str().unwrap_or("unknown");
-                        println!("Stable: {version}, published at {published_at}, download at: {url}");
-                    }
-                    if let Some(nightly) = channels["nightly"].as_object() {
-                        let version = nightly["version"].as_str().unwrap_or("unknown");
-                        let published_at = nightly["published_at"].as_str().unwrap_or("unknown");
-                        let url = nightly["download_url"].as_str().unwrap_or("unknown");
-                        println!("Latest Nightly: {version}, published at {published_at}, download at: {url}");
-                    }
-                }
-                process::exit(exitcode::OK);
-            }
-            Err(e) => {
-                eprintln!("Error fetching latest version: {e}");
-                process::exit(exitcode::UNAVAILABLE);
-            }
-        }
-    }
 
     let cmd: Command = args.command.into();
     let resp = match socket::root::process_cmd(&args.socket_path, &cmd).await {
@@ -209,6 +178,25 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
+        Response::CheckUpdate(manifest) => {
+            if manifest.is_null() {
+                eprintln!("Failed to fetch update manifest");
+                return;
+            }
+            let channels = &manifest["channels"];
+            if let Some(stable) = channels["stable"].as_object() {
+                let version = stable["version"].as_str().unwrap_or("unknown");
+                let published_at = stable["published_at"].as_str().unwrap_or("unknown");
+                let url = stable["download_url"].as_str().unwrap_or("unknown");
+                println!("Stable: {version}, published at {published_at}, download at: {url}");
+            }
+            if let Some(nightly) = channels["nightly"].as_object() {
+                let version = nightly["version"].as_str().unwrap_or("unknown");
+                let published_at = nightly["published_at"].as_str().unwrap_or("unknown");
+                let url = nightly["download_url"].as_str().unwrap_or("unknown");
+                println!("Latest Nightly: {version}, published at {published_at}, download at: {url}");
+            }
+        }
         Response::StartClient(command::StartClientResponse::Started) => {
             println!("Worker client started");
         }
@@ -250,6 +238,9 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
         Response::RefreshNodeTriggered => exitcode::OK,
         Response::Info(..) => exitcode::OK,
+        Response::CheckUpdate(manifest) => {
+            if manifest.is_null() { exitcode::UNAVAILABLE } else { exitcode::OK }
+        }
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,

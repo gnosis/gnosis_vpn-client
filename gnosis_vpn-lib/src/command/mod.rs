@@ -42,6 +42,8 @@ pub enum Command {
     Ping,
     /// Deliver service version and other meta
     Info,
+    /// Fetch the latest update manifest and return version info for all channels
+    CheckUpdate,
     /// Start worker process and edge client if not already running, with a keep alive duration for the client
     StartClient(Duration),
     /// Stop a running worker process and edge client
@@ -72,6 +74,7 @@ pub enum Response {
     RefreshNodeTriggered,
     Pong,
     Info(InfoResponse),
+    CheckUpdate(serde_json::Value),
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
     WorkerOffline,
@@ -573,7 +576,7 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
+            Command::Info | Command::Ping | Command::CheckUpdate | Command::StartClient(_) | Command::StopClient => Err(()),
         }
     }
 }
