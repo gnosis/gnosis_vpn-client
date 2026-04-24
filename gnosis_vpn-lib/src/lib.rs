@@ -11,7 +11,7 @@ pub mod gvpn_client;
 pub mod hopr;
 pub mod info;
 pub mod logging;
-pub mod manifest;
+pub mod check_update;
 pub mod ping;
 pub mod route_health;
 pub mod shell_command_ext;

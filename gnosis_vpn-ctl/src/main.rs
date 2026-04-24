@@ -4,7 +4,7 @@ use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
-use gnosis_vpn_lib::manifest;
+use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -21,7 +21,7 @@ async fn main() {
 
     if let cli::Command::CheckUpdate {} = args.command {
         let client = reqwest::Client::new();
-        match manifest::download(&client).await {
+        match check_update::download(&client).await {
             Ok(manifest) => {
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&manifest).unwrap_or_default());
