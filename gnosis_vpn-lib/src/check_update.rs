@@ -37,8 +37,9 @@ fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest,
 
 pub async fn download(client: &Client, manifest_base_url: &str) -> Result<Manifest, Error> {
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
-    let manifest_url = url::Url::parse(&format!("{}{}", manifest_base_url, MANIFEST_FILENAME))?;
-    let sig_url = url::Url::parse(&format!("{}{}", manifest_base_url, sig_filename))?;
+    let base = url::Url::parse(&format!("{}/", manifest_base_url.trim_end_matches('/')))?;
+    let manifest_url = base.join(MANIFEST_FILENAME)?;
+    let sig_url = base.join(&sig_filename)?;
 
     tracing::debug!(?manifest_url, ?sig_url, "downloading update manifest and signature");
 
