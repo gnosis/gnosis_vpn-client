@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "schedule:earlyMondays"],
+  "pinDigests": true,
+  "prCreation": "not-pending",
+  "semanticCommits": "enabled",
+  "rangeStrategy": "bump",
+  "minimumReleaseAge": "14 days",
+  "vulnerabilityAlerts": { "enabled": true },
+  "nix": { "enabled": true },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "commitMessageTopic": "GitHub Actions"
+    },
+    {
+      "matchManagers": ["nix"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "nix flake updates"
+    }
+  ]
+}
