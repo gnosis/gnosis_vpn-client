@@ -1264,7 +1264,9 @@ impl DaemonState {
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
-                let _ = self.keep_alive_instruction_sender.try_send(KeepAliveInstruction::Restart);
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .try_send(KeepAliveInstruction::Restart);
             }
             _ => (),
         }
