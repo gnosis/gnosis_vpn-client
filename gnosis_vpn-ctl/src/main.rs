@@ -172,7 +172,10 @@ fn pretty_print(resp: &Response) {
             println!("Node balance check triggered");
         }
         Response::Info(info) => {
-            let mut str_resp = format!("Gnosis VPN\n - client service version: {version}", version = info.version);
+            let mut str_resp = format!(
+                "Gnosis VPN\n - client service version: {version}",
+                version = info.version
+            );
             match &info.package_version {
                 Some(v) => str_resp.push_str(&format!("\n - package version: {v}")),
                 None => str_resp.push_str("\n - package version: not available"),
@@ -243,7 +246,11 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::RefreshNodeTriggered => exitcode::OK,
         Response::Info(..) => exitcode::OK,
         Response::CheckUpdate(manifest) => {
-            if manifest.is_null() { exitcode::UNAVAILABLE } else { exitcode::OK }
+            if manifest.is_null() {
+                exitcode::UNAVAILABLE
+            } else {
+                exitcode::OK
+            }
         }
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,

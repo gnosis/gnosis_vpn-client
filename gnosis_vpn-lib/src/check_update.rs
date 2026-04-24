@@ -59,13 +59,7 @@ pub async fn download(client: &Client) -> Result<serde_json::Value, Error> {
         .bytes()
         .await?;
 
-    let sig_bytes = client
-        .get(sig_url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let sig_bytes = client.get(sig_url).send().await?.error_for_status()?.bytes().await?;
 
     verify_and_parse(&manifest_bytes, &sig_bytes)
 }
@@ -85,12 +79,22 @@ mod tests {
         let manifest_bytes = fixture(manifest_file);
         let sig_bytes = fixture(&sig_file);
         let result = verify_and_parse(&manifest_bytes, &sig_bytes);
-        assert!(result.is_ok(), "verification failed for {manifest_file}: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "verification failed for {manifest_file}: {:?}",
+            result.err()
+        );
         let manifest = result.unwrap();
         assert_eq!(manifest["schema_version"], 1, "schema_version should be 1");
         assert!(manifest["channels"].is_object(), "channels should be an object");
-        assert!(manifest["channels"]["stable"].is_object(), "stable channel should exist");
-        assert!(manifest["channels"]["stable"]["version"].is_string(), "stable version should be a string");
+        assert!(
+            manifest["channels"]["stable"].is_object(),
+            "stable channel should exist"
+        );
+        assert!(
+            manifest["channels"]["stable"]["version"].is_string(),
+            "stable version should be a string"
+        );
     }
 
     #[test]

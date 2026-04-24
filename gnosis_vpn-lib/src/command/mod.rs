@@ -577,7 +577,9 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::CheckUpdate | Command::StartClient(_) | Command::StopClient => Err(()),
+            Command::Info | Command::Ping | Command::CheckUpdate | Command::StartClient(_) | Command::StopClient => {
+                Err(())
+            }
         }
     }
 }
