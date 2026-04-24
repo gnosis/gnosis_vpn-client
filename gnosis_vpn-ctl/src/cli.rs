@@ -68,7 +68,7 @@ pub enum Command {
     #[command()]
     NerdStats {},
 
-    /// Display service information, like version and file locations
+    /// Display service information, such as versions and file locations
     #[command()]
     Info {},
 

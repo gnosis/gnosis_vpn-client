@@ -173,6 +173,10 @@ fn pretty_print(resp: &Response) {
         }
         Response::Info(info) => {
             let mut str_resp = format!("Gnosis VPN client service {version}", version = info.version);
+            match &info.package_version {
+                Some(v) => str_resp.push_str(&format!("\nPackage version: {v}")),
+                None => str_resp.push_str("\nPackage version: not available"),
+            }
             if let Some(ref file) = info.log_file {
                 str_resp.push_str(&format!("\nLog file: {file}", file = file.display()));
             }
