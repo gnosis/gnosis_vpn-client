@@ -96,9 +96,9 @@ struct WorkerChild {
 
 #[derive(Debug)]
 enum KeepAliveInstruction {
-    Reset,
     Ignite(Duration),
     Stop,
+    Restart,
 }
 
 async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMessage>), exitcode::ExitCode> {
@@ -377,9 +377,6 @@ async fn keep_alive_timer(
                 }
                 Some(msg) = keep_alive_instruction_receiver.recv() => {
                     match msg {
-                        KeepAliveInstruction::Reset => {
-                            keepalive.as_mut().reset(time::Instant::now() + dur);
-                        }
                         KeepAliveInstruction::Ignite(duration) => {
                             tracing::info!(?duration, "ignite keep alive timer");
                             active = true;
@@ -390,6 +387,11 @@ async fn keep_alive_timer(
                             tracing::debug!("stop keep alive timer");
                             active = false;
                             keepalive.as_mut().reset(time::Instant::now())
+                        }
+                        KeepAliveInstruction::Restart => {
+                            tracing::debug!(?dur, "restart keep alive timer");
+                            active = true;
+                            keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
                     }
                 }
@@ -770,7 +772,7 @@ impl DaemonState {
                     send_to_worker(msg, &mut child.socket_writer).await?;
                     let _ = self
                         .keep_alive_instruction_sender
-                        .send(KeepAliveInstruction::Reset)
+                        .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
                 } else if matches!(w_cmd, WorkerCommand::Status) {
@@ -1015,7 +1017,7 @@ impl DaemonState {
                     self.setup_worker().await?;
                     let _ = self
                         .keep_alive_instruction_sender
-                        .send(KeepAliveInstruction::Reset)
+                        .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
                 } else {
@@ -1051,7 +1053,7 @@ impl DaemonState {
                 self.setup_worker().await?;
                 let _ = self
                     .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Reset)
+                    .send(KeepAliveInstruction::Restart)
                     .await;
                 Ok(())
             }
@@ -1257,10 +1259,12 @@ impl DaemonState {
             WorkerCommand::Connect(id) => {
                 tracing::debug!(?id, "remembering target destination from connect command");
                 self.target_dest_id = Some(id.clone());
+                let _ = self.keep_alive_instruction_sender.try_send(KeepAliveInstruction::Stop);
             }
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
+                let _ = self.keep_alive_instruction_sender.try_send(KeepAliveInstruction::Restart);
             }
             _ => (),
         }
