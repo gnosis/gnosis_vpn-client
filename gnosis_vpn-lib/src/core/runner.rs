@@ -28,7 +28,7 @@ use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
-use crate::route_health::HealthCheckOutcome;
+use crate::route_health::{self, HealthCheckOutcome};
 use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, ping, remote_data};
@@ -233,7 +233,7 @@ pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>)
     tracing::debug!(?interval, "starting tunnel ping probe");
 
     loop {
-        time::sleep(interval).await;
+        time::sleep(route_health::jitter(interval)).await;
 
         let (tx, rx) = oneshot::channel();
         let request = Results::ConnectionRequestToRoot(event::RunnerToRoot::Ping {
