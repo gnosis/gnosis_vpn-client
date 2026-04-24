@@ -140,6 +140,7 @@ impl TryFrom<Config> for config::Config {
             destinations,
             wireguard,
             blokli,
+            manifest_base_url: "https://download.gnosisvpn.io/manifests/".to_string(),
         })
     }
 }

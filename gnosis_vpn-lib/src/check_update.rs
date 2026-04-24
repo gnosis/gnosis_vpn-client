@@ -22,9 +22,6 @@ const MANIFEST_FILENAME: &str = "macos-arm64.json";
     all(target_os = "linux", target_arch = "aarch64"),
     all(target_os = "macos", target_arch = "aarch64"),
 )))]
-compile_error!("unsupported platform: no update manifest available for this target");
-
-const MANIFEST_BASE_URL: &str = "https://download.gnosisvpn.io/manifests/";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -46,10 +43,10 @@ fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest,
     Ok(manifest)
 }
 
-pub async fn download(client: &Client) -> Result<Manifest, Error> {
+pub async fn download(client: &Client, manifest_base_url: &str) -> Result<Manifest, Error> {
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
-    let manifest_url = url::Url::parse(&format!("{}{}", MANIFEST_BASE_URL, MANIFEST_FILENAME))?;
-    let sig_url = url::Url::parse(&format!("{}{}", MANIFEST_BASE_URL, sig_filename))?;
+    let manifest_url = url::Url::parse(&format!("{}{}", manifest_base_url, MANIFEST_FILENAME))?;
+    let sig_url = url::Url::parse(&format!("{}{}", manifest_base_url, sig_filename))?;
 
     tracing::debug!(?manifest_url, ?sig_url, "downloading update manifest and signature");
 

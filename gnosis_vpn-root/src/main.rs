@@ -881,7 +881,7 @@ impl DaemonState {
                     .timeout(std::time::Duration::from_secs(60))
                     .build()
                     .unwrap_or_default();
-                let response = match check_update::download(&client).await {
+                let response = match check_update::download(&client, &self.config.manifest_base_url).await {
                     Ok(manifest) => command::CheckUpdateResponse::Ok(manifest),
                     Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
                         tracing::warn!(error = ?e, "update manifest integrity check failed");
