@@ -1,0 +1,6 @@
+# Redirect users to the main hub for all reporting
+blank_issues_enabled: false
+contact_links:
+  - name: Report a Bug or Request a Feature
+    url: https://github.com/gnosis/gnosis_vpn/discussions/new?category=issues-bug-reports
+    about: Use our Discussions forum for all feedback, bug reports, and feature requests.
