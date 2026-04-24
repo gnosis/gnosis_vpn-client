@@ -152,6 +152,19 @@ pub struct InfoResponse {
     pub version: String,
     pub log_file: Option<PathBuf>,
     pub package_version: Option<String>,
+    pub update_state: UpdateState,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum UpdateState {
+    /// No update check has been requested
+    Disabled,
+    /// Update check is in progress
+    Running,
+    /// Update check completed successfully; contains the latest stable version
+    Version(String),
+    /// Update check failed
+    Error(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

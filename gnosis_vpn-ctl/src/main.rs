@@ -180,6 +180,13 @@ fn pretty_print(resp: &Response) {
                 Some(v) => str_resp.push_str(&format!("\n - package version: {v}")),
                 None => str_resp.push_str("\n - package version: not available"),
             }
+            let update_str = match &info.update_state {
+                command::UpdateState::Disabled => "disabled".to_string(),
+                command::UpdateState::Running => "checking...".to_string(),
+                command::UpdateState::Version(v) => format!("latest stable: {v}"),
+                command::UpdateState::Error(e) => format!("error: {e}"),
+            };
+            str_resp.push_str(&format!("\n - update check: {update_str}"));
             if let Some(ref file) = info.log_file {
                 str_resp.push_str(&format!("\nLog file: {file}", file = file.display()));
             }

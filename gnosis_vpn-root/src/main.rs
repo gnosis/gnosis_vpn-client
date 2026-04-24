@@ -69,6 +69,9 @@ struct DaemonState {
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
+    // result channel from spawned check-update tasks back to the main loop
+    update_state_channel: (mpsc::Sender<command::UpdateState>, mpsc::Receiver<command::UpdateState>),
+    update_state: command::UpdateState,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -657,6 +660,8 @@ impl DaemonState {
             worker_params,
             worker_user,
             keep_alive_instruction_sender,
+            update_state_channel: mpsc::channel(1),
+            update_state: command::UpdateState::Disabled,
         }
     }
 
@@ -680,6 +685,7 @@ impl DaemonState {
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
+                Some(state) = self.update_state_channel.1.recv() => { self.update_state = state; },
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -789,23 +795,46 @@ impl DaemonState {
             Err(_) => {
                 if matches!(cmd, LibCommand::CheckUpdate) {
                     let manifest_base_url = self.config.manifest_base_url.clone();
+                    let update_state_sender = self.update_state_channel.0.clone();
+                    self.update_state = command::UpdateState::Running;
                     tokio::spawn(async move {
                         let client = reqwest::Client::builder()
                             .timeout(std::time::Duration::from_secs(30))
                             .build()
                             .unwrap_or_default();
-                        let response = match check_update::download(&client, &manifest_base_url).await {
-                            Ok(manifest) => command::CheckUpdateResponse::Ok(Box::new(manifest)),
-                            Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
-                                tracing::warn!(error = ?e, "update manifest integrity check failed");
-                                command::CheckUpdateResponse::IntegrityError(e.to_string())
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = ?e, "failed to fetch update manifest");
-                                command::CheckUpdateResponse::Unavailable(e.to_string())
-                            }
-                        };
-                        let _ = resp.send(Response::CheckUpdate(response)).map_err(|error| {
+                        let (check_response, new_update_state) =
+                            match check_update::download(&client, &manifest_base_url).await {
+                                Ok(manifest) => {
+                                    let version = manifest
+                                        .channels
+                                        .stable
+                                        .as_ref()
+                                        .map(|s| s.version.clone())
+                                        .unwrap_or_default();
+                                    (
+                                        command::CheckUpdateResponse::Ok(Box::new(manifest)),
+                                        command::UpdateState::Version(version),
+                                    )
+                                }
+                                Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
+                                    tracing::warn!(error = ?e, "update manifest integrity check failed");
+                                    let msg = e.to_string();
+                                    (
+                                        command::CheckUpdateResponse::IntegrityError(msg.clone()),
+                                        command::UpdateState::Error(msg),
+                                    )
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = ?e, "failed to fetch update manifest");
+                                    let msg = e.to_string();
+                                    (
+                                        command::CheckUpdateResponse::Unavailable(msg.clone()),
+                                        command::UpdateState::Error(msg),
+                                    )
+                                }
+                            };
+                        let _ = update_state_sender.send(new_update_state).await;
+                        let _ = resp.send(Response::CheckUpdate(check_response)).map_err(|error| {
                             tracing::error!(?error, "socket command response channel closed");
                         });
                     });
@@ -897,6 +926,7 @@ impl DaemonState {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     log_file: self.log_file.clone(),
                     package_version,
+                    update_state: self.update_state.clone(),
                 };
                 Ok(Response::Info(info))
             }
