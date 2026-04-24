@@ -4,6 +4,8 @@ use thiserror::Error;
 
 use std::io::Cursor;
 
+use crate::command::CheckUpdateResponse;
+
 const PUBLIC_KEY: &str = include_str!("../../gnosisvpn-public-key.asc");
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -36,7 +38,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
-fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<serde_json::Value, Error> {
+fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<CheckUpdateResponse, Error> {
     let (public_key, _) = SignedPublicKey::from_armor_single(Cursor::new(PUBLIC_KEY))?;
     let (sig, _) = StandaloneSignature::from_armor_single(Cursor::new(sig_bytes))?;
     sig.verify(&public_key, manifest_bytes)?;
@@ -44,7 +46,7 @@ fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<serde_jso
     Ok(manifest)
 }
 
-pub async fn download(client: &Client) -> Result<serde_json::Value, Error> {
+pub async fn download(client: &Client) -> Result<CheckUpdateResponse, Error> {
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
     let manifest_url = url::Url::parse(&format!("{}{}", MANIFEST_BASE_URL, MANIFEST_FILENAME))?;
     let sig_url = url::Url::parse(&format!("{}{}", MANIFEST_BASE_URL, sig_filename))?;
@@ -85,16 +87,9 @@ mod tests {
             result.err()
         );
         let manifest = result.unwrap();
-        assert_eq!(manifest["schema_version"], 1, "schema_version should be 1");
-        assert!(manifest["channels"].is_object(), "channels should be an object");
-        assert!(
-            manifest["channels"]["stable"].is_object(),
-            "stable channel should exist"
-        );
-        assert!(
-            manifest["channels"]["stable"]["version"].is_string(),
-            "stable version should be a string"
-        );
+        assert_eq!(manifest.schema_version, 1, "schema_version should be 1");
+        let stable = manifest.channels.stable.expect("stable channel should exist");
+        assert!(!stable.version.is_empty(), "stable version should not be empty");
     }
 
     #[test]

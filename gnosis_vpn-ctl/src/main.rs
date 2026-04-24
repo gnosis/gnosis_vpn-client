@@ -185,23 +185,18 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
-        Response::CheckUpdate(manifest) => {
-            if manifest.is_null() {
-                eprintln!("Failed to fetch update manifest");
-                return;
+        Response::CheckUpdate(r) => {
+            if let Some(stable) = &r.channels.stable {
+                println!(
+                    "Stable: {}, published at {}, download at: {}",
+                    stable.version, stable.published_at, stable.download_url
+                );
             }
-            let channels = &manifest["channels"];
-            if let Some(stable) = channels["stable"].as_object() {
-                let version = stable["version"].as_str().unwrap_or("unknown");
-                let published_at = stable["published_at"].as_str().unwrap_or("unknown");
-                let url = stable["download_url"].as_str().unwrap_or("unknown");
-                println!("Stable: {version}, published at {published_at}, download at: {url}");
-            }
-            if let Some(nightly) = channels["nightly"].as_object() {
-                let version = nightly["version"].as_str().unwrap_or("unknown");
-                let published_at = nightly["published_at"].as_str().unwrap_or("unknown");
-                let url = nightly["download_url"].as_str().unwrap_or("unknown");
-                println!("Latest Nightly: {version}, published at {published_at}, download at: {url}");
+            if let Some(nightly) = &r.channels.nightly {
+                println!(
+                    "Latest Nightly: {}, published at {}, download at: {}",
+                    nightly.version, nightly.published_at, nightly.download_url
+                );
             }
         }
         Response::StartClient(command::StartClientResponse::Started) => {
@@ -245,13 +240,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
         Response::RefreshNodeTriggered => exitcode::OK,
         Response::Info(..) => exitcode::OK,
-        Response::CheckUpdate(manifest) => {
-            if manifest.is_null() {
-                exitcode::UNAVAILABLE
-            } else {
-                exitcode::OK
-            }
-        }
+        Response::CheckUpdate(_) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,

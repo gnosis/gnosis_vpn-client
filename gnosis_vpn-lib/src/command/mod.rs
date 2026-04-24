@@ -74,7 +74,7 @@ pub enum Response {
     RefreshNodeTriggered,
     Pong,
     Info(InfoResponse),
-    CheckUpdate(serde_json::Value),
+    CheckUpdate(CheckUpdateResponse),
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
     WorkerOffline,
@@ -152,6 +152,32 @@ pub struct InfoResponse {
     pub version: String,
     pub log_file: Option<PathBuf>,
     pub package_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CheckUpdateResponse {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub channels: CheckUpdateChannels,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CheckUpdateChannels {
+    pub stable: Option<ChannelRelease>,
+    pub nightly: Option<ChannelRelease>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChannelRelease {
+    pub version: String,
+    pub published_at: String,
+    pub download_url: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub artifact_signature: String,
+    pub release_notes: String,
+    pub min_os_version: String,
+    pub min_app_version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -877,12 +877,15 @@ impl DaemonState {
                 Ok(Response::Info(info))
             }
             LibCommand::CheckUpdate => {
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build()
+                    .unwrap_or_default();
                 match check_update::download(&client).await {
                     Ok(manifest) => Ok(Response::CheckUpdate(manifest)),
                     Err(e) => {
                         tracing::warn!(error = ?e, "failed to fetch update manifest");
-                        Ok(Response::CheckUpdate(serde_json::Value::Null))
+                        Err(exitcode::UNAVAILABLE)
                     }
                 }
             }
