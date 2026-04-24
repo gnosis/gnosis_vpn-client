@@ -157,7 +157,7 @@ pub struct InfoResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CheckUpdateResponse {
     /// Manifest downloaded and signature verified successfully
-    Ok(Manifest),
+    Ok(Box<Manifest>),
     /// Network or availability failure — manifest could not be fetched
     Unavailable(String),
     /// Manifest was fetched but failed PGP verification or JSON parsing
