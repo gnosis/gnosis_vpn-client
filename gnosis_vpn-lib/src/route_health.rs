@@ -53,7 +53,8 @@ pub(crate) fn jitter(base: Duration) -> Duration {
     let factor = rand::rng().random::<f64>() * 0.5 - 0.25;
     let jitter_secs = base.as_secs_f64() * factor;
     if jitter_secs >= 0.0 {
-        base + Duration::from_secs_f64(jitter_secs)
+        let jitter = Duration::from_secs_f64(jitter_secs);
+        base.checked_add(jitter).unwrap_or(Duration::MAX)
     } else {
         base.saturating_sub(Duration::from_secs_f64(-jitter_secs))
     }
