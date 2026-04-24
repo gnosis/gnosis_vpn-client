@@ -1,7 +1,5 @@
 use pgp::{Deserializable, SignedPublicKey, StandaloneSignature};
 use reqwest::Client;
-use thiserror::Error;
-
 use std::io::Cursor;
 
 use crate::command::Manifest;
@@ -17,12 +15,7 @@ const MANIFEST_FILENAME: &str = "linux-arm64.json";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const MANIFEST_FILENAME: &str = "macos-arm64.json";
 
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "aarch64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-)))]
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Error making http request: {0}")]
     Request(#[from] reqwest::Error),
