@@ -22,7 +22,6 @@ const MANIFEST_FILENAME: &str = "macos-arm64.json";
     all(target_os = "linux", target_arch = "aarch64"),
     all(target_os = "macos", target_arch = "aarch64"),
 )))]
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Error making http request: {0}")]
