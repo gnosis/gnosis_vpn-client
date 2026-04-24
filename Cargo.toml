@@ -30,7 +30,7 @@ hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "e8e0b6
 human-bandwidth = "0.1.4"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
-libc = "0.2.183"
+libc = "0.2.184"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
