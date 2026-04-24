@@ -45,7 +45,7 @@ const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
 /// are returned unchanged so initial spawns are not delayed.
-pub fn jitter(base: Duration) -> Duration {
+pub(crate) fn jitter(base: Duration) -> Duration {
     if base.is_zero() {
         return base;
     }
