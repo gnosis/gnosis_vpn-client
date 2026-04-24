@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use std::io::Cursor;
 
-use crate::command::CheckUpdateResponse;
+use crate::command::Manifest;
 
 const PUBLIC_KEY: &str = include_str!("../../gnosisvpn-public-key.asc");
 
@@ -38,7 +38,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
-fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<CheckUpdateResponse, Error> {
+fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest, Error> {
     let (public_key, _) = SignedPublicKey::from_armor_single(Cursor::new(PUBLIC_KEY))?;
     let (sig, _) = StandaloneSignature::from_armor_single(Cursor::new(sig_bytes))?;
     sig.verify(&public_key, manifest_bytes)?;
@@ -46,7 +46,7 @@ fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<CheckUpda
     Ok(manifest)
 }
 
-pub async fn download(client: &Client) -> Result<CheckUpdateResponse, Error> {
+pub async fn download(client: &Client) -> Result<Manifest, Error> {
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
     let manifest_url = url::Url::parse(&format!("{}{}", MANIFEST_BASE_URL, MANIFEST_FILENAME))?;
     let sig_url = url::Url::parse(&format!("{}{}", MANIFEST_BASE_URL, sig_filename))?;

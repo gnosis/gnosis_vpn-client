@@ -155,14 +155,24 @@ pub struct InfoResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CheckUpdateResponse {
-    pub schema_version: u32,
-    pub generated_at: String,
-    pub channels: CheckUpdateChannels,
+pub enum CheckUpdateResponse {
+    /// Manifest downloaded and signature verified successfully
+    Ok(Manifest),
+    /// Network or availability failure — manifest could not be fetched
+    Unavailable(String),
+    /// Manifest was fetched but failed PGP verification or JSON parsing
+    IntegrityError(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CheckUpdateChannels {
+pub struct Manifest {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub channels: ManifestChannels,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ManifestChannels {
     pub stable: Option<ChannelRelease>,
     pub nightly: Option<ChannelRelease>,
 }

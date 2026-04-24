@@ -881,13 +881,18 @@ impl DaemonState {
                     .timeout(std::time::Duration::from_secs(60))
                     .build()
                     .unwrap_or_default();
-                match check_update::download(&client).await {
-                    Ok(manifest) => Ok(Response::CheckUpdate(manifest)),
+                let response = match check_update::download(&client).await {
+                    Ok(manifest) => command::CheckUpdateResponse::Ok(manifest),
+                    Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
+                        tracing::warn!(error = ?e, "update manifest integrity check failed");
+                        command::CheckUpdateResponse::IntegrityError(e.to_string())
+                    }
                     Err(e) => {
                         tracing::warn!(error = ?e, "failed to fetch update manifest");
-                        Err(exitcode::UNAVAILABLE)
+                        command::CheckUpdateResponse::Unavailable(e.to_string())
                     }
-                }
+                };
+                Ok(Response::CheckUpdate(response))
             }
 
             LibCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {

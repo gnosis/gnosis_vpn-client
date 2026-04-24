@@ -185,19 +185,25 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
-        Response::CheckUpdate(r) => {
-            if let Some(stable) = &r.channels.stable {
+        Response::CheckUpdate(command::CheckUpdateResponse::Ok(manifest)) => {
+            if let Some(stable) = &manifest.channels.stable {
                 println!(
                     "Stable: {}, published at {}, download at: {}",
                     stable.version, stable.published_at, stable.download_url
                 );
             }
-            if let Some(nightly) = &r.channels.nightly {
+            if let Some(nightly) = &manifest.channels.nightly {
                 println!(
                     "Latest Nightly: {}, published at {}, download at: {}",
                     nightly.version, nightly.published_at, nightly.download_url
                 );
             }
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::Unavailable(reason)) => {
+            eprintln!("Update manifest unavailable: {reason}");
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(reason)) => {
+            eprintln!("Update manifest integrity check failed: {reason}");
         }
         Response::StartClient(command::StartClientResponse::Started) => {
             println!("Worker client started");
@@ -240,7 +246,9 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
         Response::RefreshNodeTriggered => exitcode::OK,
         Response::Info(..) => exitcode::OK,
-        Response::CheckUpdate(_) => exitcode::OK,
+        Response::CheckUpdate(command::CheckUpdateResponse::Ok(_)) => exitcode::OK,
+        Response::CheckUpdate(command::CheckUpdateResponse::Unavailable(_)) => exitcode::UNAVAILABLE,
+        Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(_)) => exitcode::SOFTWARE,
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
