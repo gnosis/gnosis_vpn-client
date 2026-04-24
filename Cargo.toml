@@ -16,7 +16,6 @@ async-trait = "0.1.89"
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
 cfg-if = "1.0.4"
-cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "06b7837d232d9041211c3279d0ad6a6a3d682180", features = [
   "prometheus",
@@ -34,9 +33,7 @@ libc = "0.2.183"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
 ] }
-mnl = "0.3.1"
 multiaddr = "0.18.2"
-nftnl = "0.9.1"
 notify = "8.2.0"
 ping = "0.7.0"
 rand = "0.10.0"

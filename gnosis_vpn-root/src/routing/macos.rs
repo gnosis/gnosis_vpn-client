@@ -32,9 +32,10 @@ use super::bypass;
 use super::route_ops::RouteOps;
 use super::route_ops_macos::DarwinRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
-use super::{Error, Routing, VPN_TUNNEL_SUBNET};
+use super::{Error, Routing};
 
 const DEFAULT_VPN_ROUTES: &[&str] = &["0.0.0.0/1", "128.0.0.0/1"];
+const VPN_TUNNEL_SUBNET: (&str, u8) = ("10.128.0.0", 9);
 
 fn vpn_subnet_route() -> String {
     format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1)

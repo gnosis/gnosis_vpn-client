@@ -472,7 +472,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (keep_alive_instruction_sender, keep_alive_instruction_receiver) = mpsc::channel(32);
     let (cancel_keep_alive_timer, keep_alive_expired) = keep_alive_timer(keep_alive_instruction_receiver).await?;
 
-    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
+    // Clean up from any previous unclean shutdown
     routing::reset_on_startup(worker_params.state_home()).await;
 
     let mut state = DaemonState::new(
@@ -1189,34 +1189,8 @@ impl DaemonState {
             .await;
     }
 
-    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
-        // ensure clean slate
-        self.teardown_any_routing().await;
-
-        let state_home = self.worker_params.state_home();
-        let worker_user = self.worker_user.clone();
-        let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
-        match res_router {
-            Ok(mut router) => {
-                let res_setup = router.setup().await;
-                self.router = Some(Box::new(router));
-                match res_setup {
-                    Ok(_) => {
-                        tracing::info!("dynamic routing setup successfully");
-                        Ok(())
-                    }
-                    Err(error) => {
-                        tracing::error!(?error, "dynamic routing setup error");
-                        self.teardown_any_routing().await;
-                        Err(error.to_string())
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to build dynamic router");
-                Err(error.to_string())
-            }
-        }
+    async fn setup_dynamic_routing(&mut self, _wg_data: event::WireGuardData) -> Result<(), String> {
+        Err("dynamic routing not supported".to_string())
     }
 
     async fn setup_static_routing(

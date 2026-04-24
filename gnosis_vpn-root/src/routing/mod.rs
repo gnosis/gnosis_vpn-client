@@ -1,14 +1,8 @@
-//! # Routing Modes
+//! # Routing
 //!
 //! This module provides split-tunnel VPN routing implementations for different platforms.
-//!
-//! ## Dynamic Routing (Linux only, default)
-//! Uses rtnetlink + firewall rules for policy-based routing with firewall marks.
-//! Most reliable but requires root and nftables availability.
-//!
-//! ## Static Routing (all platforms)
-//! Uses route operations via platform-native APIs.
-//! Simpler but may have reduced reliability during network changes.
+//! Uses route operations via platform-native APIs to add peer IP bypass routes before
+//! bringing up WireGuard, ensuring no interruption during VPN setup.
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -22,8 +16,6 @@ pub(crate) mod wg_ops;
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
-        pub(crate) mod netlink_ops;
-        pub(crate) mod nftables_ops;
         pub(crate) mod route_ops_linux;
         mod linux;
     } else if #[cfg(target_os = "macos")] {
@@ -40,7 +32,7 @@ pub(crate) mod mocks;
 // ============================================================================
 
 #[cfg(target_os = "linux")]
-pub use linux::{dynamic_router, reset_on_startup, static_fallback_router as static_router};
+pub use linux::{reset_on_startup, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
 pub use macos::{dynamic_router, reset_on_startup, static_router};
 
@@ -60,10 +52,6 @@ pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
     ("169.254.0.0", 16), // Link-local (APIPA)
 ];
 
-/// VPN internal subnet that must be routed through the tunnel.
-/// This is more specific than the RFC1918 bypass (10.0.0.0/8),
-/// so it takes precedence and ensures VPN server traffic uses the tunnel.
-pub(crate) const VPN_TUNNEL_SUBNET: (&str, u8) = ("10.128.0.0", 9);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -89,10 +77,6 @@ pub enum Error {
     #[cfg(target_os = "linux")]
     #[error("rtnetlink error: {0} ")]
     Rtnetlink(#[from] rtnetlink::Error),
-
-    #[cfg(target_os = "linux")]
-    #[error("nftables error: {0} ")]
-    NfTables(String),
 }
 
 #[async_trait]
