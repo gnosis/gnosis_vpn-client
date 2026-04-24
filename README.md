@@ -118,6 +118,25 @@ steps:
    diff -u <(cat gnosis_vpn-root-aarch64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-aarch64-linux)
    ```
 
+## Idle shutdown
+
+When `--client-autostart <duration>` (or `GNOSISVPN_CLIENT_AUTOSTART`) is set,
+the service starts the worker automatically on launch and shuts it down after the
+worker has been idle for the given duration.
+
+The idle countdown behaves as follows:
+
+- **Idle**: countdown runs; worker shuts down when it reaches zero.
+- **Connected**: countdown is suspended for the lifetime of the VPN tunnel.
+- **Disconnected**: countdown resumes from the full duration.
+- Any other command to the worker (e.g. status) resets the countdown.
+
+Example — shut down the worker after 10 minutes of idle time:
+
+```bash
+gnosis_vpn-root --client-autostart 10m ...
+```
+
 ## General usage
 
 Check available params and env vars via:

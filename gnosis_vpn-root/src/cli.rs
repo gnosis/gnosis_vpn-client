@@ -81,7 +81,8 @@ pub struct Cli {
     #[arg(long)]
     pub allow_insecure: bool,
 
-    /// Autostart client after service startup with specified keepalive duration
+    /// Autostart client after service startup and shut it down after being idle for this duration.
+    /// The idle countdown is suspended while a VPN connection is active and resumes on disconnect.
     #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
                 value_parser = humantime::parse_duration
         )]

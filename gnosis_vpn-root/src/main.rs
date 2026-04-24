@@ -96,8 +96,16 @@ struct WorkerChild {
 
 #[derive(Debug)]
 enum KeepAliveInstruction {
+    /// First start: store duration and begin countdown.
     Ignite(Duration),
-    Stop,
+    /// Connected: halt countdown and mark as suspended.
+    /// A Restart while suspended is a no-op, so the unconditional
+    /// post-command Restart in incoming_socket_command cannot accidentally
+    /// re-enable the timer while the VPN tunnel is active.
+    Suspend,
+    /// Disconnected: un-suspend and restart countdown from stored duration.
+    Resume,
+    /// Activity while not suspended: reset countdown to stored duration.
     Restart,
 }
 
@@ -366,6 +374,7 @@ async fn keep_alive_timer(
     let (sender, receiver) = mpsc::channel(1);
     tokio::spawn(async move {
         let mut active = false;
+        let mut suspended = false;
         let mut dur = Duration::ZERO;
         let keepalive = time::sleep(dur);
         tokio::pin!(keepalive);
@@ -380,18 +389,30 @@ async fn keep_alive_timer(
                         KeepAliveInstruction::Ignite(duration) => {
                             tracing::info!(?duration, "ignite keep alive timer");
                             active = true;
+                            suspended = false;
                             dur = duration;
                             keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
-                        KeepAliveInstruction::Stop => {
-                            tracing::debug!("stop keep alive timer");
+                        KeepAliveInstruction::Suspend => {
+                            tracing::debug!("suspend keep alive timer");
                             active = false;
-                            keepalive.as_mut().reset(time::Instant::now())
+                            suspended = true;
+                            keepalive.as_mut().reset(time::Instant::now());
+                        }
+                        KeepAliveInstruction::Resume => {
+                            tracing::debug!(?dur, "resume keep alive timer");
+                            active = true;
+                            suspended = false;
+                            keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
                         KeepAliveInstruction::Restart => {
-                            tracing::debug!(?dur, "restart keep alive timer");
-                            active = true;
-                            keepalive.as_mut().reset(time::Instant::now() + dur);
+                            // no-op while suspended: the VPN tunnel is active,
+                            // we must not restart the idle countdown
+                            if !suspended {
+                                tracing::debug!(?dur, "restart keep alive timer");
+                                active = true;
+                                keepalive.as_mut().reset(time::Instant::now() + dur);
+                            }
                         }
                     }
                 }
@@ -1187,7 +1208,7 @@ impl DaemonState {
         self.pending_responses.clear();
         let _ = self
             .keep_alive_instruction_sender
-            .send(KeepAliveInstruction::Stop)
+            .send(KeepAliveInstruction::Suspend)
             .await;
     }
 
@@ -1261,7 +1282,7 @@ impl DaemonState {
                 self.target_dest_id = Some(id.clone());
                 let _ = self
                     .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Stop)
+                    .send(KeepAliveInstruction::Suspend)
                     .await;
             }
             WorkerCommand::Disconnect => {
@@ -1269,7 +1290,7 @@ impl DaemonState {
                 self.target_dest_id = None;
                 let _ = self
                     .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Restart)
+                    .send(KeepAliveInstruction::Resume)
                     .await;
             }
             _ => (),
