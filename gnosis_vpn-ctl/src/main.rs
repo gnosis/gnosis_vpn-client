@@ -25,10 +25,20 @@ async fn main() {
             Ok(manifest) => {
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&manifest).unwrap_or_default());
-                } else if let Some(version) = manifest["version"].as_str() {
-                    println!("{version}");
                 } else {
-                    println!("{}", serde_json::to_string_pretty(&manifest).unwrap_or_default());
+                    let channels = &manifest["channels"];
+                    if let Some(stable) = channels["stable"].as_object() {
+                        let version = stable["version"].as_str().unwrap_or("unknown");
+                        let published_at = stable["published_at"].as_str().unwrap_or("unknown");
+                        let url = stable["download_url"].as_str().unwrap_or("unknown");
+                        println!("Stable: {version}, published at {published_at}, download at: {url}");
+                    }
+                    if let Some(nightly) = channels["nightly"].as_object() {
+                        let version = nightly["version"].as_str().unwrap_or("unknown");
+                        let published_at = nightly["published_at"].as_str().unwrap_or("unknown");
+                        let url = nightly["download_url"].as_str().unwrap_or("unknown");
+                        println!("Latest Nightly: {version}, published at {published_at}, download at: {url}");
+                    }
                 }
                 process::exit(exitcode::OK);
             }
