@@ -1,4 +1,4 @@
-name: "Internal: Actionable Issue"
+name: Actionable Issue
 description: Track work promoted from a Discussion.
 labels: ["actionable", "triage"]
 body:
@@ -14,8 +14,6 @@ body:
     attributes:
       label: Description
       description: Concise summary of the required work.
-    validations:
-      required: true
   - type: textarea
     id: tasks
     attributes:
