@@ -759,7 +759,7 @@ impl DaemonState {
         let SocketCmd { cmd, resp } = socket_cmd;
         match WorkerCommand::try_from(cmd.clone()) {
             Ok(w_cmd) => {
-                self.handle_hybrid_cmd(&w_cmd);
+                self.handle_hybrid_cmd(&w_cmd).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1254,19 +1254,23 @@ impl DaemonState {
         }
     }
 
-    fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
+    async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
             WorkerCommand::Connect(id) => {
                 tracing::debug!(?id, "remembering target destination from connect command");
                 self.target_dest_id = Some(id.clone());
-                let _ = self.keep_alive_instruction_sender.try_send(KeepAliveInstruction::Stop);
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Stop)
+                    .await;
             }
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
                 let _ = self
                     .keep_alive_instruction_sender
-                    .try_send(KeepAliveInstruction::Restart);
+                    .send(KeepAliveInstruction::Restart)
+                    .await;
             }
             _ => (),
         }
