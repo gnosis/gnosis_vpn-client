@@ -36,7 +36,7 @@ jobs:
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@a178becb8c3711ae955bad477861bfefe6feceae # build-binaries-v2
     permissions:
       contents: read
     with:
@@ -61,7 +61,7 @@ jobs:
     runs-on: depot-ubuntu-22.04-4
     steps:
       - name: Run checks
-        uses: hoprnet/hopr-workflows/actions/nix-action@nix-action-v1
+        uses: hoprnet/hopr-workflows/actions/nix-action@c2aca7e56d25c4a786049ccf816c7f1af8721de8 # nix-action-v1
         with:
           source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
           cachix_cache_name: gnosis-vpn-client
@@ -78,7 +78,7 @@ jobs:
       contents: read
     steps:
       - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
         with:
           tool-cache: true
           android: true
@@ -88,9 +88,9 @@ jobs:
           docker-images: true
           swap-storage: true
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@setup-nix-v1
+        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
         with:
           cachix_cache_name: gnosis-vpn-client
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -99,7 +99,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wireguard-tools resolvconf
       - name: Install just
-        uses: extractions/setup-just@v2
+        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
       - name: Build binaries and system test
         run: |
           nix build .#binary-gnosis_vpn-system_tests
