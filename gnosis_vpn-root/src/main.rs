@@ -888,9 +888,14 @@ impl DaemonState {
             | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
             LibCommand::Info => {
+                let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
+                    .await
+                    .ok()
+                    .map(|s| s.trim().to_string());
                 let info = command::InfoResponse {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     log_file: self.log_file.clone(),
+                    package_version,
                 };
                 Ok(Response::Info(info))
             }

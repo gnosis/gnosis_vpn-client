@@ -1,7 +1,14 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use gnosis_vpn_lib::command::Command as LibCommand;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum OutputFormat {
+    Plain,
+    Json,
+    Yaml,
+}
 
 /// Gnosis VPN client control interface for Gnosis VPN service
 #[derive(Debug, Parser)]
@@ -19,9 +26,23 @@ pub struct Cli {
     )]
     pub socket_path: PathBuf,
 
-    /// Format output as json
-    #[arg(long)]
+    /// Output format applied to every command (alternative to --json / --yaml)
+    #[arg(
+        short = 'o',
+        long = "output",
+        value_name = "FORMAT",
+        value_enum,
+        conflicts_with_all = ["json", "yaml"],
+    )]
+    pub output: Option<OutputFormat>,
+
+    /// Format output as JSON (shorthand for --output json; mutually exclusive with --yaml)
+    #[arg(long, conflicts_with = "yaml")]
     pub json: bool,
+
+    /// Format output as YAML (shorthand for --output yaml; mutually exclusive with --json)
+    #[arg(long)]
+    pub yaml: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -68,7 +89,7 @@ pub enum Command {
     #[command()]
     NerdStats {},
 
-    /// Display service information, like version and file locations
+    /// Display service information, such as versions and file locations
     #[command()]
     Info {},
 
@@ -86,6 +107,10 @@ pub enum Command {
     /// Stop worker process to return to idle mode
     #[command()]
     StopClient {},
+
+    /// Fetch and display the latest available version from the update manifest
+    #[command()]
+    CheckUpdate {},
 }
 
 impl From<Command> for LibCommand {
@@ -103,6 +128,7 @@ impl From<Command> for LibCommand {
             Command::Info {} => LibCommand::Info,
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
+            Command::CheckUpdate {} => unreachable!("CheckUpdate is handled before socket dispatch"),
         }
     }
 }

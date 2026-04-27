@@ -1,5 +1,6 @@
 pub mod app_nap;
 pub mod balance;
+pub mod check_update;
 pub mod command;
 pub mod compat;
 pub mod config;
