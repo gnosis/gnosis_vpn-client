@@ -19,9 +19,13 @@ pub struct Cli {
     )]
     pub socket_path: PathBuf,
 
-    /// Format output as json
-    #[arg(long)]
+    /// Format output as JSON (mutually exclusive with --yaml)
+    #[arg(long, conflicts_with = "yaml")]
     pub json: bool,
+
+    /// Format output as YAML (mutually exclusive with --json)
+    #[arg(long)]
+    pub yaml: bool,
 }
 
 #[derive(Debug, Subcommand)]

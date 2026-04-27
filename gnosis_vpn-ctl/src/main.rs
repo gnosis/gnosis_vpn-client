@@ -16,12 +16,26 @@ mod cli;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+#[derive(Clone, Copy)]
+enum OutputFormat {
+    Plain,
+    Json,
+    Yaml,
+}
+
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
+    let format = if args.json {
+        OutputFormat::Json
+    } else if args.yaml {
+        OutputFormat::Yaml
+    } else {
+        OutputFormat::Plain
+    };
 
     if matches!(args.command, cli::Command::CheckUpdate {}) {
-        let exit = run_check_update(args.json).await;
+        let exit = run_check_update(format).await;
         process::exit(exit);
     }
 
@@ -34,63 +48,81 @@ async fn main() {
         }
     };
 
-    if args.json {
-        json_print(&resp)
-    } else {
-        pretty_print(&resp)
+    match format {
+        OutputFormat::Json => json_print(&resp),
+        OutputFormat::Yaml => yaml_print(&resp),
+        OutputFormat::Plain => pretty_print(&resp),
     };
 
     let exit = determine_exitcode(&resp);
     process::exit(exit);
 }
 
-async fn run_check_update(json: bool) -> ExitCode {
+async fn run_check_update(format: OutputFormat) -> ExitCode {
     let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
         Ok(c) => c,
-        Err(e) => return emit_check_update_error(json, "internal", &e.to_string()),
+        Err(e) => return emit_check_update_error(format, "internal", &e.to_string()),
     };
     match check_update::download(&client).await {
         Ok(manifest) => {
-            if json {
-                match serde_json::to_string_pretty(&manifest) {
+            match format {
+                OutputFormat::Json => match serde_json::to_string_pretty(&manifest) {
                     Ok(s) => println!("{s}"),
-                    Err(e) => return emit_check_update_error(true, "internal", &e.to_string()),
-                }
-            } else {
-                if let Some(stable) = &manifest.channels.stable {
-                    println!(
-                        "Stable: {}, published at {}, download at: {}",
-                        stable.version, stable.published_at, stable.download_url
-                    );
-                }
-                if let Some(nightly) = &manifest.channels.nightly {
-                    println!(
-                        "Latest Nightly: {}, published at {}, download at: {}",
-                        nightly.version, nightly.published_at, nightly.download_url
-                    );
+                    Err(e) => return emit_check_update_error(OutputFormat::Json, "internal", &e.to_string()),
+                },
+                OutputFormat::Yaml => match serde_saphyr::to_string(&manifest) {
+                    Ok(s) => print!("{s}"),
+                    Err(e) => return emit_check_update_error(OutputFormat::Yaml, "internal", &e.to_string()),
+                },
+                OutputFormat::Plain => {
+                    if let Some(stable) = &manifest.channels.stable {
+                        println!(
+                            "Stable: {}, published at {}, download at: {}",
+                            stable.version, stable.published_at, stable.download_url
+                        );
+                    }
+                    if let Some(nightly) = &manifest.channels.nightly {
+                        println!(
+                            "Latest Nightly: {}, published at {}, download at: {}",
+                            nightly.version, nightly.published_at, nightly.download_url
+                        );
+                    }
                 }
             }
             exitcode::OK
         }
         Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
-            emit_check_update_error(json, "integrity_error", &e.to_string())
+            emit_check_update_error(format, "integrity_error", &e.to_string())
         }
-        Err(e) => emit_check_update_error(json, "unavailable", &e.to_string()),
+        Err(e) => emit_check_update_error(format, "unavailable", &e.to_string()),
     }
 }
 
-fn emit_check_update_error(json: bool, kind: &'static str, message: &str) -> ExitCode {
-    if json {
-        let payload = serde_json::json!({ "type": kind, "error": message });
-        eprintln!("{}", serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()));
-    } else {
-        let prefix = match kind {
-            "unavailable" => "Update manifest unavailable",
-            "integrity_error" => "Update manifest integrity check failed",
-            "internal" => "Internal error",
-            _ => "Error",
-        };
-        eprintln!("{prefix}: {message}");
+fn emit_check_update_error(format: OutputFormat, kind: &'static str, message: &str) -> ExitCode {
+    match format {
+        OutputFormat::Json => {
+            let payload = serde_json::json!({ "type": kind, "error": message });
+            eprintln!(
+                "{}",
+                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
+            );
+        }
+        OutputFormat::Yaml => {
+            let payload = serde_json::json!({ "type": kind, "error": message });
+            eprintln!(
+                "{}",
+                serde_saphyr::to_string(&payload).unwrap_or_else(|_| payload.to_string())
+            );
+        }
+        OutputFormat::Plain => {
+            let prefix = match kind {
+                "unavailable" => "Update manifest unavailable",
+                "integrity_error" => "Update manifest integrity check failed",
+                "internal" => "Internal error",
+                _ => "Error",
+            };
+            eprintln!("{prefix}: {message}");
+        }
     }
     match kind {
         "unavailable" => exitcode::UNAVAILABLE,
@@ -102,6 +134,13 @@ fn json_print(resp: &Response) {
     match serde_json::to_string_pretty(resp) {
         Ok(s) => println!("{s}"),
         Err(e) => eprintln!("Error serializing response to JSON: {e}"),
+    }
+}
+
+fn yaml_print(resp: &Response) {
+    match serde_saphyr::to_string(resp) {
+        Ok(s) => print!("{s}"),
+        Err(e) => eprintln!("Error serializing response to YAML: {e}"),
     }
 }
 

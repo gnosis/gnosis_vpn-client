@@ -1,4 +1,4 @@
-use serde_yaml;
+use serde_saphyr;
 use thiserror::Error;
 use tokio::fs;
 
@@ -19,7 +19,9 @@ pub enum Error {
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("Deserialization error: {0}")]
-    YamlDeserialization(#[from] serde_yaml::Error),
+    YamlDeserialization(#[from] serde_saphyr::Error),
+    #[error("Serialization error: {0}")]
+    YamlSerialization(#[from] serde_saphyr::ser::Error),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
 }
@@ -33,12 +35,12 @@ pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
         }
     })?;
 
-    serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
 pub async fn store_safe(state_home: PathBuf, safe_module: &SafeModule) -> Result<(), Error> {
     let safe_file = safe_file(state_home);
-    let content = serde_yaml::to_string(&safe_module)?;
+    let content = serde_saphyr::to_string(&safe_module)?;
     fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
@@ -50,7 +52,7 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
             Error::IO(e)
         }
     })?;
-    serde_yaml::from_str::<SafeModule>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<SafeModule>(&content).map_err(Error::YamlDeserialization)
 }
 
 pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
@@ -64,7 +66,7 @@ publish: false
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
     );
-    serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
 }
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {
