@@ -1,7 +1,14 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use gnosis_vpn_lib::command::Command as LibCommand;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum OutputFormat {
+    Plain,
+    Json,
+    Yaml,
+}
 
 /// Gnosis VPN client control interface for Gnosis VPN service
 #[derive(Debug, Parser)]
@@ -19,11 +26,21 @@ pub struct Cli {
     )]
     pub socket_path: PathBuf,
 
-    /// Format output as JSON (mutually exclusive with --yaml)
+    /// Output format applied to every command (alternative to --json / --yaml)
+    #[arg(
+        short = 'o',
+        long = "output",
+        value_name = "FORMAT",
+        value_enum,
+        conflicts_with_all = ["json", "yaml"],
+    )]
+    pub output: Option<OutputFormat>,
+
+    /// Format output as JSON (shorthand for --output json; mutually exclusive with --yaml)
     #[arg(long, conflicts_with = "yaml")]
     pub json: bool,
 
-    /// Format output as YAML (mutually exclusive with --json)
+    /// Format output as YAML (shorthand for --output yaml; mutually exclusive with --json)
     #[arg(long)]
     pub yaml: bool,
 }

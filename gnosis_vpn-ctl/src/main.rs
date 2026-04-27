@@ -10,28 +10,22 @@ use gnosis_vpn_lib::socket;
 
 mod cli;
 
+use cli::OutputFormat;
+
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[derive(Clone, Copy)]
-enum OutputFormat {
-    Plain,
-    Json,
-    Yaml,
-}
-
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
-    let format = if args.json {
-        OutputFormat::Json
-    } else if args.yaml {
-        OutputFormat::Yaml
-    } else {
-        OutputFormat::Plain
+    let format = match args.output {
+        Some(f) => f,
+        None if args.json => OutputFormat::Json,
+        None if args.yaml => OutputFormat::Yaml,
+        None => OutputFormat::Plain,
     };
 
     if matches!(args.command, cli::Command::CheckUpdate {}) {
