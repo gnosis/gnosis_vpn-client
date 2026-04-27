@@ -14,7 +14,7 @@ name = "gnosis_vpn"
 anyhow = { version = "1.0.100" }
 async-trait = "0.1.89"
 backon = { version = "1.6.0" }
-bytesize = "2.3.0"
+bytesize = "2.3.1"
 cfg-if = "1.0.4"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
