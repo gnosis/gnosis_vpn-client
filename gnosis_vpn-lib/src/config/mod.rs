@@ -23,7 +23,6 @@ pub struct Config {
     pub destinations: HashMap<String, Destination>,
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
-    pub manifest_base_url: String,
 }
 
 #[derive(Debug, Error)]

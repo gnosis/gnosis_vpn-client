@@ -42,8 +42,6 @@ pub enum Command {
     Ping,
     /// Deliver service version and other meta
     Info,
-    /// Fetch the latest update manifest and return version info for all channels
-    CheckUpdate,
     /// Start worker process and edge client if not already running, with a keep alive duration for the client
     StartClient(Duration),
     /// Stop a running worker process and edge client
@@ -74,7 +72,6 @@ pub enum Response {
     RefreshNodeTriggered,
     Pong,
     Info(InfoResponse),
-    CheckUpdate(CheckUpdateResponse),
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
     WorkerOffline,
@@ -152,42 +149,6 @@ pub struct InfoResponse {
     pub version: String,
     pub log_file: Option<PathBuf>,
     pub package_version: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum CheckUpdateResponse {
-    /// Manifest downloaded and signature verified successfully
-    Ok(Box<Manifest>),
-    /// Network or availability failure — manifest could not be fetched
-    Unavailable(String),
-    /// Manifest was fetched but failed PGP verification or JSON parsing
-    IntegrityError(String),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Manifest {
-    pub schema_version: u32,
-    pub generated_at: String,
-    pub channels: ManifestChannels,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ManifestChannels {
-    pub stable: Option<ChannelRelease>,
-    pub nightly: Option<ChannelRelease>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChannelRelease {
-    pub version: String,
-    pub published_at: String,
-    pub download_url: String,
-    pub size_bytes: u64,
-    pub sha256: String,
-    pub artifact_signature: String,
-    pub release_notes: String,
-    pub min_os_version: String,
-    pub min_app_version: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -613,9 +574,7 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::CheckUpdate | Command::StartClient(_) | Command::StopClient => {
-                Err(())
-            }
+            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
     }
 }

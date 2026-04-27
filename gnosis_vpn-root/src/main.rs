@@ -26,7 +26,7 @@ use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{check_update, dirs, logging, ping, socket, worker};
+use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
 mod network_info;
@@ -787,30 +787,6 @@ impl DaemonState {
                 }
             }
             Err(_) => {
-                if matches!(cmd, LibCommand::CheckUpdate) {
-                    let manifest_base_url = self.config.manifest_base_url.clone();
-                    tokio::spawn(async move {
-                        let client = reqwest::Client::builder()
-                            .timeout(std::time::Duration::from_secs(30))
-                            .build()
-                            .unwrap_or_default();
-                        let response = match check_update::download(&client, &manifest_base_url).await {
-                            Ok(manifest) => command::CheckUpdateResponse::Ok(Box::new(manifest)),
-                            Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
-                                tracing::warn!(error = ?e, "update manifest integrity check failed");
-                                command::CheckUpdateResponse::IntegrityError(e.to_string())
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = ?e, "failed to fetch update manifest");
-                                command::CheckUpdateResponse::Unavailable(e.to_string())
-                            }
-                        };
-                        let _ = resp.send(Response::CheckUpdate(response)).map_err(|error| {
-                            tracing::error!(?error, "socket command response channel closed");
-                        });
-                    });
-                    return Ok(());
-                }
                 let response = self.incoming_root_command(cmd).await?;
                 let _ = resp.send(response).map_err(|error| {
                     tracing::error!(?error, "socket command response channel closed");
@@ -969,7 +945,6 @@ impl DaemonState {
                     Err(exitcode::TEMPFAIL)
                 }
             },
-            LibCommand::CheckUpdate => unreachable!("CheckUpdate is handled before incoming_root_command"),
         }
     }
 

@@ -1,10 +1,10 @@
 use pgp::{Deserializable, SignedPublicKey, StandaloneSignature};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 
-use crate::command::Manifest;
-
 const PUBLIC_KEY: &str = include_str!("../../gnosisvpn-public-key.asc");
+const MANIFEST_BASE_URL: &str = "https://download.gnosisvpn.io/manifests/";
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const MANIFEST_FILENAME: &str = "linux-amd64.json";
@@ -14,6 +14,32 @@ const MANIFEST_FILENAME: &str = "linux-arm64.json";
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const MANIFEST_FILENAME: &str = "macos-arm64.json";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Manifest {
+    pub schema_version: u32,
+    pub generated_at: String,
+    pub channels: ManifestChannels,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ManifestChannels {
+    pub stable: Option<ChannelRelease>,
+    pub nightly: Option<ChannelRelease>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChannelRelease {
+    pub version: String,
+    pub published_at: String,
+    pub download_url: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub artifact_signature: String,
+    pub release_notes: String,
+    pub min_os_version: String,
+    pub min_app_version: String,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -35,9 +61,9 @@ fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest,
     Ok(manifest)
 }
 
-pub async fn download(client: &Client, manifest_base_url: &str) -> Result<Manifest, Error> {
+pub async fn download(client: &Client) -> Result<Manifest, Error> {
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
-    let base = url::Url::parse(&format!("{}/", manifest_base_url.trim_end_matches('/')))?;
+    let base = url::Url::parse(MANIFEST_BASE_URL)?;
     let manifest_url = base.join(MANIFEST_FILENAME)?;
     let sig_url = base.join(&sig_filename)?;
 

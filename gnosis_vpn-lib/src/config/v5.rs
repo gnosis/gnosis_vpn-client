@@ -27,8 +27,6 @@ pub struct Config {
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
-    #[serde(default = "Config::default_manifest_base_url")]
-    pub(super) manifest_base_url: String,
 }
 
 #[serde_as]
@@ -527,12 +525,6 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
     }
 }
 
-impl Config {
-    fn default_manifest_base_url() -> String {
-        "https://download.gnosisvpn.io/manifests/".to_string()
-    }
-}
-
 impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
@@ -546,7 +538,6 @@ impl TryFrom<Config> for config::Config {
             destinations,
             wireguard,
             blokli,
-            manifest_base_url: value.manifest_base_url,
         })
     }
 }
