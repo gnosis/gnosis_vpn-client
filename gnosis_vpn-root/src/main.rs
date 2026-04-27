@@ -12,7 +12,6 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
@@ -24,7 +23,6 @@ use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerComma
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
-use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
@@ -33,7 +31,7 @@ mod network_info;
 mod routing;
 mod wg_tooling;
 
-use routing::Routing;
+use routing::{RouteCmd, RouteEvent, RouteManager};
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -50,7 +48,7 @@ struct DaemonState {
     log_file: Option<PathBuf>,
     worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
-    router: Option<Box<dyn Routing>>,
+    route_cmd_sender: mpsc::Sender<RouteCmd>,
     shutdown_ongoing: Shutdown,
     // keep track of the current target for restore/restart/reload logic
     target_dest_id: Option<String>,
@@ -475,6 +473,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up from any previous unclean shutdown
     routing::reset_on_startup(worker_params.state_home()).await;
 
+    let (cancel_route_manager, route_cmd_sender, route_event_receiver, route_manager) =
+        RouteManager::new(worker_params.state_home());
+    tokio::spawn(route_manager.run());
+
     let mut state = DaemonState::new(
         worker_user,
         config,
@@ -483,6 +485,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         reload_handle,
         args.log_file,
         keep_alive_instruction_sender,
+        route_cmd_sender,
     );
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
@@ -493,11 +496,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             .await;
     }
     let res = state
-        .daemon_loop(signal_receiver, socket_listener, config_receiver, keep_alive_expired)
+        .daemon_loop(signal_receiver, socket_listener, config_receiver, keep_alive_expired, route_event_receiver)
         .await;
 
     // cancel running tasks and run teardown logic
     state.teardown().await;
+    cancel_route_manager.cancel();
     cancel_socket_listener.cancel();
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
@@ -639,6 +643,7 @@ impl DaemonState {
         reload_handle: Option<LogReloadHandle>,
         log_file: Option<PathBuf>,
         keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
+        route_cmd_sender: mpsc::Sender<RouteCmd>,
     ) -> Self {
         Self {
             config,
@@ -649,7 +654,7 @@ impl DaemonState {
             pending_responses: HashMap::new(),
             ping_tasks: JoinSet::new(),
             reload_handle,
-            router: None,
+            route_cmd_sender,
             shutdown_ongoing: Shutdown::None,
             target_dest_id: None,
             worker_child: None,
@@ -666,6 +671,7 @@ impl DaemonState {
         mut socket_listener: mpsc::Receiver<SocketCmd>,
         mut config_receiver: mpsc::Receiver<()>,
         mut keep_alive_expired: mpsc::Receiver<Duration>,
+        mut route_event_receiver: mpsc::Receiver<RouteEvent>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
         loop {
@@ -680,6 +686,7 @@ impl DaemonState {
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
+                Some(event) = route_event_receiver.recv() => self.incoming_route_event(event).await?,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
@@ -983,20 +990,13 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
-                let res = self.setup_static_routing(wg_data, peer_ips).await;
-                if matches!(self.shutdown_ongoing, Shutdown::None)
-                    && let Some(ref mut child) = self.worker_child
-                {
-                    send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
-                        &mut child.socket_writer,
-                    )
-                    .await?;
+                if matches!(self.shutdown_ongoing, Shutdown::None) {
+                    let _ = self.route_cmd_sender.send(RouteCmd::Connect { wg_data, peer_ips }).await;
                 }
                 Ok(())
             }
             RequestToRoot::TearDownWg => {
-                self.teardown_any_routing().await;
+                let _ = self.route_cmd_sender.send(RouteCmd::Disconnect).await;
                 Ok(())
             }
             RequestToRoot::Ping { options } => {
@@ -1164,14 +1164,23 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn teardown_any_routing(&mut self) {
-        if let Some(ref mut router) = self.router {
-            router.teardown(Logs::Print).await;
+    async fn incoming_route_event(&mut self, event: RouteEvent) -> Result<(), exitcode::ExitCode> {
+        match event {
+            RouteEvent::Connected(res) => {
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
         }
-        self.router = None;
     }
 
-    /// Remove routing and stop ping tasks
     async fn teardown(&mut self) {
         self.cleanup_worker_resources().await;
         if let Some(ref mut child) = self.worker_child {
@@ -1181,7 +1190,7 @@ impl DaemonState {
 
     async fn cleanup_worker_resources(&mut self) {
         self.ping_tasks.shutdown().await;
-        self.teardown_any_routing().await;
+        let _ = self.route_cmd_sender.send(RouteCmd::Disconnect).await;
         self.pending_responses.clear();
         let _ = self
             .keep_alive_instruction_sender
@@ -1191,39 +1200,6 @@ impl DaemonState {
 
     async fn setup_dynamic_routing(&mut self, _wg_data: event::WireGuardData) -> Result<(), String> {
         Err("dynamic routing not supported".to_string())
-    }
-
-    async fn setup_static_routing(
-        &mut self,
-        wg_data: event::WireGuardData,
-        peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<(), String> {
-        // ensure clean slate
-        self.teardown_any_routing().await;
-
-        let state_home = self.worker_params.state_home();
-        let res_router = routing::static_router(state_home, wg_data, peer_ips);
-        match res_router {
-            Ok(mut router) => {
-                let res_setup = router.setup().await;
-                self.router = Some(Box::new(router));
-                match res_setup {
-                    Ok(_) => {
-                        tracing::info!("static routing setup successfully");
-                        Ok(())
-                    }
-                    Err(error) => {
-                        tracing::error!(?error, "static routing setup error");
-                        self.teardown_any_routing().await;
-                        Err(error.to_string())
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to build static router");
-                Err(error.to_string())
-            }
-        }
     }
 
     fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {

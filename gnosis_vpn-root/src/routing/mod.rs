@@ -3,6 +3,16 @@
 //! This module provides split-tunnel VPN routing implementations for different platforms.
 //! Uses route operations via platform-native APIs to add peer IP bypass routes before
 //! bringing up WireGuard, ensuring no interruption during VPN setup.
+//!
+//! ## Architecture
+//!
+//! The public API is [`RouteManager`] — a background actor that owns all routing state
+//! and communicates with the root daemon loop via channel pairs:
+//! - Root sends [`RouteCmd`] to the manager
+//! - Manager sends [`RouteEvent`] back to root's `daemon_loop`
+//!
+//! Internal platform implementations ([`linux`] / [`macos`]) implement the [`Routing`]
+//! trait and are owned by the manager.
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -11,6 +21,7 @@ use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use gnosis_vpn_lib::{dirs, wireguard};
 
 mod bypass;
+pub mod manager;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
@@ -27,14 +38,13 @@ cfg_if::cfg_if! {
 #[cfg(test)]
 pub(crate) mod mocks;
 
-// ============================================================================
-// Shared Utilities
-// ============================================================================
+pub use manager::{RouteCmd, RouteEvent, RouteManager};
 
+// Platform-specific entry points used by the manager task (not public API).
 #[cfg(target_os = "linux")]
-pub use linux::{reset_on_startup, static_fallback_router as static_router};
+pub(crate) use linux::{reset_on_startup, static_fallback_router as static_router};
 #[cfg(target_os = "macos")]
-pub use macos::{dynamic_router, reset_on_startup, static_router};
+pub(crate) use macos::{reset_on_startup, static_router};
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)
@@ -80,7 +90,7 @@ pub enum Error {
 }
 
 #[async_trait]
-pub trait Routing {
+pub trait Routing: Send {
     async fn setup(&mut self) -> Result<(), Error>;
     async fn teardown(&mut self, logs: Logs);
 }
