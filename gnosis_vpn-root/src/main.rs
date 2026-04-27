@@ -96,9 +96,17 @@ struct WorkerChild {
 
 #[derive(Debug)]
 enum KeepAliveInstruction {
-    Reset,
+    /// First start: store duration and begin countdown.
     Ignite(Duration),
-    Stop,
+    /// Connected: halt countdown and mark as suspended.
+    /// A Restart while suspended is a no-op, so the unconditional
+    /// post-command Restart in incoming_socket_command cannot accidentally
+    /// re-enable the timer while the VPN tunnel is active.
+    Suspend,
+    /// Disconnected: un-suspend and restart countdown from stored duration.
+    Resume,
+    /// Activity while not suspended: reset countdown to stored duration.
+    Restart,
 }
 
 async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMessage>), exitcode::ExitCode> {
@@ -366,6 +374,7 @@ async fn keep_alive_timer(
     let (sender, receiver) = mpsc::channel(1);
     tokio::spawn(async move {
         let mut active = false;
+        let mut suspended = false;
         let mut dur = Duration::ZERO;
         let keepalive = time::sleep(dur);
         tokio::pin!(keepalive);
@@ -377,19 +386,33 @@ async fn keep_alive_timer(
                 }
                 Some(msg) = keep_alive_instruction_receiver.recv() => {
                     match msg {
-                        KeepAliveInstruction::Reset => {
-                            keepalive.as_mut().reset(time::Instant::now() + dur);
-                        }
                         KeepAliveInstruction::Ignite(duration) => {
                             tracing::info!(?duration, "ignite keep alive timer");
                             active = true;
+                            suspended = false;
                             dur = duration;
                             keepalive.as_mut().reset(time::Instant::now() + dur);
                         }
-                        KeepAliveInstruction::Stop => {
-                            tracing::debug!("stop keep alive timer");
+                        KeepAliveInstruction::Suspend => {
+                            tracing::debug!("suspend keep alive timer");
                             active = false;
-                            keepalive.as_mut().reset(time::Instant::now())
+                            suspended = true;
+                            keepalive.as_mut().reset(time::Instant::now());
+                        }
+                        KeepAliveInstruction::Resume => {
+                            tracing::debug!(?dur, "resume keep alive timer");
+                            active = true;
+                            suspended = false;
+                            keepalive.as_mut().reset(time::Instant::now() + dur);
+                        }
+                        KeepAliveInstruction::Restart => {
+                            // no-op while suspended: the VPN tunnel is active,
+                            // we must not restart the idle countdown
+                            if !suspended {
+                                tracing::debug!(?dur, "restart keep alive timer");
+                                active = true;
+                                keepalive.as_mut().reset(time::Instant::now() + dur);
+                            }
                         }
                     }
                 }
@@ -757,7 +780,7 @@ impl DaemonState {
         let SocketCmd { cmd, resp } = socket_cmd;
         match WorkerCommand::try_from(cmd.clone()) {
             Ok(w_cmd) => {
-                self.handle_hybrid_cmd(&w_cmd);
+                self.handle_hybrid_cmd(&w_cmd).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -770,7 +793,7 @@ impl DaemonState {
                     send_to_worker(msg, &mut child.socket_writer).await?;
                     let _ = self
                         .keep_alive_instruction_sender
-                        .send(KeepAliveInstruction::Reset)
+                        .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
                 } else if matches!(w_cmd, WorkerCommand::Status) {
@@ -1020,7 +1043,7 @@ impl DaemonState {
                     self.setup_worker().await?;
                     let _ = self
                         .keep_alive_instruction_sender
-                        .send(KeepAliveInstruction::Reset)
+                        .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
                 } else {
@@ -1056,7 +1079,7 @@ impl DaemonState {
                 self.setup_worker().await?;
                 let _ = self
                     .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Reset)
+                    .send(KeepAliveInstruction::Restart)
                     .await;
                 Ok(())
             }
@@ -1190,7 +1213,7 @@ impl DaemonState {
         self.pending_responses.clear();
         let _ = self
             .keep_alive_instruction_sender
-            .send(KeepAliveInstruction::Stop)
+            .send(KeepAliveInstruction::Suspend)
             .await;
     }
 
@@ -1257,15 +1280,23 @@ impl DaemonState {
         }
     }
 
-    fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
+    async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
             WorkerCommand::Connect(id) => {
                 tracing::debug!(?id, "remembering target destination from connect command");
                 self.target_dest_id = Some(id.clone());
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Suspend)
+                    .await;
             }
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Resume)
+                    .await;
             }
             _ => (),
         }
