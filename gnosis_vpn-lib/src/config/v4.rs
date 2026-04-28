@@ -1,5 +1,5 @@
-use edgli::hopr_lib::exports::network::types::types::RoutingOptions;
-use edgli::hopr_lib::{Address, NodeId};
+use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
@@ -156,7 +156,9 @@ pub fn convert_destinations(
     for (address, dest) in config_dests.iter() {
         let path = match dest.path.clone() {
             Some(v5::DestinationPath::Intermediates(p)) => {
-                RoutingOptions::IntermediatePath(p.iter().map(|addr| NodeId::Chain(*addr)).collect())
+                let hop_count = p.len().min(3_usize) as u8;
+                tracing::warn!(address = %address.to_checksum(), hop_count, "intermediates routing is deprecated; treating as hop count");
+                RoutingOptions::Hops(hop_count.try_into()?)
             }
             Some(v5::DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into()?),
             None => RoutingOptions::Hops(1.try_into()?),

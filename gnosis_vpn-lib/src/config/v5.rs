@@ -1,6 +1,8 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
-use edgli::hopr_lib::{Address, NodeId, SessionCapabilities, SessionCapability, SessionTarget};
+use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -554,7 +556,9 @@ pub fn convert_destinations(
     for (id, dest) in config_dests.iter() {
         let path = match dest.path.clone() {
             Some(DestinationPath::Intermediates(p)) => {
-                RoutingOptions::IntermediatePath(p.iter().map(|addr| NodeId::Chain(*addr)).collect())
+                let hop_count = p.len().min(MAX_HOPS as usize) as u8;
+                tracing::warn!(id, hop_count, "intermediates routing is deprecated; treating as hop count");
+                RoutingOptions::Hops(hop_count.try_into()?)
             }
             Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into()?),
             None => RoutingOptions::Hops(1.try_into()?),

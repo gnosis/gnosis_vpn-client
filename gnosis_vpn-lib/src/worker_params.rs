@@ -1,4 +1,4 @@
-use edgli::blokli::SafelessInteractor;
+use edgli::blokli::{SafeOperations, SafelessInteractor};
 use edgli::hopr_lib::HoprKeys;
 use edgli::hopr_lib::config::HoprLibConfig;
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,7 @@ use tokio::fs;
 use url::Url;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
@@ -129,13 +130,14 @@ impl WorkerParams {
     }
 
     /// Create safeless blokli instance
-    pub async fn create_safeless_interactor(&self, config: BlokliConfig) -> Result<SafelessInteractor, Error> {
+    pub async fn create_safeless_interactor(&self, config: BlokliConfig) -> Result<Arc<dyn SafeOperations>, Error> {
         let keys = self.calc_keys().await?;
         let private_key = keys.chain_key;
         let url = self.blokli_url();
-        edgli::blokli::SafelessInteractor::new(url, &private_key, Some(config.into()))
+        let interactor = SafelessInteractor::new(url, &private_key, Some(config.into()))
             .await
-            .map_err(|e| Error::BlokliCreation(e.to_string()))
+            .map_err(|e| Error::BlokliCreation(e.to_string()))?;
+        Ok(Arc::new(interactor) as Arc<dyn SafeOperations>)
     }
 
     pub fn allow_insecure(&self) -> bool {

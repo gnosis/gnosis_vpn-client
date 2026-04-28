@@ -1,4 +1,4 @@
-use edgli::hopr_lib::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use url::Url;

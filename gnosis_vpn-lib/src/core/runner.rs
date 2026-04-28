@@ -3,11 +3,12 @@
 
 use backon::Retryable;
 use bytesize::ByteSize;
-use edgli::blokli::SafelessInteractor;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
-use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Address, Balance, WxHOPR};
-use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
+use edgli::blokli::SafeOperations;
+use edgli::hopr_lib::api::node::HoprState;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::builder::Keypair;
+use edgli::hopr_lib::exports::network::types::types::IpProtocol;
+use edgli::hopr_lib::exports::transport::SurbBalancerConfig;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::prelude::*;
@@ -26,7 +27,7 @@ use std::time::Duration;
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
+use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
 use crate::route_health::{self, HealthCheckOutcome};
 use crate::ticket_stats::{self, TicketStats};
@@ -64,7 +65,7 @@ pub enum Results {
         safe_module: SafeModule,
     },
     SafelessInteractor {
-        res: Result<SafelessInteractor, Error>,
+        res: Result<Arc<dyn SafeOperations>, Error>,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -134,17 +135,17 @@ struct UnauthorizedError {
     error: String,
 }
 
-pub async fn ticket_stats(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+pub async fn ticket_stats(safeless_interactor: Arc<dyn SafeOperations>, results_sender: mpsc::Sender<Results>) {
     let res = run_ticket_stats(safeless_interactor).await;
     let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
-pub async fn node_balance(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+pub async fn node_balance(safeless_interactor: Arc<dyn SafeOperations>, results_sender: mpsc::Sender<Results>) {
     let res = run_node_balance(safeless_interactor).await;
     let _ = results_sender.send(Results::NodeBalance { res }).await;
 }
 
-pub async fn query_safe(safeless_interactor: Arc<SafelessInteractor>, results_sender: mpsc::Sender<Results>) {
+pub async fn query_safe(safeless_interactor: Arc<dyn SafeOperations>, results_sender: mpsc::Sender<Results>) {
     let res = run_query_safe(safeless_interactor).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
@@ -155,7 +156,7 @@ pub async fn funding_tool(worker_params: WorkerParams, code: String, results_sen
 }
 
 pub async fn safe_deployment(
-    safeless_interactor: Arc<SafelessInteractor>,
+    safeless_interactor: Arc<dyn SafeOperations>,
     presafe: balance::PreSafe,
     results_sender: mpsc::Sender<Results>,
 ) {
@@ -266,7 +267,7 @@ pub async fn create_safeless_interactor(
     let _ = results_sender.send(Results::SafelessInteractor { res }).await;
 }
 
-async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
+async fn run_query_safe(safeless_interactor: Arc<dyn SafeOperations>) -> Result<Option<SafeModule>, Error> {
     tracing::debug!("starting query safe runner");
     (|| {
         let blokli = safeless_interactor.clone();
@@ -285,7 +286,7 @@ async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<
     .await
 }
 
-async fn run_node_balance(safeless_interactor: Arc<SafelessInteractor>) -> Result<balance::PreSafe, Error> {
+async fn run_node_balance(safeless_interactor: Arc<dyn SafeOperations>) -> Result<balance::PreSafe, Error> {
     tracing::debug!("starting node balance runner");
     (|| {
         let blokli = safeless_interactor.clone();
@@ -304,7 +305,7 @@ async fn run_node_balance(safeless_interactor: Arc<SafelessInteractor>) -> Resul
     .await
 }
 
-async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Result<TicketStats, Error> {
+async fn run_ticket_stats(safeless_interactor: Arc<dyn SafeOperations>) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
     (|| {
         let blokli = safeless_interactor.clone();
@@ -313,7 +314,7 @@ async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Resul
 
             Ok(TicketStats {
                 ticket_price: ticket_stats.ticket_price,
-                winning_probability: ticket_stats.winning_probability,
+                winning_probability: ticket_stats.winning_probability.into(),
             })
         }
     })
@@ -325,7 +326,7 @@ async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Resul
 }
 
 async fn run_safe_deployment(
-    safeless_interactor: Arc<SafelessInteractor>,
+    safeless_interactor: Arc<dyn SafeOperations>,
     presafe: balance::PreSafe,
 ) -> Result<SafeModule, Error> {
     tracing::debug!("starting safe deployment runner");
@@ -422,16 +423,9 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(
-        cfg,
-        hopr::config::db_file(worker_params.state_home()).as_path(),
-        keys,
-        blokli_url,
-        blokli_config.into(),
-        visitor,
-    )
-    .await
-    .map_err(Error::from)
+    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), visitor)
+        .await
+        .map_err(Error::from)
 }
 
 async fn run_fund_channel(
@@ -470,14 +464,14 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
 async fn run_create_safeless_interactor(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
-) -> Result<SafelessInteractor, Error> {
+) -> Result<Arc<dyn SafeOperations>, Error> {
     let blokli_provider = worker_params.blokli_url();
     let chain_key = worker_params.calc_keys().await?.chain_key;
     (|| async {
         let res = edgli::blokli::SafelessInteractor::new(blokli_provider.clone(), &chain_key, Some(blokli_config))
             .await
             .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
-        Ok(res)
+        Ok(Arc::new(res) as Arc<dyn SafeOperations>)
     })
     .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
@@ -574,15 +568,16 @@ pub fn to_surb_balancer_config(
     max_surb_upstream: Bandwidth,
 ) -> Result<SurbBalancerConfig, SurbConfigError> {
     // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::exports::transport::SESSION_MTU as u64 {
         return Err(SurbConfigError::ResponseBufferTooSmall);
     }
     if max_surb_upstream.is_zero() {
         return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
     }
     let config = SurbBalancerConfig {
-        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
+        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE))
+            as u64,
         ..Default::default()
     };
     Ok(config)

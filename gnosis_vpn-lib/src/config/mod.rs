@@ -1,4 +1,4 @@
-use edgli::hopr_lib::GeneralError;
+use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

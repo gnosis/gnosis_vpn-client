@@ -1,6 +1,6 @@
 use edgli::EdgliInitState;
-use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Balance, WxHOPR, XDai};
+use edgli::hopr_lib::api::node::HoprState;
+use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
@@ -168,20 +168,21 @@ pub enum HoprStatus {
     WaitingForFunds,
     CheckingBalance,
     ValidatingNetworkConfig,
-    SubscribingToAnnouncements,
+    CheckingOnchainAddress,
     RegisteringSafe,
     AnnouncingNode,
     AwaitingKeyBinding,
     InitializingServices,
     Running,
     Terminated,
+    Degraded,
+    Failed,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprInitStatus {
     ValidatingConfig,
     IdentifyingNode,
-    InitializingDatabase,
     ConnectingBlockchain,
     CreatingNode,
     StartingNode,
@@ -404,13 +405,15 @@ impl From<HoprState> for HoprStatus {
             HoprState::WaitingForFunds => HoprStatus::WaitingForFunds,
             HoprState::CheckingBalance => HoprStatus::CheckingBalance,
             HoprState::ValidatingNetworkConfig => HoprStatus::ValidatingNetworkConfig,
-            HoprState::SubscribingToAnnouncements => HoprStatus::SubscribingToAnnouncements,
+            HoprState::CheckingOnchainAddress => HoprStatus::CheckingOnchainAddress,
             HoprState::RegisteringSafe => HoprStatus::RegisteringSafe,
             HoprState::AnnouncingNode => HoprStatus::AnnouncingNode,
             HoprState::AwaitingKeyBinding => HoprStatus::AwaitingKeyBinding,
             HoprState::InitializingServices => HoprStatus::InitializingServices,
             HoprState::Running => HoprStatus::Running,
             HoprState::Terminated => HoprStatus::Terminated,
+            HoprState::Degraded => HoprStatus::Degraded,
+            HoprState::Failed => HoprStatus::Failed,
         }
     }
 }
@@ -420,7 +423,6 @@ impl From<EdgliInitState> for HoprInitStatus {
         match state {
             EdgliInitState::ValidatingConfig => HoprInitStatus::ValidatingConfig,
             EdgliInitState::IdentifyingNode => HoprInitStatus::IdentifyingNode,
-            EdgliInitState::InitializingDatabase => HoprInitStatus::InitializingDatabase,
             EdgliInitState::ConnectingBlockchain => HoprInitStatus::ConnectingBlockchain,
             EdgliInitState::CreatingNode => HoprInitStatus::CreatingNode,
             EdgliInitState::StartingNode => HoprInitStatus::StartingNode,
@@ -534,13 +536,15 @@ impl Display for HoprStatus {
             HoprStatus::WaitingForFunds => write!(f, "Waiting for initial wallet funding"),
             HoprStatus::CheckingBalance => write!(f, "Verifying wallet balance"),
             HoprStatus::ValidatingNetworkConfig => write!(f, "Validating network configuration"),
-            HoprStatus::SubscribingToAnnouncements => write!(f, "Subscribing to network announcements"),
+            HoprStatus::CheckingOnchainAddress => write!(f, "Checking onchain address"),
             HoprStatus::RegisteringSafe => write!(f, "Registering Safe contract"),
             HoprStatus::AnnouncingNode => write!(f, "Announcing node on chain"),
             HoprStatus::AwaitingKeyBinding => write!(f, "Waiting for on-chain key binding confirmation"),
             HoprStatus::InitializingServices => write!(f, "Initializing internal services"),
             HoprStatus::Running => write!(f, "Node is running"),
             HoprStatus::Terminated => write!(f, "Node has been terminated"),
+            HoprStatus::Degraded => write!(f, "Node is running in degraded state"),
+            HoprStatus::Failed => write!(f, "Node has failed"),
         }
     }
 }
@@ -550,7 +554,6 @@ impl Display for HoprInitStatus {
         match self {
             HoprInitStatus::ValidatingConfig => write!(f, "Validating configuration"),
             HoprInitStatus::IdentifyingNode => write!(f, "Identifying node"),
-            HoprInitStatus::InitializingDatabase => write!(f, "Initializing database"),
             HoprInitStatus::ConnectingBlockchain => write!(f, "Connecting blockchain"),
             HoprInitStatus::CreatingNode => write!(f, "Creating node"),
             HoprInitStatus::StartingNode => write!(f, "Starting node"),
@@ -610,7 +613,7 @@ mod tests {
         Destination::new(
             "test-destination".to_string(),
             address(1),
-            RoutingOptions::IntermediatePath(Default::default()),
+            RoutingOptions::Hops(1.try_into().unwrap()),
             HashMap::new(),
         )
     }

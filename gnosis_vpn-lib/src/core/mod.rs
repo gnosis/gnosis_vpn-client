@@ -1,7 +1,7 @@
 use edgli::EdgliInitState;
-use edgli::blokli::SafelessInteractor;
-use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::blokli::SafeOperations;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -74,7 +74,7 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    safeless_interactor: Option<Arc<SafelessInteractor>>,
+    safeless_interactor: Option<Arc<dyn SafeOperations>>,
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
     strategy_handle: Option<AbortHandle>,
@@ -395,7 +395,7 @@ impl Core {
                                         // should never be here - mark unrecoverable to indicate misconfiguration
                                         .unwrap_or_else(|| command::RouteHealthView {
                                             state: route_health::RouteHealthState::Unrecoverable {
-                                                reason: route_health::UnrecoverableReason::InvalidId,
+                                                reason: route_health::UnrecoverableReason::InvalidPath,
                                             },
                                             last_error: None,
                                             checking_since: None,
@@ -603,6 +603,22 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
+                    // For AnyChannel routes stuck in NeedsFunding, notify them that channels
+                    // exist so they can transition to Routable. channel_funded() gates itself
+                    // by static_need so this is safe to broadcast.
+                    if let Some(hopr) = self.hopr.clone() {
+                        let channel_addrs: Vec<Address> = balances.channels_out.keys().cloned().collect();
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        for addr in &channel_addrs {
+                            for id in &dest_ids {
+                                if let (Some(rh), Some(dest)) =
+                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                                {
+                                    rh.channel_funded(*addr, &hopr, dest, &self.config.connection, results_sender);
+                                }
+                            }
+                        }
+                    }
                     self.balances = Some(balances);
                     self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
@@ -660,18 +676,9 @@ impl Core {
 
             Results::FundChannel { address, res } => {
                 self.ongoing_channel_fundings.retain(|a| a != &address);
-                let dest_ids: Vec<String> = self
-                    .config
-                    .destinations
-                    .iter()
-                    .filter_map(|(_, d)| {
-                        if d.has_intermediate_channel(address) {
-                            Some(d.id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                // Broadcast to all route healths — channel_funded() itself determines
+                // applicability via static_need (Channel match or AnyChannel).
+                let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                 match res {
                     Ok(()) => {
                         tracing::info!(address = %address.to_checksum(), "channel funded");
@@ -863,13 +870,13 @@ impl Core {
 
     async fn on_results_safeless_interactor(
         &mut self,
-        res: Result<SafelessInteractor, runner::Error>,
+        res: Result<Arc<dyn SafeOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         match res {
             Ok(safeless_interactor) => {
                 tracing::info!("safeless interactor created successfully");
-                self.safeless_interactor = Some(Arc::new(safeless_interactor));
+                self.safeless_interactor = Some(safeless_interactor);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
             }
