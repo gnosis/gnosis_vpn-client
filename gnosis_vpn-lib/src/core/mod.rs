@@ -603,6 +603,22 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
+                    // For AnyChannel routes stuck in NeedsFunding, notify them that channels
+                    // exist so they can transition to Routable. channel_funded() gates itself
+                    // by static_need so this is safe to broadcast.
+                    if let Some(hopr) = self.hopr.clone() {
+                        let channel_addrs: Vec<Address> = balances.channels_out.keys().cloned().collect();
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        for addr in &channel_addrs {
+                            for id in &dest_ids {
+                                if let (Some(rh), Some(dest)) =
+                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                                {
+                                    rh.channel_funded(*addr, &hopr, dest, &self.config.connection, results_sender);
+                                }
+                            }
+                        }
+                    }
                     self.balances = Some(balances);
                     self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
@@ -660,18 +676,9 @@ impl Core {
 
             Results::FundChannel { address, res } => {
                 self.ongoing_channel_fundings.retain(|a| a != &address);
-                let dest_ids: Vec<String> = self
-                    .config
-                    .destinations
-                    .iter()
-                    .filter_map(|(_, d)| {
-                        if d.has_intermediate_channel(address) {
-                            Some(d.id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                // Broadcast to all route healths — channel_funded() itself determines
+                // applicability via static_need (Channel match or AnyChannel).
+                let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                 match res {
                     Ok(()) => {
                         tracing::info!(address = %address.to_checksum(), "channel funded");
