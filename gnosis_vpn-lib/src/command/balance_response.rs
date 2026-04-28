@@ -1,13 +1,13 @@
 use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt::{self, Display}};
 
-use std::collections::HashMap;
-use std::fmt::{self, Display};
-
-use crate::balance::{self, FundingIssue};
-use crate::connection::destination::Destination;
-use crate::info::Info;
-use crate::ticket_stats::{self, TicketStats};
+use crate::{
+    balance::{self, FundingIssue},
+    connection::destination::Destination,
+    info::Info,
+    ticket_stats::{self, TicketStats},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
