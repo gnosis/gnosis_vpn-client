@@ -130,19 +130,19 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
-                    tracing::debug!("received SIGINT");
+                    tracing::info!("received SIGINT");
                     let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sigterm.recv() => {
-                    tracing::debug!("received SIGTERM");
+                    tracing::info!("received SIGTERM");
                     let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::debug!("received SIGHUP");
+                    tracing::info!("received SIGHUP");
                     let _ =  sender.send(SignalMessage::RotateLogs).await;
                 }
                 _ = cancel.cancelled() => {
-                    tracing::debug!("signal channel received cancellation");
+                    tracing::info!("signal channel received cancellation");
                     break;
                 }
                 else => {
