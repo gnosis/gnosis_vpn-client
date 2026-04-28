@@ -395,7 +395,7 @@ impl Core {
                                         // should never be here - mark unrecoverable to indicate misconfiguration
                                         .unwrap_or_else(|| command::RouteHealthView {
                                             state: route_health::RouteHealthState::Unrecoverable {
-                                                reason: route_health::UnrecoverableReason::InvalidId,
+                                                reason: route_health::UnrecoverableReason::InvalidPath,
                                             },
                                             last_error: None,
                                             checking_since: None,

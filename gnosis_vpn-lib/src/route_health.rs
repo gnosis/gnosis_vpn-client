@@ -33,7 +33,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
+use crate::connection::destination::{Address, Destination, RoutingOptions};
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
@@ -98,8 +98,6 @@ pub enum StaticNeed {
 pub enum UnrecoverableReason {
     /// Direct (0-hop) peering is configured but insecure peering is disabled.
     NotAllowed,
-    /// The configured path contains an offchain node ID, which is not supported.
-    InvalidId,
     /// The configured intermediate path is empty.
     InvalidPath,
     /// The exit server only offers API versions we do not support.
@@ -244,11 +242,7 @@ impl RouteHealth {
 fn derive_static_need(routing: &RoutingOptions, dest_address: Address) -> StaticNeed {
     match routing.clone() {
         RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => StaticNeed::Peering(dest_address),
-        RoutingOptions::Hops(_) => StaticNeed::AnyChannel,
-        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(address)) => StaticNeed::Channel(address),
-            _ => StaticNeed::AnyChannel,
-        },
+        _ => StaticNeed::AnyChannel,
     }
 }
 
@@ -263,16 +257,7 @@ fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> Route
                 reason: UnrecoverableReason::NotAllowed,
             }
         }
-        RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering { funded: false },
-        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(_)) => RouteHealthState::NeedsPeering { funded: false },
-            Some(NodeId::Offchain(_)) => RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::InvalidId,
-            },
-            None => RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::InvalidPath,
-            },
-        },
+        _ => RouteHealthState::NeedsPeering { funded: false },
     }
 }
 
@@ -1022,7 +1007,6 @@ impl Display for UnrecoverableReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UnrecoverableReason::NotAllowed => write!(f, "direct peering not allowed (insecure peering disabled)"),
-            UnrecoverableReason::InvalidId => write!(f, "path contains offchain node ID (unsupported)"),
             UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
             UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
                 write!(

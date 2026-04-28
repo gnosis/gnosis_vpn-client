@@ -40,7 +40,6 @@ use crate::{
     balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
-    ticket_stats::TicketStats,
 };
 
 #[derive(Debug, Error)]
@@ -348,7 +347,6 @@ impl Hopr {
         tracing::debug!("query hopr info");
         Info {
             node_address: self.edgli.me_onchain(),
-            node_peer_id: self.edgli.me_peer_id(),
             safe_address: self.edgli.safe_address(),
         }
     }
@@ -375,18 +373,6 @@ impl Hopr {
                 })
                 .collect(),
         })
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
-        tracing::debug!("query hopr ticket price");
-        let ticket_price = self.edgli.get_ticket_price().await.map_err(HoprError::HoprLib)?;
-        let winning_probability = self
-            .edgli
-            .get_ticket_win_probability()
-            .await
-            .map_err(HoprError::HoprLib)?;
-        Ok(TicketStats::new(ticket_price, winning_probability.into()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

@@ -613,7 +613,7 @@ mod tests {
         Destination::new(
             "test-destination".to_string(),
             address(1),
-            RoutingOptions::IntermediatePath(Default::default()),
+            RoutingOptions::Hops(1.try_into().unwrap()),
             HashMap::new(),
         )
     }

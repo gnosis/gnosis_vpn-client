@@ -13,7 +13,7 @@ const ID_PASS: &str = "gnosisvpn-hopr.pass";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("keypair error: {0}")]
-    KeyPair(String),
+    KeyPair(#[source] anyhow::Error),
     #[error("Unable to determine project directories")]
     ProjectDirs,
     #[error(transparent)]
@@ -28,7 +28,7 @@ pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
         password: pass.as_str(),
         id_path: id_path.as_str(),
     };
-    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(e.to_string()))
+    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(anyhow::anyhow!(e)))
 }
 
 pub fn file(state_home: PathBuf) -> PathBuf {
