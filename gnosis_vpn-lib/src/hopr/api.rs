@@ -1,15 +1,15 @@
 use bytesize::ByteSize;
-use edgli::{BlockchainConnectorConfig, EdgliInitState};
+use edgli::{BlockchainConnectorConfig, ChannelEntry, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
         HopRouting, HoprSessionClientConfig,
         api::{
             chain::ChainKeyOperations,
-            node::{HasChainApi, HasTransportApi, HoprNodeOperations, IncentiveChannelOperations},
+            node::{HasChainApi, HasTransportApi},
             types::{
                 internal::{channels::ChannelStatus, routing::RoutingOptions},
-                primitive::prelude::{Address, Balance, HoprBalance, WxHOPR, XDai},
+                primitive::prelude::{Address, Balance, HoprBalance, WxHOPR},
             },
         },
         errors::HoprLibError,
@@ -94,11 +94,18 @@ impl Hopr {
     #[instrument(skip(self), level = "debug", ret, err)]
     pub async fn ensure_channel_open(&self, target: Address, amount: Balance<WxHOPR>) -> Result<(), ChannelError> {
         tracing::debug!("ensure hopr channel open");
-        let channels_from_me = self
+        let channels_from_me: Vec<ChannelEntry> = self
             .edgli
-            .channels_from(self.edgli.me_onchain())
+            .my_outgoing_channels()
             .await
-            .map_err(|e| ChannelError::HoprLibError(HoprLibError::chain(e)))?;
+            .map_err(ChannelError::HoprLibError)?;
+
+        let open_channel = || async {
+            self.edgli
+                .open_channel(target, amount)
+                .await
+                .map_err(|e| ChannelError::Open(HoprError::HoprLib(e)))
+        };
 
         if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
             match channel.status {
@@ -109,20 +116,12 @@ impl Hopr {
                 }
                 ChannelStatus::Closed => {
                     tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is closed, opening a new one");
-                    self.edgli
-                        .open_channel(target, amount)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| ChannelError::Open(HoprError::HoprLib(HoprLibError::other(e))))
+                    open_channel().await
                 }
             }
         } else {
             tracing::debug!(destination = %target, %amount, "no existing channel found, opening a new one");
-            self.edgli
-                .open_channel(target, amount)
-                .await
-                .map(|_| ())
-                .map_err(|e| ChannelError::Open(HoprError::HoprLib(HoprLibError::other(e))))
+            open_channel().await
         }
     }
 
@@ -349,8 +348,8 @@ impl Hopr {
         tracing::debug!("query hopr info");
         Info {
             node_address: self.edgli.me_onchain(),
-            node_peer_id: self.edgli.me_peer_id().to_string(),
-            safe_address: self.edgli.identity().safe_address,
+            node_peer_id: self.edgli.me_peer_id(),
+            safe_address: self.edgli.safe_address(),
         }
     }
 
@@ -358,21 +357,13 @@ impl Hopr {
     pub async fn balances(&self) -> Result<Balances, HoprError> {
         tracing::debug!("query hopr balances");
         Ok(Balances {
-            node_xdai: self
-                .edgli
-                .get_balance::<XDai>()
-                .await
-                .map_err(|e| HoprError::HoprLib(HoprLibError::chain(e)))?,
-            safe_wxhopr: self
-                .edgli
-                .get_safe_balance()
-                .await
-                .map_err(|e| HoprError::HoprLib(HoprLibError::chain(e)))?,
+            node_xdai: self.edgli.get_xdai_balance().await.map_err(HoprError::HoprLib)?,
+            safe_wxhopr: self.edgli.get_safe_balance().await.map_err(HoprError::HoprLib)?,
             channels_out: self
                 .edgli
-                .channels_from(self.edgli.me_onchain())
+                .my_outgoing_channels()
                 .await
-                .map_err(|e| HoprError::HoprLib(HoprLibError::chain(e)))?
+                .map_err(HoprError::HoprLib)?
                 .into_iter()
                 .filter_map(|ch| {
                     if matches!(ch.status, ChannelStatus::Open) || matches!(ch.status, ChannelStatus::PendingToClose(_))
@@ -389,43 +380,25 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn get_ticket_stats(&self) -> Result<TicketStats, HoprError> {
         tracing::debug!("query hopr ticket price");
-        let ticket_price = self
-            .edgli
-            .get_ticket_price()
-            .await
-            .map_err(|e| HoprError::HoprLib(HoprLibError::chain(e)))?;
+        let ticket_price = self.edgli.get_ticket_price().await.map_err(HoprError::HoprLib)?;
         let winning_probability = self
             .edgli
-            .get_minimum_incoming_ticket_win_probability()
+            .get_ticket_win_probability()
             .await
-            .map_err(|e| HoprError::HoprLib(HoprLibError::chain(e)))?;
+            .map_err(HoprError::HoprLib)?;
         Ok(TicketStats::new(ticket_price, winning_probability.into()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub fn status(&self) -> edgli::hopr_lib::api::node::HoprState {
         tracing::debug!("query hopr status");
-        HoprNodeOperations::status(&**self.edgli)
+        self.edgli.status()
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
         tracing::debug!("query hopr connected peers");
-        let offchain_keys = self
-            .edgli
-            .transport()
-            .network_connected_peers()
-            .await
-            .map_err(|e| HoprError::HoprLib(e.into()))?;
-        let mut addresses = Vec::new();
-        for key in offchain_keys {
-            match self.edgli.chain_api().packet_key_to_chain_key(&key) {
-                Ok(Some(address)) => addresses.push(address),
-                Ok(None) => {}
-                Err(e) => tracing::warn!(%key, error = ?e, "failed to get chain address for offchain key"),
-            }
-        }
-        Ok(addresses)
+        self.edgli.connected_peer_addresses().await.map_err(HoprError::HoprLib)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
