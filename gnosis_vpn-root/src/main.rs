@@ -31,7 +31,7 @@ mod network_info;
 mod routing;
 mod wg_tooling;
 
-use routing::{RouteCmd, RouteEvent, RouteManager};
+use routing::{RouteCmd, RouteEvent};
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -474,7 +474,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     routing::reset_on_startup(worker_params.state_home()).await;
 
     let (cancel_route_manager, route_cmd_sender, route_event_receiver, route_manager) =
-        RouteManager::new(worker_params.state_home());
+        routing::create_manager(worker_params.state_home()).map_err(|err| {
+            tracing::error!(error = ?err, "failed to create route manager");
+            exitcode::UNAVAILABLE
+        })?;
     tokio::spawn(route_manager.run());
 
     let mut state = DaemonState::new(
@@ -991,7 +994,7 @@ impl DaemonState {
             }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
                 if matches!(self.shutdown_ongoing, Shutdown::None) {
-                    let _ = self.route_cmd_sender.send(RouteCmd::Connect { wg_data, peer_ips }).await;
+                    let _ = self.route_cmd_sender.send(RouteCmd::Connect { wg_data: Box::new(wg_data), peer_ips }).await;
                 }
                 Ok(())
             }
@@ -1176,6 +1179,10 @@ impl DaemonState {
                     )
                     .await?;
                 }
+                Ok(())
+            }
+            RouteEvent::NetworkChanged => {
+                tracing::info!("network changed, bypass routes rebuilt");
                 Ok(())
             }
         }

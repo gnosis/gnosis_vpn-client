@@ -1,8 +1,5 @@
 //! Linux route operations using rtnetlink.
-//!
-//! [`NetlinkRouteOps`] implements [`RouteOps`] using typed netlink messages via `rtnetlink::Handle`.
 
-use async_trait::async_trait;
 use futures::TryStreamExt;
 use rtnetlink::packet_route::link::LinkAttribute;
 use rtnetlink::packet_route::route::{RouteAddress, RouteAttribute};
@@ -10,11 +7,8 @@ use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 use super::Error;
-use super::route_ops::RouteOps;
 
-/// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
-///
-/// Reuses the same netlink connection as [`RealNetlinkOps`](super::netlink_ops::RealNetlinkOps).
+/// Route table operations for Linux backed by an `rtnetlink::Handle`.
 #[derive(Clone)]
 pub struct NetlinkRouteOps {
     handle: rtnetlink::Handle,
@@ -25,8 +19,6 @@ impl NetlinkRouteOps {
         Self { handle }
     }
 
-    /// Parse a destination string like "10.0.0.0/8" or "1.2.3.4" into (addr, prefix_len).
-    #[allow(dead_code)]
     fn parse_dest(dest: &str) -> Result<(Ipv4Addr, u8), Error> {
         if let Some((addr_str, prefix_str)) = dest.split_once('/') {
             let addr = Ipv4Addr::from_str(addr_str)
@@ -38,13 +30,10 @@ impl NetlinkRouteOps {
         } else {
             let addr =
                 Ipv4Addr::from_str(dest).map_err(|e| Error::General(format!("invalid route destination: {e}")))?;
-            // Host route
             Ok((addr, 32))
         }
     }
 
-    /// Resolve a device name to its interface index.
-    #[allow(dead_code)]
     async fn resolve_ifindex(&self, device: &str) -> Result<u32, Error> {
         let links: Vec<_> = self
             .handle
@@ -61,12 +50,8 @@ impl NetlinkRouteOps {
             .map(|l| l.header.index)
             .ok_or_else(|| Error::General(format!("interface '{device}' not found")))
     }
-}
 
-#[async_trait]
-impl RouteOps for NetlinkRouteOps {
-    async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
-        // List all IPv4 routes and find the default (0.0.0.0/0)
+    pub async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
         let routes: Vec<_> = self
             .handle
             .route()
@@ -75,12 +60,10 @@ impl RouteOps for NetlinkRouteOps {
             .try_collect()
             .await?;
 
-        // Find the default route (prefix_len == 0)
         let default_route = routes
             .iter()
             .filter(|r| r.header.destination_prefix_length == 0)
             .min_by_key(|r| {
-                // Prefer routes with lower metric
                 r.attributes
                     .iter()
                     .find_map(|a| match a {
@@ -91,7 +74,6 @@ impl RouteOps for NetlinkRouteOps {
             })
             .ok_or(Error::NoInterface)?;
 
-        // Extract interface index
         let if_index = default_route
             .attributes
             .iter()
@@ -101,13 +83,11 @@ impl RouteOps for NetlinkRouteOps {
             })
             .ok_or(Error::NoInterface)?;
 
-        // Extract gateway
         let gateway = default_route.attributes.iter().find_map(|a| match a {
             RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
             _ => None,
         });
 
-        // Resolve ifindex to name
         let links: Vec<_> = self.handle.link().get().execute().try_collect().await?;
 
         let if_name = links
@@ -124,7 +104,7 @@ impl RouteOps for NetlinkRouteOps {
         Ok((if_name, gateway))
     }
 
-    async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
+    pub async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let (addr, prefix_len) = Self::parse_dest(dest)?;
         let if_index = self.resolve_ifindex(device).await?;
 
@@ -141,7 +121,7 @@ impl RouteOps for NetlinkRouteOps {
         Ok(())
     }
 
-    async fn route_del(&self, dest: &str, device: &str) -> Result<(), Error> {
+    pub async fn route_del(&self, dest: &str, device: &str) -> Result<(), Error> {
         let (addr, prefix_len) = Self::parse_dest(dest)?;
         let if_index = self.resolve_ifindex(device).await?;
 

@@ -1,22 +1,14 @@
 //! macOS route operations using BSD route commands.
 //!
-//! [`DarwinRouteOps`] implements [`RouteOps`] using macOS-native routing.
 //! Currently wraps the `route` command; a future iteration could use
 //! PF_ROUTE sockets directly for CLI-free operation.
 
-use async_trait::async_trait;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
 use super::Error;
-use super::route_ops::RouteOps;
 
-/// Build the argument list for a `route add` invocation.
-///
-/// When a gateway is present, `-ifp` pins the route to the named interface.
-/// Without a gateway, `-interface` marks the destination as directly reachable
-/// via the named interface.
 fn route_add_args(dest: &str, gateway: Option<&str>, device: &str) -> Vec<String> {
     let mut args = vec!["-n".into(), "add".into(), "-inet".into(), dest.into()];
     if let Some(gw) = gateway {
@@ -30,13 +22,12 @@ fn route_add_args(dest: &str, gateway: Option<&str>, device: &str) -> Vec<String
     args
 }
 
-/// Production [`RouteOps`] for macOS backed by the `route` command.
+/// Route table operations for macOS backed by the `route` command.
 #[derive(Clone)]
 pub struct DarwinRouteOps;
 
-#[async_trait]
-impl RouteOps for DarwinRouteOps {
-    async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
+impl DarwinRouteOps {
+    pub async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
         let output = Command::new("route")
             .arg("-n")
             .arg("get")
@@ -44,12 +35,10 @@ impl RouteOps for DarwinRouteOps {
             .run_stdout(Logs::Print)
             .await?;
 
-        // Use shared parser with macOS-specific keys and suffix filter
-        // (filters out "index:" when gateway shows "gateway: index: 28")
-        parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
+        parse_route_output(&output)
     }
 
-    async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
+    pub async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
         for arg in route_add_args(dest, gateway, device) {
             cmd.arg(arg);
@@ -58,7 +47,7 @@ impl RouteOps for DarwinRouteOps {
         Ok(())
     }
 
-    async fn route_del(&self, dest: &str, _device: &str) -> Result<(), Error> {
+    pub async fn route_del(&self, dest: &str, _device: &str) -> Result<(), Error> {
         Command::new("route")
             .arg("-n")
             .arg("delete")
@@ -70,45 +59,28 @@ impl RouteOps for DarwinRouteOps {
     }
 }
 
-/// Parses key-value pairs from command output to extract device and gateway.
+/// Parse `route -n get 0.0.0.0` output to extract interface name and gateway.
 ///
-/// This utility works for both Linux (`ip route show default`) and macOS
-/// (`route -n get 0.0.0.0`) command outputs by parameterizing the key names.
-///
-/// # Arguments
-/// * `output` - The command output to parse
-/// * `device_key` - Key for device name (e.g., "dev" on Linux, "interface:" on macOS)
-/// * `gateway_key` - Key for gateway IP (e.g., "via" on Linux, "gateway:" on macOS)
-/// * `filter_suffix` - Optional suffix to filter out (e.g., Some(":") for macOS
-///   to handle "gateway: index: 28" cases)
-///
-/// # Returns
-/// A tuple of (device_name, Option<gateway_ip>)
-pub(crate) fn parse_key_value_output(
-    output: &str,
-    device_key: &str,
-    gateway_key: &str,
-    filter_suffix: Option<&str>,
-) -> Result<(String, Option<String>), Error> {
+/// Handles the case where gateway shows as "index: N" (e.g. when a VPN is
+/// active) by filtering out values that contain a colon suffix.
+fn parse_route_output(output: &str) -> Result<(String, Option<String>), Error> {
     let parts: Vec<&str> = output.split_whitespace().collect();
 
-    let device_index = parts.iter().position(|&x| x == device_key);
-    let gateway_index = parts.iter().position(|&x| x == gateway_key);
-
-    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
-        Some(dev) => dev.to_string(),
-        None => {
-            tracing::error!(%output, "Unable to determine default interface");
-            return Err(Error::NoInterface);
-        }
-    };
-
-    let gateway = gateway_index
+    let device = parts
+        .iter()
+        .position(|&x| x == "interface:")
         .and_then(|idx| parts.get(idx + 1))
-        .filter(|gw| {
-            // Filter out values matching the suffix (e.g., "index:" on macOS)
-            filter_suffix.is_none_or(|suffix| !gw.ends_with(suffix))
-        })
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            tracing::error!(%output, "unable to determine default interface");
+            Error::NoInterface
+        })?;
+
+    let gateway = parts
+        .iter()
+        .position(|&x| x == "gateway:")
+        .and_then(|idx| parts.get(idx + 1))
+        .filter(|gw| !gw.ends_with(':')) // filter "index:" in "gateway: index: 28"
         .map(|gw| gw.to_string());
 
     Ok((device, gateway))
@@ -134,41 +106,37 @@ mod tests {
     }
 
     #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
+    fn parses_interface_and_gateway() -> anyhow::Result<()> {
         let output = r#"
-                      route to: default
-                   destination: default
-                          mask: default
-                       gateway: 192.168.178.1
-                     interface: en1
-                         flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-                    recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
-                          0         0         0         0         0         0      1500         0
-                   "#;
+                  route to: default
+               destination: default
+                      mask: default
+                   gateway: 192.168.178.1
+                 interface: en1
+                     flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+               "#;
 
-        let (device, gateway) = super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
+        let (device, gateway) = parse_route_output(output)?;
         assert_eq!(device, "en1");
         assert_eq!(gateway, Some("192.168.178.1".to_string()));
         Ok(())
     }
 
     #[test]
-    fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
+    fn parses_interface_no_gateway_when_vpn_active() -> anyhow::Result<()> {
         // When VPN is active, gateway may show as "index: N" instead of an IP
         let output = r#"
-                                 route to: default
-                              destination: default
-                                     mask: default
-                                  gateway: index: 28
-                                interface: utun8
-                                    flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-                              "#;
+                             route to: default
+                          destination: default
+                                 mask: default
+                              gateway: index: 28
+                            interface: utun8
+                                flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+                          "#;
 
-        let (device, gateway) = super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
+        let (device, gateway) = parse_route_output(output)?;
         assert_eq!(device, "utun8");
-        assert_eq!(gateway, None); // Should be None, not "index:"
+        assert_eq!(gateway, None);
         Ok(())
     }
 }
