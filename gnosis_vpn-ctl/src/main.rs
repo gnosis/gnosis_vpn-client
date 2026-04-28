@@ -77,7 +77,7 @@ async fn run_check_update(format: OutputFormat) -> ExitCode {
                     }
                     if let Some(snapshot) = &manifest.channels.snapshot {
                         println!(
-                            "Latest Snapsot: {}, published at {}, download at: {}",
+                            "Latest Snapshot: {}, published at {}, download at: {}",
                             snapshot.version, snapshot.published_at, snapshot.download_url
                         );
                     }
