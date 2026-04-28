@@ -75,10 +75,10 @@ async fn run_check_update(format: OutputFormat) -> ExitCode {
                             stable.version, stable.published_at, stable.download_url
                         );
                     }
-                    if let Some(nightly) = &manifest.channels.nightly {
+                    if let Some(snapshot) = &manifest.channels.snapshot {
                         println!(
-                            "Latest Nightly: {}, published at {}, download at: {}",
-                            nightly.version, nightly.published_at, nightly.download_url
+                            "Latest Snapsot: {}, published at {}, download at: {}",
+                            snapshot.version, snapshot.published_at, snapshot.download_url
                         );
                     }
                 }

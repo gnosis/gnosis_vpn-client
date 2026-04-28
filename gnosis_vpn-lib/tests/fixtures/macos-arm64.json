@@ -13,7 +13,7 @@
       "min_os_version": "14.0",
       "min_app_version": "0.77.0"
     },
-    "nightly": {
+    "snapshot": {
       "version": "2026.04.24+build.030921",
       "published_at": "2026-04-24T03:08:33Z",
       "download_url": "https://download.gnosisvpn.io/latest/gnosisvpn_arm64.pkg",

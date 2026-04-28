@@ -25,7 +25,7 @@ pub struct Manifest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ManifestChannels {
     pub stable: Option<ChannelRelease>,
-    pub nightly: Option<ChannelRelease>,
+    pub snapshot: Option<ChannelRelease>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
