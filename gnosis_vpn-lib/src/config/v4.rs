@@ -1,5 +1,6 @@
-use edgli::hopr_lib::exports::network::types::types::RoutingOptions;
-use edgli::hopr_lib::{Address, NodeId};
+use edgli::hopr_lib::api::types::internal::prelude::NodeId;
+use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 

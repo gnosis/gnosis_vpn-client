@@ -11,9 +11,11 @@ pub struct BlokliConfig {
 
 impl From<BlokliConfig> for BlockchainConnectorConfig {
     fn from(config: BlokliConfig) -> Self {
+        let defaults = BlockchainConnectorConfig::default();
         BlockchainConnectorConfig {
             connection_sync_timeout: config.connection_sync_timeout,
             sync_tolerance: config.sync_tolerance,
+            tx_timeout_multiplier: defaults.tx_timeout_multiplier,
         }
     }
 }

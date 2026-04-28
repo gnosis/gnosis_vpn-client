@@ -1,4 +1,6 @@
-pub use edgli::hopr_lib::{Address, NodeId, RoutingOptions};
+pub use edgli::hopr_lib::api::types::internal::prelude::NodeId;
+pub use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;

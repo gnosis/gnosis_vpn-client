@@ -1,4 +1,3 @@
-use edgli::hopr_lib::exports::crypto::keypair::errors::KeyPairError;
 use edgli::hopr_lib::{HoprKeys, IdentityRetrievalModes};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
@@ -13,8 +12,8 @@ const ID_PASS: &str = "gnosisvpn-hopr.pass";
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(transparent)]
-    KeyPair(#[from] KeyPairError),
+    #[error("keypair error: {0}")]
+    KeyPair(String),
     #[error("Unable to determine project directories")]
     ProjectDirs,
     #[error(transparent)]
@@ -29,7 +28,7 @@ pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
         password: pass.as_str(),
         id_path: id_path.as_str(),
     };
-    HoprKeys::try_from(retrieval_mode).map_err(Error::KeyPair)
+    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(e.to_string()))
 }
 
 pub fn file(state_home: PathBuf) -> PathBuf {

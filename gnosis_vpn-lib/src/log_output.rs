@@ -1,4 +1,4 @@
-use edgli::hopr_lib::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use humantime::format_duration;
 use serde::ser::Serialize;
 

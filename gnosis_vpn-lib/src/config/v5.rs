@@ -1,6 +1,9 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
-use edgli::hopr_lib::{Address, NodeId, SessionCapabilities, SessionCapability, SessionTarget};
+use edgli::hopr_lib::api::types::internal::prelude::NodeId;
+use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DisplayFromStr, serde_as};

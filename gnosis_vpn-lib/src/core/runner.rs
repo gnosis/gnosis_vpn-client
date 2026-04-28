@@ -4,10 +4,11 @@
 use backon::Retryable;
 use bytesize::ByteSize;
 use edgli::blokli::SafelessInteractor;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
-use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Address, Balance, WxHOPR};
-use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
+use edgli::hopr_lib::api::node::HoprState;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::builder::Keypair;
+use edgli::hopr_lib::exports::network::types::types::IpProtocol;
+use edgli::hopr_lib::exports::transport::SurbBalancerConfig;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::prelude::*;
@@ -26,7 +27,7 @@ use std::time::Duration;
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{self, Hopr, HoprError, api as hopr_api, config as hopr_config};
+use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
 use crate::log_output;
 use crate::route_health::{self, HealthCheckOutcome};
 use crate::ticket_stats::{self, TicketStats};
@@ -313,7 +314,7 @@ async fn run_ticket_stats(safeless_interactor: Arc<SafelessInteractor>) -> Resul
 
             Ok(TicketStats {
                 ticket_price: ticket_stats.ticket_price,
-                winning_probability: ticket_stats.winning_probability,
+                winning_probability: ticket_stats.winning_probability.into(),
             })
         }
     })
@@ -422,16 +423,9 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(
-        cfg,
-        hopr::config::db_file(worker_params.state_home()).as_path(),
-        keys,
-        blokli_url,
-        blokli_config.into(),
-        visitor,
-    )
-    .await
-    .map_err(Error::from)
+    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), visitor)
+        .await
+        .map_err(Error::from)
 }
 
 async fn run_fund_channel(
@@ -574,15 +568,16 @@ pub fn to_surb_balancer_config(
     max_surb_upstream: Bandwidth,
 ) -> Result<SurbBalancerConfig, SurbConfigError> {
     // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::exports::transport::SESSION_MTU as u64 {
         return Err(SurbConfigError::ResponseBufferTooSmall);
     }
     if max_surb_upstream.is_zero() {
         return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
     }
     let config = SurbBalancerConfig {
-        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
+        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE))
+            as u64,
         ..Default::default()
     };
     Ok(config)

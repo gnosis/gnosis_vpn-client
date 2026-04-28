@@ -1,7 +1,7 @@
 use edgli::EdgliInitState;
 use edgli::blokli::SafelessInteractor;
-use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};

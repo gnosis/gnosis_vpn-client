@@ -9,7 +9,6 @@ use crate::dirs;
 
 pub use edgli::hopr_lib::config::HoprLibConfig;
 
-const DB_FILE: &str = "gnosisvpn-hopr.db";
 const SAFE_FILE: &str = "gnosisvpn-hopr.safe";
 
 #[derive(Debug, Error)]
@@ -69,8 +68,4 @@ publish: false
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, SAFE_FILE)
-}
-
-pub(crate) fn db_file(state_home: PathBuf) -> PathBuf {
-    dirs::config_dir(state_home, DB_FILE)
 }

@@ -1,4 +1,6 @@
-use edgli::hopr_lib::{Address, Balance, NodeId, RoutingOptions, WxHOPR, XDai};
+use edgli::hopr_lib::api::types::internal::prelude::NodeId;
+use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;

@@ -25,7 +25,7 @@ mod remote_data;
 mod ticket_stats;
 
 pub mod prelude {
-    pub use edgli::hopr_lib::Address;
+    pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
 }
 
 pub const IDENTIFIER: &str = "com.gnosisvpn.gnosisvpnclient";

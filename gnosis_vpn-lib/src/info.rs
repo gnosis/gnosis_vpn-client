@@ -1,4 +1,4 @@
-use edgli::hopr_lib::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};

@@ -21,7 +21,7 @@
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
 //! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
-use edgli::hopr_lib::SessionClientConfig;
+use edgli::hopr_lib::exports::transport::SessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;

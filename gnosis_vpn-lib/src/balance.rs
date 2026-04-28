@@ -1,4 +1,4 @@
-pub use edgli::hopr_lib::{Address, Balance, WxHOPR, XDai};
+pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;

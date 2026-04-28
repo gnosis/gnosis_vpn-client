@@ -1,4 +1,6 @@
-use edgli::hopr_lib::{Address, IpProtocol, RoutingOptions};
+use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::network::types::types::IpProtocol;
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
