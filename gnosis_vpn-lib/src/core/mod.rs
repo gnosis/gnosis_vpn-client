@@ -1,5 +1,5 @@
 use edgli::EdgliInitState;
-use edgli::blokli::SafelessInteractor;
+use edgli::blokli::SafeOperations;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
@@ -74,7 +74,7 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    safeless_interactor: Option<Arc<SafelessInteractor>>,
+    safeless_interactor: Option<Arc<dyn SafeOperations>>,
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
     strategy_handle: Option<AbortHandle>,
@@ -863,13 +863,13 @@ impl Core {
 
     async fn on_results_safeless_interactor(
         &mut self,
-        res: Result<SafelessInteractor, runner::Error>,
+        res: Result<Arc<dyn SafeOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         match res {
             Ok(safeless_interactor) => {
                 tracing::info!("safeless interactor created successfully");
-                self.safeless_interactor = Some(Arc::new(safeless_interactor));
+                self.safeless_interactor = Some(safeless_interactor);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
             }

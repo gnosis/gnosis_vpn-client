@@ -17,7 +17,7 @@ pub const ENV_VAR_BLOKLI_URL: &str = "GNOSISVPN_HOPR_BLOKLI_URL";
 
 pub fn telemetry() -> Result<String, HoprError> {
     tracing::debug!("query hopr telemetry");
-    edgli::hopr_lib::Hopr::<(), (), (), ()>::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
+    edgli::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
 }
 
 pub fn blokli_url(provided_blokli_url: Option<url::Url>) -> url::Url {

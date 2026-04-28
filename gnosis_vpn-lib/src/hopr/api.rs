@@ -354,24 +354,25 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn balances(&self) -> Result<Balances, HoprError> {
         tracing::debug!("query hopr balances");
+        let node_balances = self.edgli.balances().await.map_err(HoprError::HoprLib)?;
+        let channels_out = self
+            .edgli
+            .my_outgoing_channels()
+            .await
+            .map_err(HoprError::HoprLib)?
+            .into_iter()
+            .filter_map(|ch| {
+                if matches!(ch.status, ChannelStatus::Open) || matches!(ch.status, ChannelStatus::PendingToClose(_)) {
+                    Some((ch.destination, ch.balance))
+                } else {
+                    None
+                }
+            })
+            .collect();
         Ok(Balances {
-            node_xdai: self.edgli.get_xdai_balance().await.map_err(HoprError::HoprLib)?,
-            safe_wxhopr: self.edgli.get_safe_balance().await.map_err(HoprError::HoprLib)?,
-            channels_out: self
-                .edgli
-                .my_outgoing_channels()
-                .await
-                .map_err(HoprError::HoprLib)?
-                .into_iter()
-                .filter_map(|ch| {
-                    if matches!(ch.status, ChannelStatus::Open) || matches!(ch.status, ChannelStatus::PendingToClose(_))
-                    {
-                        Some((ch.destination, ch.balance))
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
+            node_xdai: node_balances.node_xdai,
+            safe_wxhopr: node_balances.safe_wxhopr,
+            channels_out,
         })
     }
 
