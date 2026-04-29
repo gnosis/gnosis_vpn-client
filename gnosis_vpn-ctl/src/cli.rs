@@ -32,7 +32,7 @@ pub struct Cli {
         long = "output",
         value_name = "FORMAT",
         value_enum,
-        conflicts_with = "json",
+        conflicts_with = "json"
     )]
     pub output: Option<OutputFormat>,
 
