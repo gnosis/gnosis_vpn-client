@@ -42,10 +42,3 @@ allow = [
   "GPL-3.0-only",
 ]
 private = { ignore = true }
-
-# hopr-ticket-manager has no license field in its Cargo.toml; it is part of
-# hoprnet (GPL-3.0-only) but the field is simply absent from that crate.
-[[licenses.exceptions]]
-allow = ["GPL-3.0-only"]
-name = "hopr-ticket-manager"
-version = "*"
