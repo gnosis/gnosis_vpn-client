@@ -8,7 +8,7 @@ use edgli::{
             chain::ChainKeyOperations,
             node::{HasChainApi, HasTransportApi},
             types::{
-                internal::{channels::ChannelStatus, routing::RoutingOptions},
+                internal::channels::ChannelStatus,
                 primitive::prelude::{Address, Balance, HoprBalance, WxHOPR},
             },
         },
@@ -52,18 +52,6 @@ pub enum ChannelError {
     HoprLibError(#[from] HoprLibError),
 }
 
-/// Convert any `RoutingOptions` value to a `HopRouting`.
-///
-/// `IntermediatePath` is treated as its length (capped by `HopRouting`'s max);
-/// `Hops` is passed through directly. Used when reading back `RoutingOptions`
-/// stored in external types that we cannot change (e.g. `SessionClientConfig`).
-fn routing_to_hop_routing(opts: &RoutingOptions) -> HopRouting {
-    let count = match opts {
-        RoutingOptions::Hops(h) => usize::from(*h),
-        RoutingOptions::IntermediatePath(path) => path.as_ref().len(),
-    };
-    HopRouting::try_from(count).unwrap_or_default()
-}
 
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
@@ -309,8 +297,8 @@ impl Hopr {
                     protocol,
                     bound_host: key.1,
                     target: entry.target.to_string(),
-                    forward_path: routing_to_hop_routing(&entry.forward_path),
-                    return_path: routing_to_hop_routing(&entry.return_path),
+                    forward_path: entry.forward_path,
+                    return_path: entry.return_path,
                     destination: entry.destination,
                     hopr_mtu: SESSION_MTU,
                     surb_len: SURB_SIZE,

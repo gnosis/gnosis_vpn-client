@@ -18,11 +18,11 @@ bytesize = "2.3.0"
 cfg-if = "1.0.4"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "94ef8ba163f5dc1030e0b21589bcde36b98cf217", features = ["telemetry"] }
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f6026e4034bd6d91c839c0c283fa9931f0cb7650", features = ["telemetry"] }
 exitcode = "1.1.2"
 futures = "0.3.31"
 futures-util = "0.3.31"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "3c3d4cf7c2cc22adce48c08e44a9323c6b7ec044", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "5bc538a0060e39e91f482c79fd5aad1708bc3f21", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "0.1.4"
