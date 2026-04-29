@@ -18,12 +18,22 @@ pub enum Error {
     NoFile,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("Deserialization error: {0}")]
-    YamlDeserialization(#[from] serde_saphyr::Error),
-    #[error("Serialization error: {0}")]
-    YamlSerialization(#[from] serde_saphyr::ser::Error),
+    #[error("Yaml error: {0}")]
+    Yaml(Box<dyn std::error::Error + Send + Sync>),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
+}
+
+impl From<serde_saphyr::Error> for Error {
+    fn from(e: serde_saphyr::Error) -> Self {
+        Error::Yaml(Box::new(e))
+    }
+}
+
+impl From<serde_saphyr::ser::Error> for Error {
+    fn from(e: serde_saphyr::ser::Error) -> Self {
+        Error::Yaml(Box::new(e))
+    }
 }
 
 pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
@@ -35,7 +45,7 @@ pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
         }
     })?;
 
-    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Into::into)
 }
 
 pub async fn store_safe(state_home: PathBuf, safe_module: &SafeModule) -> Result<(), Error> {
@@ -52,7 +62,7 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
             Error::IO(e)
         }
     })?;
-    serde_saphyr::from_str::<SafeModule>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<SafeModule>(&content).map_err(Into::into)
 }
 
 pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
@@ -66,7 +76,7 @@ publish: false
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
     );
-    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Into::into)
 }
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {
