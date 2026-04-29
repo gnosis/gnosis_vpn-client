@@ -15,7 +15,7 @@ use edgli::{
         errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
-            transport::{SESSION_MTU, SURB_SIZE, SessionClientConfig, SessionId, SessionTarget, SurbBalancerConfig},
+            transport::{SESSION_MTU, SURB_SIZE, SessionId, SessionTarget, SurbBalancerConfig},
         },
     },
 };
@@ -147,7 +147,7 @@ impl Hopr {
         target: SessionTarget,
         session_pool: Option<usize>,
         max_client_sessions: Option<usize>,
-        cfg: SessionClientConfig,
+        cfg: HoprSessionClientConfig,
     ) -> Result<SessionClientMetadata, HoprError> {
         tracing::debug!("open hopr session");
         let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into();
@@ -198,15 +198,6 @@ impl Hopr {
             "binding {protocol} session listening socket to {bind_host} (port range limitations: {port_range:?})"
         );
 
-        let hopr_cfg = HoprSessionClientConfig {
-            forward_path: routing_to_hop_routing(&cfg.forward_path_options),
-            return_path: routing_to_hop_routing(&cfg.return_path_options),
-            capabilities: cfg.capabilities,
-            pseudonym: cfg.pseudonym,
-            surb_management: cfg.surb_management,
-            always_max_out_surbs: cfg.always_max_out_surbs,
-        };
-
         let (bound_host, udp_session_id, max_clients) = match protocol {
             IpProtocol::TCP => create_tcp_client_binding(
                 bind_host,
@@ -215,7 +206,7 @@ impl Hopr {
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
-                hopr_cfg,
+                cfg.clone(),
                 session_pool,
                 max_client_sessions,
             )
@@ -228,7 +219,7 @@ impl Hopr {
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
-                hopr_cfg,
+                cfg.clone(),
             )
             .await
             .map_err(|e| HoprError::Construction(format!("failed to create UDP client binding: {e}")))?,
@@ -248,8 +239,8 @@ impl Hopr {
             bound_host,
             target: session_target_spec.to_string(),
             destination,
-            forward_path: routing_to_hop_routing(&cfg.forward_path_options),
-            return_path: routing_to_hop_routing(&cfg.return_path_options),
+            forward_path: cfg.forward_path,
+            return_path: cfg.return_path,
             hopr_mtu: SESSION_MTU,
             surb_len: SURB_SIZE,
             active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),

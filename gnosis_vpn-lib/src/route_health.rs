@@ -21,7 +21,7 @@
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
 //! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
-use edgli::hopr_lib::exports::transport::SessionClientConfig;
+use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -890,10 +890,10 @@ impl HealthSession {
     /// Uses the configured bridge capabilities/target but disables SURB
     /// management — the session is short-lived and not used for user traffic.
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
-        let cfg = SessionClientConfig {
+        let cfg = HoprSessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
-            forward_path_options: destination.routing.into(),
-            return_path_options: destination.routing.into(),
+            forward_path: destination.routing,
+            return_path: destination.routing,
             surb_management: None,
             ..Default::default()
         };

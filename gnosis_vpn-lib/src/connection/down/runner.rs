@@ -1,7 +1,7 @@
 //! The runner module for `core::connection::down` struct.
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use edgli::hopr_lib::exports::transport::{SessionClientConfig, SurbBalancerConfig};
+use edgli::hopr_lib::{HoprSessionClientConfig, exports::transport::SurbBalancerConfig};
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -87,10 +87,10 @@ async fn open_bridge_session(
     options: &Options,
     surb_management: SurbBalancerConfig,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
+    let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: down.destination.routing.into(),
-        return_path_options: down.destination.routing.into(),
+        forward_path: down.destination.routing,
+        return_path: down.destination.routing,
         surb_management: Some(surb_management),
         ..Default::default()
     };
