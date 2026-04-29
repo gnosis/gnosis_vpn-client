@@ -26,23 +26,19 @@ pub struct Cli {
     )]
     pub socket_path: PathBuf,
 
-    /// Output format applied to every command (alternative to --json / --yaml)
+    /// Output format applied to every command (alternative to --json)
     #[arg(
         short = 'o',
         long = "output",
         value_name = "FORMAT",
         value_enum,
-        conflicts_with_all = ["json", "yaml"],
+        conflicts_with = "json",
     )]
     pub output: Option<OutputFormat>,
 
-    /// Format output as JSON (shorthand for --output json; mutually exclusive with --yaml)
-    #[arg(long, conflicts_with = "yaml")]
-    pub json: bool,
-
-    /// Format output as YAML (shorthand for --output yaml; mutually exclusive with --json)
+    /// Format output as JSON (shorthand for --output json)
     #[arg(long)]
-    pub yaml: bool,
+    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]

@@ -24,7 +24,6 @@ async fn main() {
     let format = match args.output {
         Some(f) => f,
         None if args.json => OutputFormat::Json,
-        None if args.yaml => OutputFormat::Yaml,
         None => OutputFormat::Plain,
     };
 
