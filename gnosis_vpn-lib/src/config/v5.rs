@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
@@ -556,12 +556,12 @@ pub fn convert_destinations(
     for (id, dest) in config_dests.iter() {
         let path = match dest.path.clone() {
             Some(DestinationPath::Intermediates(p)) => {
-                let hop_count = p.len().min(MAX_HOPS as usize) as u8;
+                let hop_count = p.len().min(MAX_HOPS as usize);
                 tracing::warn!(id, hop_count, "intermediates routing is deprecated; treating as hop count");
-                RoutingOptions::Hops(hop_count.try_into()?)
+                HopRouting::try_from(hop_count)?
             }
-            Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into()?),
-            None => RoutingOptions::Hops(1.try_into()?),
+            Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
+            None => HopRouting::try_from(1)?,
         };
 
         let meta = dest.meta.clone().unwrap_or_default();
@@ -574,7 +574,51 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, convert_destinations};
+    use edgli::hopr_lib::HopRouting;
+
+    fn parse(toml: &str) -> Config {
+        toml::from_str(toml).expect("valid TOML")
+    }
+
+    #[test]
+    fn convert_destinations_hops_path_preserved() {
+        let cfg = parse(r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+"#####);
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_none_path_defaults_to_1_hop() {
+        let cfg = parse(r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####);
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_empty_map_errors() {
+        let result = convert_destinations(Some(std::collections::HashMap::new()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_destinations_none_errors() {
+        let result = convert_destinations(None);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_minimal_config() -> anyhow::Result<()> {

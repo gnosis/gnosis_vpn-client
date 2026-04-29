@@ -13,6 +13,7 @@ use crate::wireguard::Config as WireGuardConfig;
 mod v3;
 mod v4;
 mod v5;
+mod v6;
 
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
@@ -78,6 +79,14 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
         5 => {
             let res = toml::from_str::<v5::Config>(&content)?;
             let wrong_keys = v5::wrong_keys(&table);
+            for key in wrong_keys.iter() {
+                tracing::warn!(%key, "ignoring unsupported key in configuration file");
+            }
+            res.try_into()
+        }
+        6 => {
+            let res = toml::from_str::<v6::Config>(&content)?;
+            let wrong_keys = v6::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }

@@ -600,7 +600,7 @@ impl Display for RouteHealthView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::RoutingOptions;
+    use crate::connection::destination::HopRouting;
     use crate::gvpn_client;
     use crate::route_health::ExitHealth;
     use std::collections::HashMap;
@@ -613,7 +613,7 @@ mod tests {
         Destination::new(
             "test-destination".to_string(),
             address(1),
-            RoutingOptions::Hops(1.try_into().unwrap()),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
         )
     }

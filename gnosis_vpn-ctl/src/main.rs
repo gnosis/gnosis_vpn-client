@@ -3,7 +3,6 @@ use exitcode::{self, ExitCode};
 use std::process;
 
 use gnosis_vpn_lib::command::{self, Command, Response};
-use gnosis_vpn_lib::connection::destination::RoutingOptions;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -300,38 +299,31 @@ fn print_connected_stats(stats: &command::ConnStats) {
 
 fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
     let mut str_resp = String::new();
-    match stats.destination.routing {
-        RoutingOptions::Hops(nr) => {
-            let nr_val: usize = nr.into();
-            match nr_val {
-                0 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        exit = stats.destination.id,
-                    ));
-                }
-                1 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        exit = stats.destination.id,
-                    ));
-                }
-                _ => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        nr = nr_val,
-                        exit = stats.destination.id,
-                    ));
-                }
-            }
+    match stats.destination.routing.hop_count() {
+        0 => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
         }
-        _ => {}
-    };
+        1 => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
+        }
+        nr => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
+        }
+    }
     str_resp
 }

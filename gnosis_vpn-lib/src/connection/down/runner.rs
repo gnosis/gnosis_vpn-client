@@ -89,8 +89,8 @@ async fn open_bridge_session(
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: down.destination.routing.clone(),
-        return_path_options: down.destination.routing.clone(),
+        forward_path_options: down.destination.routing.into(),
+        return_path_options: down.destination.routing.into(),
         surb_management: Some(surb_management),
         ..Default::default()
     };

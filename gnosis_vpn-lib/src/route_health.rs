@@ -33,7 +33,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::connection::destination::{Address, Destination, RoutingOptions};
+use crate::connection::destination::{Address, Destination, HopRouting};
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
@@ -236,28 +236,25 @@ impl RouteHealth {
     }
 }
 
-/// Derive the static need from routing alone. For invalid routing variants
-/// (empty path / offchain-first), we fall back to `AnyChannel` — the resulting
-/// state will be `Unrecoverable` so the field is never observed.
-fn derive_static_need(routing: &RoutingOptions, dest_address: Address) -> StaticNeed {
-    match routing.clone() {
-        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => StaticNeed::Peering(dest_address),
-        _ => StaticNeed::AnyChannel,
+/// Derive the static need from routing alone.
+fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
+    if routing.hop_count() == 0 {
+        StaticNeed::Peering(dest_address)
+    } else {
+        StaticNeed::Channel(dest_address)
     }
 }
 
-/// Pick the starting state purely from routing config. Invalid or
-/// disallowed routing variants short-circuit straight to `Unrecoverable`;
-/// everything else starts at `NeedsPeering` and waits for Core to feed in
-/// the peer set.
-fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> RouteHealthState {
-    match routing.clone() {
-        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 && !allow_insecure => {
-            RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::NotAllowed,
-            }
+/// Pick the starting state purely from routing config. 0-hop routing without
+/// `allow_insecure` short-circuits to `Unrecoverable`; everything else starts
+/// at `NeedsPeering` and waits for Core to feed in the peer set.
+fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHealthState {
+    if routing.hop_count() == 0 && !allow_insecure {
+        RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::NotAllowed,
         }
-        _ => RouteHealthState::NeedsPeering { funded: false },
+    } else {
+        RouteHealthState::NeedsPeering { funded: false }
     }
 }
 
@@ -895,8 +892,8 @@ impl HealthSession {
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
         let cfg = SessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
-            forward_path_options: destination.routing.clone(),
-            return_path_options: destination.routing.clone(),
+            forward_path_options: destination.routing.into(),
+            return_path_options: destination.routing.into(),
             surb_management: None,
             ..Default::default()
         };

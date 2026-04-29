@@ -1,4 +1,4 @@
-pub use edgli::hopr_lib::api::types::internal::routing::RoutingOptions;
+pub use edgli::hopr_lib::HopRouting;
 pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
@@ -12,11 +12,11 @@ pub struct Destination {
     pub id: String,
     pub meta: HashMap<String, String>,
     pub address: Address,
-    pub routing: RoutingOptions,
+    pub routing: HopRouting,
 }
 
 impl Destination {
-    pub fn new(id: String, address: Address, routing: RoutingOptions, meta: HashMap<String, String>) -> Self {
+    pub fn new(id: String, address: Address, routing: HopRouting, meta: HashMap<String, String>) -> Self {
         Self {
             id,
             address,
@@ -30,10 +30,7 @@ impl Destination {
     }
 
     pub fn pretty_print_path(&self) -> String {
-        let nr: u8 = match self.routing.clone() {
-            RoutingOptions::Hops(hops) => hops.into(),
-            RoutingOptions::IntermediatePath(p) => p.as_ref().len() as u8,
-        };
+        let nr = self.routing.hop_count();
         let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
         if nr > 0 {
             format!("->{path}->")

@@ -52,6 +52,19 @@ pub enum ChannelError {
     HoprLibError(#[from] HoprLibError),
 }
 
+/// Convert any `RoutingOptions` value to a `HopRouting`.
+///
+/// `IntermediatePath` is treated as its length (capped by `HopRouting`'s max);
+/// `Hops` is passed through directly. Used when reading back `RoutingOptions`
+/// stored in external types that we cannot change (e.g. `SessionClientConfig`).
+fn routing_to_hop_routing(opts: &RoutingOptions) -> HopRouting {
+    let count = match opts {
+        RoutingOptions::Hops(h) => usize::from(*h),
+        RoutingOptions::IntermediatePath(path) => path.as_ref().len(),
+    };
+    HopRouting::try_from(count).unwrap_or_default()
+}
+
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
     open_listeners: Arc<ListenerJoinHandles>,
@@ -185,16 +198,9 @@ impl Hopr {
             "binding {protocol} session listening socket to {bind_host} (port range limitations: {port_range:?})"
         );
 
-        let to_hop_routing = |opts: &RoutingOptions| -> HopRouting {
-            let count = match opts {
-                RoutingOptions::Hops(h) => usize::from(*h),
-                RoutingOptions::IntermediatePath(path) => path.as_ref().len(),
-            };
-            HopRouting::try_from(count).unwrap_or_default()
-        };
         let hopr_cfg = HoprSessionClientConfig {
-            forward_path: to_hop_routing(&cfg.forward_path_options),
-            return_path: to_hop_routing(&cfg.return_path_options),
+            forward_path: routing_to_hop_routing(&cfg.forward_path_options),
+            return_path: routing_to_hop_routing(&cfg.return_path_options),
             capabilities: cfg.capabilities,
             pseudonym: cfg.pseudonym,
             surb_management: cfg.surb_management,
@@ -242,8 +248,8 @@ impl Hopr {
             bound_host,
             target: session_target_spec.to_string(),
             destination,
-            forward_path: cfg.forward_path_options,
-            return_path: cfg.return_path_options,
+            forward_path: routing_to_hop_routing(&cfg.forward_path_options),
+            return_path: routing_to_hop_routing(&cfg.return_path_options),
             hopr_mtu: SESSION_MTU,
             surb_len: SURB_SIZE,
             active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),
@@ -312,8 +318,8 @@ impl Hopr {
                     protocol,
                     bound_host: key.1,
                     target: entry.target.to_string(),
-                    forward_path: entry.forward_path.clone(),
-                    return_path: entry.return_path.clone(),
+                    forward_path: routing_to_hop_routing(&entry.forward_path),
+                    return_path: routing_to_hop_routing(&entry.return_path),
                     destination: entry.destination,
                     hopr_mtu: SESSION_MTU,
                     surb_len: SURB_SIZE,
@@ -400,7 +406,7 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn announced_peers(&self, minimum_score: f64) -> Result<HashMap<Address, Peer>, HoprError> {
+    pub async fn announced_peers(&self, _minimum_score: f64) -> Result<HashMap<Address, Peer>, HoprError> {
         tracing::debug!("query hopr connected peers");
         let offchain_keys = self
             .edgli
