@@ -18,7 +18,9 @@ bytesize = "2.3.0"
 cfg-if = "1.0.4"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f6026e4034bd6d91c839c0c283fa9931f0cb7650", features = ["telemetry"] }
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "c80d29563fe56615e793e0af48784c88253593b6", features = [
+  "telemetry",
+] }
 exitcode = "1.1.2"
 futures = "0.3.31"
 futures-util = "0.3.31"

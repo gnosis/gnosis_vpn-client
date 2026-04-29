@@ -1,6 +1,9 @@
 use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::{self, Display}};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+};
 
 use crate::{
     balance::{self, FundingIssue},
@@ -49,7 +52,7 @@ impl BalanceResponse {
     ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
-        let mut channels_out = from_balances(balances.channels_out.iter());
+        let mut channels_out = from_balances(balances.channels_out.iter(), destinations);
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
         let ticket_value = ticket_stats.ticket_value()?;
@@ -70,11 +73,23 @@ impl BalanceResponse {
 
 fn from_balances<'a>(
     channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>,
+    destinations: &HashMap<String, Destination>,
 ) -> Vec<ChannelOut> {
+    let addr_to_id: HashMap<Address, &str> = destinations
+        .iter()
+        .map(|(id, dest)| (dest.address, id.as_str()))
+        .collect();
     channels_out
-        .map(|(address, balance)| ChannelOut {
-            destination: ChannelDestination::Unconfigured(*address),
-            balance: ChannelBalance::Completed(*balance),
+        .map(|(address, balance)| {
+            let destination = if let Some(id) = addr_to_id.get(address) {
+                ChannelDestination::Configured(((*id).to_string(), *address))
+            } else {
+                ChannelDestination::Unconfigured(*address)
+            };
+            ChannelOut {
+                destination,
+                balance: ChannelBalance::Completed(*balance),
+            }
         })
         .collect()
 }
@@ -93,14 +108,11 @@ fn add_from_destinations<'a>(
             continue;
         }
 
-        // ongoing_channel_fundings contains relay addresses, so match
-        // against the relay in the routing path, not the exit address
-        let relay_is_funding = ongoing_channel_fundings
-            .iter()
-            .find(|&&addr| dest.has_intermediate_channel(*addr));
-        if let Some(&&relay_addr) = relay_is_funding {
+        // ongoing_channel_fundings contains exit addresses; match against dest.address
+        let is_funding = ongoing_channel_fundings.iter().any(|&&addr| addr == dest.address);
+        if is_funding {
             channels_out.push(ChannelOut {
-                destination: ChannelDestination::Configured((id.clone(), relay_addr)),
+                destination: ChannelDestination::Configured((id.clone(), dest.address)),
                 balance: ChannelBalance::FundingOngoing,
             });
         }
@@ -136,4 +148,3 @@ impl Display for ChannelDestination {
         }
     }
 }
-

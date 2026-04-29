@@ -557,7 +557,11 @@ pub fn convert_destinations(
         let path = match dest.path.clone() {
             Some(DestinationPath::Intermediates(p)) => {
                 let hop_count = p.len().min(MAX_HOPS as usize);
-                tracing::warn!(id, hop_count, "intermediates routing is deprecated; treating as hop count");
+                tracing::warn!(
+                    id,
+                    hop_count,
+                    "intermediates routing is deprecated; treating as hop count"
+                );
                 HopRouting::try_from(hop_count)?
             }
             Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
@@ -583,13 +587,15 @@ mod tests {
 
     #[test]
     fn convert_destinations_hops_path_preserved() {
-        let cfg = parse(r#####"
+        let cfg = parse(
+            r#####"
 version = 5
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
-"#####);
+"#####,
+        );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
@@ -597,12 +603,14 @@ path = { hops = 2 }
 
     #[test]
     fn convert_destinations_none_path_defaults_to_1_hop() {
-        let cfg = parse(r#####"
+        let cfg = parse(
+            r#####"
 version = 5
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-"#####);
+"#####,
+        );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());

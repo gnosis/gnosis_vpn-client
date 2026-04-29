@@ -183,12 +183,14 @@ mod tests {
 
     #[test]
     fn convert_destinations_hops_path_preserved() {
-        let cfg = parse(r#####"
+        let cfg = parse(
+            r#####"
 version = 4
 
 [destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 path = { hops = 2 }
-"#####);
+"#####,
+        );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
@@ -196,11 +198,13 @@ path = { hops = 2 }
 
     #[test]
     fn convert_destinations_none_path_defaults_to_1_hop() {
-        let cfg = parse(r#####"
+        let cfg = parse(
+            r#####"
 version = 4
 
 [destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
-"#####);
+"#####,
+        );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
