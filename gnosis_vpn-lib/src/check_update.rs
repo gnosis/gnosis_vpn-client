@@ -31,10 +31,10 @@ pub struct ManifestChannels {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChannelRelease {
     pub version: String,
-    pub published_at: String,
-    pub download_url: String,
+    pub published_at: Timestamp,
+    pub download_url: Url,
     pub size_bytes: u64,
-    pub sha256: String,
+    pub sha256: Hash,
     pub artifact_signature: String,
     pub release_notes: String,
     pub min_os_version: String,
