@@ -3400,6 +3400,7 @@ dependencies = [
  "backon",
  "bytesize",
  "cfg-if",
+ "chrono",
  "edgli",
  "futures-util",
  "hopr-utils-session",

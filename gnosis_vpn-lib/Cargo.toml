@@ -11,6 +11,7 @@ anyhow.workspace             = true
 backon.workspace             = true
 bytesize                     = { workspace = true, features = ["serde"] }
 cfg-if.workspace             = true
+chrono.workspace             = true
 edgli.workspace              = true
 futures-util.workspace       = true
 hopr-utils-session.workspace = true
@@ -25,7 +26,7 @@ reqwest.workspace            = true
 serde.workspace              = true
 serde-saphyr.workspace       = true
 serde_json.workspace         = true
-serde_with.workspace         = true
+serde_with                   = { workspace = true, features = ["hex"] }
 thiserror.workspace          = true
 tokio.workspace              = true
 tokio-util.workspace         = true

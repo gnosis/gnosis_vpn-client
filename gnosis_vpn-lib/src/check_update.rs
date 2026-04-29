@@ -1,7 +1,27 @@
+use bytesize::ByteSize;
+use chrono::{DateTime, Utc};
 use pgp::{Deserializable, SignedPublicKey, StandaloneSignature};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_with::{hex::Hex, serde_as};
+use std::fmt;
 use std::io::Cursor;
+use url::Url;
+
+pub type Timestamp = DateTime<Utc>;
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hash(#[serde_as(as = "Hex")] pub [u8; 32]);
+
+impl fmt::Display for Hash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
 
 const PUBLIC_KEY: &str = include_str!("../../gnosisvpn-public-key.asc");
 const MANIFEST_BASE_URL: &str = "https://download.gnosisvpn.io/manifests/";
@@ -33,7 +53,7 @@ pub struct ChannelRelease {
     pub version: String,
     pub published_at: Timestamp,
     pub download_url: Url,
-    pub size_bytes: u64,
+    pub size_bytes: ByteSize,
     pub sha256: Hash,
     pub artifact_signature: String,
     pub release_notes: String,
@@ -132,6 +152,20 @@ mod tests {
         manifest_bytes[mid] ^= 0xff;
         let result = verify_and_parse(&manifest_bytes, &sig_bytes);
         assert!(result.is_err(), "tampered manifest should fail verification");
+    }
+
+    #[test]
+    fn deserializes_all_fixtures() {
+        for name in ["linux-amd64.json", "linux-arm64.json", "macos-arm64.json"] {
+            let bytes = fixture(name);
+            let manifest: Manifest =
+                serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("deserialize {name}: {e}"));
+            let stable = manifest.channels.stable.expect("stable channel");
+            assert_eq!(stable.sha256.0.len(), 32);
+            assert!(stable.size_bytes.as_u64() > 0);
+            assert!(stable.published_at.timestamp() > 0);
+            assert!(!stable.min_os_version.is_empty());
+        }
     }
 
     #[test]
