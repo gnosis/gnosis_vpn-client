@@ -42,6 +42,11 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+/// How long to wait before the first health check after an AnyChannel route
+/// becomes routable. The HOPR path selector needs time to index relay→exit
+/// channel graph data; without this window the first ping reliably fails with
+/// "cannot find N hop path in the channel graph".
+const ANY_CHANNEL_FIRST_CHECK_DELAY: Duration = Duration::from_secs(30);
 
 /// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
 /// are returned unchanged so initial spawns are not delayed.
@@ -422,8 +427,12 @@ impl RouteHealth {
     ///
     /// If this route was waiting on that funding (or on any funding, for
     /// `AnyChannel` needs) it becomes routable and the first health check
-    /// is scheduled immediately. Calls that do not apply to this route are
-    /// ignored.
+    /// is scheduled. For `Channel` routes the channel was just explicitly
+    /// funded so the health check fires immediately. For `AnyChannel` routes
+    /// the relay channel appeared in the balance broadcast but the HOPR path
+    /// selector may not yet have indexed relay→exit channel graph data; a
+    /// short stabilisation delay is applied before the first attempt.
+    /// Calls that do not apply to this route are ignored.
     pub fn channel_funded(
         &mut self,
         address: Address,
@@ -442,7 +451,12 @@ impl RouteHealth {
         };
         if satisfies_need {
             self.state = RouteHealthState::Routable;
-            self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+            let initial_delay = if matches!(self.static_need, StaticNeed::AnyChannel) {
+                ANY_CHANNEL_FIRST_CHECK_DELAY
+            } else {
+                Duration::ZERO
+            };
+            self.spawn_health_check(initial_delay, hopr, dest, options, sender);
         }
     }
 
