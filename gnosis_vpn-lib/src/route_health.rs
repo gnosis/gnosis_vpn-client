@@ -250,9 +250,10 @@ impl RouteHealth {
 /// Derive the static need from routing alone.
 ///
 /// For 0-hop routes the destination must be a direct transport peer and no
-/// channel is needed. For 1+ hop routes any connected relay peer is sufficient
-/// and the HOPR AutoFunding strategy creates relay-to-exit channels; the route
-/// advances once those channels appear in the balance state (`AnyChannel`).
+/// channel is needed. For 1+ hop routes any connected relay peer is sufficient;
+/// the HOPR AutoFunding strategy keeps this node's outgoing channels (e.g.
+/// edge → relay) topped up, and the route advances once at least one such
+/// outgoing channel appears in the balance state (`AnyChannel`).
 fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
     if routing.hop_count() == 0 {
         StaticNeed::Peering(dest_address)
@@ -987,7 +988,9 @@ impl RouteHealth {
             GRAPH_WARMUP_RETRY_INTERVAL
         } else {
             let normal_failures = self.exit_failures - GRAPH_WARMUP_RETRY_COUNT;
-            (FAILURE_INTERVAL * normal_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+            FAILURE_INTERVAL
+                .saturating_mul(normal_failures)
+                .min(MAX_INTERVAL_BETWEEN_FAILURES)
         }
     }
 }

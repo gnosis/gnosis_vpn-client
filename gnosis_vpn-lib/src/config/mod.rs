@@ -10,8 +10,6 @@ use crate::connection::{destination::Destination, options::Options as Connection
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::wireguard::Config as WireGuardConfig;
 
-mod v3;
-mod v4;
 mod v5;
 mod v6;
 
@@ -60,30 +58,6 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
         .ok_or(Error::VersionNotFound)?;
 
     match version {
-        3 => {
-            let res = toml::from_str::<v3::Config>(&content)?;
-            let wrong_keys = v3::wrong_keys(&table);
-            for key in wrong_keys.iter() {
-                tracing::warn!(%key, "ignoring unsupported key in configuration file");
-            }
-            res.try_into()
-        }
-        4 => {
-            let res = toml::from_str::<v4::Config>(&content)?;
-            let wrong_keys = v4::wrong_keys(&table);
-            for key in wrong_keys.iter() {
-                tracing::warn!(%key, "ignoring unsupported key in configuration file");
-            }
-            res.try_into()
-        }
-        5 => {
-            let res = toml::from_str::<v5::Config>(&content)?;
-            let wrong_keys = v5::wrong_keys(&table);
-            for key in wrong_keys.iter() {
-                tracing::warn!(%key, "ignoring unsupported key in configuration file");
-            }
-            res.try_into()
-        }
         6 => {
             let res = toml::from_str::<v6::Config>(&content)?;
             let wrong_keys = v6::wrong_keys(&table);

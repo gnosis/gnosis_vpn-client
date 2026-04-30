@@ -87,7 +87,7 @@ impl Hopr {
     // --- channel management ---
     /// Ensure a channel to the specified target is open with the specified amount.
     ///
-    /// This API assumes that hopr object imlements 2 strategies to avoid edge scenarios and race conditions:
+    /// This API assumes that hopr object implements 2 strategies to avoid edge scenarios and race conditions:
     /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
     /// 2. AutoFunding making sure that once a channel is open, it will stay funded
     #[instrument(skip(self), level = "debug", ret, err)]
