@@ -177,7 +177,10 @@ mod tests {
         let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].destination, ChannelDestination::Configured(("dest-1".to_string(), addr)));
+        assert_eq!(
+            result[0].destination,
+            ChannelDestination::Configured(("dest-1".to_string(), addr))
+        );
         assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
     }
 
