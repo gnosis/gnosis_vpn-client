@@ -59,6 +59,16 @@ safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
 publish: false
+protocol:
+    # Edge client: probe aggressively at startup so relay observations are
+    # populated before the first health check fires.  interval is the delay
+    # between probing rounds; it must be >= timeout (3 s).  recheck_threshold
+    # controls how quickly a relay gets re-examined after its last probe —
+    # 10 s keeps the path-selector graph fresh without excessive traffic.
+    probe:
+        timeout: 3s
+        interval: 3s
+        recheck_threshold: 10s
 "##,
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
