@@ -148,3 +148,78 @@ impl Display for ChannelDestination {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::destination::{Destination, HopRouting};
+
+    fn address(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    fn destination(id: &str, addr: Address) -> Destination {
+        Destination::new(
+            id.to_string(),
+            addr,
+            HopRouting::try_from(1).expect("conversion cannot fail"),
+            HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn from_balances_emits_configured_for_known_destination() {
+        let addr = address(1);
+        let balance = Balance::<WxHOPR>::from(100u64);
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-1".to_string(), destination("dest-1", addr));
+
+        let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].destination, ChannelDestination::Configured(("dest-1".to_string(), addr)));
+        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+    }
+
+    #[test]
+    fn from_balances_emits_unconfigured_for_unknown_address() {
+        let addr = address(2);
+        let balance = Balance::<WxHOPR>::from(50u64);
+        let destinations = HashMap::new();
+
+        let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].destination, ChannelDestination::Unconfigured(addr));
+        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+    }
+
+    #[test]
+    fn add_from_destinations_adds_funding_ongoing_for_funded_exit() {
+        let addr = address(3);
+        let mut channels_out = Vec::new();
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-2".to_string(), destination("dest-2", addr));
+
+        add_from_destinations(&mut channels_out, destinations.iter(), &[&addr]);
+
+        assert_eq!(channels_out.len(), 1);
+        assert_eq!(
+            channels_out[0].destination,
+            ChannelDestination::Configured(("dest-2".to_string(), addr))
+        );
+        assert_eq!(channels_out[0].balance, ChannelBalance::FundingOngoing);
+    }
+
+    #[test]
+    fn add_from_destinations_skips_when_not_funding() {
+        let addr = address(4);
+        let mut channels_out = Vec::new();
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-3".to_string(), destination("dest-3", addr));
+
+        add_from_destinations(&mut channels_out, destinations.iter(), &[]);
+
+        assert!(channels_out.is_empty());
+    }
+}

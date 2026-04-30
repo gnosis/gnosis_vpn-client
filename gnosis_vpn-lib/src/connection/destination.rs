@@ -25,10 +25,6 @@ impl Destination {
         }
     }
 
-    pub fn has_intermediate_channel(&self, _address: Address) -> bool {
-        false
-    }
-
     pub fn pretty_print_path(&self) -> String {
         let nr = self.routing.hop_count();
         let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");

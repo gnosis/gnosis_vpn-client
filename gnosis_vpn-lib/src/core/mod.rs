@@ -388,10 +388,7 @@ impl Core {
                             .into_iter()
                             .map(|v| command::DestinationState {
                                 destination: v.clone(),
-                                route_health: self
-                                    .route_healths
-                                    .get(&v.id)
-                                    .map(command::RouteHealthView::from),
+                                route_health: self.route_healths.get(&v.id).map(command::RouteHealthView::from),
                             })
                             .collect();
                         let res = Response::status(command::StatusResponse {

@@ -212,7 +212,7 @@ impl Hopr {
             .map_err(|e| HoprError::Construction(format!("failed to create UDP client binding: {e}")))?,
         };
 
-        let max_surb_upstream = cfg.surb_management.map(|v| {
+        let max_surb_upstream = cfg.surb_management.as_ref().map(|v| {
             human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
                 .expect("config value extract that cannot fail")
         });
