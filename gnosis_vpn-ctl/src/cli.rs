@@ -99,7 +99,7 @@ pub enum Command {
     /// Refuses to run unless the VPN is connected. Pass --force to bypass the connection check.
     #[command()]
     CheckUpdate {
-        /// Skip the VPN connection check (insecure)
+        /// Perform the connection even if VPN is currently inactive (insecure)
         #[arg(short = 'f', long)]
         force: bool,
     },
