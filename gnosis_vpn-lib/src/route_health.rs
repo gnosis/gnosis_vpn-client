@@ -83,7 +83,11 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 /// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
-    /// A funded channel to this specific address (first intermediate hop).
+    /// A funded channel to this specific destination address.
+    ///
+    /// For 1+ hop routing the destination is reached through relay peers;
+    /// any connected relay satisfies the peering check. The channel must
+    /// still be funded to this specific address for HOPR payments to work.
     Channel(Address),
     /// Any funded outgoing channel is sufficient (hop count without a fixed path).
     AnyChannel,
@@ -354,8 +358,11 @@ impl RouteHealth {
         sender: &mpsc::Sender<Results>,
     ) -> PeerTransition {
         let is_peered = match &self.static_need {
-            StaticNeed::Channel(addr) | StaticNeed::Peering(addr) => addresses.contains(addr),
-            StaticNeed::AnyChannel => !addresses.is_empty(),
+            // 0-hop: destination must be a direct transport peer — packets go straight to it.
+            StaticNeed::Peering(addr) => addresses.contains(addr),
+            // 1+ hop and AnyChannel: any connected relay can carry packets to the destination;
+            // the exit node itself does not need to be a direct transport peer.
+            StaticNeed::Channel(_) | StaticNeed::AnyChannel => !addresses.is_empty(),
         };
 
         match &self.state {
@@ -1051,5 +1058,85 @@ impl Display for ExitHealth {
             self.health,
             self.versions,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    /// Mirror the `is_peered` logic from `peers()` so we can test it without
+    /// constructing heavyweight `Arc<Hopr>` / `Options` / channel types.
+    fn is_peered(need: &StaticNeed, connected: &HashSet<Address>) -> bool {
+        match need {
+            StaticNeed::Peering(a) => connected.contains(a),
+            StaticNeed::Channel(_) | StaticNeed::AnyChannel => !connected.is_empty(),
+        }
+    }
+
+    // --- derive_static_need ---
+
+    #[test]
+    fn zero_hop_routing_yields_peering() {
+        let dest = addr(1);
+        let routing = HopRouting::try_from(0).expect("0-hop is valid");
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Peering(dest));
+    }
+
+    #[test]
+    fn one_hop_routing_yields_channel_to_dest() {
+        let dest = addr(2);
+        let routing = HopRouting::try_from(1).expect("1-hop is valid");
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Channel(dest));
+    }
+
+    // --- is_peered for Channel routes ---
+
+    #[test]
+    fn channel_route_is_peered_when_any_relay_is_connected() {
+        // Under the old code Channel(dest) required dest in connected peers.
+        // The new code requires only any peer, so a relay (not the exit) suffices.
+        let dest = addr(10);
+        let relay = addr(20);
+        let need = StaticNeed::Channel(dest);
+
+        let mut peers = HashSet::new();
+        peers.insert(relay); // relay present, dest absent
+
+        assert!(is_peered(&need, &peers), "relay peer should satisfy Channel need");
+    }
+
+    #[test]
+    fn channel_route_is_not_peered_when_no_peers_at_all() {
+        let dest = addr(10);
+        let need = StaticNeed::Channel(dest);
+        assert!(!is_peered(&need, &HashSet::new()));
+    }
+
+    // --- is_peered for Peering routes (0-hop) ---
+
+    #[test]
+    fn peering_route_requires_dest_to_be_direct_peer() {
+        let dest = addr(10);
+        let relay = addr(20);
+        let need = StaticNeed::Peering(dest);
+
+        let mut only_relay = HashSet::new();
+        only_relay.insert(relay);
+        assert!(
+            !is_peered(&need, &only_relay),
+            "relay alone must not satisfy Peering need"
+        );
+
+        let mut with_dest = HashSet::new();
+        with_dest.insert(dest);
+        assert!(
+            is_peered(&need, &with_dest),
+            "dest as direct peer must satisfy Peering need"
+        );
     }
 }
