@@ -241,11 +241,16 @@ impl RouteHealth {
 }
 
 /// Derive the static need from routing alone.
+///
+/// For 0-hop routes the destination must be a direct transport peer and no
+/// channel is needed. For 1+ hop routes any connected relay peer is sufficient
+/// and the HOPR AutoFunding strategy creates relay-to-exit channels; the route
+/// advances once those channels appear in the balance state (`AnyChannel`).
 fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
     if routing.hop_count() == 0 {
         StaticNeed::Peering(dest_address)
     } else {
-        StaticNeed::Channel(dest_address)
+        StaticNeed::AnyChannel
     }
 }
 
@@ -1088,18 +1093,33 @@ mod tests {
     }
 
     #[test]
-    fn one_hop_routing_yields_channel_to_dest() {
+    fn one_hop_routing_yields_any_channel() {
+        // For 1+ hop routes the exit is reached through HOPR relays; any relay
+        // channel satisfies the need. derive_static_need must return AnyChannel,
+        // not Channel(dest), so we never proactively fund a direct exit channel
+        // (which would only enable 0-hop routing, not 1-hop).
         let dest = addr(2);
         let routing = HopRouting::try_from(1).expect("1-hop is valid");
-        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Channel(dest));
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
     }
 
-    // --- is_peered for Channel routes ---
+    // --- is_peered for Channel / AnyChannel routes ---
+
+    #[test]
+    fn any_channel_is_peered_when_any_relay_is_connected() {
+        let relay = addr(20);
+        let need = StaticNeed::AnyChannel;
+
+        let mut peers = HashSet::new();
+        peers.insert(relay);
+
+        assert!(is_peered(&need, &peers));
+    }
 
     #[test]
     fn channel_route_is_peered_when_any_relay_is_connected() {
-        // Under the old code Channel(dest) required dest in connected peers.
-        // The new code requires only any peer, so a relay (not the exit) suffices.
+        // Channel(dest) also uses any-peer semantics; the dest need not be a
+        // direct transport peer for multi-hop routing.
         let dest = addr(10);
         let relay = addr(20);
         let need = StaticNeed::Channel(dest);
