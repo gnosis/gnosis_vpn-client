@@ -21,11 +21,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
-    let format = match args.output {
-        Some(f) => f,
-        None if args.json => OutputFormat::Json,
-        None => OutputFormat::Plain,
-    };
+    let format = args.output.unwrap_or(OutputFormat::Plain);
 
     if matches!(args.command, cli::Command::CheckUpdate {}) {
         let exit = run_check_update(format).await;
