@@ -42,6 +42,13 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+/// Quick retry interval used for the first few failures that occur before the
+/// HOPR transport layer has had time to probe relay peers and populate the
+/// channel graph.  Once the graph is populated (typically within one probe
+/// cycle, ~3 s) the retry will succeed; subsequent failures fall through to
+/// the normal linear backoff.
+const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const GRAPH_WARMUP_RETRY_COUNT: u32 = 3;
 
 /// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
 /// are returned unchanged so initial spawns are not delayed.
@@ -967,10 +974,21 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
-    /// Delay before the next retry after a failed exit-health cycle: linear growth in
-    /// `exit_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
+    /// Delay before the next retry after a failed exit-health cycle.
+    ///
+    /// The first `GRAPH_WARMUP_RETRY_COUNT` failures use a short
+    /// `GRAPH_WARMUP_RETRY_INTERVAL` so the retry fires after the HOPR
+    /// transport heartbeat has had time to probe relay peers and populate
+    /// `is_connected()` in the channel graph (typically within one probe
+    /// cycle, ~3 s).  Subsequent failures fall through to the normal linear
+    /// backoff clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
     fn failure_backoff(&self) -> Duration {
-        (FAILURE_INTERVAL * self.exit_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+        if self.exit_failures <= GRAPH_WARMUP_RETRY_COUNT {
+            GRAPH_WARMUP_RETRY_INTERVAL
+        } else {
+            let normal_failures = self.exit_failures - GRAPH_WARMUP_RETRY_COUNT;
+            (FAILURE_INTERVAL * normal_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+        }
     }
 }
 
@@ -1135,6 +1153,57 @@ mod tests {
         let dest = addr(10);
         let need = StaticNeed::Channel(dest);
         assert!(!is_peered(&need, &HashSet::new()));
+    }
+
+    // --- failure_backoff ---
+
+    fn backoff_at(failures: u32) -> Duration {
+        use crate::connection::destination::{Destination, HopRouting};
+        use tokio_util::sync::CancellationToken;
+        let dest = Destination::new(
+            "test".to_string(),
+            addr(1),
+            HopRouting::try_from(1).unwrap(),
+            Default::default(),
+        );
+        let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());
+        rh.exit_failures = failures;
+        rh.failure_backoff()
+    }
+
+    #[test]
+    fn failure_backoff_uses_warmup_interval_for_first_failures() {
+        for n in 1..=GRAPH_WARMUP_RETRY_COUNT {
+            assert_eq!(
+                backoff_at(n),
+                GRAPH_WARMUP_RETRY_INTERVAL,
+                "failure {n} should use warmup interval"
+            );
+        }
+    }
+
+    #[test]
+    fn failure_backoff_switches_to_linear_after_warmup() {
+        let first_normal = GRAPH_WARMUP_RETRY_COUNT + 1;
+        assert_eq!(
+            backoff_at(first_normal),
+            FAILURE_INTERVAL,
+            "first post-warmup failure should equal one FAILURE_INTERVAL"
+        );
+        assert_eq!(
+            backoff_at(first_normal + 1),
+            FAILURE_INTERVAL * 2,
+            "second post-warmup failure should equal two FAILURE_INTERVALs"
+        );
+    }
+
+    #[test]
+    fn failure_backoff_clamps_at_max_interval() {
+        assert_eq!(
+            backoff_at(u32::MAX),
+            MAX_INTERVAL_BETWEEN_FAILURES,
+            "backoff must not exceed MAX_INTERVAL_BETWEEN_FAILURES"
+        );
     }
 
     // --- is_peered for Peering routes (0-hop) ---
