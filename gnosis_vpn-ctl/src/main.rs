@@ -145,21 +145,23 @@ impl fmt::Display for CheckUpdateErrorKind {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CheckUpdateErrorPayload {
+    r#type: String,
+    error: String,
+}
+
 fn emit_check_update_error(format: OutputFormat, kind: CheckUpdateErrorKind, message: &str) -> ExitCode {
+    let payload = CheckUpdateErrorPayload {
+        r#type: kind.slug().to_string(),
+        error: message.to_string(),
+    };
     match format {
         OutputFormat::Json => {
-            let payload = serde_json::json!({ "type": kind.slug(), "error": message });
-            eprintln!(
-                "{}",
-                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
-            );
+            eprintln!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
         }
         OutputFormat::Yaml => {
-            let payload = serde_json::json!({ "type": kind.slug(), "error": message });
-            eprintln!(
-                "{}",
-                serde_saphyr::to_string(&payload).unwrap_or_else(|_| payload.to_string())
-            );
+            eprintln!("{}", serde_saphyr::to_string(&payload).unwrap_or_default());
         }
         OutputFormat::Plain => {
             eprintln!("{kind}: {message}");

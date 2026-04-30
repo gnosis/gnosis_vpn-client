@@ -3387,6 +3387,7 @@ dependencies = [
  "humantime",
  "mimalloc",
  "reqwest 0.13.2",
+ "serde",
  "serde-saphyr",
  "serde_json",
  "tokio",
