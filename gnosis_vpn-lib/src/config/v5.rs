@@ -1,17 +1,53 @@
 use bytesize::ByteSize;
+use edgli::hopr_lib::HopRouting;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 
+use std::cmp::PartialEq;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::vec::Vec;
 
-use crate::connection::options;
+use crate::config;
+use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
+
+const MAX_HOPS: u8 = 3;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Config {
+    pub version: u8,
+    pub(super) destinations: Option<HashMap<String, Destination>>,
+    pub(super) connection: Option<Connection>,
+    pub(super) wireguard: Option<WireGuard>,
+    pub(super) blokli: Option<BlokliConfig>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Destination {
+    #[serde_as(as = "DisplayFromStr")]
+    address: Address,
+    meta: Option<HashMap<String, String>>,
+    path: Option<DestinationPath>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) enum DestinationPath {
+    #[serde(alias = "intermediates")]
+    Intermediates(#[serde_as(as = "Vec<DisplayFromStr>")] Vec<Address>),
+    #[serde(alias = "hops", deserialize_with = "validate_hops")]
+    Hops(u8),
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Connection {
@@ -282,6 +318,20 @@ where
     }
 }
 
+fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u8::deserialize(deserializer)?;
+    if value <= MAX_HOPS {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "hops must be less than or equal to {MAX_HOPS}"
+        )))
+    }
+}
+
 fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
     let mut flags = SessionCapabilities::empty();
     for cap in caps {
@@ -474,5 +524,198 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
             connection_sync_timeout,
             sync_tolerance,
         }
+    }
+}
+
+impl TryFrom<Config> for config::Config {
+    type Error = config::Error;
+
+    fn try_from(value: Config) -> Result<Self, Self::Error> {
+        let connection = value.connection.into();
+        let destinations = convert_destinations(value.destinations)?;
+        let wireguard = value.wireguard.into();
+        let blokli = value.blokli.into();
+        Ok(config::Config {
+            connection,
+            destinations,
+            wireguard,
+            blokli,
+        })
+    }
+}
+
+pub fn convert_destinations(
+    value: Option<HashMap<String, Destination>>,
+) -> Result<HashMap<String, ConnDestination>, config::Error> {
+    let config_dests = value.ok_or(config::Error::NoDestinations)?;
+    if config_dests.is_empty() {
+        return Err(config::Error::NoDestinations);
+    }
+
+    let mut result = HashMap::new();
+    for (id, dest) in config_dests.iter() {
+        let path = match dest.path.clone() {
+            Some(DestinationPath::Intermediates(p)) => {
+                let hop_count = p.len().min(MAX_HOPS as usize);
+                tracing::warn!(
+                    id,
+                    hop_count,
+                    "intermediates routing is deprecated; treating as hop count"
+                );
+                HopRouting::try_from(hop_count)?
+            }
+            Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
+            None => HopRouting::try_from(1)?,
+        };
+
+        let meta = dest.meta.clone().unwrap_or_default();
+
+        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
+        result.insert(id.to_string(), dest);
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, convert_destinations};
+    use edgli::hopr_lib::HopRouting;
+
+    fn parse(toml: &str) -> Config {
+        toml::from_str(toml).expect("valid TOML")
+    }
+
+    #[test]
+    fn convert_destinations_hops_path_preserved() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_none_path_defaults_to_1_hop() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_empty_map_errors() {
+        let result = convert_destinations(Some(std::collections::HashMap::new()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_destinations_none_errors() {
+        let result = convert_destinations(None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_minimal_config() -> anyhow::Result<()> {
+        let config = r#####"
+version = 5
+"#####;
+        toml::from_str::<Config>(config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn config_parse_single_destination_should_succeed() -> anyhow::Result<()> {
+        let config = r#####"
+version = 5
+
+[destinations]
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+meta = { location = "Germany" }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
+"#####;
+
+        toml::from_str::<Config>(config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn full_config_should_be_parsable() -> anyhow::Result<()> {
+        let config = r#####"
+version = 5
+
+[destinations]
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+meta = { location = "Germany" }
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
+
+[destinations.USA]
+address = "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"
+meta = { location = "USA" }
+path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
+
+[destinations.Spain]
+address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
+meta = { location = "Spain" }
+path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
+
+[connection]
+http_timeout = "60s"
+
+[connection.bridge]
+capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]
+target = "127.0.0.1:8000"
+
+[connection.wg]
+capabilities = [ "segmentation", "no_delay" ]
+target = "127.0.0.1:51820"
+
+[connection.ping]
+address = "10.128.0.1"
+timeout = "7s"
+ttl = 6
+seq_count = 1
+
+[connection.max_surb_upstream]
+bridge = "512 Kb/s"
+ping = "1 Mb/s"
+main = "16 Mb/s"
+
+[connection.buffer]
+bridge = "32 kB"
+ping = "32 kB"
+main = "2 MB"
+
+[wireguard]
+listen_port = 51820
+allowed_ips = "10.128.0.1/9"
+# use if you want to disable key rotation on every connection
+force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
+dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
+
+[blokli]
+connection_sync_timeout = "30s"
+sync_tolerance = 50
+"#####;
+        toml::from_str::<Config>(config)?;
+
+        Ok(())
     }
 }
