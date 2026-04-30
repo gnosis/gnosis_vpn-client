@@ -63,41 +63,48 @@ pub struct ChannelRelease {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Error making http request: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("Error parsing url: {0}")]
-    Url(#[from] url::ParseError),
-    #[error("PGP error: {0}")]
-    Pgp(#[from] pgp::errors::Error),
-    #[error("Error parsing manifest: {0}")]
-    Json(#[from] serde_json::Error),
+    #[error("Manifest integrity error: {0}")]
+    Integrity(String),
+    #[error("Update check error: {0}")]
+    Other(String),
 }
 
 fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest, Error> {
-    let (public_key, _) = SignedPublicKey::from_armor_single(Cursor::new(PUBLIC_KEY))?;
-    let (sig, _) = StandaloneSignature::from_armor_single(Cursor::new(sig_bytes))?;
-    sig.verify(&public_key, manifest_bytes)?;
-    let manifest = serde_json::from_slice(manifest_bytes)?;
-    Ok(manifest)
+    let (public_key, _) =
+        SignedPublicKey::from_armor_single(Cursor::new(PUBLIC_KEY)).map_err(|e| Error::Integrity(e.to_string()))?;
+    let (sig, _) =
+        StandaloneSignature::from_armor_single(Cursor::new(sig_bytes)).map_err(|e| Error::Integrity(e.to_string()))?;
+    sig.verify(&public_key, manifest_bytes).map_err(|e| Error::Integrity(e.to_string()))?;
+    serde_json::from_slice(manifest_bytes).map_err(|e| Error::Integrity(e.to_string()))
 }
 
 pub async fn download(client: &Client) -> Result<Manifest, Error> {
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
-    let base = url::Url::parse(MANIFEST_BASE_URL)?;
-    let manifest_url = base.join(MANIFEST_FILENAME)?;
-    let sig_url = base.join(&sig_filename)?;
+    let base = url::Url::parse(MANIFEST_BASE_URL).map_err(|e| Error::Other(e.to_string()))?;
+    let manifest_url = base.join(MANIFEST_FILENAME).map_err(|e| Error::Other(e.to_string()))?;
+    let sig_url = base.join(&sig_filename).map_err(|e| Error::Other(e.to_string()))?;
 
     tracing::debug!(?manifest_url, ?sig_url, "downloading update manifest and signature");
 
     let manifest_bytes = client
         .get(manifest_url)
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| Error::Other(e.to_string()))?
         .bytes()
-        .await?;
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
 
-    let sig_bytes = client.get(sig_url).send().await?.error_for_status()?.bytes().await?;
+    let sig_bytes = client
+        .get(sig_url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| Error::Other(e.to_string()))?
+        .bytes()
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
 
     verify_and_parse(&manifest_bytes, &sig_bytes)
 }

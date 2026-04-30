@@ -1,5 +1,6 @@
 use exitcode::{self, ExitCode};
 
+use std::fmt;
 use std::process;
 use std::time::Duration;
 
@@ -50,18 +51,22 @@ async fn main() {
 async fn run_check_update(format: OutputFormat) -> ExitCode {
     let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
         Ok(c) => c,
-        Err(e) => return emit_check_update_error(format, "internal", &e.to_string()),
+        Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string()),
     };
     match check_update::download(&client).await {
         Ok(manifest) => {
             match format {
                 OutputFormat::Json => match serde_json::to_string_pretty(&manifest) {
                     Ok(s) => println!("{s}"),
-                    Err(e) => return emit_check_update_error(OutputFormat::Json, "internal", &e.to_string()),
+                    Err(e) => {
+                        return emit_check_update_error(OutputFormat::Json, CheckUpdateErrorKind::Internal, &e.to_string());
+                    }
                 },
                 OutputFormat::Yaml => match serde_saphyr::to_string(&manifest) {
                     Ok(s) => print!("{s}"),
-                    Err(e) => return emit_check_update_error(OutputFormat::Yaml, "internal", &e.to_string()),
+                    Err(e) => {
+                        return emit_check_update_error(OutputFormat::Yaml, CheckUpdateErrorKind::Internal, &e.to_string());
+                    }
                 },
                 OutputFormat::Plain => {
                     if let Some(stable) = &manifest.channels.stable {
@@ -80,43 +85,69 @@ async fn run_check_update(format: OutputFormat) -> ExitCode {
             }
             exitcode::OK
         }
-        Err(e @ check_update::Error::Pgp(_)) | Err(e @ check_update::Error::Json(_)) => {
-            emit_check_update_error(format, "integrity_error", &e.to_string())
+        Err(e @ check_update::Error::Integrity(_)) => {
+            emit_check_update_error(format, CheckUpdateErrorKind::IntegrityError, &e.to_string())
         }
-        Err(e) => emit_check_update_error(format, "unavailable", &e.to_string()),
+        Err(e) => emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
     }
 }
 
-fn emit_check_update_error(format: OutputFormat, kind: &'static str, message: &str) -> ExitCode {
+#[derive(Clone, Copy, Debug)]
+enum CheckUpdateErrorKind {
+    Unavailable,
+    IntegrityError,
+    Internal,
+}
+
+impl CheckUpdateErrorKind {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::IntegrityError => "integrity_error",
+            Self::Internal => "internal",
+        }
+    }
+
+    fn exit_code(self) -> ExitCode {
+        match self {
+            Self::Unavailable => exitcode::UNAVAILABLE,
+            Self::IntegrityError | Self::Internal => exitcode::SOFTWARE,
+        }
+    }
+}
+
+impl fmt::Display for CheckUpdateErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Unavailable => "Update manifest unavailable",
+            Self::IntegrityError => "Update manifest integrity check failed",
+            Self::Internal => "Internal error",
+        };
+        f.write_str(label)
+    }
+}
+
+fn emit_check_update_error(format: OutputFormat, kind: CheckUpdateErrorKind, message: &str) -> ExitCode {
     match format {
         OutputFormat::Json => {
-            let payload = serde_json::json!({ "type": kind, "error": message });
+            let payload = serde_json::json!({ "type": kind.slug(), "error": message });
             eprintln!(
                 "{}",
                 serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
             );
         }
         OutputFormat::Yaml => {
-            let payload = serde_json::json!({ "type": kind, "error": message });
+            let payload = serde_json::json!({ "type": kind.slug(), "error": message });
             eprintln!(
                 "{}",
                 serde_saphyr::to_string(&payload).unwrap_or_else(|_| payload.to_string())
             );
         }
         OutputFormat::Plain => {
-            let prefix = match kind {
-                "unavailable" => "Update manifest unavailable",
-                "integrity_error" => "Update manifest integrity check failed",
-                "internal" => "Internal error",
-                _ => "Error",
-            };
-            eprintln!("{prefix}: {message}");
+            eprintln!("{kind}: {message}");
         }
     }
-    match kind {
-        "unavailable" => exitcode::UNAVAILABLE,
-        _ => exitcode::SOFTWARE,
-    }
+    kind.exit_code()
 }
 
 fn json_print(resp: &Response) {
@@ -261,18 +292,12 @@ fn pretty_print(resp: &Response) {
             println!("Node balance check triggered");
         }
         Response::Info(info) => {
-            let mut str_resp = format!(
-                "Gnosis VPN\n - client service version: {version}",
-                version = info.version
+            println!(
+                "Gnosis VPN: client service version: {}, package version: {}{}",
+                info.version,
+                info.package_version.as_deref().unwrap_or("not available"),
+                info.log_file.as_ref().map(|f| format!("\nLog file: {}", f.display())).unwrap_or_default(),
             );
-            match &info.package_version {
-                Some(v) => str_resp.push_str(&format!("\n - package version: {v}")),
-                None => str_resp.push_str("\n - package version: not available"),
-            }
-            if let Some(ref file) = info.log_file {
-                str_resp.push_str(&format!("\nLog file: {file}", file = file.display()));
-            }
-            println!("{str_resp}");
         }
         Response::StartClient(command::StartClientResponse::Started) => {
             println!("Worker client started");

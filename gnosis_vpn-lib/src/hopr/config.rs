@@ -18,21 +18,21 @@ pub enum Error {
     NoFile,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("Yaml error: {0}")]
-    Yaml(Box<dyn std::error::Error + Send + Sync>),
+    #[error("Output error: {0}")]
+    Output(String),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
 }
 
 impl From<serde_saphyr::Error> for Error {
     fn from(e: serde_saphyr::Error) -> Self {
-        Error::Yaml(Box::new(e))
+        Error::Output(e.to_string())
     }
 }
 
 impl From<serde_saphyr::ser::Error> for Error {
     fn from(e: serde_saphyr::ser::Error) -> Self {
-        Error::Yaml(Box::new(e))
+        Error::Output(e.to_string())
     }
 }
 
