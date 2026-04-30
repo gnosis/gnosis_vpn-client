@@ -6,7 +6,11 @@ use serde::{Deserialize, Serialize};
 use serde_with::{hex::Hex, serde_as};
 use std::fmt;
 use std::io::Cursor;
+use std::path::Path;
 use url::Url;
+
+use crate::command::{Command as LibCommand, Response};
+use crate::socket;
 
 pub type Timestamp = DateTime<Utc>;
 
@@ -67,6 +71,19 @@ pub enum Error {
     Integrity(String),
     #[error("Update check error: {0}")]
     Other(String),
+    #[error("VPN not connected — checking for updates without an active VPN connection is insecure")]
+    VpnNotConnected,
+}
+
+/// Verify the daemon reports an active VPN connection.
+///
+/// Returns `Err(Error::VpnNotConnected)` if the daemon is unreachable or the
+/// connection is not established.
+pub async fn ensure_vpn_connected(socket_path: &Path) -> Result<(), Error> {
+    match socket::root::process_cmd(socket_path, &LibCommand::Status).await {
+        Ok(Response::Status(status)) if status.connected.is_some() => Ok(()),
+        _ => Err(Error::VpnNotConnected),
+    }
 }
 
 fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest, Error> {
@@ -74,11 +91,21 @@ fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Manifest,
         SignedPublicKey::from_armor_single(Cursor::new(PUBLIC_KEY)).map_err(|e| Error::Integrity(e.to_string()))?;
     let (sig, _) =
         StandaloneSignature::from_armor_single(Cursor::new(sig_bytes)).map_err(|e| Error::Integrity(e.to_string()))?;
-    sig.verify(&public_key, manifest_bytes).map_err(|e| Error::Integrity(e.to_string()))?;
+    sig.verify(&public_key, manifest_bytes)
+        .map_err(|e| Error::Integrity(e.to_string()))?;
     serde_json::from_slice(manifest_bytes).map_err(|e| Error::Integrity(e.to_string()))
 }
 
-pub async fn download(client: &Client) -> Result<Manifest, Error> {
+/// Download and verify the update manifest.
+///
+/// If `socket_path` is `Some`, the daemon's VPN connection state is checked
+/// first; the call fails with `Error::VpnNotConnected` unless the VPN is up.
+/// Pass `None` to skip the gate (e.g. for an explicit user-initiated override).
+pub async fn download(client: &Client, socket_path: Option<&Path>) -> Result<Manifest, Error> {
+    if let Some(path) = socket_path {
+        ensure_vpn_connected(path).await?;
+    }
+
     let sig_filename = MANIFEST_FILENAME.replace(".json", ".json.asc");
     let base = url::Url::parse(MANIFEST_BASE_URL).map_err(|e| Error::Other(e.to_string()))?;
     let manifest_url = base.join(MANIFEST_FILENAME).map_err(|e| Error::Other(e.to_string()))?;

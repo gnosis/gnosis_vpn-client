@@ -24,8 +24,8 @@ async fn main() {
     let args = cli::parse();
     let format = args.output.unwrap_or(OutputFormat::Plain);
 
-    if matches!(args.command, cli::Command::CheckUpdate {}) {
-        let exit = run_check_update(format).await;
+    if let cli::Command::CheckUpdate { force } = args.command {
+        let exit = run_check_update(format, &args.socket_path, force).await;
         process::exit(exit);
     }
 
@@ -48,24 +48,33 @@ async fn main() {
     process::exit(exit);
 }
 
-async fn run_check_update(format: OutputFormat) -> ExitCode {
+async fn run_check_update(format: OutputFormat, socket_path: &std::path::Path, force: bool) -> ExitCode {
     let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
         Ok(c) => c,
         Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string()),
     };
-    match check_update::download(&client).await {
+    let gate = (!force).then_some(socket_path);
+    match check_update::download(&client, gate).await {
         Ok(manifest) => {
             match format {
                 OutputFormat::Json => match serde_json::to_string_pretty(&manifest) {
                     Ok(s) => println!("{s}"),
                     Err(e) => {
-                        return emit_check_update_error(OutputFormat::Json, CheckUpdateErrorKind::Internal, &e.to_string());
+                        return emit_check_update_error(
+                            OutputFormat::Json,
+                            CheckUpdateErrorKind::Internal,
+                            &e.to_string(),
+                        );
                     }
                 },
                 OutputFormat::Yaml => match serde_saphyr::to_string(&manifest) {
                     Ok(s) => print!("{s}"),
                     Err(e) => {
-                        return emit_check_update_error(OutputFormat::Yaml, CheckUpdateErrorKind::Internal, &e.to_string());
+                        return emit_check_update_error(
+                            OutputFormat::Yaml,
+                            CheckUpdateErrorKind::Internal,
+                            &e.to_string(),
+                        );
                     }
                 },
                 OutputFormat::Plain => {
@@ -85,6 +94,11 @@ async fn run_check_update(format: OutputFormat) -> ExitCode {
             }
             exitcode::OK
         }
+        Err(check_update::Error::VpnNotConnected) => emit_check_update_error(
+            format,
+            CheckUpdateErrorKind::VpnNotConnected,
+            "pass -f/--force to bypass the VPN connection check",
+        ),
         Err(e @ check_update::Error::Integrity(_)) => {
             emit_check_update_error(format, CheckUpdateErrorKind::IntegrityError, &e.to_string())
         }
@@ -97,6 +111,7 @@ enum CheckUpdateErrorKind {
     Unavailable,
     IntegrityError,
     Internal,
+    VpnNotConnected,
 }
 
 impl CheckUpdateErrorKind {
@@ -105,12 +120,14 @@ impl CheckUpdateErrorKind {
             Self::Unavailable => "unavailable",
             Self::IntegrityError => "integrity_error",
             Self::Internal => "internal",
+            Self::VpnNotConnected => "vpn_not_connected",
         }
     }
 
     fn exit_code(self) -> ExitCode {
         match self {
             Self::Unavailable => exitcode::UNAVAILABLE,
+            Self::VpnNotConnected => exitcode::NOPERM,
             Self::IntegrityError | Self::Internal => exitcode::SOFTWARE,
         }
     }
@@ -122,6 +139,7 @@ impl fmt::Display for CheckUpdateErrorKind {
             Self::Unavailable => "Update manifest unavailable",
             Self::IntegrityError => "Update manifest integrity check failed",
             Self::Internal => "Internal error",
+            Self::VpnNotConnected => "VPN not connected",
         };
         f.write_str(label)
     }
@@ -296,7 +314,10 @@ fn pretty_print(resp: &Response) {
                 "Gnosis VPN: client service version: {}, package version: {}{}",
                 info.version,
                 info.package_version.as_deref().unwrap_or("not available"),
-                info.log_file.as_ref().map(|f| format!("\nLog file: {}", f.display())).unwrap_or_default(),
+                info.log_file
+                    .as_ref()
+                    .map(|f| format!("\nLog file: {}", f.display()))
+                    .unwrap_or_default(),
             );
         }
         Response::StartClient(command::StartClientResponse::Started) => {

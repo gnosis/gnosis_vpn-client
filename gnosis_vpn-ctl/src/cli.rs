@@ -27,12 +27,7 @@ pub struct Cli {
     pub socket_path: PathBuf,
 
     /// Output format applied to every command
-    #[arg(
-        short = 'o',
-        long = "output",
-        value_name = "FORMAT",
-        value_enum,
-    )]
+    #[arg(short = 'o', long = "output", value_name = "FORMAT", value_enum)]
     pub output: Option<OutputFormat>,
 }
 
@@ -100,8 +95,14 @@ pub enum Command {
     StopClient {},
 
     /// Fetch and display the latest available version from the update manifest
+    ///
+    /// Refuses to run unless the VPN is connected. Pass --force to bypass the connection check.
     #[command()]
-    CheckUpdate {},
+    CheckUpdate {
+        /// Skip the VPN connection check (insecure)
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
 }
 
 impl From<Command> for LibCommand {
@@ -119,7 +120,7 @@ impl From<Command> for LibCommand {
             Command::Info {} => LibCommand::Info,
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
-            Command::CheckUpdate {} => unreachable!("CheckUpdate is handled before socket dispatch"),
+            Command::CheckUpdate { .. } => unreachable!("CheckUpdate is handled before socket dispatch"),
         }
     }
 }
