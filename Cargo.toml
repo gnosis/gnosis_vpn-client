@@ -18,7 +18,7 @@ bytesize = "2.3.0"
 cfg-if = "1.0.4"
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "d33e77c678c09fc301b0ad0ff64eb50d853ebfd1", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8f684b7294af9382a6958a6aeefb5f74aee7a0d", features = [
   "prometheus",
 ] }
 exitcode = "1.1.2"
