@@ -615,3 +615,25 @@ pub fn to_surb_balancer_config(
     };
     Ok(config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_wxhopr_withdraw_display_ok() {
+        let res = Results::NodeWxhoprWithdraw { res: Ok(()) };
+        assert_eq!(res.to_string(), "NodeWxhoprWithdraw: Success");
+    }
+
+    #[test]
+    fn node_wxhopr_withdraw_display_err() {
+        let res = Results::NodeWxhoprWithdraw {
+            res: Err(Error::Chain("connector is not connected".to_string())),
+        };
+        assert_eq!(
+            res.to_string(),
+            "NodeWxhoprWithdraw: Error(chain error: connector is not connected)"
+        );
+    }
+}
