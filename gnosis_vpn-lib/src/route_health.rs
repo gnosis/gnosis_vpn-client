@@ -44,9 +44,10 @@ const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
 /// Quick retry interval used for the first few failures that occur before the
 /// HOPR transport layer has had time to probe relay peers and populate the
-/// channel graph.  Once the graph is populated (typically within one probe
-/// cycle, ~3 s) the retry will succeed; subsequent failures fall through to
-/// the normal linear backoff.
+/// channel graph.  Each failed health-check attempt takes ~42s (session
+/// establish_max_retries=1: 2 attempts × 20s + 2s delay, capped below the 60s
+/// HTTP timeout).  After GRAPH_WARMUP_RETRY_COUNT short-gap retries the graph
+/// is expected to be warm and path selection succeeds.
 const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const GRAPH_WARMUP_RETRY_COUNT: u32 = 3;
 
