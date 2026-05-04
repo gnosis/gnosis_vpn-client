@@ -2,10 +2,12 @@
 
 ## Linux Binary Verification
 
-All GnosisVPN client binaries include SHA256 checksums for integrity verification. Additionally:
+All GnosisVPN client binaries include SHA256 checksums for integrity
+verification. Additionally:
 
 - **Linux binaries** are signed with GPG
-- **macOS binaries** use Apple's code signing mechanism and are signed with an Apple Developer certificate
+- **macOS binaries** use Apple's code signing mechanism and are signed with an
+  Apple Developer certificate
 
 We strongly recommend verifying binaries before installation.
 
@@ -24,14 +26,14 @@ You can import the GnosisVPN public key using any of these methods:
 **From keyserver:**
 
 ```bash
-gpg --keyserver keyserver.ubuntu.com --recv-keys 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
+gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
 echo "9A308031FD3BFE8EDBF5076D84F73FEA46D10972:6:" | gpg --import-ownertrust
 ```
 
 **From this repository:**
 
 ```bash
-curl -s -O https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/main/gnosisvpn-public-key.asc
+curl -fsSLO https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/main/gnosisvpn-public-key.asc
 gpg --import gnosisvpn-public-key.asc
 ```
 
@@ -45,7 +47,8 @@ gpg --import gnosisvpn-public-key.asc
 
 ### Verifying Binary Signatures
 
-Each Linux release includes three files per binary (`gnosis_vpn-ctl`, `gnosis_vpn-worker`, `gnosis_vpn-root`):
+Each Linux release includes three files per binary (`gnosis_vpn-ctl`,
+`gnosis_vpn-worker`, `gnosis_vpn-root`):
 
 1. **Binary file** (e.g., `gnosis_vpn-ctl-x86_64-linux`)
 2. **SHA256 checksum** (e.g., `gnosis_vpn-ctl-x86_64-linux.sha256`)
@@ -83,15 +86,15 @@ gpg: Good signature from "GnosisVPN (Gnosis VPN) <tech@hoprnet.org>" [ultimate]
 
 ## macOS Binary Verification
 
-macOS binaries are signed with an Apple Developer certificate and notarized by Apple. The system verifies signatures
-automatically during installation.
+macOS binaries are signed with an Apple Developer certificate and notarized by
+Apple. The system verifies signatures automatically during installation.
 
 ### Verify SHA256 Checksum (macOS)
 
 Each macOS release includes a SHA256 checksum file for manual verification:
 
-Download the binary and checksum from the release page https://github.com/gnosis/gnosis_vpn-client/releases
-
+Download the binary and checksum from the release page
+https://github.com/gnosis/gnosis_vpn-client/releases
 
 ```bash
 # Verify checksum
@@ -106,7 +109,8 @@ gnosis_vpn-ctl-aarch64-darwin: OK
 
 ## Reporting Security Vulnerabilities
 
-If you discover a security vulnerability in GnosisVPN, please report it privately to:
+If you discover a security vulnerability in GnosisVPN, please report it
+privately to:
 
 **Email:** tech@hoprnet.org
 

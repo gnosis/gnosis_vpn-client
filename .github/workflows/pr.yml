@@ -49,9 +49,7 @@ jobs:
       binary: gnosis_vpn-client
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
-      enabled: ${{ matrix.required_label == '' ||
-        contains(github.event.pull_request.labels.*.name, matrix.required_label)
-        }}
+      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -113,5 +111,4 @@ jobs:
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result/bin/gnosis_vpn-worker
-        run: just system-tests ${{ github.workspace
-          }}/result/bin/gnosis_vpn-system_tests
+        run: just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests
