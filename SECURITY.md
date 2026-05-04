@@ -76,9 +76,9 @@ gpg:                using EDDSA key 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
 gpg: Good signature from "GnosisVPN <tech@hoprnet.org>"
 ```
 
-## MacOS Binary Verification
+## macOS Binary Verification
 
-MacOS binaries are signed with an Apple Developer certificate and notarized by Apple. The system verifies signatures
+macOS binaries are signed with an Apple Developer certificate and notarized by Apple. The system verifies signatures
 automatically during installation.
 
 ### Verify SHA256 Checksum (macOS)
