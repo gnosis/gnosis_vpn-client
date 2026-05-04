@@ -42,13 +42,22 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
-/// Quick retry interval used for the first few failures that occur before the
-/// HOPR transport layer has had time to probe relay peers and populate the
-/// channel graph.  Each failed health-check attempt takes ~42s (session
-/// establish_max_retries=1: 2 attempts × 20s + 2s delay, capped below the 60s
-/// HTTP timeout).  After GRAPH_WARMUP_RETRY_COUNT short-gap retries the graph
-/// is expected to be warm and path selection succeeds.
-const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+/// Retry interval for the first few health-check failures while the HOPR
+/// transport layer is still establishing P2P connections to relays.
+///
+/// Timing rationale:
+///   - The path planner caches selected relay paths for 60 s (PathPlannerConfig
+///     default, not YAML-configurable).  If the retry fires before the cache
+///     expires, the same relay set is reused — potentially picking the same
+///     unreachable relay again.
+///   - 90 s > 60 s cache TTL, so each warmup retry triggers a fresh relay
+///     selection with an up-to-date connected-peer set.
+///   - Each failed attempt takes ~42 s (establish_max_retries=1:
+///     2 × 20 s + 2 s delay).  90 s wait → full cycle ≈ 132 s/retry.
+///   - After GRAPH_WARMUP_RETRY_COUNT retries (≈ 396 s total) the path
+///     selector is expected to have discovered all reachable relays and
+///     session establishment succeeds.
+const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(90);
 const GRAPH_WARMUP_RETRY_COUNT: u32 = 3;
 
 /// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
