@@ -915,6 +915,7 @@ impl HealthSession {
             forward_path: destination.routing,
             return_path: destination.routing,
             surb_management: None,
+            always_max_out_surbs: true,
             ..Default::default()
         };
         tracing::debug!(%destination, "opening TCP session for health check");
