@@ -30,7 +30,7 @@ gpg --keyserver keyserver.ubuntu.com --recv-keys 9A308031FD3BFE8EDBF5076D84F73FE
 **From this repository:**
 
 ```bash
-curl -s -O https://raw.githubusercontent.com/gnosis/gnosis_vpn/main/gnosisvpn-public-key.asc
+curl -s -O https://raw.githubusercontent.com/gnosis/gnosis_vpn-client/main/gnosisvpn-public-key.asc
 gpg --import gnosisvpn-public-key.asc
 ```
 
