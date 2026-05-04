@@ -278,12 +278,38 @@ pub async fn create_safeless_interactor(
     let _ = results_sender.send(Results::SafelessInteractor { res }).await;
 }
 
-async fn run_node_wxhopr_withdraw(safeless: Arc<SafelessInteractor>, safe_address: Address) -> Result<(), Error> {
-    let (wxhopr, _xdai) = safeless.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
+trait NodeWxhoprOps {
+    fn node_wxhopr_balance(&self) -> impl std::future::Future<Output = anyhow::Result<Balance<WxHOPR>>> + Send;
+    fn move_node_wxhopr_to_safe(
+        &self,
+        safe_address: Address,
+        amount: Balance<WxHOPR>,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+}
+
+impl NodeWxhoprOps for SafelessInteractor {
+    async fn node_wxhopr_balance(&self) -> anyhow::Result<Balance<WxHOPR>> {
+        let (wxhopr, _xdai) = self.balances().await?;
+        Ok(wxhopr)
+    }
+
+    async fn move_node_wxhopr_to_safe(&self, safe_address: Address, amount: Balance<WxHOPR>) -> anyhow::Result<()> {
+        self.withdraw_wxhopr(safe_address, amount).await
+    }
+}
+
+async fn run_node_wxhopr_withdraw<T: NodeWxhoprOps + Send + Sync>(
+    safeless: Arc<T>,
+    safe_address: Address,
+) -> Result<(), Error> {
+    let wxhopr = safeless
+        .node_wxhopr_balance()
+        .await
+        .map_err(|e| Error::Chain(e.to_string()))?;
     if !wxhopr.is_zero() {
         tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
         safeless
-            .withdraw_wxhopr(safe_address, wxhopr)
+            .move_node_wxhopr_to_safe(safe_address, wxhopr)
             .await
             .map_err(|e| Error::Chain(e.to_string()))?;
     }
@@ -619,6 +645,7 @@ pub fn to_surb_balancer_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn node_wxhopr_withdraw_display_ok() {
@@ -635,5 +662,87 @@ mod tests {
             res.to_string(),
             "NodeWxhoprWithdraw: Error(chain error: connector is not connected)"
         );
+    }
+
+    struct MockNodeOps {
+        wxhopr: Balance<WxHOPR>,
+        balance_should_fail: bool,
+        withdraw_should_fail: bool,
+        withdraw_calls: Mutex<Vec<(Address, Balance<WxHOPR>)>>,
+    }
+
+    impl MockNodeOps {
+        fn new(wxhopr: Balance<WxHOPR>) -> Self {
+            Self {
+                wxhopr,
+                balance_should_fail: false,
+                withdraw_should_fail: false,
+                withdraw_calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl NodeWxhoprOps for MockNodeOps {
+        async fn node_wxhopr_balance(&self) -> anyhow::Result<Balance<WxHOPR>> {
+            if self.balance_should_fail {
+                anyhow::bail!("balance fetch failed");
+            }
+            Ok(self.wxhopr)
+        }
+
+        async fn move_node_wxhopr_to_safe(&self, safe_address: Address, amount: Balance<WxHOPR>) -> anyhow::Result<()> {
+            if self.withdraw_should_fail {
+                anyhow::bail!("withdraw failed");
+            }
+            self.withdraw_calls.lock().unwrap().push((safe_address, amount));
+            Ok(())
+        }
+    }
+
+    fn safe_addr() -> Address {
+        Address::from([0xAA; 20])
+    }
+
+    #[tokio::test]
+    async fn run_node_wxhopr_withdraw_skips_when_balance_is_zero() -> anyhow::Result<()> {
+        let mock = Arc::new(MockNodeOps::new(Balance::<WxHOPR>::zero()));
+        run_node_wxhopr_withdraw(mock.clone(), safe_addr()).await?;
+        assert!(
+            mock.withdraw_calls.lock().unwrap().is_empty(),
+            "withdraw should not be called when balance is zero"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_node_wxhopr_withdraw_moves_full_balance_to_safe() -> anyhow::Result<()> {
+        let amount = Balance::<WxHOPR>::from(15u64);
+        let mock = Arc::new(MockNodeOps::new(amount));
+        run_node_wxhopr_withdraw(mock.clone(), safe_addr()).await?;
+        let calls = mock.withdraw_calls.lock().unwrap().clone();
+        assert_eq!(calls, vec![(safe_addr(), amount)]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_node_wxhopr_withdraw_returns_error_when_balance_fetch_fails() {
+        let mut mock = MockNodeOps::new(Balance::<WxHOPR>::from(10u64));
+        mock.balance_should_fail = true;
+        let mock = Arc::new(mock);
+        let res = run_node_wxhopr_withdraw(mock.clone(), safe_addr()).await;
+        assert!(matches!(res, Err(Error::Chain(_))));
+        assert!(
+            mock.withdraw_calls.lock().unwrap().is_empty(),
+            "withdraw should not be attempted when balance fetch fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_node_wxhopr_withdraw_returns_error_when_withdraw_fails() {
+        let mut mock = MockNodeOps::new(Balance::<WxHOPR>::from(10u64));
+        mock.withdraw_should_fail = true;
+        let mock = Arc::new(mock);
+        let res = run_node_wxhopr_withdraw(mock, safe_addr()).await;
+        assert!(matches!(res, Err(Error::Chain(_))));
     }
 }
