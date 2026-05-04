@@ -24,7 +24,7 @@ You can import the GnosisVPN public key using any of these methods:
 **From keyserver:**
 
 ```bash
-gpg --keyserver keyserver.ubuntu.com --recv-keys 84F73FEA46D10972
+gpg --keyserver keyserver.ubuntu.com --recv-keys 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
 ```
 
 **From this repository:**
