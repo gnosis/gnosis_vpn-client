@@ -88,6 +88,7 @@ Each macOS release includes a SHA256 checksum file for manual verification:
 Download the binary and checksum from the release page https://github.com/gnosis/gnosis_vpn-client/releases
 
 
+```bash
 # Verify checksum
 shasum -a 256 -c gnosis_vpn-ctl-aarch64-darwin.sha256
 ```
