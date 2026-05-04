@@ -25,6 +25,7 @@ You can import the GnosisVPN public key using any of these methods:
 
 ```bash
 gpg --keyserver keyserver.ubuntu.com --recv-keys 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
+echo "9A308031FD3BFE8EDBF5076D84F73FEA46D10972:6:" | gpg --import-ownertrust
 ```
 
 **From this repository:**
@@ -73,7 +74,7 @@ Expected output:
 ```
 gpg: Signature made [date]
 gpg:                using EDDSA key 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
-gpg: Good signature from "GnosisVPN <tech@hoprnet.org>"
+gpg: Good signature from "GnosisVPN (Gnosis VPN) tech@hoprnet.org"
 ```
 
 ## macOS Binary Verification

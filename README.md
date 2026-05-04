@@ -87,7 +87,7 @@ There are three environment variables that control the worker process setup:
 Use the latest
 [installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
 
-Verify integrity before installing - see [SECURITY.md](./SECURITY.md)
+Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
 
 ## Idle shutdown
 
