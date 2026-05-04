@@ -72,9 +72,13 @@ gpg --verify gnosis_vpn-ctl-x86_64-linux.asc gnosis_vpn-ctl-x86_64-linux
 Expected output:
 
 ```
-gpg: Signature made [date]
+gpg: Signature made Mon May  4 12:25:22 2026 CEST
 gpg:                using EDDSA key 9A308031FD3BFE8EDBF5076D84F73FEA46D10972
-gpg: Good signature from "GnosisVPN (Gnosis VPN) tech@hoprnet.org"
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2075-11-23
+gpg: Good signature from "GnosisVPN (Gnosis VPN) <tech@hoprnet.org>" [ultimate]
 ```
 
 ## macOS Binary Verification
