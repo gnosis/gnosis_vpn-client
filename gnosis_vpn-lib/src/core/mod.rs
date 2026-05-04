@@ -30,6 +30,11 @@ pub mod runner;
 
 use runner::Results;
 
+/// Interval between node wxHOPR withdrawal checks in steady state.
+const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+/// Retry delay after a node wxHOPR withdrawal attempt fails.
+const NODE_WXHOPR_WITHDRAW_RETRY_DELAY: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Configuration error: {0}")]
@@ -617,11 +622,11 @@ impl Core {
 
             Results::NodeWxhoprWithdraw { res } => match res {
                 Ok(()) => {
-                    self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::from_secs(45));
+                    self.spawn_node_wxhopr_withdraw_runner(results_sender, NODE_WXHOPR_WITHDRAW_INTERVAL);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to withdraw node wxHOPR to safe - retrying");
-                    self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::from_secs(10));
+                    self.spawn_node_wxhopr_withdraw_runner(results_sender, NODE_WXHOPR_WITHDRAW_RETRY_DELAY);
                 }
             },
 
