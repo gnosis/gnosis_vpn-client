@@ -1,4 +1,4 @@
-use serde_yaml;
+use serde_saphyr;
 use thiserror::Error;
 use tokio::fs;
 
@@ -17,10 +17,22 @@ pub enum Error {
     NoFile,
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("Deserialization error: {0}")]
-    YamlDeserialization(#[from] serde_yaml::Error),
+    #[error("Output error: {0}")]
+    Output(String),
     #[error("Project directory error: {0}")]
     Dirs(#[from] crate::dirs::Error),
+}
+
+impl From<serde_saphyr::Error> for Error {
+    fn from(e: serde_saphyr::Error) -> Self {
+        Error::Output(e.to_string())
+    }
+}
+
+impl From<serde_saphyr::ser::Error> for Error {
+    fn from(e: serde_saphyr::ser::Error) -> Self {
+        Error::Output(e.to_string())
+    }
 }
 
 pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
@@ -32,12 +44,12 @@ pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
         }
     })?;
 
-    serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Into::into)
 }
 
 pub async fn store_safe(state_home: PathBuf, safe_module: &SafeModule) -> Result<(), Error> {
     let safe_file = safe_file(state_home);
-    let content = serde_yaml::to_string(&safe_module)?;
+    let content = serde_saphyr::to_string(&safe_module)?;
     fs::write(&safe_file, &content).await.map_err(Error::IO)
 }
 
@@ -49,7 +61,7 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
             Error::IO(e)
         }
     })?;
-    serde_yaml::from_str::<SafeModule>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<SafeModule>(&content).map_err(Into::into)
 }
 
 pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
@@ -73,7 +85,7 @@ protocol:
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
     );
-    serde_yaml::from_str::<HoprLibConfig>(&content).map_err(Error::YamlDeserialization)
+    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Into::into)
 }
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {
