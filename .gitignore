@@ -28,3 +28,4 @@ gcp-sa-*.json
 
 # VsCode settings
 .vscode/*
+gnosisvpn-private-key.asc
