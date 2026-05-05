@@ -2674,7 +2674,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "3.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=543d3499fd216e823e0ad8d7fcb2849b885c8f0f#543d3499fd216e823e0ad8d7fcb2849b885c8f0f"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=7d054134f37c20a4ae18f62ecd24d127d8c7a56f#7d054134f37c20a4ae18f62ecd24d127d8c7a56f"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2684,6 +2684,7 @@ dependencies = [
  "futures",
  "hopr-api",
  "hopr-chain-connector",
+ "hopr-ct-full-network",
  "hopr-lib",
  "hopr-reference",
  "hopr-strategy",
