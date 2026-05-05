@@ -1,5 +1,5 @@
 use edgli::EdgliInitState;
-use edgli::blokli::SafeOperations;
+use edgli::blokli::IncentiveOperations;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
@@ -50,8 +50,8 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("Hopr params error: {0}")]
     HoprParams(#[from] worker_params::Error),
-    #[error("Safeless Interactor creation error: {0}")]
-    SafelessInteractorCreation(String),
+    #[error("IncentiveOperations creation error: {0}")]
+    IncentiveOperationsCreation(String),
 }
 
 pub struct Core {
@@ -77,7 +77,7 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    safeless_interactor: Option<Arc<dyn SafeOperations>>,
+    incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
     strategy_handle: Option<AbortHandle>,
@@ -90,8 +90,8 @@ pub struct Core {
 
 #[derive(Debug, Clone)]
 enum Phase {
-    // initial phase - instantiate safeless interactor (blokli)
-    // and determine if safe is present
+    // initial phase — create the IncentiveOperations handle (Blokli-backed)
+    // and determine if a Safe has been deployed for this node
     Initial,
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
@@ -173,7 +173,7 @@ impl Core {
             phase: Phase::Initial,
             balances: None,
             hopr: None,
-            safeless_interactor: None,
+            incentive_operations: None,
             ticket_stats: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -545,7 +545,7 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
-            Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
+            Results::IncentiveOperations { res } => self.on_results_incentive_operations(res, results_sender).await,
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -868,20 +868,23 @@ impl Core {
         return true;
     }
 
-    async fn on_results_safeless_interactor(
+    async fn on_results_incentive_operations(
         &mut self,
-        res: Result<Arc<dyn SafeOperations>, runner::Error>,
+        res: Result<Arc<dyn IncentiveOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         match res {
-            Ok(safeless_interactor) => {
-                tracing::info!("safeless interactor created successfully");
-                self.safeless_interactor = Some(safeless_interactor);
+            Ok(incentive_operations) => {
+                tracing::info!("incentive operations handle created successfully");
+                self.incentive_operations = Some(incentive_operations);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
             }
             Err(err) => {
-                tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
+                tracing::error!(
+                    ?err,
+                    "failed to create incentive operations handle - retrying in 30 seconds"
+                );
                 self.spawn_initial_runner(results_sender, Duration::from_secs(30));
             }
         }
@@ -1120,7 +1123,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::create_safeless_interactor(&worker_params, blokli_config.into(), results_sender).await;
+                    runner::create_incentive_operations(&worker_params, blokli_config.into(), results_sender).await;
                 })
                 .await
         });
@@ -1136,11 +1139,11 @@ impl Core {
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
-                    tracing::info!("no persisted safe module found - querying safeless interactor");
+                    tracing::info!("no persisted safe module found - querying incentive operations");
                 } else {
                     tracing::warn!(
                         ?err,
-                        "error deserializing existing safe module - querying safeless interactor"
+                        "error deserializing existing safe module - querying incentive operations"
                     );
                 }
                 self.phase = Phase::CheckingSafe {
@@ -1158,12 +1161,12 @@ impl Core {
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::query_safe(safeless_interactor, results_sender).await
+                        runner::query_safe(incentive_operations, results_sender).await
                     })
                     .await
             });
@@ -1173,12 +1176,12 @@ impl Core {
     fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_balance(safeless_interactor, results_sender).await
+                        runner::node_balance(incentive_operations, results_sender).await
                     })
                     .await
             });
@@ -1200,11 +1203,11 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
-                        runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
+                        runner::safe_deployment(incentive_operations, presafe, results_sender).await;
                     })
                     .await
             });
@@ -1244,12 +1247,12 @@ impl Core {
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::ticket_stats(safeless_interactor, results_sender).await;
+                        runner::ticket_stats(incentive_operations, results_sender).await;
                     })
                     .await
             });
@@ -1272,7 +1275,7 @@ impl Core {
     }
 
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let (Some(safeless), Some(hopr)) = (self.safeless_interactor.clone(), self.hopr.clone()) {
+        if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
             let safe_address = hopr.info().safe_address;
             let cancel = self.cancel_node_wxhopr.clone();
             let results_sender = results_sender.clone();
@@ -1280,7 +1283,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_wxhopr_withdraw(safeless, safe_address, results_sender).await;
+                        runner::node_wxhopr_withdraw(ops, safe_address, results_sender).await;
                     })
                     .await
             });

@@ -1,4 +1,4 @@
-use edgli::blokli::{SafeOperations, SafelessInteractor};
+use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::HoprKeys;
 use edgli::hopr_lib::config::HoprLibConfig;
 use serde::{Deserialize, Serialize};
@@ -129,15 +129,18 @@ impl WorkerParams {
         }
     }
 
-    /// Create safeless blokli instance
-    pub async fn create_safeless_interactor(&self, config: BlokliConfig) -> Result<Arc<dyn SafeOperations>, Error> {
+    /// Create an [`IncentiveOperations`] handle for pre-Safe on-chain interactions.
+    pub async fn create_incentive_operations(
+        &self,
+        config: BlokliConfig,
+    ) -> Result<Arc<dyn IncentiveOperations>, Error> {
         let keys = self.calc_keys().await?;
         let private_key = keys.chain_key;
         let url = self.blokli_url();
-        let interactor = SafelessInteractor::new(url, &private_key, Some(config.into()))
+        let ops = make_incentive_operations(url, &private_key, Some(config.into()))
             .await
             .map_err(|e| Error::BlokliCreation(e.to_string()))?;
-        Ok(Arc::new(interactor) as Arc<dyn SafeOperations>)
+        Ok(Arc::from(ops))
     }
 
     pub fn allow_insecure(&self) -> bool {

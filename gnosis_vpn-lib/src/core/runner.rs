@@ -3,7 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
-use edgli::blokli::SafeOperations;
+use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR};
 use edgli::hopr_lib::builder::Keypair;
@@ -64,8 +64,8 @@ pub enum Results {
         res: Result<Hopr, Error>,
         safe_module: SafeModule,
     },
-    SafelessInteractor {
-        res: Result<Arc<dyn SafeOperations>, Error>,
+    IncentiveOperations {
+        res: Result<Arc<dyn IncentiveOperations>, Error>,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -121,8 +121,8 @@ pub enum Error {
     ChannelError(#[from] hopr_api::ChannelError),
     #[error("Funding tool error: {0}")]
     FundingTool(String),
-    #[error("Safeless interactor creation error: {0}")]
-    SafelessInteractorCreation(String),
+    #[error("IncentiveOperations creation error: {0}")]
+    IncentiveOperationsCreation(String),
 }
 
 #[derive(Debug, Error)]
@@ -138,18 +138,18 @@ struct UnauthorizedError {
     error: String,
 }
 
-pub async fn ticket_stats(safeless_interactor: Arc<dyn SafeOperations>, results_sender: mpsc::Sender<Results>) {
-    let res = run_ticket_stats(safeless_interactor).await;
+pub async fn ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+    let res = run_ticket_stats(incentive_operations).await;
     let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
-pub async fn node_balance(safeless_interactor: Arc<dyn SafeOperations>, results_sender: mpsc::Sender<Results>) {
-    let res = run_node_balance(safeless_interactor).await;
+pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+    let res = run_node_balance(incentive_operations).await;
     let _ = results_sender.send(Results::NodeBalance { res }).await;
 }
 
-pub async fn query_safe(safeless_interactor: Arc<dyn SafeOperations>, results_sender: mpsc::Sender<Results>) {
-    let res = run_query_safe(safeless_interactor).await;
+pub async fn query_safe(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+    let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
@@ -159,11 +159,11 @@ pub async fn funding_tool(worker_params: WorkerParams, code: String, results_sen
 }
 
 pub async fn safe_deployment(
-    safeless_interactor: Arc<dyn SafeOperations>,
+    incentive_operations: Arc<dyn IncentiveOperations>,
     presafe: balance::PreSafe,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_safe_deployment(safeless_interactor, presafe).await;
+    let res = run_safe_deployment(incentive_operations, presafe).await;
     let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
@@ -194,11 +194,11 @@ pub async fn hopr(
 }
 
 pub async fn node_wxhopr_withdraw(
-    safeless: Arc<dyn SafeOperations>,
+    incentive_operations: Arc<dyn IncentiveOperations>,
     safe_address: Address,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_node_wxhopr_withdraw(safeless, safe_address).await;
+    let res = run_node_wxhopr_withdraw(incentive_operations, safe_address).await;
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
 }
 
@@ -270,23 +270,29 @@ pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>)
     }
 }
 
-pub async fn create_safeless_interactor(
+pub async fn create_incentive_operations(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_create_safeless_interactor(worker_params, blokli_config).await;
-    let _ = results_sender.send(Results::SafelessInteractor { res }).await;
+    let res = run_create_incentive_operations(worker_params, blokli_config).await;
+    let _ = results_sender.send(Results::IncentiveOperations { res }).await;
 }
 
-async fn run_node_wxhopr_withdraw(safeless: Arc<dyn SafeOperations>, safe_address: Address) -> Result<(), Error> {
+async fn run_node_wxhopr_withdraw(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    safe_address: Address,
+) -> Result<(), Error> {
     (|| {
-        let safeless = safeless.clone();
+        let incentive_operations = incentive_operations.clone();
         async move {
-            let (wxhopr, _xdai) = safeless.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
+            let (wxhopr, _xdai) = incentive_operations
+                .balances()
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
             if !wxhopr.is_zero() {
                 tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
-                safeless
+                incentive_operations
                     .withdraw_wxhopr(safe_address, wxhopr)
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))?;
@@ -308,13 +314,12 @@ async fn run_node_wxhopr_withdraw(safeless: Arc<dyn SafeOperations>, safe_addres
     .await
 }
 
-async fn run_query_safe(safeless_interactor: Arc<dyn SafeOperations>) -> Result<Option<SafeModule>, Error> {
+async fn run_query_safe(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<Option<SafeModule>, Error> {
     tracing::debug!("starting query safe runner");
     (|| {
-        let blokli = safeless_interactor.clone();
+        let ops = incentive_operations.clone();
         async move {
-            blokli
-                .retrieve_safe()
+            ops.retrieve_safe()
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))
                 .map(|b| b.map(SafeModule::from))
@@ -327,12 +332,12 @@ async fn run_query_safe(safeless_interactor: Arc<dyn SafeOperations>) -> Result<
     .await
 }
 
-async fn run_node_balance(safeless_interactor: Arc<dyn SafeOperations>) -> Result<balance::PreSafe, Error> {
+async fn run_node_balance(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<balance::PreSafe, Error> {
     tracing::debug!("starting node balance runner");
     (|| {
-        let blokli = safeless_interactor.clone();
+        let ops = incentive_operations.clone();
         async move {
-            let (balance_wxhopr, balance_xdai) = blokli.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
+            let (balance_wxhopr, balance_xdai) = ops.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
             Ok(balance::PreSafe {
                 node_xdai: balance_xdai,
                 node_wxhopr: balance_wxhopr,
@@ -346,12 +351,12 @@ async fn run_node_balance(safeless_interactor: Arc<dyn SafeOperations>) -> Resul
     .await
 }
 
-async fn run_ticket_stats(safeless_interactor: Arc<dyn SafeOperations>) -> Result<TicketStats, Error> {
+async fn run_ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<TicketStats, Error> {
     tracing::debug!("starting ticket stats runner");
     (|| {
-        let blokli = safeless_interactor.clone();
+        let ops = incentive_operations.clone();
         async move {
-            let ticket_stats = blokli.ticket_stats().await.map_err(|e| Error::Chain(e.to_string()))?;
+            let ticket_stats = ops.ticket_stats().await.map_err(|e| Error::Chain(e.to_string()))?;
 
             Ok(TicketStats {
                 ticket_price: ticket_stats.ticket_price,
@@ -367,15 +372,14 @@ async fn run_ticket_stats(safeless_interactor: Arc<dyn SafeOperations>) -> Resul
 }
 
 async fn run_safe_deployment(
-    safeless_interactor: Arc<dyn SafeOperations>,
+    incentive_operations: Arc<dyn IncentiveOperations>,
     presafe: balance::PreSafe,
 ) -> Result<SafeModule, Error> {
     tracing::debug!("starting safe deployment runner");
     (|| {
-        let blokli = safeless_interactor.clone();
+        let ops = incentive_operations.clone();
         async move {
-            blokli
-                .deploy_safe(presafe.node_wxhopr)
+            ops.deploy_safe(presafe.node_wxhopr)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))
                 .map(SafeModule::from)
@@ -502,21 +506,21 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
     }
 }
 
-async fn run_create_safeless_interactor(
+async fn run_create_incentive_operations(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
-) -> Result<Arc<dyn SafeOperations>, Error> {
+) -> Result<Arc<dyn IncentiveOperations>, Error> {
     let blokli_provider = worker_params.blokli_url();
     let chain_key = worker_params.calc_keys().await?.chain_key;
     (|| async {
-        let res = edgli::blokli::SafelessInteractor::new(blokli_provider.clone(), &chain_key, Some(blokli_config))
+        let ops = make_incentive_operations(blokli_provider.clone(), &chain_key, Some(blokli_config))
             .await
-            .map_err(|e| Error::SafelessInteractorCreation(e.to_string()))?;
-        Ok(Arc::new(res) as Arc<dyn SafeOperations>)
+            .map_err(|e| Error::IncentiveOperationsCreation(e.to_string()))?;
+        Ok(Arc::from(ops))
     })
     .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
-        tracing::warn!(?err, ?delay, "SafelessInteractor creation attempt failed, retrying...");
+        tracing::warn!(?err, ?delay, "IncentiveOperations creation attempt failed, retrying...");
     })
     .await
 }
@@ -571,9 +575,9 @@ impl Display for Results {
                 Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
                 Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
-            Results::SafelessInteractor { res } => match res {
-                Ok(_) => write!(f, "SafelessInteractor: Created Successfully"),
-                Err(err) => write!(f, "SafelessInteractor: Error({})", err),
+            Results::IncentiveOperations { res } => match res {
+                Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),
+                Err(err) => write!(f, "IncentiveOperations: Error({})", err),
             },
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent(evt) => {
