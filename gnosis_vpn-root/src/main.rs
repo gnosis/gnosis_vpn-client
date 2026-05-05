@@ -130,19 +130,19 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
         loop {
             tokio::select! {
                 Some(_) = sigint.recv() => {
-                    tracing::debug!("received SIGINT");
+                    tracing::info!("received SIGINT");
                     let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sigterm.recv() => {
-                    tracing::debug!("received SIGTERM");
+                    tracing::info!("received SIGTERM");
                     let _ =  sender.send(SignalMessage::Shutdown).await;
                 },
                 Some(_) = sighup.recv() => {
-                    tracing::debug!("received SIGHUP");
+                    tracing::info!("received SIGHUP");
                     let _ =  sender.send(SignalMessage::RotateLogs).await;
                 }
                 _ = cancel.cancelled() => {
-                    tracing::debug!("signal channel received cancellation");
+                    tracing::info!("signal channel received cancellation");
                     break;
                 }
                 else => {
@@ -888,9 +888,14 @@ impl DaemonState {
             | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
             LibCommand::Info => {
+                let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
+                    .await
+                    .ok()
+                    .map(|s| s.trim().to_string());
                 let info = command::InfoResponse {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     log_file: self.log_file.clone(),
+                    package_version,
                 };
                 Ok(Response::Info(info))
             }

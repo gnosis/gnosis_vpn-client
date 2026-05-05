@@ -87,36 +87,7 @@ There are three environment variables that control the worker process setup:
 Use the latest
 [installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
 
-### Check signatures
-
-To validate the signature of the downloaded binary from GitHub, follow these
-steps:
-
-1. Import the public key (checkout the repository first):
-
-   ```bash
-   gpg --import gpg-publickey.asc
-   ```
-
-2. Verify the binary signature (examples for x86_64 and ARM64):
-
-   ```bash
-   # For x86_64 (AMD64)
-   gpg --verify gnosis_vpn-root-x86_64-linux.asc gnosis_vpn-root-x86_64-linux
-
-   # For ARM64
-   gpg --verify gnosis_vpn-root-aarch64-linux.asc gnosis_vpn-root-aarch64-linux
-   ```
-
-3. Compare the checksum with the actual checksum:
-
-   ```bash
-   # For x86_64 (AMD64)
-   diff -u <(cat gnosis_vpn-root-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-x86_64-linux)
-
-   # For ARM64
-   diff -u <(cat gnosis_vpn-root-aarch64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-aarch64-linux)
-   ```
+Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
 
 ## Idle shutdown
 
