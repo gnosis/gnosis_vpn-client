@@ -30,6 +30,8 @@ pub mod runner;
 
 use runner::Results;
 
+const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Configuration error: {0}")]
@@ -65,6 +67,7 @@ pub struct Core {
     // cancellation tokens
     cancel_balances: CancellationToken,
     cancel_connection: CancellationToken,
+    cancel_node_wxhopr: CancellationToken,
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
 
@@ -159,6 +162,7 @@ impl Core {
             // cancellation tokens
             cancel_balances: cancel_on_shutdown.child_token(),
             cancel_connection: cancel_on_shutdown.child_token(),
+            cancel_node_wxhopr: cancel_on_shutdown.child_token(),
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
 
@@ -578,6 +582,7 @@ impl Core {
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
                     self.spawn_balances_runner(results_sender, Duration::ZERO);
+                    self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
                     self.try_start_reactor(results_sender);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
@@ -614,6 +619,14 @@ impl Core {
                     self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
+
+            // The runner retries indefinitely so res is always Ok; log just in case.
+            Results::NodeWxhoprWithdraw { res } => {
+                if let Err(err) = res {
+                    tracing::error!(?err, "failed to withdraw node wxHOPR to safe");
+                }
+                self.spawn_node_wxhopr_withdraw_runner(results_sender, NODE_WXHOPR_WITHDRAW_INTERVAL);
+            }
 
             Results::HoprRunning => {
                 self.on_hopr_running(results_sender);
@@ -1252,6 +1265,22 @@ impl Core {
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
                         runner::balances(hopr, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let (Some(safeless), Some(hopr)) = (self.safeless_interactor.clone(), self.hopr.clone()) {
+            let safe_address = hopr.info().safe_address;
+            let cancel = self.cancel_node_wxhopr.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::node_wxhopr_withdraw(safeless, safe_address, results_sender).await;
                     })
                     .await
             });
