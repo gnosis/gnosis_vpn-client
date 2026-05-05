@@ -1,7 +1,7 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use backon::Retryable;
+use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
@@ -293,7 +293,14 @@ async fn run_node_wxhopr_withdraw(safeless: Arc<SafelessInteractor>, safe_addres
             Ok(())
         }
     })
-    .retry(remote_data::backoff_expo_long_delay())
+    .retry(
+        ExponentialBuilder::new()
+            .with_min_delay(Duration::from_secs(10))
+            .with_max_delay(Duration::from_secs(60))
+            .with_factor(2.0)
+            .with_jitter()
+            .without_max_times(),
+    )
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "wxHOPR withdrawal attempt failed, retrying...");
     })
