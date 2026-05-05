@@ -518,8 +518,10 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
             .as_ref()
             .and_then(|b| b.connection_sync_timeout)
             .unwrap_or_else(|| HoprBlokliConfig::default().connection_sync_timeout);
-        // Edge client uses less tolerance than the default of 90%
-        let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
+        let sync_tolerance = value
+            .as_ref()
+            .and_then(|b| b.sync_tolerance)
+            .unwrap_or_else(|| HoprBlokliConfig::default().sync_tolerance);
         HoprBlokliConfig {
             connection_sync_timeout,
             sync_tolerance,
@@ -712,7 +714,7 @@ dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 
 [blokli]
 connection_sync_timeout = "30s"
-sync_tolerance = 50
+sync_tolerance = 90
 "#####;
         toml::from_str::<Config>(config)?;
 

@@ -75,12 +75,14 @@ protocol:
     # Edge client: probe aggressively at startup so relay observations are
     # populated before the first health check fires.  interval is the delay
     # between probing rounds; it must be >= timeout (3 s).  recheck_threshold
-    # controls how quickly a relay gets re-examined after its last probe —
-    # 10 s keeps the path-selector graph fresh without excessive traffic.
+    # controls how quickly a relay gets re-examined after its last probe.
+    # At startup the graph needs to converge fast so health checks can
+    # succeed within the warm-up window — match interval so every relay
+    # is re-probed on every round.
     probe:
         timeout: 3s
         interval: 3s
-        recheck_threshold: 10s
+        recheck_threshold: 3s
     # Cap session-establishment retries so the total create_session duration
     # stays below the health-check HTTP timeout (60 s).
     # 1-hop formula: SESSION_INITIATION_TIMEOUT_BASE(5s) × (1+1+2) = 20s/attempt.
