@@ -279,15 +279,25 @@ pub async fn create_safeless_interactor(
 }
 
 async fn run_node_wxhopr_withdraw(safeless: Arc<SafelessInteractor>, safe_address: Address) -> Result<(), Error> {
-    let (wxhopr, _xdai) = safeless.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
-    if !wxhopr.is_zero() {
-        tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
-        safeless
-            .withdraw_wxhopr(safe_address, wxhopr)
-            .await
-            .map_err(|e| Error::Chain(e.to_string()))?;
-    }
-    Ok(())
+    (|| {
+        let safeless = safeless.clone();
+        async move {
+            let (wxhopr, _xdai) = safeless.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
+            if !wxhopr.is_zero() {
+                tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
+                safeless
+                    .withdraw_wxhopr(safe_address, wxhopr)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+            }
+            Ok(())
+        }
+    })
+    .retry(remote_data::backoff_expo_long_delay())
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "wxHOPR withdrawal attempt failed, retrying...");
+    })
+    .await
 }
 
 async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
