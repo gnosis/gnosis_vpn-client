@@ -219,6 +219,7 @@ impl Hopr {
 
         let response_buffer: Option<bytesize::ByteSize> = cfg
             .surb_management
+            .as_ref()
             .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
 
         Ok(SessionClientMetadata {
@@ -316,8 +317,11 @@ impl Hopr {
         tracing::debug!("adjust hopr session");
         let session_id = SessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
-        // NOTE: known bug: adjust session does not update self.open_listeners which leads to
-        // outdated info being reported by list_sessions
+        // NOTE: the live SURB balancer is updated via the configurator below, but the
+        // cached `max_surb_upstream` and `response_buffer` snapshots stored in
+        // `open_listeners` (computed once at session creation) are not refreshed —
+        // so list_sessions continues to report the originally-configured values for
+        // adjusted sessions.
         self.open_listeners
             .find_configurator(&session_id)
             .ok_or(HoprError::SessionNotFound)?

@@ -100,13 +100,16 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 /// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
-    /// A funded channel to this specific destination address.
+    /// A funded outgoing channel to this specific address.
     ///
-    /// For 1+ hop routing the destination is reached through relay peers;
-    /// any connected relay satisfies the peering check. The channel must
-    /// still be funded to this specific address for HOPR payments to work.
+    /// Not derived from routing in production: `derive_static_need` returns
+    /// `Peering` for 0-hop and `AnyChannel` for 1+ hop. This variant is kept
+    /// for tests and future routing modes that require funding to a known
+    /// peer (e.g. an explicit single-relay path).
     Channel(Address),
-    /// Any funded outgoing channel is sufficient (hop count without a fixed path).
+    /// Any funded outgoing channel is sufficient — used for all 1+ hop
+    /// routes. Multi-hop payments flow through relay channels kept funded
+    /// by the AutoFunding strategy, independently of the destination.
     AnyChannel,
     /// Direct peering with the destination — no channel needed (0-hop route).
     Peering(Address),
