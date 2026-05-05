@@ -617,6 +617,7 @@ impl Core {
                 }
             },
 
+            // The runner retries indefinitely so res is always Ok; log just in case.
             Results::NodeWxhoprWithdraw { res } => {
                 if let Err(err) = res {
                     tracing::error!(?err, "failed to withdraw node wxHOPR to safe");
