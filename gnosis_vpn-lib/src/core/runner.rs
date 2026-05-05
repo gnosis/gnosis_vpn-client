@@ -1,7 +1,7 @@
 //! Various runner tasks that might get extracted into their own modules once applicable.
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
-use backon::Retryable;
+use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
@@ -68,6 +68,9 @@ pub enum Results {
     },
     Balances {
         res: Result<balance::Balances, Error>,
+    },
+    NodeWxhoprWithdraw {
+        res: Result<(), Error>,
     },
     ConnectedPeers {
         res: Result<Vec<Address>, Error>,
@@ -189,6 +192,15 @@ pub async fn hopr(
         .await;
 }
 
+pub async fn node_wxhopr_withdraw(
+    safeless: Arc<SafelessInteractor>,
+    safe_address: Address,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_node_wxhopr_withdraw(safeless, safe_address).await;
+    let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
+}
+
 pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting balances runner");
     let res = hopr.balances().await.map_err(Error::from);
@@ -264,6 +276,35 @@ pub async fn create_safeless_interactor(
 ) {
     let res = run_create_safeless_interactor(worker_params, blokli_config).await;
     let _ = results_sender.send(Results::SafelessInteractor { res }).await;
+}
+
+async fn run_node_wxhopr_withdraw(safeless: Arc<SafelessInteractor>, safe_address: Address) -> Result<(), Error> {
+    (|| {
+        let safeless = safeless.clone();
+        async move {
+            let (wxhopr, _xdai) = safeless.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
+            if !wxhopr.is_zero() {
+                tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
+                safeless
+                    .withdraw_wxhopr(safe_address, wxhopr)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+            }
+            Ok(())
+        }
+    })
+    .retry(
+        ExponentialBuilder::new()
+            .with_min_delay(Duration::from_secs(10))
+            .with_max_delay(Duration::from_secs(60))
+            .with_factor(2.0)
+            .with_jitter()
+            .without_max_times(),
+    )
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "wxHOPR withdrawal attempt failed, retrying...");
+    })
+    .await
 }
 
 async fn run_query_safe(safeless_interactor: Arc<SafelessInteractor>) -> Result<Option<SafeModule>, Error> {
@@ -527,6 +568,10 @@ impl Display for Results {
             Results::Balances { res } => match res {
                 Ok(balances) => write!(f, "Balances: {}", balances),
                 Err(err) => write!(f, "Balances: Error({})", err),
+            },
+            Results::NodeWxhoprWithdraw { res } => match res {
+                Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
+                Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
             Results::ConnectedPeers { res } => match res {
                 Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
