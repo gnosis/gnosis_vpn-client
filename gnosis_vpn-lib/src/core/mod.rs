@@ -1513,19 +1513,13 @@ impl Core {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        let Some(tv) = self.ticket_stats.and_then(|s| s.ticket_value().ok()) else {
-            return;
-        };
-        match edgli.start_telemetry_reactor(tv) {
+        match edgli.start_telemetry_reactor() {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(strategy_process);
             }
             Err(err) => {
-                tracing::error!(
-                    ?err,
-                    "failed to start edge node telemetry reactor - retrying ticket stats"
-                );
+                tracing::error!(?err, "failed to start edge node telemetry reactor - retrying");
                 self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
             }
         }

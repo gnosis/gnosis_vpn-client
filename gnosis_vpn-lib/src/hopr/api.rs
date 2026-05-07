@@ -9,7 +9,7 @@ use edgli::{
             node::{HasChainApi, HasTransportApi},
             types::{
                 internal::channels::ChannelStatus,
-                primitive::prelude::{Address, Balance, HoprBalance, WxHOPR},
+                primitive::prelude::{Address, Balance, WxHOPR},
             },
         },
         errors::HoprLibError,
@@ -37,7 +37,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use crate::peer::Peer;
 use crate::{
-    balance::{self, Balances},
+    balance::Balances,
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
 };
@@ -377,11 +377,8 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub fn start_telemetry_reactor(&self, ticket_value: HoprBalance) -> Result<AbortHandle, HoprError> {
-        let cfg = edgli::strategy::default_edge_client_telemetry_reactor_cfg(
-            balance::min_stake_threshold(ticket_value),
-            balance::funding_amount(ticket_value),
-        );
+    pub fn start_telemetry_reactor(&self) -> Result<AbortHandle, HoprError> {
+        let cfg = edgli::strategy::default_edge_client_telemetry_reactor_cfg();
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
