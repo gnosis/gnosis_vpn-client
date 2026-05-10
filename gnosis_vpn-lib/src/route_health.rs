@@ -22,6 +22,7 @@
 //! Core owns one `RouteHealth` per configured destination and uses the
 //! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
 use edgli::hopr_lib::SessionClientConfig;
+use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::time;
@@ -41,6 +42,23 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
+/// are returned unchanged so initial spawns are not delayed.
+pub(crate) fn jitter(base: Duration) -> Duration {
+    if base.is_zero() {
+        return base;
+    }
+    // random factor in [-0.25, +0.25)
+    let factor = rand::rng().random::<f64>() * 0.5 - 0.25;
+    let jitter_secs = base.as_secs_f64() * factor;
+    if jitter_secs >= 0.0 {
+        let jitter = Duration::from_secs_f64(jitter_secs);
+        base.checked_add(jitter).unwrap_or(Duration::MAX)
+    } else {
+        base.saturating_sub(Duration::from_secs_f64(-jitter_secs))
+    }
+}
 
 /// Returns the first supported API version found in `server_versions`, or `None`
 /// if there is no compatible version.
@@ -699,7 +717,7 @@ impl RouteHealth {
         tokio::spawn(async move {
             token
                 .run_until_cancelled(async {
-                    time::sleep(delay).await;
+                    time::sleep(jitter(delay)).await;
                     run_health_check(hopr, &dest, &options, &scope, &sender).await;
                 })
                 .await;

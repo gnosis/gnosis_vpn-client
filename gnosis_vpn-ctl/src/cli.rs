@@ -1,7 +1,14 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use gnosis_vpn_lib::command::Command as LibCommand;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum OutputFormat {
+    Plain,
+    Json,
+    Yaml,
+}
 
 /// Gnosis VPN client control interface for Gnosis VPN service
 #[derive(Debug, Parser)]
@@ -19,9 +26,9 @@ pub struct Cli {
     )]
     pub socket_path: PathBuf,
 
-    /// Format output as json
-    #[arg(long)]
-    pub json: bool,
+    /// Output format applied to every command
+    #[arg(short = 'o', long = "output", value_name = "FORMAT", value_enum)]
+    pub output: Option<OutputFormat>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -68,7 +75,7 @@ pub enum Command {
     #[command()]
     NerdStats {},
 
-    /// Display service information, like version and file locations
+    /// Display service information, such as versions and file locations
     #[command()]
     Info {},
 
@@ -86,6 +93,16 @@ pub enum Command {
     /// Stop worker process to return to idle mode
     #[command()]
     StopClient {},
+
+    /// Fetch and display the latest available version from the update manifest
+    ///
+    /// Refuses to run unless the VPN is connected. Pass --force to bypass the connection check.
+    #[command()]
+    CheckUpdate {
+        /// Perform the connection even if VPN is currently inactive (insecure)
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
 }
 
 impl From<Command> for LibCommand {
@@ -103,6 +120,7 @@ impl From<Command> for LibCommand {
             Command::Info {} => LibCommand::Info,
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
+            Command::CheckUpdate { .. } => unreachable!("CheckUpdate is handled before socket dispatch"),
         }
     }
 }

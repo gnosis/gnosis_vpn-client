@@ -148,6 +148,7 @@ pub enum RunMode {
 pub struct InfoResponse {
     pub version: String,
     pub log_file: Option<PathBuf>,
+    pub package_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

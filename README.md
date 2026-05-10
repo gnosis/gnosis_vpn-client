@@ -87,36 +87,26 @@ There are three environment variables that control the worker process setup:
 Use the latest
 [installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
 
-### Check signatures
+Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
 
-To validate the signature of the downloaded binary from GitHub, follow these
-steps:
+## Idle shutdown
 
-1. Import the public key (checkout the repository first):
+When `--client-autostart <duration>` (or `GNOSISVPN_CLIENT_AUTOSTART`) is set,
+the service starts the worker automatically on launch and shuts it down after
+the worker has been idle for the given duration.
 
-   ```bash
-   gpg --import gpg-publickey.asc
-   ```
+The idle countdown behaves as follows:
 
-2. Verify the binary signature (examples for x86_64 and ARM64):
+- **Idle**: countdown runs; worker shuts down when it reaches zero.
+- **Connected**: countdown is suspended for the lifetime of the VPN tunnel.
+- **Disconnected**: countdown resumes from the full duration.
+- Any other command to the worker (e.g. status) resets the countdown.
 
-   ```bash
-   # For x86_64 (AMD64)
-   gpg --verify gnosis_vpn-root-x86_64-linux.asc gnosis_vpn-root-x86_64-linux
+Example — shut down the worker after 10 minutes of idle time:
 
-   # For ARM64
-   gpg --verify gnosis_vpn-root-aarch64-linux.asc gnosis_vpn-root-aarch64-linux
-   ```
-
-3. Compare the checksum with the actual checksum:
-
-   ```bash
-   # For x86_64 (AMD64)
-   diff -u <(cat gnosis_vpn-root-x86_64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-x86_64-linux)
-
-   # For ARM64
-   diff -u <(cat gnosis_vpn-root-aarch64-linux.sha256) <(shasum -a 256 gnosis_vpn-root-aarch64-linux)
-   ```
+```bash
+gnosis_vpn-root --client-autostart 10m ...
+```
 
 ## General usage
 

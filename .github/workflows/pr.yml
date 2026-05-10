@@ -1,4 +1,4 @@
-name: Build
+name: PR
 on:
   pull_request:
     types:
@@ -8,7 +8,7 @@ on:
       - ready_for_review
       - labeled
 concurrency:
-  group: ${{ github.ref }}-build
+  group: ${{ github.ref }}-pr
   cancel-in-progress: true
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@a178becb8c3711ae955bad477861bfefe6feceae # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6aaef0e7e6763f060bd1cefa2406c5f89497e733 # build-binaries-v2
     permissions:
       contents: read
     with:
@@ -53,7 +53,8 @@ jobs:
     secrets:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+      gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
+      gpg_private_key_password: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY_PASSWORD }}
       apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   checks:
