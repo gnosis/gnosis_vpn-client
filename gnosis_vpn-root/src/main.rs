@@ -31,6 +31,7 @@ use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 mod cli;
 mod network_info;
 mod routing;
+mod routing_actor;
 mod wg_tooling;
 
 use routing::Routing;
@@ -69,6 +70,9 @@ struct DaemonState {
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
+    // placeholder until the routing actor message protocol is defined
+    #[allow(dead_code)]
+    routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -498,6 +502,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(worker_params.state_home()).await;
 
+    let cancel_routing_actor = CancellationToken::new();
+    let routing_actor_sender = routing_actor::start(cancel_routing_actor.clone());
+
     let mut state = DaemonState::new(
         worker_user,
         config,
@@ -506,6 +513,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         reload_handle,
         args.log_file,
         keep_alive_instruction_sender,
+        routing_actor_sender,
     );
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
@@ -521,6 +529,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // cancel running tasks and run teardown logic
     state.teardown().await;
+    cancel_routing_actor.cancel();
     cancel_socket_listener.cancel();
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
@@ -662,6 +671,7 @@ impl DaemonState {
         reload_handle: Option<LogReloadHandle>,
         log_file: Option<PathBuf>,
         keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
+        routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
     ) -> Self {
         Self {
             config,
@@ -680,6 +690,7 @@ impl DaemonState {
             worker_params,
             worker_user,
             keep_alive_instruction_sender,
+            routing_actor_sender,
         }
     }
 
