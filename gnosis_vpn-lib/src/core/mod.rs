@@ -554,7 +554,7 @@ impl Core {
                 }
             }
             Results::TicketStats { res } => match res {
-                Ok(stats) => self.on_ticket_stats(stats, results_sender),
+                Ok(stats) => self.on_ticket_stats(stats, results_sender).await,
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch ticket stats - retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
@@ -583,7 +583,7 @@ impl Core {
                     self.hopr = Some(Arc::new(hopr));
                     self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
-                    self.try_start_reactor(results_sender);
+                    self.try_start_reactor(results_sender).await;
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -1508,12 +1508,12 @@ impl Core {
         }
     }
 
-    fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
+    async fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
         if self.strategy_handle.is_some() {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        match edgli.start_telemetry_reactor() {
+        match edgli.start_telemetry_reactor().await {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(strategy_process);
@@ -1525,13 +1525,13 @@ impl Core {
         }
     }
 
-    fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
+    async fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
         tracing::info!("received ticket stats from runner");
         match stats.ticket_value() {
             Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
                 self.ticket_stats = Some(stats);
-                self.try_start_reactor(results_sender);
+                self.try_start_reactor(results_sender).await;
             }
             Err(err) => {
                 tracing::error!(?err, %stats, "failed to determine ticket value from stats - retrying");
