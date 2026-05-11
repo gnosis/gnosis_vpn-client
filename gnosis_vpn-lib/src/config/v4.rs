@@ -198,6 +198,36 @@ path = { hops = 2 }
     }
 
     #[test]
+    fn convert_destinations_intermediates_treated_as_hop_count() {
+        let cfg = parse(
+            r#####"
+version = 4
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A"] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_intermediates_clamped_to_max_hops() {
+        let cfg = parse(
+            r#####"
+version = 4
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A", "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254", "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(3).unwrap());
+    }
+
+    #[test]
     fn convert_destinations_none_path_defaults_to_1_hop() {
         let cfg = parse(
             r#####"

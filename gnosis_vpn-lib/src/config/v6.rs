@@ -58,13 +58,13 @@ pub(super) enum Capability {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct ConnectionProtocol {
+pub(super) struct ConnectionProtocol {
     capabilities: Option<Vec<Capability>>,
     target: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct PingOptions {
+pub(super) struct PingOptions {
     address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
     timeout: Option<Duration>,
@@ -73,7 +73,7 @@ struct PingOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct HealthCheckIntervalOptions {
+pub(super) struct HealthCheckIntervalOptions {
     #[serde(default, with = "humantime_serde::option")]
     ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_n_pings")]
@@ -87,14 +87,14 @@ struct HealthCheckIntervalOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct BufferOptions {
+pub(super) struct BufferOptions {
     bridge: Option<ByteSize>,
     ping: Option<ByteSize>,
     main: Option<ByteSize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct MaxSurbUpstreamOptions {
+pub(super) struct MaxSurbUpstreamOptions {
     #[serde(default, with = "human_bandwidth::serde")]
     bridge: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
