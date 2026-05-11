@@ -650,6 +650,13 @@ impl Core {
                             );
                             match transition {
                                 route_health::PeerTransition::NowNeedsFunding => {
+                                    // `needs_channel_funding()` returns Some only for
+                                    // `StaticNeed::Channel` routes (test/future use).
+                                    // All production 1+ hop routes use `StaticNeed::AnyChannel`,
+                                    // so nothing is spawned here — the ChannelLifecycleStrategy
+                                    // reactor opens and funds relay channels; the route exits
+                                    // NeedsFunding on the next Balances poll once a funded
+                                    // outgoing channel appears and `channel_funded` fires.
                                     if let Some(addr) = rh.needs_channel_funding() {
                                         self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
                                     }
