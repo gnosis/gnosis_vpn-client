@@ -1,9 +1,14 @@
 use std::net::IpAddr;
 
+use tokio::sync::oneshot;
+
 use crate::routing::killswitch::Firewall;
 
 pub enum Msg {
-    SetAllowedIps(Vec<IpAddr>),
+    SetAllowedIps {
+        ips: Vec<IpAddr>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 pub(super) struct Actor {
@@ -19,10 +24,12 @@ impl Actor {
 
     pub(super) fn handle(&mut self, msg: Msg) {
         match msg {
-            Msg::SetAllowedIps(ips) => {
-                if let Err(error) = self.firewall.apply_policy(&ips) {
+            Msg::SetAllowedIps { ips, reply } => {
+                let result = self.firewall.apply_policy(&ips).map_err(|e| e.to_string());
+                if let Err(ref error) = result {
                     tracing::error!(?error, "failed to apply killswitch policy");
                 }
+                let _ = reply.send(result);
             }
         }
     }
