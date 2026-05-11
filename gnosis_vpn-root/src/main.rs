@@ -70,8 +70,6 @@ struct DaemonState {
     pending_responses: HashMap<u64, oneshot::Sender<Response>>,
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
-    // placeholder until the routing actor message protocol is defined
-    #[allow(dead_code)]
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
 }
 
