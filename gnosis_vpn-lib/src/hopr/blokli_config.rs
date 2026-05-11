@@ -25,7 +25,9 @@ impl Default for BlokliConfig {
         let def = BlockchainConnectorConfig::default();
         Self {
             connection_sync_timeout: def.connection_sync_timeout,
-            sync_tolerance: def.sync_tolerance,
+            // Edge client uses lower tolerance than full nodes (default 90%) because
+            // its blokli index typically covers only a fraction of all on-chain accounts.
+            sync_tolerance: 50,
         }
     }
 }
