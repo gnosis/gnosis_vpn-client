@@ -381,7 +381,7 @@ impl Hopr {
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
     ) -> Result<AbortHandle, HoprError> {
-        let cfg = edgli::strategy::default_edge_client_telemetry_reactor_cfg(&self.edgli, sizing)
+        let cfg = edgli::strategy::default_strategy_cfg(&self.edgli, sizing)
             .await
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
         self.edgli
