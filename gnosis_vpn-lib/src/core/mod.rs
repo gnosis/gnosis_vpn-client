@@ -871,6 +871,10 @@ impl Core {
                     }
                 }
             }
+
+            Results::RetryReactor => {
+                self.try_start_reactor(results_sender).await;
+            }
         };
         return true;
     }
@@ -1526,10 +1530,23 @@ impl Core {
                 self.strategy_handle = Some(strategy_process);
             }
             Err(err) => {
-                tracing::error!(?err, "failed to start edge node telemetry reactor - retrying");
-                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
+                self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
             }
         }
+    }
+
+    fn spawn_retry_reactor(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    let _ = results_sender.send(Results::RetryReactor).await;
+                })
+                .await
+        });
     }
 
     async fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {

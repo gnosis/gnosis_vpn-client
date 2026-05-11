@@ -99,6 +99,7 @@ pub enum Results {
         id: String,
         outcome: HealthCheckOutcome,
     },
+    RetryReactor,
 }
 
 #[derive(Debug, Error)]
@@ -608,6 +609,7 @@ impl Display for Results {
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
             Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
+            Results::RetryReactor => write!(f, "RetryReactor"),
         }
     }
 }
