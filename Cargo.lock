@@ -2731,7 +2731,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "3.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=a2debf2bce149751578e889a0d4122802f9cd6c2#a2debf2bce149751578e889a0d4122802f9cd6c2"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=1fca749634ac4559429a3fe19c2f6fac9637e1fc#1fca749634ac4559429a3fe19c2f6fac9637e1fc"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2751,6 +2751,7 @@ dependencies = [
  "opentelemetry_sdk",
  "serde_yaml",
  "signal-hook",
+ "smart-default",
  "strum 0.28.0",
  "thiserror 2.0.18",
  "tokio",

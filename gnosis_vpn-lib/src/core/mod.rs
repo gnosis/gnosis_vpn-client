@@ -1520,7 +1520,7 @@ impl Core {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        match edgli.start_telemetry_reactor().await {
+        match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(strategy_process);

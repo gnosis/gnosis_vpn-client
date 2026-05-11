@@ -172,6 +172,7 @@ impl TryFrom<Config> for config::Config {
             destinations,
             wireguard,
             blokli,
+            strategy: Default::default(),
         })
     }
 }

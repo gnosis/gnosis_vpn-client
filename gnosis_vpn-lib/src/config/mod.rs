@@ -8,6 +8,7 @@ use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
 use crate::hopr::blokli_config::BlokliConfig;
+use crate::hopr::strategy_config::StrategyConfig;
 use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
@@ -24,6 +25,7 @@ pub struct Config {
     pub destinations: HashMap<String, Destination>,
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
+    pub strategy: StrategyConfig,
 }
 
 #[derive(Debug, Error)]

@@ -377,13 +377,13 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn start_telemetry_reactor(&self) -> Result<AbortHandle, HoprError> {
-        let cfg = edgli::strategy::default_edge_client_telemetry_reactor_cfg(
-            &self.edgli,
-            edgli::strategy::ChannelSizing::default(),
-        )
-        .await
-        .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
+    pub async fn start_telemetry_reactor(
+        &self,
+        sizing: edgli::strategy::IncentiveConfiguration,
+    ) -> Result<AbortHandle, HoprError> {
+        let cfg = edgli::strategy::default_edge_client_telemetry_reactor_cfg(&self.edgli, sizing)
+            .await
+            .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))

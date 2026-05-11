@@ -12,10 +12,54 @@ use std::collections::HashMap;
 
 use crate::config;
 use crate::connection::destination::Destination as ConnDestination;
+use crate::hopr::strategy_config::StrategyConfig;
 
 /// Re-use all v5 connection/wireguard/blokli types — the TOML schema for
 /// those sections is unchanged in v6.
-pub(super) use super::v5::{BlokliConfig, Connection, WireGuard, wrong_keys};
+pub(super) use super::v5::{BlokliConfig, Connection, WireGuard};
+
+/// v6 extends v5's wrong_keys by recognising the `[strategy]` section.
+pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
+    let mut wrong = super::v5::wrong_keys(table);
+    // `strategy` is valid in v6 — remove it from the "unknown" list.
+    wrong.retain(|k| k != "strategy");
+    // Check for unknown sub-keys inside [strategy].
+    if let Some(strategy) = table.get("strategy").and_then(|v| v.as_table()) {
+        for k in strategy.keys() {
+            if k != "desired_message_count" && k != "min_open_channels" && k != "target_open_channels" {
+                wrong.push(format!("strategy.{k}"));
+            }
+        }
+    }
+    wrong
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Strategy {
+    pub(super) desired_message_count: Option<u64>,
+    pub(super) min_open_channels: Option<usize>,
+    pub(super) target_open_channels: Option<usize>,
+}
+
+impl From<Option<Strategy>> for StrategyConfig {
+    fn from(v: Option<Strategy>) -> Self {
+        let def = StrategyConfig::default();
+        Self {
+            desired_message_count: v
+                .as_ref()
+                .and_then(|s| s.desired_message_count)
+                .unwrap_or(def.desired_message_count),
+            min_open_channels: v
+                .as_ref()
+                .and_then(|s| s.min_open_channels)
+                .unwrap_or(def.min_open_channels),
+            target_open_channels: v
+                .as_ref()
+                .and_then(|s| s.target_open_channels)
+                .unwrap_or(def.target_open_channels),
+        }
+    }
+}
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,6 +69,7 @@ pub struct Config {
     pub(super) connection: Option<Connection>,
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
+    pub(super) strategy: Option<Strategy>,
 }
 
 #[serde_as]
@@ -55,11 +100,13 @@ impl TryFrom<Config> for config::Config {
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
+        let strategy = value.strategy.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
             blokli,
+            strategy,
         })
     }
 }
