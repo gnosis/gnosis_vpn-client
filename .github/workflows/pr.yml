@@ -36,7 +36,7 @@ jobs:
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@b063eebe2dfb2f92e7177a8f81383aaac4835d09 # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6aaef0e7e6763f060bd1cefa2406c5f89497e733 # build-binaries-v2
     permissions:
       contents: read
     with:
