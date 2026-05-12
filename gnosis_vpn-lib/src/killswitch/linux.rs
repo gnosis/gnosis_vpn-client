@@ -72,6 +72,12 @@ enum Protocol {
 /// listed IP.
 pub struct Firewall;
 
+impl Default for Firewall {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Firewall {
     pub fn new() -> Self {
         Firewall

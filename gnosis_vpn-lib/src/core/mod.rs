@@ -246,6 +246,15 @@ impl Core {
             WorkerToCore::ResponseFromRoot(resp) => {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
+                    ResponseFromRoot::KillswitchLockdown { res } => {
+                        if let Some(responder) = self.responder_unit.take() {
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for killswitch lockdown response");
+                            });
+                        } else {
+                            tracing::warn!(?res, "no responder channel available for root response");
+                        }
+                    }
                     ResponseFromRoot::DynamicWgRouting { res } => {
                         if let Some(responder) = self.responder_unit.take() {
                             let _ = responder.send(res).map_err(|_| {
@@ -824,6 +833,12 @@ impl Core {
             }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
+                RunnerToRoot::KillswitchLockdown { peer_ips, resp } => {
+                    self.responder_unit = Some(resp);
+                    let request = RequestToRoot::KillswitchLockdown { peer_ips };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+
                 RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
                     self.responder_unit = Some(resp);
                     let request = RequestToRoot::DynamicWgRouting { wg_data };

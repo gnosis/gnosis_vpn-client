@@ -65,6 +65,10 @@ pub enum WorkerToRoot {
 /// Runner requesting root command and usually waiting for response
 #[derive(Debug)]
 pub enum RunnerToRoot {
+    KillswitchLockdown {
+        peer_ips: Vec<Ipv4Addr>,
+        resp: oneshot::Sender<Result<(), String>>,
+    },
     DynamicWgRouting {
         wg_data: WireGuardData,
         resp: oneshot::Sender<Result<(), String>>,
@@ -99,6 +103,9 @@ impl AsRef<RootToWorker> for RootToWorker {
 /// Slimmed down **RespondableRequestToRoot** for inter-process communication.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RequestToRoot {
+    KillswitchLockdown {
+        peer_ips: Vec<Ipv4Addr>,
+    },
     DynamicWgRouting {
         wg_data: WireGuardData,
     },
@@ -116,6 +123,7 @@ pub enum RequestToRoot {
 /// Should be matched by worker to **RespondableRequestToRoot** request responses.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponseFromRoot {
+    KillswitchLockdown { res: Result<(), String> },
     DynamicWgRouting { res: Result<(), String> },
     StaticWgRouting { res: Result<(), String> },
     Ping { res: Result<Duration, String> },
