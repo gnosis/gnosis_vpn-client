@@ -1,4 +1,3 @@
-#[cfg(target_os = "linux")]
 pub mod killswitch;
 
 pub mod app_nap;
