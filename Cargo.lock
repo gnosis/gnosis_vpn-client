@@ -3385,6 +3385,7 @@ dependencies = [
  "exitcode",
  "gnosis_vpn-lib",
  "humantime",
+ "libc",
  "mimalloc",
  "reqwest 0.13.2",
  "serde",

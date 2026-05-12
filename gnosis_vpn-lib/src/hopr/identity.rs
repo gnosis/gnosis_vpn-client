@@ -1,9 +1,12 @@
+use edgli::hopr_lib::Address;
 use edgli::hopr_lib::exports::crypto::keypair::errors::KeyPairError;
+use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::{HoprKeys, IdentityRetrievalModes};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use thiserror::Error;
 
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::dirs;
@@ -23,13 +26,25 @@ pub enum Error {
     Dirs(#[from] crate::dirs::Error),
 }
 
-pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
+pub fn from_path(file: PathBuf, password: String) -> Result<HoprKeys, Error> {
     let id_path = file.to_string_lossy().to_string();
     let retrieval_mode = IdentityRetrievalModes::FromFile {
-        password: pass.as_str(),
+        password: password.as_str(),
         id_path: id_path.as_str(),
     };
     HoprKeys::try_from(retrieval_mode).map_err(Error::KeyPair)
+}
+
+pub fn get_identity(file: &Path, password: &str) -> Result<([u8; 32], Address), Error> {
+    let keys = from_path(file.to_path_buf(), password.to_string())?;
+    let private_key: [u8; 32] = keys
+        .chain_key
+        .secret()
+        .as_ref()
+        .try_into()
+        .expect("chain key secret is 32 bytes");
+    let address = keys.chain_key.public().to_address();
+    Ok((private_key, address))
 }
 
 pub fn file(state_home: PathBuf) -> PathBuf {
