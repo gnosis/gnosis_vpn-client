@@ -503,16 +503,25 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let cancel_routing_actor = CancellationToken::new();
     let routing_actor_sender = routing_actor::start(cancel_routing_actor.clone());
 
-    let mut state = DaemonState::new(
-        worker_user,
+    let mut state = DaemonState {
         config,
         config_path,
-        worker_params,
+        incoming_worker_channel: mpsc::channel(32),
+        log_file: args.log_file,
+        pending_response_counter: 0,
+        pending_responses: HashMap::new(),
+        ping_tasks: JoinSet::new(),
         reload_handle,
-        args.log_file,
+        router: None,
+        shutdown_ongoing: Shutdown::None,
+        target_dest_id: None,
+        worker_child: None,
+        worker_exit_channel: mpsc::channel(1),
+        worker_params,
+        worker_user,
         keep_alive_instruction_sender,
         routing_actor_sender,
-    );
+    };
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
         state.setup_worker().await?;
@@ -661,37 +670,6 @@ async fn main() {
 }
 
 impl DaemonState {
-    fn new(
-        worker_user: worker::Worker,
-        config: Config,
-        config_path: PathBuf,
-        worker_params: WorkerParams,
-        reload_handle: Option<LogReloadHandle>,
-        log_file: Option<PathBuf>,
-        keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
-        routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
-    ) -> Self {
-        Self {
-            config,
-            config_path,
-            incoming_worker_channel: mpsc::channel(32),
-            log_file,
-            pending_response_counter: 0,
-            pending_responses: HashMap::new(),
-            ping_tasks: JoinSet::new(),
-            reload_handle,
-            router: None,
-            shutdown_ongoing: Shutdown::None,
-            target_dest_id: None,
-            worker_child: None,
-            worker_exit_channel: mpsc::channel(1),
-            worker_params,
-            worker_user,
-            keep_alive_instruction_sender,
-            routing_actor_sender,
-        }
-    }
-
     async fn daemon_loop(
         &mut self,
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
