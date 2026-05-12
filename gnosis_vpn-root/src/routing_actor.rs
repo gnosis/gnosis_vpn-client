@@ -47,15 +47,15 @@ impl Actor {
     }
 }
 
-pub fn start(cancel: CancellationToken) -> (mpsc::Sender<Msg>, tokio::task::JoinHandle<()>) {
+pub fn start(cancel: CancellationToken) -> Result<(mpsc::Sender<Msg>, tokio::task::JoinHandle<()>), String> {
+    let actor = Actor::new()?;
     let (sender, receiver) = mpsc::channel(32);
-    let handle = tokio::spawn(run(receiver, cancel));
-    (sender, handle)
+    let handle = tokio::spawn(run(actor, receiver, cancel));
+    Ok((sender, handle))
 }
 
-async fn run(mut receiver: mpsc::Receiver<Msg>, cancel: CancellationToken) {
+async fn run(mut actor: Actor, mut receiver: mpsc::Receiver<Msg>, cancel: CancellationToken) {
     tracing::info!("routing actor started");
-    let mut actor = Actor::new();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
