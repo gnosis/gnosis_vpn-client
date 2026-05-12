@@ -30,6 +30,7 @@ pub struct Runner {
     options: Options,
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
+    cached_blokli_ips: Vec<Ipv4Addr>,
 }
 
 impl Runner {
@@ -39,6 +40,7 @@ impl Runner {
         wg_config: wireguard::Config,
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
+        cached_blokli_ips: Vec<Ipv4Addr>,
     ) -> Self {
         Self {
             destination,
@@ -46,6 +48,7 @@ impl Runner {
             options,
             wg_config,
             worker_params,
+            cached_blokli_ips,
         }
     }
 
@@ -55,8 +58,19 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
+        // -1. resolve blokli ips - use cached IPs resolution in case of killswitch active
+        let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
+        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
+        let blokli_ips = if self.cached_blokli_ips.is_empty() {
+            remote_data::resolve_ips(&blokli_url).await?
+        } else {
+            self.cached_blokli_ips.clone()
+        };
+
         // 0. generate wg keys
-        let _ = results_sender.send(progress(Progress::GenerateWg)).await;
+        let _ = results_sender
+            .send(progress(Progress::GenerateWg(blokli_ips.clone())))
+            .await;
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
         let public_key = wg.key_pair.public_key.clone();
 
@@ -93,8 +107,7 @@ impl Runner {
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
-        peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
+        peer_ips.extend(blokli_ips);
 
         // 6. activate killswitch before any routing attempt — ensures traffic is blocked
         // until the VPN tunnel is up, preventing leaks if connection fails mid-setup
