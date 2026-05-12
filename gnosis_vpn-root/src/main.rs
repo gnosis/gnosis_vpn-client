@@ -503,7 +503,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let cancel_routing_actor = CancellationToken::new();
     let routing_actor_sender = routing_actor::start(cancel_routing_actor.clone());
 
-    #[cfg(target_os = "linux")]
     {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = routing_actor_sender
