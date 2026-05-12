@@ -81,6 +81,7 @@ pub struct Up {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Init,
+    ResolvingBlokliIps,
     GeneratingWg,
     OpeningBridge,
     RegisterWg,
@@ -115,7 +116,8 @@ impl Up {
     pub fn connect_progress(&mut self, evt: Box<Progress>) {
         let now = SystemTime::now();
         match *evt {
-            Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
+            Progress::ResolveBlokliIps => self.phase = (now, Phase::ResolvingBlokliIps),
+            Progress::GenerateWg(_) => self.phase = (now, Phase::GeneratingWg),
             Progress::OpenBridge(wg) => {
                 self.phase = (now, Phase::OpeningBridge);
                 self.wireguard = Some(wg);
@@ -162,6 +164,7 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase_str = match self {
             Phase::Init => "Init",
+            Phase::ResolvingBlokliIps => "Resolving Blokli IPs",
             Phase::GeneratingWg => "Generating WireGuard keypairs",
             Phase::OpeningBridge => "Opening bridge connection",
             Phase::RegisterWg => "Registering WireGuard public key",
@@ -191,7 +194,8 @@ impl Display for Event {
 impl Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Progress::GenerateWg => write!(f, "Generating WireGuard keypairs"),
+            Progress::ResolveBlokliIps => write!(f, "Resolving Blokli IPs"),
+            Progress::GenerateWg(_) => write!(f, "Generating WireGuard keypairs"),
             Progress::OpenBridge(_) => write!(f, "Opening bridge connection"),
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
