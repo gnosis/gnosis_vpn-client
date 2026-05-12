@@ -28,6 +28,7 @@ pub enum Progress {
     CloseBridge(Registration),
     OpenPing,
     PeerIps,
+    KillswitchLockdown,
     DynamicWgTunnel(SessionClientMetadata),
     StaticWgTunnel(SessionClientMetadata),
     Ping,
@@ -83,8 +84,9 @@ pub enum Phase {
     RegisterWg,
     ClosingBridge,
     OpeningPing,
-    EstablishDynamicWgTunnel,
     FallbackGatherPeerIps,
+    KillswitchLockdown,
+    EstablishDynamicWgTunnel,
     FallbackToStaticWgTunnel,
     VerifyPing,
     AdjustToMain,
@@ -127,6 +129,7 @@ impl Up {
                 self.session = Some(session);
             }
             Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
             Progress::StaticWgTunnel(session) => {
                 self.phase = (now, Phase::FallbackToStaticWgTunnel);
                 self.session = Some(session);
@@ -164,6 +167,7 @@ impl Display for Phase {
             Phase::OpeningPing => "Opening main connection",
             Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
             Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::KillswitchLockdown => "Activating killswitch",
             Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
@@ -192,6 +196,7 @@ impl Display for Progress {
             Progress::OpenPing => write!(f, "Opening main connection"),
             Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
+            Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {

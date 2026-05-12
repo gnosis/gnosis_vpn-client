@@ -12,7 +12,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
@@ -502,21 +502,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let cancel_routing_actor = CancellationToken::new();
     let routing_actor_sender = routing_actor::start(cancel_routing_actor.clone());
-
-    {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let _ = routing_actor_sender
-            .send(routing_actor::Msg::SetAllowedIps {
-                ips: vec![],
-                reply: reply_tx,
-            })
-            .await;
-        match reply_rx.await {
-            Ok(Ok(())) => tracing::info!("killswitch enabled"),
-            Ok(Err(ref error)) => tracing::error!(?error, "failed to enable killswitch"),
-            Err(_) => tracing::warn!("killswitch actor dropped reply channel"),
-        }
-    }
 
     let mut state = DaemonState::new(
         worker_user,
@@ -1018,9 +1003,35 @@ impl DaemonState {
         Ok(())
     }
 
+    async fn apply_killswitch(&self, ips: Vec<IpAddr>) -> Result<(), String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::SetAllowedIps { ips, reply: reply_tx })
+            .await;
+        match reply_rx.await {
+            Ok(res) => res,
+            Err(_) => Err("killswitch actor dropped reply channel".to_string()),
+        }
+    }
+
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
+            RequestToRoot::KillswitchLockdown { peer_ips } => {
+                let ips = peer_ips.into_iter().map(IpAddr::V4).collect();
+                let res = self.apply_killswitch(ips).await;
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
             RequestToRoot::DynamicWgRouting { wg_data } => {
                 let res = self.setup_dynamic_routing(wg_data).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)

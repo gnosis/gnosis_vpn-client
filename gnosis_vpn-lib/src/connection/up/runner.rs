@@ -96,6 +96,11 @@ impl Runner {
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
 
+        // 6. activate killswitch before any routing attempt — ensures traffic is blocked
+        // until the VPN tunnel is up, preventing leaks if connection fails mid-setup
+        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
+        request_killswitch_lockdown(peer_ips.clone(), &results_sender).await?;
+
         // dynamic routing is only available on Linux
         cfg_if::cfg_if! {
             if #[cfg(target_os = "linux")] {
@@ -383,6 +388,30 @@ async fn open_ping_session(
         });
     })
     .await
+}
+
+async fn request_killswitch_lockdown(
+    peer_ips: Vec<Ipv4Addr>,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<(), Error> {
+    let (tx, rx) = oneshot::channel();
+    let _ = results_sender
+        .send(Results::ConnectionRequestToRoot(RunnerToRoot::KillswitchLockdown {
+            peer_ips,
+            resp: tx,
+        }))
+        .await;
+
+    tokio::select!(
+        res = rx => match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(Error::Routing(e)),
+            Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {reason}"))),
+        },
+        _ = tokio::time::sleep(Duration::from_secs(20)) => {
+            Err(Error::Runtime("Timed out waiting for killswitch lockdown".to_string()))
+        }
+    )
 }
 
 async fn request_dynamic_wg_tunnel(
