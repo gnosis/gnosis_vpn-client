@@ -501,7 +501,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     routing::reset_on_startup(worker_params.state_home()).await;
 
     let cancel_routing_actor = CancellationToken::new();
-    let routing_actor_sender = routing_actor::start(cancel_routing_actor.clone());
+    let (routing_actor_sender, routing_actor_handle) = routing_actor::start(cancel_routing_actor.clone());
 
     let mut state = DaemonState {
         config,
@@ -541,6 +541,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
     cancel_keep_alive_timer.cancel();
+    let _ = routing_actor_handle.await;
 
     // remove socket file
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {

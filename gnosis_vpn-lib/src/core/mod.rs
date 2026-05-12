@@ -733,21 +733,15 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
-                            match *e {
-                                connection::up::Progress::GenerateWg(ref blokli_ips) => {
-                                    self.cached_resolved_blokli_ips = blokli_ips.clone();
-                                    let request = RequestToRoot::CacheBlokliIps {
-                                        ips: blokli_ips.clone(),
-                                    };
-                                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                                    conn.connect_progress(e);
-                                    self.phase = Phase::Connecting(conn);
-                                }
-                                _ => {
-                                    conn.connect_progress(e);
-                                    self.phase = Phase::Connecting(conn);
-                                }
-                            };
+                            if let connection::up::Progress::GenerateWg(blokli_ips) = e.as_ref() {
+                                self.cached_resolved_blokli_ips = blokli_ips.clone();
+                                let request = RequestToRoot::CacheBlokliIps {
+                                    ips: blokli_ips.clone(),
+                                };
+                                let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                            }
+                            conn.connect_progress(e);
+                            self.phase = Phase::Connecting(conn);
                         }
                         connection::up::Event::Setback(e) => {
                             if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
