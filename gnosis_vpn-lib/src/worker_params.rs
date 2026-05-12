@@ -68,9 +68,8 @@ impl WorkerParams {
         }
     }
 
-    pub fn with_cached_blokli_ips(mut self, ips: Vec<Ipv4Addr>) -> Self {
+    pub fn set_cached_blokli_ips(&mut self, ips: Vec<Ipv4Addr>) {
         self.cached_blokli_ips = ips;
-        self
     }
 
     pub fn cached_blokli_ips(&self) -> &[Ipv4Addr] {
