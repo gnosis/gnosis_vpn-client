@@ -34,8 +34,8 @@ hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "37d2a1
 ] }
 human-bandwidth = "0.1.4"
 humantime = "2.3.0"
-ipnetwork = "0.21"
 humantime-serde = "1.1.1"
+ipnetwork = "0.21"
 libc = "0.2.183"
 mimalloc = { version = "0.1.48", default-features = false, features = [
   "secure",
@@ -43,8 +43,8 @@ mimalloc = { version = "0.1.48", default-features = false, features = [
 mnl = "0.3.1"
 multiaddr = "0.18.2"
 nftnl = "0.9.1"
-pfctl = "0.7.0"
 notify = "8.2.0"
+pfctl = "0.7.0"
 pgp = "0.14"
 ping = "0.7.0"
 rand = "0.10.0"

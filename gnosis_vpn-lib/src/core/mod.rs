@@ -737,7 +737,9 @@ impl Core {
                             match *e {
                                 connection::up::Progress::GenerateWg(ref blokli_ips) => {
                                     self.cached_resolved_blokli_ips = blokli_ips.clone();
-                                    let request = RequestToRoot::CacheBlokliIps { ips: blokli_ips.clone() };
+                                    let request = RequestToRoot::CacheBlokliIps {
+                                        ips: blokli_ips.clone(),
+                                    };
                                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                                     conn.connect_progress(e);
                                     self.phase = Phase::Connecting(conn);

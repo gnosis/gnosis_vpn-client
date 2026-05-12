@@ -19,8 +19,7 @@ const DHCPV4_CLIENT_PORT: u16 = 68;
 const DHCPV6_SERVER_PORT: u16 = 547;
 const DHCPV6_CLIENT_PORT: u16 = 546;
 
-const IPV6_LINK_LOCAL: Ipv6Network =
-    Ipv6Network::new_checked(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10).unwrap();
+const IPV6_LINK_LOCAL: Ipv6Network = Ipv6Network::new_checked(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10).unwrap();
 const DHCPV6_SERVER_ADDRS: [Ipv6Addr; 2] = [
     Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2),
     Ipv6Addr::new(0xff05, 0, 0, 0, 0, 0, 1, 3),
@@ -60,9 +59,7 @@ impl Firewall {
     /// Remove the killswitch anchor, restoring normal networking.
     pub fn reset_policy(&mut self) -> Result<(), Error> {
         // Run all three even on partial failure; return first error encountered.
-        self.remove_rules()
-            .and(self.remove_anchor())
-            .and(self.restore_state())
+        self.remove_rules().and(self.remove_anchor()).and(self.restore_state())
     }
 
     fn enable(&mut self) -> Result<(), Error> {
@@ -73,10 +70,8 @@ impl Firewall {
     }
 
     fn add_anchor(&mut self) -> Result<(), Error> {
-        self.pf
-            .try_add_anchor(ANCHOR_NAME, pfctl::AnchorKind::Scrub)?;
-        self.pf
-            .try_add_anchor(ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+        self.pf.try_add_anchor(ANCHOR_NAME, pfctl::AnchorKind::Scrub)?;
+        self.pf.try_add_anchor(ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
         Ok(())
     }
 
@@ -99,18 +94,14 @@ impl Firewall {
     }
 
     fn remove_rules(&mut self) -> Result<(), Error> {
-        self.pf
-            .flush_rules(ANCHOR_NAME, pfctl::RulesetKind::Filter)?;
-        self.pf
-            .flush_rules(ANCHOR_NAME, pfctl::RulesetKind::Scrub)?;
+        self.pf.flush_rules(ANCHOR_NAME, pfctl::RulesetKind::Filter)?;
+        self.pf.flush_rules(ANCHOR_NAME, pfctl::RulesetKind::Scrub)?;
         Ok(())
     }
 
     fn remove_anchor(&mut self) -> Result<(), Error> {
-        self.pf
-            .try_remove_anchor(ANCHOR_NAME, pfctl::AnchorKind::Scrub)?;
-        self.pf
-            .try_remove_anchor(ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
+        self.pf.try_remove_anchor(ANCHOR_NAME, pfctl::AnchorKind::Scrub)?;
+        self.pf.try_remove_anchor(ANCHOR_NAME, pfctl::AnchorKind::Filter)?;
         Ok(())
     }
 
@@ -132,10 +123,7 @@ impl Firewall {
             }
         };
         for state in states {
-            let is_loopback = state
-                .local_address()
-                .map(|a| a.ip().is_loopback())
-                .unwrap_or(true); // keep state if we can't parse it
+            let is_loopback = state.local_address().map(|a| a.ip().is_loopback()).unwrap_or(true); // keep state if we can't parse it
             if !is_loopback {
                 if let Err(e) = self.pf.kill_state(&state) {
                     tracing::warn!(?e, "failed to kill PF state");
@@ -218,10 +206,7 @@ fn dhcp_rules() -> Result<Vec<pfctl::FilterRule>, Error> {
                     IpNetwork::V6(IPV6_LINK_LOCAL),
                     pfctl::Port::from(DHCPV6_CLIENT_PORT),
                 ))
-                .to(pfctl::Endpoint::new(
-                    server,
-                    pfctl::Port::from(DHCPV6_SERVER_PORT),
-                ))
+                .to(pfctl::Endpoint::new(server, pfctl::Port::from(DHCPV6_SERVER_PORT)))
                 .build()?,
         );
     }
