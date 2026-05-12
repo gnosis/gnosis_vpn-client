@@ -38,8 +38,7 @@ const DHCPV4_CLIENT_PORT: u16 = 68;
 const DHCPV6_SERVER_PORT: u16 = 547;
 const DHCPV6_CLIENT_PORT: u16 = 546;
 
-const IPV6_LINK_LOCAL: Ipv6Network =
-    Ipv6Network::new_checked(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10).unwrap();
+const IPV6_LINK_LOCAL: Ipv6Network = Ipv6Network::new_checked(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10).unwrap();
 const DHCPV6_SERVER_ADDRS: [Ipv6Addr; 2] = [
     Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2),
     Ipv6Addr::new(0xff05, 0, 0, 0, 0, 0, 1, 3),
@@ -416,8 +415,7 @@ fn send_batch(batch: &FinalizedBatch) -> Result<(), Error> {
             .recv(&mut buffer[..])
             .map_err(|e| Error::NfTables(format!("failed to receive netlink response: {e}")))?;
         for message in messages {
-            let message =
-                message.map_err(|e| Error::NfTables(format!("netlink message error: {e}")))?;
+            let message = message.map_err(|e| Error::NfTables(format!("netlink message error: {e}")))?;
             let expected_seq = expected_seqs
                 .next()
                 .ok_or_else(|| Error::NfTables("unexpected ACK from netfilter".into()))?;

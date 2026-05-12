@@ -38,9 +38,9 @@ uzers.workspace              = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ipnetwork = { workspace = true }
-libc       = { workspace = true }
-mnl        = { workspace = true }
-nftnl      = { workspace = true }
+libc      = { workspace = true }
+mnl       = { workspace = true }
+nftnl     = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ipnetwork.workspace        = true
