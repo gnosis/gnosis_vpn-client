@@ -3422,6 +3422,7 @@ dependencies = [
  "nftnl",
  "objc2",
  "objc2-foundation",
+ "pfctl",
  "pgp",
  "ping",
  "rand 0.10.1",
@@ -5057,6 +5058,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ioctl-sys"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bd11f3a29434026f5ff98c730b668ba74b1033637b8817940b54d040696133c"
+
+[[package]]
 name = "ipconfig"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6539,6 +6546,18 @@ dependencies = [
  "rayon",
  "serde",
  "serde_derive",
+]
+
+[[package]]
+name = "pfctl"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "944d2c073758b6bda57f517cff54cf69d74eae3593fe1e9aa9918666543456a9"
+dependencies = [
+ "derive_builder",
+ "ioctl-sys",
+ "ipnetwork",
+ "libc",
 ]
 
 [[package]]
