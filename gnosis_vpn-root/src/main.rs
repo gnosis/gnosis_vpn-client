@@ -71,7 +71,6 @@ struct DaemonState {
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
-    cached_blokli_ips: Vec<std::net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -690,7 +689,6 @@ impl DaemonState {
             worker_user,
             keep_alive_instruction_sender,
             routing_actor_sender,
-            cached_blokli_ips: Vec::new(),
         }
     }
 
@@ -1077,7 +1075,7 @@ impl DaemonState {
             }
             RequestToRoot::CacheBlokliIps { ips } => {
                 tracing::debug!(?ips, "caching blokli IPs for worker restart");
-                self.cached_blokli_ips = ips;
+                self.worker_params.set_cached_blokli_ips(ips);
                 Ok(())
             }
         }
@@ -1200,7 +1198,7 @@ impl DaemonState {
         send_to_worker(
             RootToWorker::StartupParams {
                 config: self.config.clone(),
-                worker_params: self.worker_params.clone().with_cached_blokli_ips(self.cached_blokli_ips.clone()),
+                worker_params: self.worker_params.clone(),
                 target_dest_id: self.target_dest_id.clone(),
             },
             &mut socket_writer,
@@ -1342,7 +1340,7 @@ impl DaemonState {
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
-                self.cached_blokli_ips = Vec::new();
+                self.worker_params.set_cached_blokli_ips(Vec::new());
                 self.disable_killswitch().await;
                 let _ = self
                     .keep_alive_instruction_sender
