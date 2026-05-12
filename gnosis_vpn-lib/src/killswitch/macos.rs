@@ -40,11 +40,11 @@ pub struct Firewall {
 }
 
 impl Firewall {
-    pub fn new() -> Self {
-        Firewall {
-            pf: pfctl::PfCtl::new().expect("failed to open /dev/pf — daemon must run as root"),
+    pub fn new() -> Result<Self, Error> {
+        Ok(Firewall {
+            pf: pfctl::PfCtl::new()?,
             pf_was_enabled: None,
-        }
+        })
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.

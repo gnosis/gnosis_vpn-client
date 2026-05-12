@@ -3341,13 +3341,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gnosis_vpn-killswitch_tests"
-version = "0.85.1"
-dependencies = [
- "gnosis_vpn-lib",
-]
-
-[[package]]
 name = "gnosis_vpn-lib"
 version = "0.86.0"
 dependencies = [
