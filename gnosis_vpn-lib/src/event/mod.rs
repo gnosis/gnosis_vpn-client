@@ -117,6 +117,10 @@ pub enum RequestToRoot {
     Ping {
         options: ping::Options,
     },
+    /// Fire-and-forget: ask root to hold resolved IPs so they survive a worker restart.
+    CacheBlokliIps {
+        ips: Vec<Ipv4Addr>,
+    },
 }
 
 /// Root execution response from root process.

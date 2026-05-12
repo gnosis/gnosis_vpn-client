@@ -151,6 +151,7 @@ impl Core {
         let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
+        let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
             // config data
             config,
@@ -184,7 +185,7 @@ impl Core {
             responder_unit: None,
             responder_duration: None,
             // needed to keep working during enabled killswitch
-            cached_resolved_blokli_ips: Vec::new(),
+            cached_resolved_blokli_ips,
         };
         Ok((core, incoming_sender))
     }
@@ -736,6 +737,8 @@ impl Core {
                             match *e {
                                 connection::up::Progress::GenerateWg(ref blokli_ips) => {
                                     self.cached_resolved_blokli_ips = blokli_ips.clone();
+                                    let request = RequestToRoot::CacheBlokliIps { ips: blokli_ips.clone() };
+                                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                                     conn.connect_progress(e);
                                     self.phase = Phase::Connecting(conn);
                                 }
