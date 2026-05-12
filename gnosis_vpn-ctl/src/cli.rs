@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use gnosis_vpn_lib::command::Command as LibCommand;
+use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
 
@@ -29,6 +30,14 @@ pub struct Cli {
     /// Output format applied to every command
     #[arg(short = 'o', long = "output", value_name = "FORMAT", value_enum)]
     pub output: Option<OutputFormat>,
+
+    /// Service state directory - practically identical with home directory of the worker user
+    #[arg(
+        long,
+        env = dirs::ENV_VAR_STATE_HOME,
+        default_value = dirs::DEFAULT_STATE_HOME,
+    )]
+    pub state_home: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -103,6 +112,13 @@ pub enum Command {
         #[arg(short = 'f', long)]
         force: bool,
     },
+
+    /// Decrypt the HOPR identity and print the derived Gnosis address and private key.
+    ///
+    /// Requires root because the identity file lives in a worker-owned directory.
+    /// When invoked as a non-root user, the command re-execs itself via sudo.
+    #[command()]
+    GetIdentity {},
 }
 
 impl From<Command> for LibCommand {
@@ -121,6 +137,7 @@ impl From<Command> for LibCommand {
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
             Command::CheckUpdate { .. } => unreachable!("CheckUpdate is handled before socket dispatch"),
+            Command::GetIdentity {} => unreachable!("GetIdentity is handled before socket dispatch"),
         }
     }
 }

@@ -7,6 +7,7 @@ use std::time::Duration;
 use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
+use gnosis_vpn_lib::hopr::identity;
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -26,6 +27,11 @@ async fn main() {
 
     if let cli::Command::CheckUpdate { force } = args.command {
         let exit = run_check_update(format, &args.socket_path, force).await;
+        process::exit(exit);
+    }
+
+    if let cli::Command::GetIdentity {} = args.command {
+        let exit = run_get_identity(&args.state_home);
         process::exit(exit);
     }
 
@@ -104,6 +110,64 @@ async fn run_check_update(format: OutputFormat, socket_path: &std::path::Path, f
         }
         Err(e) => emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
     }
+}
+
+fn run_get_identity(state_home: &std::path::Path) -> ExitCode {
+    // The identity file lives in a worker-owned, 0o700 directory, so we must be root.
+    // SAFETY: geteuid is always safe; it cannot fail.
+    if unsafe { libc::geteuid() } != 0 {
+        return reexec_with_sudo();
+    }
+
+    let id_file = gnosis_vpn_lib::hopr::identity::file(state_home.to_path_buf());
+    let pass_file = gnosis_vpn_lib::hopr::identity::pass_file(state_home.to_path_buf());
+
+    let password = match std::fs::read_to_string(&pass_file) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to read identity password file {}: {e}", pass_file.display());
+            return exitcode::NOINPUT;
+        }
+    };
+
+    match identity::get_identity(&id_file, password.trim_end_matches('\n')) {
+        Ok((private_key, address)) => {
+            println!("Gnosis Address: {}", address.to_checksum());
+            println!("Private Key: 0x{}", hex_encode(&private_key));
+            exitcode::OK
+        }
+        Err(e) => {
+            eprintln!("Failed to decrypt identity {}: {e}", id_file.display());
+            exitcode::SOFTWARE
+        }
+    }
+}
+
+fn reexec_with_sudo() -> ExitCode {
+    use std::os::unix::process::CommandExt;
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to determine current executable: {e}");
+            return exitcode::SOFTWARE;
+        }
+    };
+    let mut cmd = std::process::Command::new("sudo");
+    cmd.arg(&exe).args(std::env::args_os().skip(1));
+    // `exec` only returns on failure
+    let err = cmd.exec();
+    eprintln!("Failed to invoke sudo: {err}");
+    exitcode::SOFTWARE
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 #[derive(Clone, Copy, Debug)]
