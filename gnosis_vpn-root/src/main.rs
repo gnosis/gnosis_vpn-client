@@ -501,8 +501,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     routing::reset_on_startup(worker_params.state_home()).await;
 
     let cancel_routing_actor = CancellationToken::new();
-    let (routing_actor_sender, routing_actor_handle) = routing_actor::start(cancel_routing_actor.clone())
-        .map_err(|error| {
+    let (routing_actor_sender, routing_actor_handle) =
+        routing_actor::start(cancel_routing_actor.clone()).map_err(|error| {
             tracing::error!(?error, "failed to initialize firewall");
             exitcode::UNAVAILABLE
         })?;
