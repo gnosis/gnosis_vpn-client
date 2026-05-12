@@ -43,6 +43,7 @@ mimalloc = { version = "0.1.48", default-features = false, features = [
 mnl = "0.3.1"
 multiaddr = "0.18.2"
 nftnl = "0.9.1"
+pfctl = "0.7.0"
 notify = "8.2.0"
 pgp = "0.14"
 ping = "0.7.0"
