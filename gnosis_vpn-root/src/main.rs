@@ -1015,6 +1015,13 @@ impl DaemonState {
         }
     }
 
+    async fn disable_killswitch(&self) {
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::DisableKillswitch)
+            .await;
+    }
+
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
@@ -1328,6 +1335,7 @@ impl DaemonState {
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
+                self.disable_killswitch().await;
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Resume)

@@ -9,6 +9,7 @@ pub enum Msg {
         ips: Vec<IpAddr>,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    DisableKillswitch,
 }
 
 struct Actor {
@@ -30,6 +31,11 @@ impl Actor {
                     tracing::error!(?error, "failed to apply killswitch policy");
                 }
                 let _ = reply.send(result);
+            }
+            Msg::DisableKillswitch => {
+                if let Err(error) = self.firewall.reset_policy() {
+                    tracing::warn!(?error, "failed to disable killswitch on disconnect");
+                }
             }
         }
     }
