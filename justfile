@@ -51,6 +51,13 @@ docker-stop:
 docker-enter:
     docker exec --interactive --tty gnosis_vpn-client bash
 
+# Run nftables killswitch integration test (requires root, Linux only)
+killswitch-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix build .#binary-gnosis_vpn-killswitch_tests
+    sudo ./result/bin/gnosis_vpn-killswitch_tests
+
 system-tests test_binary="gnosis_vpn-system_tests":
     #!/usr/bin/env bash
     set -euo pipefail

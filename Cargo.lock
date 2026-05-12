@@ -3394,6 +3394,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnosis_vpn-killswitch_tests"
+version = "0.85.1"
+dependencies = [
+ "gnosis_vpn-lib",
+]
+
+[[package]]
 name = "gnosis_vpn-lib"
 version = "0.85.1"
 dependencies = [
@@ -3408,7 +3415,11 @@ dependencies = [
  "human-bandwidth",
  "humantime",
  "humantime-serde",
+ "ipnetwork",
+ "libc",
+ "mnl",
  "multiaddr",
+ "nftnl",
  "objc2",
  "objc2-foundation",
  "pgp",

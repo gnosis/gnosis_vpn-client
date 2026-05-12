@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use tokio::sync::oneshot;
 
-use crate::routing::killswitch::Firewall;
+use gnosis_vpn_lib::killswitch::Firewall;
 
 pub enum Msg {
     SetAllowedIps {

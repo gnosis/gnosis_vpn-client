@@ -36,6 +36,12 @@ tracing-subscriber.workspace = true
 url.workspace                = true
 uzers.workspace              = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ipnetwork = { workspace = true }
+libc       = { workspace = true }
+mnl        = { workspace = true }
+nftnl      = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace            = true
 objc2-foundation.workspace = true
