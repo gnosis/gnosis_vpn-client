@@ -43,8 +43,10 @@ mnl        = { workspace = true }
 nftnl      = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+ipnetwork.workspace        = true
 objc2.workspace            = true
 objc2-foundation.workspace = true
+pfctl.workspace            = true
 
 [dev-dependencies]
 tempfile = "3.23.0"
