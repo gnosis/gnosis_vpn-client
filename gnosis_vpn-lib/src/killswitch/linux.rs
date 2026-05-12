@@ -71,15 +71,9 @@ enum Protocol {
 /// listed IP.
 pub struct Firewall;
 
-impl Default for Firewall {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Firewall {
-    pub fn new() -> Self {
-        Firewall
+    pub fn new() -> Result<Self, Error> {
+        Ok(Firewall)
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.

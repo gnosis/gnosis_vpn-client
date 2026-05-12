@@ -17,10 +17,10 @@ struct Actor {
 }
 
 impl Actor {
-    fn new() -> Self {
-        Actor {
-            firewall: Firewall::new(),
-        }
+    fn new() -> Result<Self, String> {
+        Ok(Actor {
+            firewall: Firewall::new().map_err(|e| e.to_string())?,
+        })
     }
 
     fn handle(&mut self, msg: Msg) {
