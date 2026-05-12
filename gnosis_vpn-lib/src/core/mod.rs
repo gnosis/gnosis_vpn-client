@@ -733,7 +733,7 @@ impl Core {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
                             match *e {
-                                connection::up::Progress::GenerateWg(blokli_ips) => {
+                                connection::up::Progress::GenerateWg(ref blokli_ips) => {
                                     self.cached_resolved_blokli_ips = blokli_ips.clone();
                                     conn.connect_progress(e);
                                     self.phase = Phase::Connecting(conn);
