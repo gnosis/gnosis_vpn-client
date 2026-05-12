@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
+use std::net;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
@@ -20,9 +21,10 @@ pub enum Event {
     Setback(Box<Setback>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Progress {
-    GenerateWg,
+    ResolveBlokliIps,
+    GenerateWg(Vec<net::Ipv4Addr>),
     OpenBridge(WireGuard),
     RegisterWg,
     CloseBridge(Registration),

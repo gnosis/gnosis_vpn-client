@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
+use std::net;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -86,6 +87,7 @@ pub struct Core {
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
     ongoing_channel_fundings: Vec<Address>,
+    cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +183,8 @@ impl Core {
             route_healths,
             responder_unit: None,
             responder_duration: None,
+            // needed to keep working during enabled killswitch
+            cached_resolved_blokli_ips: Vec::new(),
         };
         Ok((core, incoming_sender))
     }
@@ -456,6 +460,7 @@ impl Core {
 
                     WorkerCommand::Disconnect => {
                         self.target_destination = None;
+                        self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
@@ -728,8 +733,17 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
-                            conn.connect_progress(e);
-                            self.phase = Phase::Connecting(conn);
+                            match *e {
+                                connection::up::Progress::GenerateWg(blokli_ips) => {
+                                    self.cached_resolved_blokli_ips = blokli_ips.clone();
+                                    conn.connect_progress(e);
+                                    self.phase = Phase::Connecting(conn);
+                                }
+                                _ => {
+                                    conn.connect_progress(e);
+                                    self.phase = Phase::Connecting(conn);
+                                }
+                            };
                         }
                         connection::up::Event::Setback(e) => {
                             if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
@@ -1387,6 +1401,7 @@ impl Core {
                 config_wireguard,
                 hopr,
                 self.worker_params.clone(),
+                self.cached_resolved_blokli_ips.clone(),
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
