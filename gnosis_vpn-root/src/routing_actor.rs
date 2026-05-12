@@ -1,15 +1,43 @@
-use tokio::sync::mpsc;
+use std::net::IpAddr;
+
+use gnosis_vpn_lib::killswitch::Firewall;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        mod linux;
-        use linux::Actor;
-        pub use linux::Msg;
-    } else {
-        mod stub;
-        use stub::Actor;
-        pub use stub::Msg;
+pub enum Msg {
+    SetAllowedIps {
+        ips: Vec<IpAddr>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+struct Actor {
+    firewall: Firewall,
+}
+
+impl Actor {
+    fn new() -> Self {
+        Actor {
+            firewall: Firewall::new(),
+        }
+    }
+
+    fn handle(&mut self, msg: Msg) {
+        match msg {
+            Msg::SetAllowedIps { ips, reply } => {
+                let result = self.firewall.apply_policy(&ips).map_err(|e| e.to_string());
+                if let Err(ref error) = result {
+                    tracing::error!(?error, "failed to apply killswitch policy");
+                }
+                let _ = reply.send(result);
+            }
+        }
+    }
+
+    fn teardown(&mut self) {
+        if let Err(error) = self.firewall.reset_policy() {
+            tracing::warn!(?error, "failed to reset killswitch policy on shutdown");
+        }
     }
 }
 
