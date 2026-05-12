@@ -256,6 +256,20 @@ in
     }
   );
 
+  # Killswitch integration test binary.
+  # NOT run as part of nix flake check (requires root/CAP_NET_ADMIN and network access).
+  # Built here so CI can nix build then sudo-run it on a standard GitHub-hosted runner.
+  binary-gnosis_vpn-killswitch_tests = builders.local.callPackage nixLib.mkRustPackage (
+    (mkGnosisvpnBuildArgs {
+      src = sources.main;
+      depsSrc = sources.deps;
+      extraCargoArgs = "--bin gnosis_vpn-killswitch_tests";
+    })
+    // {
+      CARGO_PROFILE = "dev";
+    }
+  );
+
   # Tests / QA
   gnosis_vpn-test = builders.local.callPackage nixLib.mkRustPackage (
     (mkGnosisvpnBuildArgs {

@@ -22,7 +22,6 @@ pub(crate) mod wg_ops;
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
-        pub(crate) mod killswitch;
         pub(crate) mod netlink_ops;
         pub(crate) mod nftables_ops;
         pub(crate) mod route_ops_linux;

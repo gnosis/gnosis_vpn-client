@@ -18,10 +18,15 @@ use nftnl::{
     expr::{self, Payload, Verdict},
     nft_expr,
 };
+use thiserror::Error;
 
-use gnosis_vpn_lib::wireguard::WG_INTERFACE;
+use crate::wireguard::WG_INTERFACE;
 
-use super::Error;
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    NfTables(String),
+}
 
 const TABLE_NAME: &std::ffi::CStr = c"gnosis_vpn_ks";
 const IN_CHAIN_NAME: &std::ffi::CStr = c"input";
