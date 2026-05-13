@@ -4,7 +4,6 @@ use ipnetwork::{IpNetwork, Ipv6Network};
 use pfctl::{DropAction, FilterRuleAction};
 use thiserror::Error;
 
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -135,7 +134,6 @@ impl Firewall {
         }
     }
 }
-
 
 fn scrub_rules() -> Result<Vec<pfctl::ScrubRule>, Error> {
     let rule = pfctl::ScrubRuleBuilder::default()

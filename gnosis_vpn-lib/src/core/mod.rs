@@ -847,7 +847,11 @@ impl Core {
             }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RunnerToRoot::KillswitchLockdown { peer_ips, interface, resp } => {
+                RunnerToRoot::KillswitchLockdown {
+                    peer_ips,
+                    interface,
+                    resp,
+                } => {
                     self.responder_unit = Some(resp);
                     let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
