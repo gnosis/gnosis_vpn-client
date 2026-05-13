@@ -6,6 +6,7 @@ use thiserror::Error;
 use tokio::fs;
 use url::Url;
 
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 use crate::compat::SafeModule;
@@ -35,6 +36,7 @@ pub struct WorkerParams {
     blokli_url: Option<Url>,
     force_static_routing: bool,
     state_home: PathBuf,
+    cached_blokli_ips: Vec<Ipv4Addr>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,7 +63,16 @@ impl WorkerParams {
             blokli_url,
             force_static_routing,
             state_home,
+            cached_blokli_ips: Vec::new(),
         }
+    }
+
+    pub fn set_cached_blokli_ips(&mut self, ips: Vec<Ipv4Addr>) {
+        self.cached_blokli_ips = ips;
+    }
+
+    pub fn cached_blokli_ips(&self) -> &[Ipv4Addr] {
+        &self.cached_blokli_ips
     }
 
     pub async fn persist_identity_generation(&self) -> Result<HoprKeys, Error> {

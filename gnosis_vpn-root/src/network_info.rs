@@ -294,6 +294,7 @@ fn parse_dns_nameservers(content: &str) -> Vec<String> {
 // ============================================================================
 
 /// Returns the token immediately after `keyword` in a whitespace-split line.
+#[cfg(target_os = "linux")]
 fn after<'a>(tokens: &[&'a str], keyword: &str) -> Option<&'a str> {
     tokens.windows(2).find(|w| w[0] == keyword).map(|w| w[1])
 }
