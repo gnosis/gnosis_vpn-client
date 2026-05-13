@@ -90,27 +90,6 @@ There are three environment variables that control the worker process setup:
 cargo test
 ```
 
-### Killswitch integration test (Linux only)
-
-Tests that nftables rules actually block and restore traffic. Requires root and
-network access — it is **not** run by `cargo test`.
-
-```bash
-just killswitch-test
-```
-
-This builds the test binary via `nix build .#binary-gnosis_vpn-killswitch_tests`
-then runs it as root. The test sequence is:
-
-1. `ping 1.1.1.1` — expect success (baseline)
-2. Apply lockdown (`apply_policy(&[])`) — block all traffic
-3. `ping 1.1.1.1` — expect failure
-4. Reset (`reset_policy()`) — restore networking
-5. `ping 1.1.1.1` — expect success again
-
-The reset always runs before any assertion, so a test failure never leaves the
-host firewalled.
-
 ## Installation
 
 Use the latest
