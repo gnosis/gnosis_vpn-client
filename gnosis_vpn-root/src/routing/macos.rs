@@ -104,7 +104,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     /// Phase 3 (after wg-quick up):
     ///   5. Add VPN routes (default + subnet) programmatically via route_ops
     ///
-    async fn setup(&mut self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<String, Error> {
         if self.bypass_manager.is_some() {
             return Err(Error::General("invalid state: already set up".into()));
         }
@@ -175,7 +175,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
 
         self.bypass_manager = Some(bypass_manager);
         tracing::info!("routing is ready (macOS static)");
-        Ok(())
+        Ok(iface.to_string())
     }
 
     /// Teardown split-tunnel routing for macOS StaticRouter.
@@ -211,7 +211,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
 
 #[async_trait]
 impl Routing for DynamicRouter {
-    async fn setup(&mut self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<String, Error> {
         Err(Error::NotAvailable)
     }
 

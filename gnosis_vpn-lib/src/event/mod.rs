@@ -67,16 +67,17 @@ pub enum WorkerToRoot {
 pub enum RunnerToRoot {
     KillswitchLockdown {
         peer_ips: Vec<Ipv4Addr>,
+        interface: String,
         resp: oneshot::Sender<Result<(), String>>,
     },
     DynamicWgRouting {
         wg_data: WireGuardData,
-        resp: oneshot::Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<String, String>>,
     },
     StaticWgRouting {
         wg_data: WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
-        resp: oneshot::Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<String, String>>,
     },
     TearDownWg,
     Ping {
@@ -105,6 +106,7 @@ impl AsRef<RootToWorker> for RootToWorker {
 pub enum RequestToRoot {
     KillswitchLockdown {
         peer_ips: Vec<Ipv4Addr>,
+        interface: String,
     },
     DynamicWgRouting {
         wg_data: WireGuardData,
@@ -128,7 +130,9 @@ pub enum RequestToRoot {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponseFromRoot {
     KillswitchLockdown { res: Result<(), String> },
-    DynamicWgRouting { res: Result<(), String> },
-    StaticWgRouting { res: Result<(), String> },
+    /// On success, the String is the resolved WireGuard interface name.
+    DynamicWgRouting { res: Result<String, String> },
+    /// On success, the String is the resolved WireGuard interface name.
+    StaticWgRouting { res: Result<String, String> },
     Ping { res: Result<Duration, String> },
 }

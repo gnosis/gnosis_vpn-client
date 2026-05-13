@@ -109,11 +109,6 @@ impl Runner {
         let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
         peer_ips.extend(blokli_ips);
 
-        // 6. activate killswitch before any routing attempt — ensures traffic is blocked
-        // until the VPN tunnel is up, preventing leaks if connection fails mid-setup
-        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips.clone(), &results_sender).await?;
-
         // dynamic routing is only available on Linux
         cfg_if::cfg_if! {
             if #[cfg(target_os = "linux")] {
@@ -130,8 +125,8 @@ impl Runner {
         } else {
             let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
             match res {
-                Ok(()) => {
-                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, &results_sender)
+                Ok(interface) => {
+                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, interface, &results_sender)
                         .await
                 }
                 Err(err) => {
@@ -156,8 +151,12 @@ impl Runner {
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
 
-        // setup static routing
-        request_static_wg_tunnel(wg, registration, session, peer_ips, results_sender).await?;
+        // setup static routing — returns the resolved WireGuard interface name
+        let interface = request_static_wg_tunnel(wg, registration, session, peer_ips.clone(), results_sender).await?;
+
+        // 6. activate killswitch now that the interface name is known
+        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
+        request_killswitch_lockdown(peer_ips, interface, results_sender).await?;
 
         // and verify it works
         self.run_check_static_routing(session, results_sender).await
@@ -202,8 +201,12 @@ impl Runner {
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
 
-        // setup static routing
-        request_static_wg_tunnel(wg, registration, &session, peer_ips, results_sender).await?;
+        // setup static routing — returns the resolved WireGuard interface name
+        let interface = request_static_wg_tunnel(wg, registration, &session, peer_ips.clone(), results_sender).await?;
+
+        // 6. activate killswitch now that the interface name is known
+        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
+        request_killswitch_lockdown(peer_ips, interface, results_sender).await?;
 
         // and verify it works
         self.run_check_static_routing(&session, results_sender).await
@@ -215,8 +218,13 @@ impl Runner {
         registration: &Registration,
         session: &SessionClientMetadata,
         peer_ips: Vec<Ipv4Addr>,
+        interface: String,
         results_sender: &mpsc::Sender<Results>,
     ) -> Result<SessionClientMetadata, Error> {
+        // 6. activate killswitch now that the interface name is known
+        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
+        request_killswitch_lockdown(peer_ips.clone(), interface, results_sender).await?;
+
         // 7a. request ping from root to check if dynamic routing works
         let _ = results_sender.send(progress(Progress::Ping)).await;
         // only one retry to avoid long fallback time in case dynamic routing doesn't work
@@ -405,12 +413,14 @@ async fn open_ping_session(
 
 async fn request_killswitch_lockdown(
     peer_ips: Vec<Ipv4Addr>,
+    interface: String,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<(), Error> {
     let (tx, rx) = oneshot::channel();
     let _ = results_sender
         .send(Results::ConnectionRequestToRoot(RunnerToRoot::KillswitchLockdown {
             peer_ips,
+            interface,
             resp: tx,
         }))
         .await;
@@ -432,7 +442,7 @@ async fn request_dynamic_wg_tunnel(
     registration: &Registration,
     session: &SessionClientMetadata,
     results_sender: &mpsc::Sender<Results>,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     // 6a. request dynamic wg tunnel from root
     let _ = results_sender
         .send(progress(Progress::DynamicWgTunnel(session.clone())))
@@ -464,7 +474,7 @@ async fn request_dynamic_wg_tunnel(
 
     tokio::select!(
         res = rx => match res {
-            Ok(Ok(_)) => Ok(()),
+            Ok(Ok(interface)) => Ok(interface),
             Ok(Err(e)) => Err(Error::Routing(e)),
             Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {}", reason))),
         },
@@ -480,7 +490,7 @@ async fn request_static_wg_tunnel(
     session: &SessionClientMetadata,
     peer_ips: Vec<Ipv4Addr>,
     results_sender: &mpsc::Sender<Results>,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     let (tx, rx) = oneshot::channel();
     let interface_info = wireguard::InterfaceInfo {
         address: registration.address(),
@@ -509,7 +519,7 @@ async fn request_static_wg_tunnel(
 
     tokio::select!(
         res = rx => match res {
-            Ok(Ok(_)) => Ok(()),
+            Ok(Ok(interface)) => Ok(interface),
             Ok(Err(e)) => Err(Error::Routing(e)),
             Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {}", reason))),
         },
