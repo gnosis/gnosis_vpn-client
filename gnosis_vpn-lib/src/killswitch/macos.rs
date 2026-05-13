@@ -59,7 +59,10 @@ impl Firewall {
     /// Remove the killswitch anchor, restoring normal networking.
     pub fn reset_policy(&mut self) -> Result<(), Error> {
         // Run all three even on partial failure; return first error encountered.
-        self.remove_rules().and(self.remove_anchor()).and(self.restore_state())
+        let rules_result = self.remove_rules();
+        let anchor_result = self.remove_anchor();
+        let state_result = self.restore_state();
+        rules_result.and(anchor_result).and(state_result)
     }
 
     fn enable(&mut self) -> Result<(), Error> {
