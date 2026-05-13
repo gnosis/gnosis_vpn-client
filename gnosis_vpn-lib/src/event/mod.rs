@@ -129,10 +129,18 @@ pub enum RequestToRoot {
 /// Should be matched by worker to **RespondableRequestToRoot** request responses.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponseFromRoot {
-    KillswitchLockdown { res: Result<(), String> },
+    KillswitchLockdown {
+        res: Result<(), String>,
+    },
     /// On success, the String is the resolved WireGuard interface name.
-    DynamicWgRouting { res: Result<String, String> },
+    DynamicWgRouting {
+        res: Result<String, String>,
+    },
     /// On success, the String is the resolved WireGuard interface name.
-    StaticWgRouting { res: Result<String, String> },
-    Ping { res: Result<Duration, String> },
+    StaticWgRouting {
+        res: Result<String, String>,
+    },
+    Ping {
+        res: Result<Duration, String>,
+    },
 }

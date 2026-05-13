@@ -990,7 +990,11 @@ impl DaemonState {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
-            .send(routing_actor::Msg::SetAllowedIps { ips, interface, reply: reply_tx })
+            .send(routing_actor::Msg::SetAllowedIps {
+                ips,
+                interface,
+                reply: reply_tx,
+            })
             .await;
         match reply_rx.await {
             Ok(res) => res,
