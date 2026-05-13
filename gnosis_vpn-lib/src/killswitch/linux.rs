@@ -20,7 +20,6 @@ use nftnl::{
 };
 use thiserror::Error;
 
-use crate::wireguard::WG_INTERFACE;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -77,9 +76,10 @@ impl Firewall {
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
-    pub fn apply_policy(&mut self, allowed_ips: &[IpAddr]) -> Result<(), Error> {
+    /// `interface` is the resolved WireGuard interface name (e.g. "wg0_gnosisvpn" or "utun8").
+    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr]) -> Result<(), Error> {
         let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
-        let batch = PolicyBatch::new(&table).finalize(allowed_ips);
+        let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips);
         send_batch(&batch)
     }
 
@@ -133,11 +133,11 @@ impl<'a> PolicyBatch<'a> {
         }
     }
 
-    fn finalize(mut self, allowed_ips: &[IpAddr]) -> FinalizedBatch {
+    fn finalize(mut self, interface: &str, allowed_ips: &[IpAddr]) -> FinalizedBatch {
         self.add_loopback_rules();
         self.add_dhcp_client_rules();
         self.add_ndp_rules();
-        self.add_tunnel_rules();
+        self.add_tunnel_rules(interface);
         for &ip in allowed_ips {
             self.add_allowed_ip_rules(ip);
         }
@@ -264,28 +264,28 @@ impl<'a> PolicyBatch<'a> {
         }
     }
 
-    fn add_tunnel_rules(&mut self) {
-        // Allow all traffic through the tunnel (name-based: safe when wg0_gnosisvpn doesn't exist)
+    fn add_tunnel_rules(&mut self, interface: &str) {
+        // Allow all traffic through the tunnel (name-based: safe when interface doesn't exist yet)
         let mut out_rule = Rule::new(&self.out_chain);
-        check_iface_by_name(&mut out_rule, Direction::Out, WG_INTERFACE);
+        check_iface_by_name(&mut out_rule, Direction::Out, interface);
         out_rule.add_expr(&Verdict::Accept);
         self.batch.add(&out_rule, MsgType::Add);
 
         let mut in_rule = Rule::new(&self.in_chain);
-        check_iface_by_name(&mut in_rule, Direction::In, WG_INTERFACE);
+        check_iface_by_name(&mut in_rule, Direction::In, interface);
         in_rule.add_expr(&Verdict::Accept);
         self.batch.add(&in_rule, MsgType::Add);
 
         // Forward out through tunnel
         let mut fwd_out_rule = Rule::new(&self.forward_chain);
-        check_iface_by_name(&mut fwd_out_rule, Direction::Out, WG_INTERFACE);
+        check_iface_by_name(&mut fwd_out_rule, Direction::Out, interface);
         fwd_out_rule.add_expr(&Verdict::Accept);
         self.batch.add(&fwd_out_rule, MsgType::Add);
 
         // Forward in from tunnel only if ESTABLISHED — prevents unsolicited traffic leaking in
         let established_bits = nftnl::expr::ct::States::ESTABLISHED.bits();
         let mut fwd_in_rule = Rule::new(&self.forward_chain);
-        check_iface_by_name(&mut fwd_in_rule, Direction::In, WG_INTERFACE);
+        check_iface_by_name(&mut fwd_in_rule, Direction::In, interface);
         fwd_in_rule.add_expr(&nft_expr!(ct state));
         fwd_in_rule.add_expr(&nft_expr!(bitwise mask established_bits, xor 0u32));
         fwd_in_rule.add_expr(&nft_expr!(cmp != 0u32));

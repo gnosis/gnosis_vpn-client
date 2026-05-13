@@ -84,6 +84,7 @@ pub struct Core {
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
+    responder_string: Option<oneshot::Sender<Result<String, String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
     ongoing_channel_fundings: Vec<Address>,
@@ -183,6 +184,7 @@ impl Core {
             ongoing_channel_fundings: Vec::new(),
             route_healths,
             responder_unit: None,
+            responder_string: None,
             responder_duration: None,
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
@@ -261,7 +263,7 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::DynamicWgRouting { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
+                        if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for dynamic wg routing response");
                             });
@@ -270,7 +272,7 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::StaticWgRouting { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
+                        if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for static wg routing response");
                             });
@@ -846,14 +848,14 @@ impl Core {
             }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RunnerToRoot::KillswitchLockdown { peer_ips, resp } => {
+                RunnerToRoot::KillswitchLockdown { peer_ips, interface, resp } => {
                     self.responder_unit = Some(resp);
-                    let request = RequestToRoot::KillswitchLockdown { peer_ips };
+                    let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
                 RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
-                    self.responder_unit = Some(resp);
+                    self.responder_string = Some(resp);
                     let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -863,7 +865,7 @@ impl Core {
                     peer_ips,
                     resp,
                 } => {
-                    self.responder_unit = Some(resp);
+                    self.responder_string = Some(resp);
                     let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }

@@ -4,7 +4,6 @@ use ipnetwork::{IpNetwork, Ipv6Network};
 use pfctl::{DropAction, FilterRuleAction};
 use thiserror::Error;
 
-use crate::wireguard::WG_INTERFACE;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -48,10 +47,11 @@ impl Firewall {
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
-    pub fn apply_policy(&mut self, allowed_ips: &[IpAddr]) -> Result<(), Error> {
+    /// `interface` is the resolved WireGuard interface name (e.g. "utun8" on macOS).
+    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr]) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
-        self.set_rules(allowed_ips)?;
+        self.set_rules(interface, allowed_ips)?;
         self.flush_states();
         Ok(())
     }
@@ -75,13 +75,13 @@ impl Firewall {
         Ok(())
     }
 
-    fn set_rules(&mut self, allowed_ips: &[IpAddr]) -> Result<(), Error> {
+    fn set_rules(&mut self, interface: &str, allowed_ips: &[IpAddr]) -> Result<(), Error> {
         let mut rules = vec![];
 
         rules.append(&mut loopback_rules()?);
         rules.append(&mut dhcp_rules()?);
         rules.append(&mut ndp_rules()?);
-        rules.push(tunnel_rule(&tunnel_interface())?);
+        rules.push(tunnel_rule(interface)?);
         for &ip in allowed_ips {
             rules.append(&mut allowed_ip_rules(ip)?);
         }
@@ -133,17 +133,6 @@ impl Firewall {
     }
 }
 
-/// Returns the actual WireGuard tunnel interface name on macOS.
-///
-/// `wg-quick` on macOS creates a `utunN` interface and writes its name to
-/// `/var/run/wireguard/{WG_INTERFACE}.name`. Falls back to `WG_INTERFACE` if
-/// the file is missing (e.g. tunnel not yet up).
-fn tunnel_interface() -> String {
-    let name_file = format!("/var/run/wireguard/{WG_INTERFACE}.name");
-    std::fs::read_to_string(&name_file)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| WG_INTERFACE.to_string())
-}
 
 fn scrub_rules() -> Result<Vec<pfctl::ScrubRule>, Error> {
     let rule = pfctl::ScrubRuleBuilder::default()

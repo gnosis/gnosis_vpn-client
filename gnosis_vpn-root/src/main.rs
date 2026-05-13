@@ -986,11 +986,11 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn apply_killswitch(&self, ips: Vec<IpAddr>) -> Result<(), String> {
+    async fn apply_killswitch(&self, interface: String, ips: Vec<IpAddr>) -> Result<(), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
-            .send(routing_actor::Msg::SetAllowedIps { ips, reply: reply_tx })
+            .send(routing_actor::Msg::SetAllowedIps { ips, interface, reply: reply_tx })
             .await;
         match reply_rx.await {
             Ok(res) => res,
@@ -1008,9 +1008,9 @@ impl DaemonState {
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
-            RequestToRoot::KillswitchLockdown { peer_ips } => {
+            RequestToRoot::KillswitchLockdown { peer_ips, interface } => {
                 let ips = peer_ips.into_iter().map(IpAddr::V4).collect();
-                let res = self.apply_killswitch(ips).await;
+                let res = self.apply_killswitch(interface, ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1247,7 +1247,7 @@ impl DaemonState {
             .await;
     }
 
-    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
+    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<String, String> {
         // ensure clean slate
         self.teardown_any_routing().await;
 
@@ -1259,9 +1259,9 @@ impl DaemonState {
                 let res_setup = router.setup().await;
                 self.router = Some(Box::new(router));
                 match res_setup {
-                    Ok(_) => {
+                    Ok(interface_name) => {
                         tracing::info!("dynamic routing setup successfully");
-                        Ok(())
+                        Ok(interface_name)
                     }
                     Err(error) => {
                         tracing::error!(?error, "dynamic routing setup error");
@@ -1281,7 +1281,7 @@ impl DaemonState {
         &mut self,
         wg_data: event::WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         // ensure clean slate
         self.teardown_any_routing().await;
 
@@ -1292,9 +1292,9 @@ impl DaemonState {
                 let res_setup = router.setup().await;
                 self.router = Some(Box::new(router));
                 match res_setup {
-                    Ok(_) => {
+                    Ok(interface_name) => {
                         tracing::info!("static routing setup successfully");
-                        Ok(())
+                        Ok(interface_name)
                     }
                     Err(error) => {
                         tracing::error!(?error, "static routing setup error");
