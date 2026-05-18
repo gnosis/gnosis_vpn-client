@@ -50,7 +50,7 @@ reqwest = { version = "0.13.1", features = ["blocking", "json"] }
 rtnetlink = "0.20.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde-saphyr = "0.0.25"
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 serde_with = "3.16.1"
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["full"] }
