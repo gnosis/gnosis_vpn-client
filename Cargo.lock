@@ -2221,7 +2221,7 @@ checksum = "a23a7c462adb2a3cde276bc7e8e3fba9bf5e35d287ce735122c9de969e8fd806"
 dependencies = [
  "cynic-proc-macros",
  "ref-cast",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "serde_json",
  "static_assertions",
@@ -3386,7 +3386,7 @@ dependencies = [
  "gnosis_vpn-lib",
  "humantime",
  "mimalloc",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -3414,7 +3414,7 @@ dependencies = [
  "pgp",
  "ping",
  "rand 0.10.1",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -3466,7 +3466,7 @@ dependencies = [
  "exitcode",
  "gnosis_vpn-lib",
  "rand 0.10.1",
- "reqwest 0.13.2",
+ "reqwest 0.13.3",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -7320,9 +7320,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab3f43e3283ab1488b624b44b0e988d0acea0b3214e694730a055cb6b2efa801"
+checksum = "62e0021ea2c22aed41653bc7e1419abb2c97e038ff2c33d0e1309e49a97deec0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
