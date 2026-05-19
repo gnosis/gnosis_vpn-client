@@ -1,4 +1,5 @@
-pub use edgli::hopr_lib::{Address, NodeId, RoutingOptions};
+pub use edgli::hopr_lib::HopRouting;
+pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -11,11 +12,11 @@ pub struct Destination {
     pub id: String,
     pub meta: HashMap<String, String>,
     pub address: Address,
-    pub routing: RoutingOptions,
+    pub routing: HopRouting,
 }
 
 impl Destination {
-    pub fn new(id: String, address: Address, routing: RoutingOptions, meta: HashMap<String, String>) -> Self {
+    pub fn new(id: String, address: Address, routing: HopRouting, meta: HashMap<String, String>) -> Self {
         Self {
             id,
             address,
@@ -24,38 +25,13 @@ impl Destination {
         }
     }
 
-    pub fn has_intermediate_channel(&self, address: Address) -> bool {
-        match self.routing.clone() {
-            RoutingOptions::Hops(_) => false,
-            RoutingOptions::IntermediatePath(nodes) => nodes.into_iter().next().is_some_and(|node_id| match node_id {
-                NodeId::Chain(addr) => addr == address,
-                NodeId::Offchain(_) => false,
-            }),
-        }
-    }
-
     pub fn pretty_print_path(&self) -> String {
-        match self.routing.clone() {
-            RoutingOptions::Hops(hops) => {
-                let nr: u8 = hops.into();
-                let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
-                if nr > 0 {
-                    format!("->{}->", path).to_string()
-                } else {
-                    "->".to_string()
-                }
-            }
-            RoutingOptions::IntermediatePath(nodes) => {
-                let path = nodes
-                    .into_iter()
-                    .map(|node_id| match node_id {
-                        NodeId::Offchain(peer_id) => format!("({})", log_output::peer_id(peer_id.to_string().as_str())),
-                        NodeId::Chain(address) => format!("({})", log_output::address(&address)),
-                    })
-                    .collect::<Vec<String>>()
-                    .join("->");
-                format!("->{}->", path).to_string()
-            }
+        let nr = self.routing.hop_count();
+        let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
+        if nr > 0 {
+            format!("->{path}->")
+        } else {
+            "->".to_string()
         }
     }
 

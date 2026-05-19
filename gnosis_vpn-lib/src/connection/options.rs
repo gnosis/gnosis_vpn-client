@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 

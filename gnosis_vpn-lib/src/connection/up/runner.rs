@@ -2,8 +2,7 @@
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
-use edgli::hopr_lib::SessionClientConfig;
-use edgli::hopr_lib::SurbBalancerConfig;
+use edgli::hopr_lib::{HoprSessionClientConfig, exports::transport::SurbBalancerConfig};
 use tokio::sync::{mpsc, oneshot};
 
 use std::fmt::{self, Display};
@@ -276,10 +275,10 @@ async fn open_bridge_session(
     options: &Options,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
+    let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: destination.routing.clone(),
-        return_path_options: destination.routing.clone(),
+        forward_path: destination.routing,
+        return_path: destination.routing,
         surb_management: None,
         ..Default::default()
     };
@@ -355,10 +354,10 @@ async fn open_ping_session(
     surb_management: SurbBalancerConfig,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
+    let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path_options: destination.routing.clone(),
-        return_path_options: destination.routing.clone(),
+        forward_path: destination.routing,
+        return_path: destination.routing,
         surb_management: Some(surb_management),
         ..Default::default()
     };

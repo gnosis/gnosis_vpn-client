@@ -1,4 +1,4 @@
-use edgli::hopr_lib::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use humantime::format_duration;
 use serde::ser::Serialize;
 
@@ -24,11 +24,6 @@ pub fn elapsed(timestamp: &SystemTime) -> String {
 pub fn address(address: &Address) -> String {
     let str = address.to_checksum();
     format!("{}..{}", &str[..6], &str[38..])
-}
-
-pub fn peer_id(id: &str) -> String {
-    let l = id.len();
-    format!(".{}", &id[l - 4..])
 }
 
 fn truncate_after_second_space(s: &str) -> &str {
