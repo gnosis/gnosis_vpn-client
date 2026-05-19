@@ -5,6 +5,9 @@ flowchart
     UI["`**UI App**
     - runs in user context
     `"]
+    CLI["`**UI App**
+    - runs in user context
+    `"]
     Root["`**Root System Service**
     - runs as root
     - sets up routing
@@ -19,6 +22,7 @@ flowchart
     SystemSocket(((named Unixsocket)))
     WorkerSocket(((unnamed Unixsocket pair)))
     UI <--> SystemSocket
+    CLI <--> SystemSocket
     Root <--> SystemSocket
     Root <--> WorkerSocket
     WorkerSocket <--> Worker
