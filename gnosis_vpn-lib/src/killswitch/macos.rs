@@ -1,6 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use ipnetwork::{IpNetwork, Ipv6Network};
+
+use super::{LAN_MULTICAST_NETS, LAN_NETS};
 use pfctl::{DropAction, FilterRuleAction};
 use thiserror::Error;
 
@@ -47,10 +49,11 @@ impl Firewall {
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
     /// `interface` is the resolved WireGuard interface name (e.g. "utun8" on macOS).
-    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr]) -> Result<(), Error> {
+    /// When `lan_lockdown` is false, private LAN ranges are also let through.
+    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
-        self.set_rules(interface, allowed_ips)?;
+        self.set_rules(interface, allowed_ips, lan_lockdown)?;
         self.flush_states();
         Ok(())
     }
@@ -77,7 +80,7 @@ impl Firewall {
         Ok(())
     }
 
-    fn set_rules(&mut self, interface: &str, allowed_ips: &[IpAddr]) -> Result<(), Error> {
+    fn set_rules(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
         let mut rules = vec![];
 
         rules.append(&mut loopback_rules()?);
@@ -86,6 +89,9 @@ impl Firewall {
         rules.push(tunnel_rule(interface)?);
         for &ip in allowed_ips {
             rules.append(&mut allowed_ip_rules(ip)?);
+        }
+        if !lan_lockdown {
+            rules.append(&mut lan_rules()?);
         }
         rules.append(&mut drop_rules()?);
 
@@ -311,6 +317,31 @@ fn allowed_ip_rules(ip: IpAddr) -> Result<Vec<pfctl::FilterRule>, Error> {
         .keep_state(pfctl::StatePolicy::Keep)
         .build()?;
     Ok(vec![out_rule, in_rule])
+}
+
+fn lan_rules() -> Result<Vec<pfctl::FilterRule>, Error> {
+    let mut rules = vec![];
+    for &net in LAN_NETS.iter().chain(&LAN_MULTICAST_NETS) {
+        rules.push(
+            pfctl::FilterRuleBuilder::default()
+                .action(FilterRuleAction::Pass)
+                .quick(true)
+                .direction(pfctl::Direction::Out)
+                .to(pfctl::Ip::from(net))
+                .keep_state(pfctl::StatePolicy::Keep)
+                .build()?,
+        );
+        rules.push(
+            pfctl::FilterRuleBuilder::default()
+                .action(FilterRuleAction::Pass)
+                .quick(true)
+                .direction(pfctl::Direction::In)
+                .from(pfctl::Ip::from(net))
+                .keep_state(pfctl::StatePolicy::Keep)
+                .build()?,
+        );
+    }
+    Ok(rules)
 }
 
 fn drop_rules() -> Result<Vec<pfctl::FilterRule>, Error> {

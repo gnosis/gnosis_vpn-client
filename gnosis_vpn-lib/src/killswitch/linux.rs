@@ -13,6 +13,8 @@ use std::ffi::CString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use ipnetwork::{IpNetwork, Ipv6Network};
+
+use super::{LAN_MULTICAST_NETS, LAN_NETS};
 use nftnl::{
     Batch, Chain, FinalizedBatch, Hook, MsgType, Policy, ProtoFamily, Rule, Table,
     expr::{self, Payload, Verdict},
@@ -76,9 +78,10 @@ impl Firewall {
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
     /// `interface` is the resolved WireGuard interface name (e.g. "wg0_gnosisvpn" or "utun8").
-    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr]) -> Result<(), Error> {
+    /// When `lan_lockdown` is false, private LAN ranges are also let through.
+    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
         let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
-        let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips);
+        let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips, lan_lockdown);
         send_batch(&batch)
     }
 
@@ -132,13 +135,16 @@ impl<'a> PolicyBatch<'a> {
         }
     }
 
-    fn finalize(mut self, interface: &str, allowed_ips: &[IpAddr]) -> FinalizedBatch {
+    fn finalize(mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> FinalizedBatch {
         self.add_loopback_rules();
         self.add_dhcp_client_rules();
         self.add_ndp_rules();
         self.add_tunnel_rules(interface);
         for &ip in allowed_ips {
             self.add_allowed_ip_rules(ip);
+        }
+        if !lan_lockdown {
+            self.add_lan_rules();
         }
         self.batch.finalize()
     }
@@ -290,6 +296,29 @@ impl<'a> PolicyBatch<'a> {
         fwd_in_rule.add_expr(&nft_expr!(cmp != 0u32));
         fwd_in_rule.add_expr(&Verdict::Accept);
         self.batch.add(&fwd_in_rule, MsgType::Add);
+    }
+
+    fn add_lan_rules(&mut self) {
+        for chain in &[&self.out_chain, &self.forward_chain] {
+            for &net in &LAN_NETS {
+                let mut rule = Rule::new(chain);
+                check_net(&mut rule, End::Dst, net);
+                rule.add_expr(&Verdict::Accept);
+                self.batch.add(&rule, MsgType::Add);
+            }
+            for &net in &LAN_MULTICAST_NETS {
+                let mut rule = Rule::new(chain);
+                check_net(&mut rule, End::Dst, net);
+                rule.add_expr(&Verdict::Accept);
+                self.batch.add(&rule, MsgType::Add);
+            }
+        }
+        for &net in &LAN_NETS {
+            let mut rule = Rule::new(&self.in_chain);
+            check_net(&mut rule, End::Src, net);
+            rule.add_expr(&Verdict::Accept);
+            self.batch.add(&rule, MsgType::Add);
+        }
     }
 
     fn add_allowed_ip_rules(&mut self, ip: IpAddr) {

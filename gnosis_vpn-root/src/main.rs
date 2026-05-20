@@ -993,6 +993,7 @@ impl DaemonState {
             .send(routing_actor::Msg::SetAllowedIps {
                 ips,
                 interface,
+                lan_lockdown: self.config.connection.lan_lockdown,
                 reply: reply_tx,
             })
             .await;

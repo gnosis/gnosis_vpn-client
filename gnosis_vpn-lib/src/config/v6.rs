@@ -40,6 +40,7 @@ pub(super) struct Connection {
     pub(super) buffer: Option<BufferOptions>,
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+    pub(super) lan_lockdown: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -305,14 +306,15 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        options::Options::new(
+        options::Options {
             sessions,
-            ping_opts,
+            ping_options: ping_opts,
             buffer_sizes,
             max_surb_upstream,
             timeouts,
             health_check_intervals,
-        )
+            lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+        }
     }
 }
 

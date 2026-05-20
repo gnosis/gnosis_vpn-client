@@ -8,6 +8,7 @@ pub enum Msg {
     SetAllowedIps {
         ips: Vec<IpAddr>,
         interface: String,
+        lan_lockdown: bool,
         reply: oneshot::Sender<Result<(), String>>,
     },
     DisableKillswitch,
@@ -26,8 +27,8 @@ impl Actor {
 
     fn handle(&mut self, msg: Msg) {
         match msg {
-            Msg::SetAllowedIps { ips, interface, reply } => {
-                let result = self.firewall.apply_policy(&interface, &ips).map_err(|e| e.to_string());
+            Msg::SetAllowedIps { ips, interface, lan_lockdown, reply } => {
+                let result = self.firewall.apply_policy(&interface, &ips, lan_lockdown).map_err(|e| e.to_string());
                 if let Err(ref error) = result {
                     tracing::error!(?error, "failed to apply killswitch policy");
                 }
