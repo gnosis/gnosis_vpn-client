@@ -88,15 +88,12 @@ pub(super) struct HealthCheckIntervalOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct BufferOptions {
-    bridge: Option<ByteSize>,
     ping: Option<ByteSize>,
     main: Option<ByteSize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct MaxSurbUpstreamOptions {
-    #[serde(default, with = "human_bandwidth::serde")]
-    bridge: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
     ping: Option<Bandwidth>,
     #[serde(default, with = "human_bandwidth::serde")]
@@ -230,7 +227,6 @@ impl From<BufferOptions> for options::BufferSizes {
     fn from(buffer: BufferOptions) -> Self {
         let def = options::BufferSizes::default();
         options::BufferSizes {
-            bridge: buffer.bridge.unwrap_or(def.bridge),
             ping: buffer.ping.unwrap_or(def.ping),
             main: buffer.main.unwrap_or(def.main),
         }
@@ -241,7 +237,6 @@ impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
     fn from(surbs: MaxSurbUpstreamOptions) -> Self {
         let def = options::MaxSurbUpstream::default();
         options::MaxSurbUpstream {
-            bridge: surbs.bridge.unwrap_or(def.bridge),
             ping: surbs.ping.unwrap_or(def.ping),
             main: surbs.main.unwrap_or(def.main),
         }
