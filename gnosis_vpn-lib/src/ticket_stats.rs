@@ -1,5 +1,6 @@
-use edgli::hopr_lib::UnitaryFloatOps;
-use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
+use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
+use edgli::hopr_lib::api::types::primitive::prelude::UnitaryFloatOps;
+use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

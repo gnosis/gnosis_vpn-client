@@ -1,7 +1,7 @@
 use edgli::EdgliInitState;
-use edgli::blokli::SafelessInteractor;
-use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::blokli::IncentiveOperations;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -50,8 +50,8 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("Hopr params error: {0}")]
     HoprParams(#[from] worker_params::Error),
-    #[error("Safeless Interactor creation error: {0}")]
-    SafelessInteractorCreation(String),
+    #[error("IncentiveOperations creation error: {0}")]
+    IncentiveOperationsCreation(String),
 }
 
 pub struct Core {
@@ -77,7 +77,7 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    safeless_interactor: Option<Arc<SafelessInteractor>>,
+    incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
     strategy_handle: Option<AbortHandle>,
@@ -90,8 +90,8 @@ pub struct Core {
 
 #[derive(Debug, Clone)]
 enum Phase {
-    // initial phase - instantiate safeless interactor (blokli)
-    // and determine if safe is present
+    // initial phase — create the IncentiveOperations handle (Blokli-backed)
+    // and determine if a Safe has been deployed for this node
     Initial,
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
@@ -173,7 +173,7 @@ impl Core {
             phase: Phase::Initial,
             balances: None,
             hopr: None,
-            safeless_interactor: None,
+            incentive_operations: None,
             ticket_stats: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -392,20 +392,7 @@ impl Core {
                             .into_iter()
                             .map(|v| command::DestinationState {
                                 destination: v.clone(),
-                                route_health: Some(
-                                    self.route_healths
-                                        .get(&v.id)
-                                        .map(command::RouteHealthView::from)
-                                        // should never be here - mark unrecoverable to indicate misconfiguration
-                                        .unwrap_or_else(|| command::RouteHealthView {
-                                            state: route_health::RouteHealthState::Unrecoverable {
-                                                reason: route_health::UnrecoverableReason::InvalidId,
-                                            },
-                                            last_error: None,
-                                            checking_since: None,
-                                            consecutive_failures: 0,
-                                        }),
-                                ),
+                                route_health: self.route_healths.get(&v.id).map(command::RouteHealthView::from),
                             })
                             .collect();
                         let res = Response::status(command::StatusResponse {
@@ -558,7 +545,7 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
-            Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
+            Results::IncentiveOperations { res } => self.on_results_incentive_operations(res, results_sender).await,
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -567,7 +554,7 @@ impl Core {
                 }
             }
             Results::TicketStats { res } => match res {
-                Ok(stats) => self.on_ticket_stats(stats, results_sender),
+                Ok(stats) => self.on_ticket_stats(stats, results_sender).await,
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch ticket stats - retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
@@ -596,7 +583,7 @@ impl Core {
                     self.hopr = Some(Arc::new(hopr));
                     self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
-                    self.try_start_reactor(results_sender);
+                    self.try_start_reactor(results_sender).await;
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -608,6 +595,22 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
+                    // For AnyChannel routes stuck in NeedsFunding, notify them that channels
+                    // exist so they can transition to Routable. channel_funded() gates itself
+                    // by static_need so this is safe to broadcast.
+                    if let Some(hopr) = self.hopr.clone() {
+                        let channel_addrs: Vec<Address> = balances.channels_out.keys().cloned().collect();
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        for addr in &channel_addrs {
+                            for id in &dest_ids {
+                                if let (Some(rh), Some(dest)) =
+                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                                {
+                                    rh.channel_funded(*addr, &hopr, dest, &self.config.connection, results_sender);
+                                }
+                            }
+                        }
+                    }
                     self.balances = Some(balances);
                     self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
@@ -647,6 +650,13 @@ impl Core {
                             );
                             match transition {
                                 route_health::PeerTransition::NowNeedsFunding => {
+                                    // `needs_channel_funding()` returns Some only for
+                                    // `StaticNeed::Channel` routes (test/future use).
+                                    // All production 1+ hop routes use `StaticNeed::AnyChannel`,
+                                    // so nothing is spawned here — the ChannelLifecycleStrategy
+                                    // reactor opens and funds relay channels; the route exits
+                                    // NeedsFunding on the next Balances poll once a funded
+                                    // outgoing channel appears and `channel_funded` fires.
                                     if let Some(addr) = rh.needs_channel_funding() {
                                         self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
                                     }
@@ -673,18 +683,9 @@ impl Core {
 
             Results::FundChannel { address, res } => {
                 self.ongoing_channel_fundings.retain(|a| a != &address);
-                let dest_ids: Vec<String> = self
-                    .config
-                    .destinations
-                    .iter()
-                    .filter_map(|(_, d)| {
-                        if d.has_intermediate_channel(address) {
-                            Some(d.id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                // Broadcast to all route healths — channel_funded() itself determines
+                // applicability via static_need (Channel match or AnyChannel).
+                let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                 match res {
                     Ok(()) => {
                         tracing::info!(address = %address.to_checksum(), "channel funded");
@@ -870,24 +871,31 @@ impl Core {
                     }
                 }
             }
+
+            Results::RetryReactor => {
+                self.try_start_reactor(results_sender).await;
+            }
         };
         return true;
     }
 
-    async fn on_results_safeless_interactor(
+    async fn on_results_incentive_operations(
         &mut self,
-        res: Result<SafelessInteractor, runner::Error>,
+        res: Result<Arc<dyn IncentiveOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         match res {
-            Ok(safeless_interactor) => {
-                tracing::info!("safeless interactor created successfully");
-                self.safeless_interactor = Some(Arc::new(safeless_interactor));
+            Ok(incentive_operations) => {
+                tracing::info!("incentive operations handle created successfully");
+                self.incentive_operations = Some(incentive_operations);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
             }
             Err(err) => {
-                tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
+                tracing::error!(
+                    ?err,
+                    "failed to create incentive operations handle - retrying in 30 seconds"
+                );
                 self.spawn_initial_runner(results_sender, Duration::from_secs(30));
             }
         }
@@ -1126,7 +1134,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::create_safeless_interactor(&worker_params, blokli_config.into(), results_sender).await;
+                    runner::create_incentive_operations(&worker_params, blokli_config.into(), results_sender).await;
                 })
                 .await
         });
@@ -1142,11 +1150,11 @@ impl Core {
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
-                    tracing::info!("no persisted safe module found - querying safeless interactor");
+                    tracing::info!("no persisted safe module found - querying incentive operations");
                 } else {
                     tracing::warn!(
                         ?err,
-                        "error deserializing existing safe module - querying safeless interactor"
+                        "error deserializing existing safe module - querying incentive operations"
                     );
                 }
                 self.phase = Phase::CheckingSafe {
@@ -1164,12 +1172,12 @@ impl Core {
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::query_safe(safeless_interactor, results_sender).await
+                        runner::query_safe(incentive_operations, results_sender).await
                     })
                     .await
             });
@@ -1179,12 +1187,12 @@ impl Core {
     fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_balance(safeless_interactor, results_sender).await
+                        runner::node_balance(incentive_operations, results_sender).await
                     })
                     .await
             });
@@ -1206,11 +1214,11 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
-                        runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
+                        runner::safe_deployment(incentive_operations, presafe, results_sender).await;
                     })
                     .await
             });
@@ -1250,12 +1258,12 @@ impl Core {
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::ticket_stats(safeless_interactor, results_sender).await;
+                        runner::ticket_stats(incentive_operations, results_sender).await;
                     })
                     .await
             });
@@ -1278,7 +1286,7 @@ impl Core {
     }
 
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let (Some(safeless), Some(hopr)) = (self.safeless_interactor.clone(), self.hopr.clone()) {
+        if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
             let safe_address = hopr.info().safe_address;
             let cancel = self.cancel_node_wxhopr.clone();
             let results_sender = results_sender.clone();
@@ -1286,7 +1294,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_wxhopr_withdraw(safeless, safe_address, results_sender).await;
+                        runner::node_wxhopr_withdraw(ops, safe_address, results_sender).await;
                     })
                     .await
             });
@@ -1511,36 +1519,43 @@ impl Core {
         }
     }
 
-    fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
+    async fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
         if self.strategy_handle.is_some() {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        let Some(tv) = self.ticket_stats.and_then(|s| s.ticket_value().ok()) else {
-            return;
-        };
-        match edgli.start_telemetry_reactor(tv) {
+        match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(strategy_process);
             }
             Err(err) => {
-                tracing::error!(
-                    ?err,
-                    "failed to start edge node telemetry reactor - retrying ticket stats"
-                );
-                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
+                self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
             }
         }
     }
 
-    fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_retry_reactor(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    let _ = results_sender.send(Results::RetryReactor).await;
+                })
+                .await
+        });
+    }
+
+    async fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
         tracing::info!("received ticket stats from runner");
         match stats.ticket_value() {
             Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
                 self.ticket_stats = Some(stats);
-                self.try_start_reactor(results_sender);
+                self.try_start_reactor(results_sender).await;
             }
             Err(err) => {
                 tracing::error!(?err, %stats, "failed to determine ticket value from stats - retrying");

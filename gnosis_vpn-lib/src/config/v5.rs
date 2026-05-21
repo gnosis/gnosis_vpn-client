@@ -1,24 +1,193 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::network::types::types::{IpOrHost, RoutingOptions, SealedHost};
-use edgli::hopr_lib::{Address, NodeId, SessionCapabilities, SessionCapability, SessionTarget};
+use edgli::hopr_lib::HopRouting;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
+use edgli::hopr_lib::exports::transport::SessionTarget;
 use human_bandwidth::re::bandwidth::Bandwidth;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
-use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
-use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::ping;
-use crate::wireguard::Config as WireGuardConfig;
 
-const MAX_HOPS: u8 = 3;
+// Types from v6 that are schema-identical in v5 are re-used directly.
+// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below
+// because v5 includes a `bridge` field that v6 does not have.
+pub(super) use super::v6::{
+    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
+};
+use super::v6::{MAX_HOPS, validate_hops};
+
+// v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
+// can carry the `bridge` field that existed in v5 configs but is absent from v6.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Connection {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) http_timeout: Option<Duration>,
+    pub(super) bridge: Option<ConnectionProtocol>,
+    pub(super) wg: Option<ConnectionProtocol>,
+    pub(super) ping: Option<PingOptions>,
+    pub(super) buffer: Option<BufferOptions>,
+    pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
+    pub(super) announced_peer_minimum_score: Option<f64>,
+    pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+}
+
+// v5 buffer config includes `bridge`; it is accepted but dropped when converting
+// to runtime options because the v6 BufferSizes type has no bridge slot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct BufferOptions {
+    bridge: Option<ByteSize>,
+    ping: Option<ByteSize>,
+    main: Option<ByteSize>,
+}
+
+// v5 max_surb_upstream config includes `bridge`; same drop-on-conversion rule.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct MaxSurbUpstreamOptions {
+    #[serde(default, with = "human_bandwidth::serde")]
+    bridge: Option<Bandwidth>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    ping: Option<Bandwidth>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    main: Option<Bandwidth>,
+}
+
+impl Connection {
+    pub fn default_bridge_capabilities() -> Vec<Capability> {
+        vec![Capability::Segmentation, Capability::NoRateControl]
+    }
+
+    pub fn default_wg_capabilities() -> Vec<Capability> {
+        vec![Capability::Segmentation, Capability::NoDelay]
+    }
+
+    pub fn default_bridge_target() -> SessionTarget {
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            8000,
+        )))))
+    }
+
+    pub fn default_wg_target() -> SessionTarget {
+        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            51820,
+        )))))
+    }
+
+    pub fn default_http_timeout() -> Duration {
+        Duration::from_secs(60)
+    }
+}
+
+impl From<BufferOptions> for options::BufferSizes {
+    fn from(buf: BufferOptions) -> Self {
+        let def = options::BufferSizes::default();
+        // bridge is v5-only and is not forwarded to runtime options
+        options::BufferSizes {
+            ping: buf.ping.unwrap_or(def.ping),
+            main: buf.main.unwrap_or(def.main),
+        }
+    }
+}
+
+impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
+    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
+        let def = options::MaxSurbUpstream::default();
+        // bridge is v5-only and is not forwarded to runtime options
+        options::MaxSurbUpstream {
+            ping: surbs.ping.unwrap_or(def.ping),
+            main: surbs.main.unwrap_or(def.main),
+        }
+    }
+}
+
+impl From<Option<Connection>> for options::Options {
+    fn from(conn: Option<Connection>) -> Self {
+        let connection = conn.as_ref();
+        let bridge_target = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target)
+            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_bridge_target());
+        let bridge_caps = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.capabilities.clone())
+            .unwrap_or(Connection::default_bridge_capabilities());
+        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
+
+        let wg_target = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_wg_target());
+        let wg_caps = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.capabilities.clone())
+            .unwrap_or(Connection::default_wg_capabilities());
+        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
+
+        let sessions = options::Sessions {
+            bridge: params_bridge,
+            wg: params_wg,
+        };
+
+        let def_opts = ping::Options::default();
+        let ping_opts = connection
+            .and_then(|c| c.ping.as_ref())
+            .map(|p| ping::Options {
+                address: p.address.unwrap_or(def_opts.address),
+                timeout: p.timeout.unwrap_or(def_opts.timeout),
+                ttl: p.ttl.unwrap_or(def_opts.ttl),
+                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
+            })
+            .unwrap_or(def_opts);
+
+        let buffer_sizes = connection
+            .and_then(|c| c.buffer.clone())
+            .map(|b| b.into())
+            .unwrap_or_default();
+        let max_surb_upstream = connection
+            .and_then(|c| c.max_surb_upstream.clone())
+            .map(|b| b.into())
+            .unwrap_or_default();
+        let http_timeout = connection
+            .and_then(|c| c.http_timeout)
+            .unwrap_or(Connection::default_http_timeout());
+
+        let timeouts = options::Timeouts { http: http_timeout };
+
+        let def_intervals = options::HealthCheckIntervals::default();
+        let health_check_intervals = connection
+            .and_then(|c| c.health_check_intervals.as_ref())
+            .map(|h| options::HealthCheckIntervals {
+                ping: h.ping.unwrap_or(def_intervals.ping),
+                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
+                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
+                tunnel_ping_max_failures: h
+                    .tunnel_ping_max_failures
+                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
+            })
+            .unwrap_or(def_intervals);
+
+        options::Options::new(
+            sessions,
+            ping_opts,
+            buffer_sizes,
+            max_surb_upstream,
+            timeouts,
+            health_check_intervals,
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -45,106 +214,6 @@ pub(super) enum DestinationPath {
     Intermediates(#[serde_as(as = "Vec<DisplayFromStr>")] Vec<Address>),
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Connection {
-    #[serde(default, with = "humantime_serde::option")]
-    http_timeout: Option<Duration>,
-    bridge: Option<ConnectionProtocol>,
-    wg: Option<ConnectionProtocol>,
-    ping: Option<PingOptions>,
-    buffer: Option<BufferOptions>,
-    max_surb_upstream: Option<MaxSurbUpstreamOptions>,
-    announced_peer_minimum_score: Option<f64>,
-    health_check_intervals: Option<HealthCheckIntervalOptions>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) enum Capability {
-    #[serde(alias = "segmentation")]
-    Segmentation,
-    #[serde(alias = "retransmission")]
-    Retransmission,
-    #[serde(alias = "retransmission_ack_only")]
-    RetransmissionAckOnly,
-    #[serde(alias = "no_delay")]
-    NoDelay,
-    #[serde(alias = "no_rate_control")]
-    NoRateControl,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct ConnectionProtocol {
-    capabilities: Option<Vec<Capability>>,
-    target: Option<SocketAddr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct PingOptions {
-    address: Option<IpAddr>,
-    #[serde(default, with = "humantime_serde::option")]
-    timeout: Option<Duration>,
-    ttl: Option<u32>,
-    seq_count: Option<u16>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct HealthCheckIntervalOptions {
-    #[serde(default, with = "humantime_serde::option")]
-    ping: Option<Duration>,
-    #[serde(default, deserialize_with = "validate_n_pings")]
-    health_every_n_pings: Option<u32>,
-    #[serde(default, deserialize_with = "validate_n_pings")]
-    version_every_n_pings: Option<u32>,
-    #[serde(default, with = "humantime_serde::option")]
-    tunnel_ping: Option<Duration>,
-    #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
-    tunnel_ping_max_failures: Option<u32>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct BufferOptions {
-    bridge: Option<ByteSize>,
-    ping: Option<ByteSize>,
-    main: Option<ByteSize>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct MaxSurbUpstreamOptions {
-    #[serde(default, with = "human_bandwidth::serde")]
-    bridge: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    ping: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    main: Option<Bandwidth>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct WireGuard {
-    pub(super) listen_port: Option<u16>,
-    pub(super) allowed_ips: Option<String>,
-    pub(super) force_private_key: Option<String>,
-    pub(super) dns: Option<WireGuardDNS>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct WireGuardDNS {
-    pub overwrite: bool,
-    pub servers: Option<String>,
-}
-
-impl WireGuardDNS {
-    fn default_server() -> String {
-        "1.1.1.1,8.8.8.8".to_string()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct BlokliConfig {
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) connection_sync_timeout: Option<Duration>,
-    pub(super) sync_tolerance: Option<usize>,
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
@@ -290,241 +359,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong_keys
 }
 
-fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<u32>::deserialize(deserializer)?;
-    if value == Some(0) {
-        Err(serde::de::Error::custom("value must be greater than zero"))
-    } else {
-        Ok(value)
-    }
-}
-
-fn validate_tunnel_ping_max_failures<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<i64>::deserialize(deserializer)?;
-    match value {
-        None => Ok(None),
-        Some(n) if n < 1 => Err(serde::de::Error::custom("tunnel_ping_max_failures must be at least 1")),
-        Some(n) => u32::try_from(n)
-            .map(Some)
-            .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
-    }
-}
-
-fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = u8::deserialize(deserializer)?;
-    if value <= MAX_HOPS {
-        Ok(value)
-    } else {
-        Err(serde::de::Error::custom(format!(
-            "hops must be less than or equal to {MAX_HOPS}"
-        )))
-    }
-}
-
-fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
-    let mut flags = SessionCapabilities::empty();
-    for cap in caps {
-        let cap = match cap {
-            Capability::Segmentation => SessionCapability::Segmentation,
-            Capability::Retransmission => SessionCapability::RetransmissionNack,
-            Capability::RetransmissionAckOnly => SessionCapability::RetransmissionAck,
-            Capability::NoDelay => SessionCapability::NoDelay,
-            Capability::NoRateControl => SessionCapability::NoRateControl,
-        };
-        flags |= cap;
-    }
-    flags
-}
-
-impl Connection {
-    pub fn default_bridge_capabilities() -> Vec<Capability> {
-        vec![
-            Capability::Segmentation,
-            Capability::Retransmission,
-            Capability::RetransmissionAckOnly,
-            Capability::NoRateControl,
-        ]
-    }
-
-    pub fn default_wg_capabilities() -> Vec<Capability> {
-        vec![Capability::Segmentation, Capability::NoDelay]
-    }
-
-    pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
-    }
-
-    pub fn default_wg_target() -> SessionTarget {
-        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            51820,
-        )))))
-    }
-
-    pub fn default_http_timeout() -> Duration {
-        Duration::from_secs(60)
-    }
-
-    pub fn default_announced_peer_minimum_score() -> f64 {
-        0.1
-    }
-}
-
-impl From<BufferOptions> for options::BufferSizes {
-    fn from(buffer: BufferOptions) -> Self {
-        let def = options::BufferSizes::default();
-        options::BufferSizes {
-            bridge: buffer.bridge.unwrap_or(def.bridge),
-            ping: buffer.ping.unwrap_or(def.ping),
-            main: buffer.main.unwrap_or(def.main),
-        }
-    }
-}
-
-impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
-    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
-        let def = options::MaxSurbUpstream::default();
-        options::MaxSurbUpstream {
-            bridge: surbs.bridge.unwrap_or(def.bridge),
-            ping: surbs.ping.unwrap_or(def.ping),
-            main: surbs.main.unwrap_or(def.main),
-        }
-    }
-}
-
-impl From<Option<Connection>> for options::Options {
-    fn from(conn: Option<Connection>) -> Self {
-        let connection = conn.as_ref();
-        let bridge_target = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_bridge_target());
-        let bridge_caps = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.capabilities.clone())
-            .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
-
-        let wg_target = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_wg_target());
-        let wg_caps = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.capabilities.clone())
-            .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
-
-        let sessions = options::Sessions {
-            bridge: params_bridge,
-            wg: params_wg,
-        };
-
-        let def_opts = ping::Options::default();
-        let ping_opts = connection
-            .and_then(|c| c.ping.as_ref())
-            .map(|p| ping::Options {
-                address: p.address.unwrap_or(def_opts.address),
-                timeout: p.timeout.unwrap_or(def_opts.timeout),
-                ttl: p.ttl.unwrap_or(def_opts.ttl),
-                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
-            })
-            .unwrap_or(def_opts);
-
-        let buffer_sizes = connection
-            .and_then(|c| c.buffer.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let max_surb_upstream = connection
-            .and_then(|c| c.max_surb_upstream.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let http_timeout = connection
-            .and_then(|c| c.http_timeout)
-            .unwrap_or(Connection::default_http_timeout());
-
-        let timeouts = options::Timeouts { http: http_timeout };
-
-        let announced_peer_minimum_score = connection
-            .and_then(|c| c.announced_peer_minimum_score)
-            .unwrap_or(Connection::default_announced_peer_minimum_score());
-
-        let def_intervals = options::HealthCheckIntervals::default();
-        let health_check_intervals = connection
-            .and_then(|c| c.health_check_intervals.as_ref())
-            .map(|h| options::HealthCheckIntervals {
-                ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
-                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
-                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
-                tunnel_ping_max_failures: h
-                    .tunnel_ping_max_failures
-                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
-            })
-            .unwrap_or(def_intervals);
-
-        options::Options::new(
-            sessions,
-            ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
-            timeouts,
-            announced_peer_minimum_score,
-            health_check_intervals,
-        )
-    }
-}
-
-impl From<Option<WireGuard>> for WireGuardConfig {
-    fn from(value: Option<WireGuard>) -> Self {
-        let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
-        let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
-        let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
-        let dns = value
-            .as_ref()
-            .and_then(|wg| {
-                wg.dns.as_ref().map(|dns| {
-                    if dns.overwrite {
-                        Some(dns.servers.clone().unwrap_or(WireGuardDNS::default_server()))
-                    } else {
-                        None
-                    }
-                })
-            })
-            .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
-    }
-}
-
-impl From<Option<BlokliConfig>> for HoprBlokliConfig {
-    fn from(value: Option<BlokliConfig>) -> Self {
-        let connection_sync_timeout = value
-            .as_ref()
-            .and_then(|b| b.connection_sync_timeout)
-            .unwrap_or_else(|| HoprBlokliConfig::default().connection_sync_timeout);
-        // Edge client uses less tolerance than the default of 90%
-        let sync_tolerance = value.as_ref().and_then(|b| b.sync_tolerance).unwrap_or(50);
-        HoprBlokliConfig {
-            connection_sync_timeout,
-            sync_tolerance,
-        }
-    }
-}
-
 impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
@@ -538,6 +372,7 @@ impl TryFrom<Config> for config::Config {
             destinations,
             wireguard,
             blokli,
+            strategy: Default::default(),
         })
     }
 }
@@ -554,10 +389,16 @@ pub fn convert_destinations(
     for (id, dest) in config_dests.iter() {
         let path = match dest.path.clone() {
             Some(DestinationPath::Intermediates(p)) => {
-                RoutingOptions::IntermediatePath(p.iter().map(|addr| NodeId::Chain(*addr)).collect())
+                let hop_count = p.len().min(MAX_HOPS as usize);
+                tracing::warn!(
+                    id,
+                    hop_count,
+                    "intermediates routing is deprecated; treating as hop count"
+                );
+                HopRouting::try_from(hop_count)?
             }
-            Some(DestinationPath::Hops(h)) => RoutingOptions::Hops(h.try_into()?),
-            None => RoutingOptions::Hops(1.try_into()?),
+            Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
+            None => HopRouting::try_from(1)?,
         };
 
         let meta = dest.meta.clone().unwrap_or_default();
@@ -570,7 +411,55 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, convert_destinations};
+    use edgli::hopr_lib::HopRouting;
+
+    fn parse(toml: &str) -> Config {
+        toml::from_str(toml).expect("valid TOML")
+    }
+
+    #[test]
+    fn convert_destinations_hops_path_preserved() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_none_path_defaults_to_1_hop() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_empty_map_errors() {
+        let result = convert_destinations(Some(std::collections::HashMap::new()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_destinations_none_errors() {
+        let result = convert_destinations(None);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_minimal_config() -> anyhow::Result<()> {
@@ -656,7 +545,7 @@ dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 
 [blokli]
 connection_sync_timeout = "30s"
-sync_tolerance = 50
+sync_tolerance = 90
 "#####;
         toml::from_str::<Config>(config)?;
 

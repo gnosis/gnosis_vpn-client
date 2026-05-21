@@ -1,8 +1,7 @@
 //! The runner module for `core::connection::down` struct.
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use edgli::hopr_lib::SessionClientConfig;
-use edgli::hopr_lib::SurbBalancerConfig;
+use edgli::hopr_lib::HoprSessionClientConfig;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -10,7 +9,7 @@ use std::sync::Arc;
 
 use crate::connection;
 use crate::connection::options::Options;
-use crate::core::runner::{self, Results};
+use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
@@ -48,9 +47,7 @@ impl Runner {
                 evt: Event::OpenBridge,
             })
             .await;
-        let bridge_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge)?;
-        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_config).await?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options).await?;
 
         // 2. unregister wg public key
         let _ = results_sender
@@ -86,13 +83,15 @@ async fn open_bridge_session(
     hopr: &Hopr,
     down: &connection::down::Down,
     options: &Options,
-    surb_management: SurbBalancerConfig,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
+    let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: down.destination.routing.clone(),
-        return_path_options: down.destination.routing.clone(),
-        surb_management: Some(surb_management),
+        forward_path: down.destination.routing,
+        return_path: down.destination.routing,
+        // only send 1 SURB alongside our HTTP requests
+        // health responses always fit into one packet
+        always_max_out_surbs: false,
+        surb_management: None,
         ..Default::default()
     };
     hopr.open_session(

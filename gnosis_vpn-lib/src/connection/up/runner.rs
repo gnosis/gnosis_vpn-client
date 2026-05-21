@@ -2,8 +2,7 @@
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
-use edgli::hopr_lib::SessionClientConfig;
-use edgli::hopr_lib::SurbBalancerConfig;
+use edgli::hopr_lib::{HoprSessionClientConfig, exports::transport::SurbBalancerConfig};
 use tokio::sync::{mpsc, oneshot};
 
 use std::fmt::{self, Display};
@@ -76,8 +75,13 @@ impl Runner {
 
         // 4. open ping session
         let _ = results_sender.send(progress(Progress::OpenPing)).await;
+        // TODO: The ping session must currently use the same buffer/surb settings as the main
+        // session. Using dedicated ping settings causes connections to fail — the edge client
+        // requires matching SURB balancer config across both phases. Once the underlying
+        // edge-client issue is resolved, replace `.main` with `.ping` here so each phase gets
+        // its own tuned config.
         let ping_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping)?;
+            runner::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main)?;
         let session = open_ping_session(
             &self.hopr,
             &self.destination,
@@ -92,7 +96,7 @@ impl Runner {
         // gather peers before we start any routing attempt to ensure static routing might still work
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let mut peer_ips = gather_peer_ips(&self.hopr).await?;
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
 
@@ -276,10 +280,13 @@ async fn open_bridge_session(
     options: &Options,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
+    let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path_options: destination.routing.clone(),
-        return_path_options: destination.routing.clone(),
+        forward_path: destination.routing,
+        return_path: destination.routing,
+        // only send 1 SURB alongside our HTTP requests
+        // health responses always fit into one packet
+        always_max_out_surbs: false,
         surb_management: None,
         ..Default::default()
     };
@@ -355,10 +362,10 @@ async fn open_ping_session(
     surb_management: SurbBalancerConfig,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = SessionClientConfig {
+    let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path_options: destination.routing.clone(),
-        return_path_options: destination.routing.clone(),
+        forward_path: destination.routing,
+        return_path: destination.routing,
         surb_management: Some(surb_management),
         ..Default::default()
     };
@@ -477,8 +484,8 @@ async fn request_static_wg_tunnel(
     )
 }
 
-async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr>, HoprError> {
-    let peers = hopr.announced_peers(minimum_score).await?;
+async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
+    let peers = hopr.announced_peers().await?;
     let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
     Ok(peer_ips)
 }

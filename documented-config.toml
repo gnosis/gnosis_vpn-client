@@ -6,7 +6,7 @@
 ###
 
 # general config file version
-version = 5
+version = 6
 
 ###
 ## destinations section - configure available target destinations
@@ -19,24 +19,23 @@ version = 5
 # address = "<exit node address>"
 # additional information about this exit node
 # meta = { location = <location> }
-# session path should either be intermediates or hops = {nr}
-# path = { intermediates = [ "12D3KooWFUD4BSzjopNzEzhSi9chAkZXRKGtQJzU482rJnyd2ZnP" ] }
+# session path: number of intermediate hops (0–3)
 # path = { hops = 1 }
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 meta    = { location = "Germany" }
-path    = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
+path    = { hops = 1 }
 
 [destinations.USA]
 address = "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"
 meta    = { location = "USA" }
-path    = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
+path    = { hops = 1 }
 
 [destinations.Spain]
 address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
 meta    = { location = "Spain" }
-path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
+path    = { hops = 1 }
 
 ###
 ## connection section - adjust for more fine grained connection control
@@ -75,14 +74,12 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 # adjust session internal options
 # [connection.max_surb_upstream]
-# bridge = "512 Kb/s"
-# ping = "1 Mb/s"
+# ping = "512 Kb/s"
 # main = "16 Mb/s"
 #
 # [connection.buffer]
-# bridge = "32 kB"
-# ping = "32 kB"
-# main = "10 MB"
+# ping = "1 MB"
+# main = "5 MB"
 
 ###
 ## wireguard section - specific VPN-related settings
@@ -105,3 +102,14 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # [blokli]
 # connection_sync_timeout = "30s"
 # sync_tolerance = 50
+
+###
+## strategy section - channel lifecycle and funding parameters
+
+# [strategy]
+# number of forwarded packets the initial channel stake is sized to cover
+# desired_message_count = 1000000
+# minimum number of open outgoing channels to maintain
+# min_open_channels = 5
+# target number of open outgoing channels
+# target_open_channels = 8

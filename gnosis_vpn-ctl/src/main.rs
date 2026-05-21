@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::command::{self, Command, Response};
-use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
 use gnosis_vpn_lib::socket;
 
 mod cli;
@@ -257,9 +256,8 @@ fn pretty_print(resp: &Response) {
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
-                "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
+                "Node Address: {}\nSafe Address: {}\n",
                 info.node_address.to_checksum(),
-                info.node_peer_id,
                 info.safe_address.to_checksum()
             ));
             str_resp.push_str(&format!(
@@ -445,56 +443,31 @@ fn print_connected_stats(stats: &command::ConnStats) {
 
 fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
     let mut str_resp = String::new();
-    match stats.destination.routing {
-        RoutingOptions::IntermediatePath(ref nodes) => {
+    match stats.destination.routing.hop_count() {
+        0 => {
             str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-VIA-->",
-                node_addr = stats.node_address.to_checksum()
-            ));
-            for n in nodes.clone() {
-                let formatted = match n {
-                    NodeId::Chain(addr) => addr.to_checksum(),
-                    NodeId::Offchain(peer_id) => peer_id.to_string(),
-                };
-                str_resp.push_str(&format!(" {formatted} --VIA-->"));
-            }
-            // safe to truncate as nodes cannot be empty - ensured by type definition
-            str_resp.truncate(str_resp.len() - 8);
-            str_resp.push_str(&format!(
-                "--TO--> {addr}(exit)\n",
-                addr = stats.destination.address.to_checksum()
+                "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
             ));
         }
-        RoutingOptions::Hops(nr) => {
-            let nr_val: usize = nr.into();
-            match nr_val {
-                0 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        exit = stats.destination.id,
-                    ));
-                }
-                1 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        exit = stats.destination.id,
-                    ));
-                }
-                _ => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        nr = nr_val,
-                        exit = stats.destination.id,
-                    ));
-                }
-            }
+        1 => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
         }
-    };
+        nr => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
+        }
+    }
     str_resp
 }

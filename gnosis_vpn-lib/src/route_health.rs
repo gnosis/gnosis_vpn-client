@@ -21,7 +21,7 @@
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
 //! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
-use edgli::hopr_lib::SessionClientConfig;
+use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -33,7 +33,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
+use crate::connection::destination::{Address, Destination, HopRouting};
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
@@ -42,6 +42,21 @@ use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+/// Retry interval for the first few health-check failures while the HOPR
+/// transport layer is still establishing P2P connections to relays.
+///
+/// Timing rationale:
+///   - The path planner caches selected relay paths for 60 s (PathPlannerConfig
+///     default, not YAML-configurable).  If the retry fires before the cache
+///     expires, the same relay set is reused — potentially picking the same
+///     unreachable relay again.
+///   - 90 s > 60 s cache TTL, so each warmup retry triggers a fresh relay
+///     selection with an up-to-date connected-peer set.
+///   - After GRAPH_WARMUP_RETRY_COUNT retries (≈ 396 s total) the path
+///     selector is expected to have discovered all reachable relays and
+///     session establishment succeeds.
+const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(90);
+const GRAPH_WARMUP_RETRY_COUNT: u32 = 3;
 
 /// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
 /// are returned unchanged so initial spawns are not delayed.
@@ -83,9 +98,16 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 /// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
-    /// A funded channel to this specific address (first intermediate hop).
+    /// A funded outgoing channel to this specific address.
+    ///
+    /// Not derived from routing in production: `derive_static_need` returns
+    /// `Peering` for 0-hop and `AnyChannel` for 1+ hop. This variant is kept
+    /// for tests and future routing modes that require funding to a known
+    /// peer (e.g. an explicit single-relay path).
     Channel(Address),
-    /// Any funded outgoing channel is sufficient (hop count without a fixed path).
+    /// Any funded outgoing channel is sufficient — used for all 1+ hop
+    /// routes. Multi-hop payments flow through relay channels kept funded
+    /// by the AutoFunding strategy, independently of the destination.
     AnyChannel,
     /// Direct peering with the destination — no channel needed (0-hop route).
     Peering(Address),
@@ -98,8 +120,6 @@ pub enum StaticNeed {
 pub enum UnrecoverableReason {
     /// Direct (0-hop) peering is configured but insecure peering is disabled.
     NotAllowed,
-    /// The configured path contains an offchain node ID, which is not supported.
-    InvalidId,
     /// The configured intermediate path is empty.
     InvalidPath,
     /// The exit server only offers API versions we do not support.
@@ -238,41 +258,31 @@ impl RouteHealth {
     }
 }
 
-/// Derive the static need from routing alone. For invalid routing variants
-/// (empty path / offchain-first), we fall back to `AnyChannel` — the resulting
-/// state will be `Unrecoverable` so the field is never observed.
-fn derive_static_need(routing: &RoutingOptions, dest_address: Address) -> StaticNeed {
-    match routing.clone() {
-        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => StaticNeed::Peering(dest_address),
-        RoutingOptions::Hops(_) => StaticNeed::AnyChannel,
-        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(address)) => StaticNeed::Channel(address),
-            _ => StaticNeed::AnyChannel,
-        },
+/// Derive the static need from routing alone.
+///
+/// For 0-hop routes the destination must be a direct transport peer and no
+/// channel is needed. For 1+ hop routes any connected relay peer is sufficient;
+/// the HOPR AutoFunding strategy keeps this node's outgoing channels (e.g.
+/// edge → relay) topped up, and the route advances once at least one such
+/// outgoing channel appears in the balance state (`AnyChannel`).
+fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
+    if routing.hop_count() == 0 {
+        StaticNeed::Peering(dest_address)
+    } else {
+        StaticNeed::AnyChannel
     }
 }
 
-/// Pick the starting state purely from routing config. Invalid or
-/// disallowed routing variants short-circuit straight to `Unrecoverable`;
-/// everything else starts at `NeedsPeering` and waits for Core to feed in
-/// the peer set.
-fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> RouteHealthState {
-    match routing.clone() {
-        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 && !allow_insecure => {
-            RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::NotAllowed,
-            }
+/// Pick the starting state purely from routing config. 0-hop routing without
+/// `allow_insecure` short-circuits to `Unrecoverable`; everything else starts
+/// at `NeedsPeering` and waits for Core to feed in the peer set.
+fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHealthState {
+    if routing.hop_count() == 0 && !allow_insecure {
+        RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::NotAllowed,
         }
-        RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering { funded: false },
-        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(_)) => RouteHealthState::NeedsPeering { funded: false },
-            Some(NodeId::Offchain(_)) => RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::InvalidId,
-            },
-            None => RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::InvalidPath,
-            },
-        },
+    } else {
+        RouteHealthState::NeedsPeering { funded: false }
     }
 }
 
@@ -372,8 +382,11 @@ impl RouteHealth {
         sender: &mpsc::Sender<Results>,
     ) -> PeerTransition {
         let is_peered = match &self.static_need {
-            StaticNeed::Channel(addr) | StaticNeed::Peering(addr) => addresses.contains(addr),
-            StaticNeed::AnyChannel => !addresses.is_empty(),
+            // 0-hop: destination must be a direct transport peer — packets go straight to it.
+            StaticNeed::Peering(addr) => addresses.contains(addr),
+            // 1+ hop and AnyChannel: any connected relay can carry packets to the destination;
+            // the exit node itself does not need to be a direct transport peer.
+            StaticNeed::Channel(_) | StaticNeed::AnyChannel => !addresses.is_empty(),
         };
 
         match &self.state {
@@ -908,10 +921,13 @@ impl HealthSession {
     /// Uses the configured bridge capabilities/target but disables SURB
     /// management — the session is short-lived and not used for user traffic.
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
-        let cfg = SessionClientConfig {
+        let cfg = HoprSessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
-            forward_path_options: destination.routing.clone(),
-            return_path_options: destination.routing.clone(),
+            forward_path: destination.routing,
+            return_path: destination.routing,
+            // only send 1 SURB alongside our HTTP requests
+            // health responses always fit into one packet
+            always_max_out_surbs: false,
             surb_management: None,
             ..Default::default()
         };
@@ -973,10 +989,23 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
-    /// Delay before the next retry after a failed exit-health cycle: linear growth in
-    /// `exit_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
+    /// Delay before the next retry after a failed exit-health cycle.
+    ///
+    /// The first `GRAPH_WARMUP_RETRY_COUNT` failures use a short
+    /// `GRAPH_WARMUP_RETRY_INTERVAL` so the retry fires after the HOPR
+    /// transport heartbeat has had time to probe relay peers and populate
+    /// `is_connected()` in the channel graph (typically within one probe
+    /// cycle, ~3 s).  Subsequent failures fall through to the normal linear
+    /// backoff clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
     fn failure_backoff(&self) -> Duration {
-        (FAILURE_INTERVAL * self.exit_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+        if self.exit_failures <= GRAPH_WARMUP_RETRY_COUNT {
+            GRAPH_WARMUP_RETRY_INTERVAL
+        } else {
+            let normal_failures = self.exit_failures - GRAPH_WARMUP_RETRY_COUNT;
+            FAILURE_INTERVAL
+                .saturating_mul(normal_failures)
+                .min(MAX_INTERVAL_BETWEEN_FAILURES)
+        }
     }
 }
 
@@ -1022,7 +1051,6 @@ impl Display for UnrecoverableReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UnrecoverableReason::NotAllowed => write!(f, "direct peering not allowed (insecure peering disabled)"),
-            UnrecoverableReason::InvalidId => write!(f, "path contains offchain node ID (unsupported)"),
             UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
             UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
                 write!(
@@ -1070,5 +1098,151 @@ impl Display for ExitHealth {
             self.health,
             self.versions,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    /// Mirror the `is_peered` logic from `peers()` so we can test it without
+    /// constructing heavyweight `Arc<Hopr>` / `Options` / channel types.
+    fn is_peered(need: &StaticNeed, connected: &HashSet<Address>) -> bool {
+        match need {
+            StaticNeed::Peering(a) => connected.contains(a),
+            StaticNeed::Channel(_) | StaticNeed::AnyChannel => !connected.is_empty(),
+        }
+    }
+
+    // --- derive_static_need ---
+
+    #[test]
+    fn zero_hop_routing_yields_peering() {
+        let dest = addr(1);
+        let routing = HopRouting::try_from(0).expect("0-hop is valid");
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Peering(dest));
+    }
+
+    #[test]
+    fn one_hop_routing_yields_any_channel() {
+        // For 1+ hop routes the exit is reached through HOPR relays; any relay
+        // channel satisfies the need. derive_static_need must return AnyChannel,
+        // not Channel(dest), so we never proactively fund a direct exit channel
+        // (which would only enable 0-hop routing, not 1-hop).
+        let dest = addr(2);
+        let routing = HopRouting::try_from(1).expect("1-hop is valid");
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
+    }
+
+    // --- is_peered for Channel / AnyChannel routes ---
+
+    #[test]
+    fn any_channel_is_peered_when_any_relay_is_connected() {
+        let relay = addr(20);
+        let need = StaticNeed::AnyChannel;
+
+        let mut peers = HashSet::new();
+        peers.insert(relay);
+
+        assert!(is_peered(&need, &peers));
+    }
+
+    #[test]
+    fn channel_route_is_peered_when_any_relay_is_connected() {
+        // Channel(dest) also uses any-peer semantics; the dest need not be a
+        // direct transport peer for multi-hop routing.
+        let dest = addr(10);
+        let relay = addr(20);
+        let need = StaticNeed::Channel(dest);
+
+        let mut peers = HashSet::new();
+        peers.insert(relay); // relay present, dest absent
+
+        assert!(is_peered(&need, &peers), "relay peer should satisfy Channel need");
+    }
+
+    #[test]
+    fn channel_route_is_not_peered_when_no_peers_at_all() {
+        let dest = addr(10);
+        let need = StaticNeed::Channel(dest);
+        assert!(!is_peered(&need, &HashSet::new()));
+    }
+
+    // --- failure_backoff ---
+
+    fn backoff_at(failures: u32) -> Duration {
+        use crate::connection::destination::{Destination, HopRouting};
+        use tokio_util::sync::CancellationToken;
+        let dest = Destination::new(
+            "test".to_string(),
+            addr(1),
+            HopRouting::try_from(1).unwrap(),
+            Default::default(),
+        );
+        let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());
+        rh.exit_failures = failures;
+        rh.failure_backoff()
+    }
+
+    #[test]
+    fn failure_backoff_uses_warmup_interval_for_first_failures() {
+        for n in 1..=GRAPH_WARMUP_RETRY_COUNT {
+            assert_eq!(
+                backoff_at(n),
+                GRAPH_WARMUP_RETRY_INTERVAL,
+                "failure {n} should use warmup interval"
+            );
+        }
+    }
+
+    #[test]
+    fn failure_backoff_switches_to_linear_after_warmup() {
+        let first_normal = GRAPH_WARMUP_RETRY_COUNT + 1;
+        assert_eq!(
+            backoff_at(first_normal),
+            FAILURE_INTERVAL,
+            "first post-warmup failure should equal one FAILURE_INTERVAL"
+        );
+        assert_eq!(
+            backoff_at(first_normal + 1),
+            FAILURE_INTERVAL * 2,
+            "second post-warmup failure should equal two FAILURE_INTERVALs"
+        );
+    }
+
+    #[test]
+    fn failure_backoff_clamps_at_max_interval() {
+        assert_eq!(
+            backoff_at(u32::MAX),
+            MAX_INTERVAL_BETWEEN_FAILURES,
+            "backoff must not exceed MAX_INTERVAL_BETWEEN_FAILURES"
+        );
+    }
+
+    // --- is_peered for Peering routes (0-hop) ---
+
+    #[test]
+    fn peering_route_requires_dest_to_be_direct_peer() {
+        let dest = addr(10);
+        let relay = addr(20);
+        let need = StaticNeed::Peering(dest);
+
+        let mut only_relay = HashSet::new();
+        only_relay.insert(relay);
+        assert!(
+            !is_peered(&need, &only_relay),
+            "relay alone must not satisfy Peering need"
+        );
+
+        let mut with_dest = HashSet::new();
+        with_dest.insert(dest);
+        assert!(
+            is_peered(&need, &with_dest),
+            "dest as direct peer must satisfy Peering need"
+        );
     }
 }

@@ -1,24 +1,22 @@
-use edgli::hopr_lib::{Address, Balance, NodeId, RoutingOptions, WxHOPR, XDai};
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+};
 
-use std::collections::HashMap;
-use std::fmt::{self, Display};
-
-use crate::balance::{self, FundingIssue};
-use crate::connection::destination::Destination;
-use crate::info::Info;
-use crate::ticket_stats::{self, TicketStats};
+use crate::{
+    balance::{self, FundingIssue},
+    connection::destination::Destination,
+    info::Info,
+    ticket_stats::{self, TicketStats},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
-    pub destination: ChannelDestination,
+    pub address: Address,
     pub balance: ChannelBalance,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ChannelDestination {
-    Unconfigured(Address),
-    Configured((String, Address)),
+    pub matched_exit: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -49,7 +47,7 @@ impl BalanceResponse {
     ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
-        let mut channels_out = from_balances(balances.channels_out.iter(), destinations.iter());
+        let mut channels_out = from_balances(balances.channels_out.iter(), destinations);
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
         let ticket_value = ticket_stats.ticket_value()?;
@@ -68,29 +66,19 @@ impl BalanceResponse {
     }
 }
 
-fn from_balances<'a, 'b>(
+fn from_balances<'a>(
     channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>,
-    destinations: impl Iterator<Item = (&'b String, &'b Destination)>,
+    destinations: &HashMap<String, Destination>,
 ) -> Vec<ChannelOut> {
-    let destinations_by_relay_address: HashMap<Address, String> = destinations
-        .filter_map(|(id, dest)| match dest.routing.clone() {
-            RoutingOptions::Hops(_) => None,
-            RoutingOptions::IntermediatePath(nodes) => nodes.into_iter().next().and_then(|node_id| match node_id {
-                NodeId::Chain(addr) => Some((addr, id.clone())),
-                NodeId::Offchain(_) => None,
-            }),
-        })
+    let addr_to_id: HashMap<Address, &str> = destinations
+        .iter()
+        .map(|(id, dest)| (dest.address, id.as_str()))
         .collect();
-
     channels_out
-        .map(|(address, balance)| {
-            let destination = if let Some(id) = destinations_by_relay_address.get(address) {
-                ChannelDestination::Configured((id.clone(), *address))
-            } else {
-                ChannelDestination::Unconfigured(*address)
-            };
-            let balance = ChannelBalance::Completed(*balance);
-            ChannelOut { destination, balance }
+        .map(|(address, balance)| ChannelOut {
+            address: *address,
+            balance: ChannelBalance::Completed(*balance),
+            matched_exit: addr_to_id.get(address).map(|id| (*id).to_string()),
         })
         .collect()
 }
@@ -101,23 +89,17 @@ fn add_from_destinations<'a>(
     ongoing_channel_fundings: &[&Address],
 ) {
     for (id, dest) in destinations {
-        let already_present = channels_out.iter().any(|channel| match &channel.destination {
-            ChannelDestination::Configured((existing_id, _)) => existing_id == id,
-            ChannelDestination::Unconfigured(_) => false,
-        });
+        let already_present = channels_out.iter().any(|channel| channel.address == dest.address);
         if already_present {
             continue;
         }
 
-        // ongoing_channel_fundings contains relay addresses, so match
-        // against the relay in the routing path, not the exit address
-        let relay_is_funding = ongoing_channel_fundings
-            .iter()
-            .find(|&&addr| dest.has_intermediate_channel(*addr));
-        if let Some(&&relay_addr) = relay_is_funding {
+        let is_funding = ongoing_channel_fundings.iter().any(|&&addr| addr == dest.address);
+        if is_funding {
             channels_out.push(ChannelOut {
-                destination: ChannelDestination::Configured((id.clone(), relay_addr)),
+                address: dest.address,
                 balance: ChannelBalance::FundingOngoing,
+                matched_exit: Some(id.clone()),
             });
         }
     }
@@ -125,12 +107,15 @@ fn add_from_destinations<'a>(
 
 impl Display for ChannelOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Channel to {dest}: {bal}",
-            dest = self.destination,
-            bal = self.balance
-        )
+        match &self.matched_exit {
+            Some(id) => write!(
+                f,
+                "Channel to {} (exit: {id}): {}",
+                self.address.to_checksum(),
+                self.balance
+            ),
+            None => write!(f, "Channel to {}: {}", self.address.to_checksum(), self.balance),
+        }
     }
 }
 
@@ -144,44 +129,76 @@ impl Display for ChannelBalance {
     }
 }
 
-impl Display for ChannelDestination {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ChannelDestination::Unconfigured(addr) => write!(f, "{} (unconfigured)", addr.to_checksum()),
-            ChannelDestination::Configured((id, addr)) => write!(f, "{checksum} ({id})", checksum = addr.to_checksum()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::destination::{Destination, HopRouting};
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
     }
 
-    #[test]
-    fn ongoing_funding_detected_for_relay_in_intermediate_path() {
-        let relay = address(0xAA);
-        let dest = Destination::new(
-            "d1".to_string(),
-            address(0xBB),
-            RoutingOptions::IntermediatePath([NodeId::Chain(relay)].into_iter().collect()),
+    fn destination(id: &str, addr: Address) -> Destination {
+        Destination::new(
+            id.to_string(),
+            addr,
+            HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
-        );
-        let destinations = HashMap::from([("d1".to_string(), dest)]);
-        let ongoing = vec![&relay];
+        )
+    }
 
+    #[test]
+    fn from_balances_sets_matched_exit_when_address_matches_destination() {
+        let addr = address(1);
+        let balance = Balance::<WxHOPR>::from(100u64);
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-1".to_string(), destination("dest-1", addr));
+
+        let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].address, addr);
+        assert_eq!(result[0].matched_exit, Some("dest-1".to_string()));
+        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+    }
+
+    #[test]
+    fn from_balances_leaves_matched_exit_empty_for_unknown_address() {
+        let addr = address(2);
+        let balance = Balance::<WxHOPR>::from(50u64);
+
+        let result = from_balances(std::iter::once((&addr, &balance)), &HashMap::new());
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].address, addr);
+        assert_eq!(result[0].matched_exit, None);
+        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+    }
+
+    #[test]
+    fn add_from_destinations_adds_funding_ongoing_for_funded_exit() {
+        let addr = address(3);
         let mut channels_out = Vec::new();
-        add_from_destinations(&mut channels_out, destinations.iter(), &ongoing);
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-2".to_string(), destination("dest-2", addr));
 
-        assert_eq!(
-            channels_out,
-            vec![ChannelOut {
-                destination: ChannelDestination::Configured(("d1".to_string(), relay)),
-                balance: ChannelBalance::FundingOngoing,
-            }]
-        );
+        add_from_destinations(&mut channels_out, destinations.iter(), &[&addr]);
+
+        assert_eq!(channels_out.len(), 1);
+        assert_eq!(channels_out[0].address, addr);
+        assert_eq!(channels_out[0].matched_exit, Some("dest-2".to_string()));
+        assert_eq!(channels_out[0].balance, ChannelBalance::FundingOngoing);
+    }
+
+    #[test]
+    fn add_from_destinations_skips_when_not_funding() {
+        let addr = address(4);
+        let mut channels_out = Vec::new();
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-3".to_string(), destination("dest-3", addr));
+
+        add_from_destinations(&mut channels_out, destinations.iter(), &[]);
+
+        assert!(channels_out.is_empty());
     }
 }

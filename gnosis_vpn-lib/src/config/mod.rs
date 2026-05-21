@@ -1,4 +1,4 @@
-use edgli::hopr_lib::GeneralError;
+use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -8,11 +8,13 @@ use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
 use crate::hopr::blokli_config::BlokliConfig;
+use crate::hopr::strategy_config::StrategyConfig;
 use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
 mod v4;
 mod v5;
+mod v6;
 
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
@@ -23,6 +25,7 @@ pub struct Config {
     pub destinations: HashMap<String, Destination>,
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
+    pub strategy: StrategyConfig,
 }
 
 #[derive(Debug, Error)]
@@ -78,6 +81,14 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
         5 => {
             let res = toml::from_str::<v5::Config>(&content)?;
             let wrong_keys = v5::wrong_keys(&table);
+            for key in wrong_keys.iter() {
+                tracing::warn!(%key, "ignoring unsupported key in configuration file");
+            }
+            res.try_into()
+        }
+        6 => {
+            let res = toml::from_str::<v6::Config>(&content)?;
+            let wrong_keys = v6::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }

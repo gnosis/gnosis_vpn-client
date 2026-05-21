@@ -9,7 +9,6 @@ use crate::dirs;
 
 pub use edgli::hopr_lib::config::HoprLibConfig;
 
-const DB_FILE: &str = "gnosisvpn-hopr.db";
 const SAFE_FILE: &str = "gnosisvpn-hopr.safe";
 
 #[derive(Debug, Error)]
@@ -72,6 +71,18 @@ safe_module:
     safe_address: {safe_address}
     module_address: {module_address}
 publish: false
+protocol:
+    # Edge client: probe aggressively at startup so relay observations are
+    # populated before the first health check fires.  interval is the delay
+    # between probing rounds; it must be >= timeout (3 s).  recheck_threshold
+    # controls how quickly a relay gets re-examined after its last probe.
+    # At startup the graph needs to converge fast so health checks can
+    # succeed within the warm-up window — match interval so every relay
+    # is re-probed on every round.
+    probe:
+        timeout: 3s
+        interval: 3s
+        recheck_threshold: 3s
 "##,
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,
@@ -81,8 +92,4 @@ publish: false
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, SAFE_FILE)
-}
-
-pub(crate) fn db_file(state_home: PathBuf) -> PathBuf {
-    dirs::config_dir(state_home, DB_FILE)
 }
