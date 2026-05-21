@@ -111,8 +111,7 @@ impl Runner {
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr).await?;
-        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
-        peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
+        peer_ips.extend(blokli_ips);
 
         // dynamic routing is only available on Linux
         cfg_if::cfg_if! {
