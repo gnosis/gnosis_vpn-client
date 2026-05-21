@@ -18,6 +18,7 @@ hopr-utils-session.workspace = true
 human-bandwidth              = { workspace = true, features = ["serde"] }
 humantime.workspace          = true
 humantime-serde.workspace    = true
+ipnetwork.workspace          = true
 multiaddr.workspace          = true
 pgp.workspace                = true
 ping.workspace               = true
@@ -36,9 +37,15 @@ tracing-subscriber.workspace = true
 url.workspace                = true
 uzers.workspace              = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc  = { workspace = true }
+mnl   = { workspace = true }
+nftnl = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace            = true
 objc2-foundation.workspace = true
+pfctl.workspace            = true
 
 [dev-dependencies]
 tempfile = "3.23.0"

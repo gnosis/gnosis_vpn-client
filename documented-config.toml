@@ -45,6 +45,12 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # http_timeout - specify general HTTP timeouts for internal protocol related requests
 # http_timeout = "60s"
 
+# lan_lockdown - when true, the killswitch blocks all local network traffic (192.168.x.x,
+# 10.x.x.x, 172.16.x.x, etc.) while the VPN is active. Defaults to false, which lets
+# you reach devices on your local network (printers, NAS, etc.) while still routing all
+# internet traffic through the VPN.
+# lan_lockdown = false
+
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]

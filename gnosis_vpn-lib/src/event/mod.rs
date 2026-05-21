@@ -65,14 +65,19 @@ pub enum WorkerToRoot {
 /// Runner requesting root command and usually waiting for response
 #[derive(Debug)]
 pub enum RunnerToRoot {
+    KillswitchLockdown {
+        peer_ips: Vec<Ipv4Addr>,
+        interface: String,
+        resp: oneshot::Sender<Result<(), String>>,
+    },
     DynamicWgRouting {
         wg_data: WireGuardData,
-        resp: oneshot::Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<String, String>>,
     },
     StaticWgRouting {
         wg_data: WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
-        resp: oneshot::Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<String, String>>,
     },
     TearDownWg,
     Ping {
@@ -99,6 +104,10 @@ impl AsRef<RootToWorker> for RootToWorker {
 /// Slimmed down **RespondableRequestToRoot** for inter-process communication.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RequestToRoot {
+    KillswitchLockdown {
+        peer_ips: Vec<Ipv4Addr>,
+        interface: String,
+    },
     DynamicWgRouting {
         wg_data: WireGuardData,
     },
@@ -110,13 +119,28 @@ pub enum RequestToRoot {
     Ping {
         options: ping::Options,
     },
+    /// Fire-and-forget: ask root to hold resolved IPs so they survive a worker restart.
+    CacheBlokliIps {
+        ips: Vec<Ipv4Addr>,
+    },
 }
 
 /// Root execution response from root process.
 /// Should be matched by worker to **RespondableRequestToRoot** request responses.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponseFromRoot {
-    DynamicWgRouting { res: Result<(), String> },
-    StaticWgRouting { res: Result<(), String> },
-    Ping { res: Result<Duration, String> },
+    KillswitchLockdown {
+        res: Result<(), String>,
+    },
+    /// On success, the String is the resolved WireGuard interface name.
+    DynamicWgRouting {
+        res: Result<String, String>,
+    },
+    /// On success, the String is the resolved WireGuard interface name.
+    StaticWgRouting {
+        res: Result<String, String>,
+    },
+    Ping {
+        res: Result<Duration, String>,
+    },
 }

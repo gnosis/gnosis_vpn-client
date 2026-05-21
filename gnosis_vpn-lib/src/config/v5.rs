@@ -58,6 +58,7 @@ pub(super) struct Connection {
     max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     announced_peer_minimum_score: Option<f64>,
     health_check_intervals: Option<HealthCheckIntervalOptions>,
+    lan_lockdown: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -150,11 +151,9 @@ pub(super) struct BlokliConfig {
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong_keys = Vec::new();
     for (key, value) in table.iter() {
-        // version plain key
         if key == "version" {
             continue;
         }
-        // wireguard nested struct
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
@@ -177,8 +176,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
-        // blokli nested struct
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
@@ -190,12 +187,10 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
-        // connection nested struct
         if key == "connection" {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
-                    if k == "http_timeout" {
+                    if k == "http_timeout" || k == "announced_peer_minimum_score" || k == "lan_lockdown" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
@@ -258,15 +253,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "announced_peer_minimum_score" {
-                        continue;
-                    }
                     wrong_keys.push(format!("connection.{k}"));
                 }
             }
             continue;
         }
-        // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
                 for (id, v) in destinations.iter() {
@@ -284,7 +275,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
         wrong_keys.push(key.clone());
     }
     wrong_keys
@@ -316,7 +306,7 @@ where
     }
 }
 
-fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
+pub(super) fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -330,7 +320,7 @@ where
     }
 }
 
-fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
+pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
     let mut flags = SessionCapabilities::empty();
     for cap in caps {
         let cap = match cap {
@@ -477,15 +467,16 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        options::Options::new(
+        options::Options {
             sessions,
-            ping_opts,
+            ping_options: ping_opts,
             buffer_sizes,
             max_surb_upstream,
             timeouts,
             announced_peer_minimum_score,
             health_check_intervals,
-        )
+            lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+        }
     }
 }
 
