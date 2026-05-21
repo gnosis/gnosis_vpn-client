@@ -59,31 +59,31 @@ pub(super) enum Capability {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct ConnectionProtocol {
-    capabilities: Option<Vec<Capability>>,
-    target: Option<SocketAddr>,
+    pub(super) capabilities: Option<Vec<Capability>>,
+    pub(super) target: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct PingOptions {
-    address: Option<IpAddr>,
+    pub(super) address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
-    timeout: Option<Duration>,
-    ttl: Option<u32>,
-    seq_count: Option<u16>,
+    pub(super) timeout: Option<Duration>,
+    pub(super) ttl: Option<u32>,
+    pub(super) seq_count: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct HealthCheckIntervalOptions {
     #[serde(default, with = "humantime_serde::option")]
-    ping: Option<Duration>,
+    pub(super) ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_n_pings")]
-    health_every_n_pings: Option<u32>,
+    pub(super) health_every_n_pings: Option<u32>,
     #[serde(default, deserialize_with = "validate_n_pings")]
-    version_every_n_pings: Option<u32>,
+    pub(super) version_every_n_pings: Option<u32>,
     #[serde(default, with = "humantime_serde::option")]
-    tunnel_ping: Option<Duration>,
+    pub(super) tunnel_ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
-    tunnel_ping_max_failures: Option<u32>,
+    pub(super) tunnel_ping_max_failures: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -169,7 +169,7 @@ where
     }
 }
 
-fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
+pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
     let mut flags = SessionCapabilities::empty();
     for cap in caps {
         let cap = match cap {

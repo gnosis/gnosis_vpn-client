@@ -1,19 +1,200 @@
+use bytesize::ByteSize;
 use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
+use edgli::hopr_lib::exports::transport::SessionTarget;
+use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::destination::Destination as ConnDestination;
+use crate::connection::{destination::Destination as ConnDestination, options};
+use crate::ping;
 
-// Shared structs and helpers live in v6 (the canonical, current-version module).
-// v5 re-uses them for the connection/wireguard/blokli sections, which are
-// schema-identical across both versions.
-pub(super) use super::v6::{BlokliConfig, Connection, WireGuard};
+// Types from v6 that are schema-identical in v5 are re-used directly.
+// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below
+// because v5 includes a `bridge` field that v6 does not have.
+pub(super) use super::v6::{BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags};
 use super::v6::{MAX_HOPS, validate_hops};
+
+// v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
+// can carry the `bridge` field that existed in v5 configs but is absent from v6.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Connection {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) http_timeout: Option<Duration>,
+    pub(super) bridge: Option<ConnectionProtocol>,
+    pub(super) wg: Option<ConnectionProtocol>,
+    pub(super) ping: Option<PingOptions>,
+    pub(super) buffer: Option<BufferOptions>,
+    pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
+    pub(super) announced_peer_minimum_score: Option<f64>,
+    pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+}
+
+// v5 buffer config includes `bridge`; it is accepted but dropped when converting
+// to runtime options because the v6 BufferSizes type has no bridge slot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct BufferOptions {
+    bridge: Option<ByteSize>,
+    ping: Option<ByteSize>,
+    main: Option<ByteSize>,
+}
+
+// v5 max_surb_upstream config includes `bridge`; same drop-on-conversion rule.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct MaxSurbUpstreamOptions {
+    #[serde(default, with = "human_bandwidth::serde")]
+    bridge: Option<Bandwidth>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    ping: Option<Bandwidth>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    main: Option<Bandwidth>,
+}
+
+impl Connection {
+    pub fn default_bridge_capabilities() -> Vec<Capability> {
+        vec![Capability::Segmentation, Capability::NoRateControl]
+    }
+
+    pub fn default_wg_capabilities() -> Vec<Capability> {
+        vec![Capability::Segmentation, Capability::NoDelay]
+    }
+
+    pub fn default_bridge_target() -> SessionTarget {
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            8000,
+        )))))
+    }
+
+    pub fn default_wg_target() -> SessionTarget {
+        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            51820,
+        )))))
+    }
+
+    pub fn default_http_timeout() -> Duration {
+        Duration::from_secs(60)
+    }
+
+    pub fn default_announced_peer_minimum_score() -> f64 {
+        0.1
+    }
+}
+
+impl From<BufferOptions> for options::BufferSizes {
+    fn from(buf: BufferOptions) -> Self {
+        let def = options::BufferSizes::default();
+        // bridge is v5-only and is not forwarded to runtime options
+        options::BufferSizes {
+            ping: buf.ping.unwrap_or(def.ping),
+            main: buf.main.unwrap_or(def.main),
+        }
+    }
+}
+
+impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
+    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
+        let def = options::MaxSurbUpstream::default();
+        // bridge is v5-only and is not forwarded to runtime options
+        options::MaxSurbUpstream {
+            ping: surbs.ping.unwrap_or(def.ping),
+            main: surbs.main.unwrap_or(def.main),
+        }
+    }
+}
+
+impl From<Option<Connection>> for options::Options {
+    fn from(conn: Option<Connection>) -> Self {
+        let connection = conn.as_ref();
+        let bridge_target = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target)
+            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_bridge_target());
+        let bridge_caps = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.capabilities.clone())
+            .unwrap_or(Connection::default_bridge_capabilities());
+        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
+
+        let wg_target = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_wg_target());
+        let wg_caps = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.capabilities.clone())
+            .unwrap_or(Connection::default_wg_capabilities());
+        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
+
+        let sessions = options::Sessions {
+            bridge: params_bridge,
+            wg: params_wg,
+        };
+
+        let def_opts = ping::Options::default();
+        let ping_opts = connection
+            .and_then(|c| c.ping.as_ref())
+            .map(|p| ping::Options {
+                address: p.address.unwrap_or(def_opts.address),
+                timeout: p.timeout.unwrap_or(def_opts.timeout),
+                ttl: p.ttl.unwrap_or(def_opts.ttl),
+                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
+            })
+            .unwrap_or(def_opts);
+
+        let buffer_sizes = connection
+            .and_then(|c| c.buffer.clone())
+            .map(|b| b.into())
+            .unwrap_or_default();
+        let max_surb_upstream = connection
+            .and_then(|c| c.max_surb_upstream.clone())
+            .map(|b| b.into())
+            .unwrap_or_default();
+        let http_timeout = connection
+            .and_then(|c| c.http_timeout)
+            .unwrap_or(Connection::default_http_timeout());
+
+        let timeouts = options::Timeouts { http: http_timeout };
+
+        let announced_peer_minimum_score = connection
+            .and_then(|c| c.announced_peer_minimum_score)
+            .unwrap_or(Connection::default_announced_peer_minimum_score());
+
+        let def_intervals = options::HealthCheckIntervals::default();
+        let health_check_intervals = connection
+            .and_then(|c| c.health_check_intervals.as_ref())
+            .map(|h| options::HealthCheckIntervals {
+                ping: h.ping.unwrap_or(def_intervals.ping),
+                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
+                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
+                tunnel_ping_max_failures: h
+                    .tunnel_ping_max_failures
+                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
+            })
+            .unwrap_or(def_intervals);
+
+        options::Options::new(
+            sessions,
+            ping_opts,
+            buffer_sizes,
+            max_surb_upstream,
+            timeouts,
+            announced_peer_minimum_score,
+            health_check_intervals,
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
