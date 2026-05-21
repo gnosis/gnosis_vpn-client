@@ -25,6 +25,9 @@ impl Actor {
         })
     }
 
+    // Firewall ops (netlink / PF ioctls) are synchronous but complete in < 1 ms
+    // and only fire at connect/disconnect, so blocking a worker thread briefly is
+    // harmless here — the complexity of spawn_blocking + Arc<Mutex<>> isn't worth it.
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::SetAllowedIps {
