@@ -17,7 +17,7 @@ use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::ticket_stats::TicketStats;
 
 mod balance_response;
-pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
+pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut};
 
 /// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

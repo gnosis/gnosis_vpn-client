@@ -14,14 +14,8 @@ use crate::{
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
-    pub destination: ChannelDestination,
+    pub address: Address,
     pub balance: ChannelBalance,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ChannelDestination {
-    Unconfigured(Address),
-    Configured((String, Address)),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -52,7 +46,7 @@ impl BalanceResponse {
     ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
-        let mut channels_out = from_balances(balances.channels_out.iter(), destinations);
+        let mut channels_out = from_balances(balances.channels_out.iter());
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
         let ticket_value = ticket_stats.ticket_value()?;
@@ -71,25 +65,11 @@ impl BalanceResponse {
     }
 }
 
-fn from_balances<'a>(
-    channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>,
-    destinations: &HashMap<String, Destination>,
-) -> Vec<ChannelOut> {
-    let addr_to_id: HashMap<Address, &str> = destinations
-        .iter()
-        .map(|(id, dest)| (dest.address, id.as_str()))
-        .collect();
+fn from_balances<'a>(channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>) -> Vec<ChannelOut> {
     channels_out
-        .map(|(address, balance)| {
-            let destination = if let Some(id) = addr_to_id.get(address) {
-                ChannelDestination::Configured(((*id).to_string(), *address))
-            } else {
-                ChannelDestination::Unconfigured(*address)
-            };
-            ChannelOut {
-                destination,
-                balance: ChannelBalance::Completed(*balance),
-            }
+        .map(|(address, balance)| ChannelOut {
+            address: *address,
+            balance: ChannelBalance::Completed(*balance),
         })
         .collect()
 }
@@ -99,20 +79,16 @@ fn add_from_destinations<'a>(
     destinations: impl Iterator<Item = (&'a String, &'a Destination)>,
     ongoing_channel_fundings: &[&Address],
 ) {
-    for (id, dest) in destinations {
-        let already_present = channels_out.iter().any(|channel| match &channel.destination {
-            ChannelDestination::Configured((existing_id, _)) => existing_id == id,
-            ChannelDestination::Unconfigured(_) => false,
-        });
+    for (_, dest) in destinations {
+        let already_present = channels_out.iter().any(|channel| channel.address == dest.address);
         if already_present {
             continue;
         }
 
-        // ongoing_channel_fundings contains exit addresses; match against dest.address
         let is_funding = ongoing_channel_fundings.iter().any(|&&addr| addr == dest.address);
         if is_funding {
             channels_out.push(ChannelOut {
-                destination: ChannelDestination::Configured((id.clone(), dest.address)),
+                address: dest.address,
                 balance: ChannelBalance::FundingOngoing,
             });
         }
@@ -121,12 +97,7 @@ fn add_from_destinations<'a>(
 
 impl Display for ChannelOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Channel to {dest}: {bal}",
-            dest = self.destination,
-            bal = self.balance
-        )
+        write!(f, "Channel to {}: {}", self.address.to_checksum(), self.balance)
     }
 }
 
@@ -136,15 +107,6 @@ impl Display for ChannelBalance {
             ChannelBalance::Unknown => write!(f, "unknown balance"),
             ChannelBalance::FundingOngoing => write!(f, "funding ongoing"),
             ChannelBalance::Completed(balance) => write!(f, "{balance}"),
-        }
-    }
-}
-
-impl Display for ChannelDestination {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ChannelDestination::Unconfigured(addr) => write!(f, "{} (unconfigured)", addr.to_checksum()),
-            ChannelDestination::Configured((id, addr)) => write!(f, "{checksum} ({id})", checksum = addr.to_checksum()),
         }
     }
 }
@@ -168,32 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn from_balances_emits_configured_for_known_destination() {
+    fn from_balances_maps_address_and_balance() {
         let addr = address(1);
         let balance = Balance::<WxHOPR>::from(100u64);
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-1".to_string(), destination("dest-1", addr));
 
-        let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
+        let result = from_balances(std::iter::once((&addr, &balance)));
 
         assert_eq!(result.len(), 1);
-        assert_eq!(
-            result[0].destination,
-            ChannelDestination::Configured(("dest-1".to_string(), addr))
-        );
-        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
-    }
-
-    #[test]
-    fn from_balances_emits_unconfigured_for_unknown_address() {
-        let addr = address(2);
-        let balance = Balance::<WxHOPR>::from(50u64);
-        let destinations = HashMap::new();
-
-        let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].destination, ChannelDestination::Unconfigured(addr));
+        assert_eq!(result[0].address, addr);
         assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
     }
 
@@ -207,10 +151,7 @@ mod tests {
         add_from_destinations(&mut channels_out, destinations.iter(), &[&addr]);
 
         assert_eq!(channels_out.len(), 1);
-        assert_eq!(
-            channels_out[0].destination,
-            ChannelDestination::Configured(("dest-2".to_string(), addr))
-        );
+        assert_eq!(channels_out[0].address, addr);
         assert_eq!(channels_out[0].balance, ChannelBalance::FundingOngoing);
     }
 
