@@ -108,7 +108,12 @@ fn add_from_destinations<'a>(
 impl Display for ChannelOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.matched_exit {
-            Some(id) => write!(f, "Channel to {} (exit: {id}): {}", self.address.to_checksum(), self.balance),
+            Some(id) => write!(
+                f,
+                "Channel to {} (exit: {id}): {}",
+                self.address.to_checksum(),
+                self.balance
+            ),
             None => write!(f, "Channel to {}: {}", self.address.to_checksum(), self.balance),
         }
     }
