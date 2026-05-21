@@ -187,13 +187,11 @@ fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
 // ── Shared From impls ─────────────────────────────────────────────────────────
 
 impl Connection {
+    /** The default capabilities for non SURB balances bridge sessions, should never include
+     * retransmissions. Those would require additional SURBS.
+     **/
     pub fn default_bridge_capabilities() -> Vec<Capability> {
-        vec![
-            Capability::Segmentation,
-            Capability::Retransmission,
-            Capability::RetransmissionAckOnly,
-            Capability::NoRateControl,
-        ]
+        vec![Capability::Segmentation, Capability::NoRateControl]
     }
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
