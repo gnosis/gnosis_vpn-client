@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
+use std::net;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,9 +84,11 @@ pub struct Core {
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
+    responder_string: Option<oneshot::Sender<Result<String, String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
     ongoing_channel_fundings: Vec<Address>,
+    cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +152,7 @@ impl Core {
         let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
+        let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
             // config data
             config,
@@ -180,7 +184,10 @@ impl Core {
             ongoing_channel_fundings: Vec::new(),
             route_healths,
             responder_unit: None,
+            responder_string: None,
             responder_duration: None,
+            // needed to keep working during enabled killswitch
+            cached_resolved_blokli_ips,
         };
         Ok((core, incoming_sender))
     }
@@ -246,8 +253,17 @@ impl Core {
             WorkerToCore::ResponseFromRoot(resp) => {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
-                    ResponseFromRoot::DynamicWgRouting { res } => {
+                    ResponseFromRoot::KillswitchLockdown { res } => {
                         if let Some(responder) = self.responder_unit.take() {
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for killswitch lockdown response");
+                            });
+                        } else {
+                            tracing::warn!(?res, "no responder channel available for root response");
+                        }
+                    }
+                    ResponseFromRoot::DynamicWgRouting { res } => {
+                        if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for dynamic wg routing response");
                             });
@@ -256,7 +272,7 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::StaticWgRouting { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
+                        if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for static wg routing response");
                             });
@@ -447,6 +463,7 @@ impl Core {
 
                     WorkerCommand::Disconnect => {
                         self.target_destination = None;
+                        self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
@@ -719,6 +736,13 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
+                            if let connection::up::Progress::GenerateWg(blokli_ips) = e.as_ref() {
+                                self.cached_resolved_blokli_ips = blokli_ips.clone();
+                                let request = RequestToRoot::CacheBlokliIps {
+                                    ips: blokli_ips.clone(),
+                                };
+                                let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                            }
                             conn.connect_progress(e);
                             self.phase = Phase::Connecting(conn);
                         }
@@ -824,8 +848,18 @@ impl Core {
             }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
+                RunnerToRoot::KillswitchLockdown {
+                    peer_ips,
+                    interface,
+                    resp,
+                } => {
                     self.responder_unit = Some(resp);
+                    let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+
+                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
+                    self.responder_string = Some(resp);
                     let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -835,7 +869,7 @@ impl Core {
                     peer_ips,
                     resp,
                 } => {
-                    self.responder_unit = Some(resp);
+                    self.responder_string = Some(resp);
                     let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -1372,6 +1406,7 @@ impl Core {
                 config_wireguard,
                 hopr,
                 self.worker_params.clone(),
+                self.cached_resolved_blokli_ips.clone(),
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {

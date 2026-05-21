@@ -40,6 +40,7 @@ pub(super) struct Connection {
     pub(super) buffer: Option<BufferOptions>,
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+    pub(super) lan_lockdown: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -305,14 +306,15 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        options::Options::new(
+        options::Options {
             sessions,
-            ping_opts,
+            ping_options: ping_opts,
             buffer_sizes,
             max_surb_upstream,
             timeouts,
             health_check_intervals,
-        )
+            lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+        }
     }
 }
 
@@ -356,18 +358,145 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
 
 // ── v6-specific items ─────────────────────────────────────────────────────────
 
-/// v6 extends v5's wrong_keys by recognising the `[strategy]` section.
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
-    let mut wrong = super::v5::wrong_keys(table);
-    // `strategy` is valid in v6 — remove it from the "unknown" list.
-    wrong.retain(|k| k != "strategy");
-    // Check for unknown sub-keys inside [strategy].
-    if let Some(strategy) = table.get("strategy").and_then(|v| v.as_table()) {
-        for k in strategy.keys() {
-            if k != "desired_message_count" && k != "min_open_channels" && k != "target_open_channels" {
-                wrong.push(format!("strategy.{k}"));
-            }
+    let mut wrong = Vec::new();
+    for (key, value) in table.iter() {
+        if key == "version" {
+            continue;
         }
+        if key == "wireguard" {
+            if let Some(wg) = value.as_table() {
+                for (k, v) in wg.iter() {
+                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                        continue;
+                    }
+                    if k == "dns" {
+                        if let Some(dns) = v.as_table() {
+                            for (k2, _) in dns.iter() {
+                                if k2 == "overwrite" || k2 == "servers" {
+                                    continue;
+                                }
+                                wrong.push(format!("wireguard.dns.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    wrong.push(format!("wireguard.{k}"));
+                }
+            }
+            continue;
+        }
+        if key == "blokli" {
+            if let Some(blokli) = value.as_table() {
+                for (k, _) in blokli.iter() {
+                    if k == "connection_sync_timeout" || k == "sync_tolerance" {
+                        continue;
+                    }
+                    wrong.push(format!("blokli.{k}"));
+                }
+            }
+            continue;
+        }
+        if key == "connection" {
+            if let Some(connection) = value.as_table() {
+                for (k, v) in connection.iter() {
+                    if k == "http_timeout" || k == "announced_peer_minimum_score" || k == "lan_lockdown" {
+                        continue;
+                    }
+                    if k == "bridge" || k == "wg" {
+                        if let Some(prot) = v.as_table() {
+                            for (k2, _) in prot.iter() {
+                                if k2 == "capabilities" || k2 == "target" {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.{k}.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "ping" {
+                        if let Some(ping) = v.as_table() {
+                            for (k2, _) in ping.iter() {
+                                if k2 == "address" || k2 == "timeout" || k2 == "ttl" || k2 == "seq_count" {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.ping.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "buffer" {
+                        if let Some(buffer) = v.as_table() {
+                            for (k2, _) in buffer.iter() {
+                                if k2 == "bridge" || k2 == "ping" || k2 == "main" {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.buffer.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "max_surb_upstream" {
+                        if let Some(surbs) = v.as_table() {
+                            for (k2, _) in surbs.iter() {
+                                if k2 == "bridge" || k2 == "ping" || k2 == "main" {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.max_surb_upstream.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "health_check_intervals" {
+                        if let Some(hci) = v.as_table() {
+                            for (k2, _) in hci.iter() {
+                                if k2 == "ping"
+                                    || k2 == "health_every_n_pings"
+                                    || k2 == "version_every_n_pings"
+                                    || k2 == "tunnel_ping"
+                                    || k2 == "tunnel_ping_max_failures"
+                                {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.health_check_intervals.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    wrong.push(format!("connection.{k}"));
+                }
+            }
+            continue;
+        }
+        if key == "destinations" {
+            if let Some(destinations) = value.as_table() {
+                for (id, v) in destinations.iter() {
+                    if let Some(dest) = v.as_table() {
+                        for (k, _) in dest.iter() {
+                            if k == "address" || k == "meta" || k == "path" {
+                                continue;
+                            }
+                            wrong.push(format!("destinations.{id}.{k}"));
+                        }
+                        continue;
+                    }
+                    wrong.push(format!("destinations.{id}"));
+                }
+            }
+            continue;
+        }
+        if key == "strategy" {
+            if let Some(strategy) = value.as_table() {
+                for (k, _) in strategy.iter() {
+                    if k == "desired_message_count" || k == "min_open_channels" || k == "target_open_channels" {
+                        continue;
+                    }
+                    wrong.push(format!("strategy.{k}"));
+                }
+            }
+            continue;
+        }
+        wrong.push(key.clone());
     }
     wrong
 }

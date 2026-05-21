@@ -178,14 +178,15 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        options::Options::new(
+        options::Options {
             sessions,
-            ping_opts,
+            ping_options: ping_opts,
             buffer_sizes,
             max_surb_upstream,
             timeouts,
             health_check_intervals,
-        )
+            lan_lockdown: false,
+        }
     }
 }
 

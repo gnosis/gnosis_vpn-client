@@ -15,6 +15,7 @@ pub struct Options {
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
     pub health_check_intervals: HealthCheckIntervals,
+    pub lan_lockdown: bool,
 }
 
 /// Controls how often each tier of health check runs.
@@ -64,26 +65,6 @@ pub struct MaxSurbUpstream {
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
-    }
-}
-
-impl Options {
-    pub fn new(
-        sessions: Sessions,
-        ping_options: ping::Options,
-        buffer_sizes: BufferSizes,
-        max_surb_upstream: MaxSurbUpstream,
-        timeouts: Timeouts,
-        health_check_intervals: HealthCheckIntervals,
-    ) -> Self {
-        Self {
-            sessions,
-            ping_options,
-            buffer_sizes,
-            max_surb_upstream,
-            timeouts,
-            health_check_intervals,
-        }
     }
 }
 
