@@ -16,6 +16,7 @@ use crate::{
 pub struct ChannelOut {
     pub address: Address,
     pub balance: ChannelBalance,
+    pub matched_exit: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -46,7 +47,7 @@ impl BalanceResponse {
     ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
-        let mut channels_out = from_balances(balances.channels_out.iter());
+        let mut channels_out = from_balances(balances.channels_out.iter(), destinations);
         add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
 
         let ticket_value = ticket_stats.ticket_value()?;
@@ -65,11 +66,19 @@ impl BalanceResponse {
     }
 }
 
-fn from_balances<'a>(channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>) -> Vec<ChannelOut> {
+fn from_balances<'a>(
+    channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>,
+    destinations: &HashMap<String, Destination>,
+) -> Vec<ChannelOut> {
+    let addr_to_id: HashMap<Address, &str> = destinations
+        .iter()
+        .map(|(id, dest)| (dest.address, id.as_str()))
+        .collect();
     channels_out
         .map(|(address, balance)| ChannelOut {
             address: *address,
             balance: ChannelBalance::Completed(*balance),
+            matched_exit: addr_to_id.get(address).map(|id| (*id).to_string()),
         })
         .collect()
 }
@@ -79,7 +88,7 @@ fn add_from_destinations<'a>(
     destinations: impl Iterator<Item = (&'a String, &'a Destination)>,
     ongoing_channel_fundings: &[&Address],
 ) {
-    for (_, dest) in destinations {
+    for (id, dest) in destinations {
         let already_present = channels_out.iter().any(|channel| channel.address == dest.address);
         if already_present {
             continue;
@@ -90,6 +99,7 @@ fn add_from_destinations<'a>(
             channels_out.push(ChannelOut {
                 address: dest.address,
                 balance: ChannelBalance::FundingOngoing,
+                matched_exit: Some(id.clone()),
             });
         }
     }
@@ -97,7 +107,10 @@ fn add_from_destinations<'a>(
 
 impl Display for ChannelOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Channel to {}: {}", self.address.to_checksum(), self.balance)
+        match &self.matched_exit {
+            Some(id) => write!(f, "Channel to {} (exit: {id}): {}", self.address.to_checksum(), self.balance),
+            None => write!(f, "Channel to {}: {}", self.address.to_checksum(), self.balance),
+        }
     }
 }
 
@@ -130,14 +143,30 @@ mod tests {
     }
 
     #[test]
-    fn from_balances_maps_address_and_balance() {
+    fn from_balances_sets_matched_exit_when_address_matches_destination() {
         let addr = address(1);
         let balance = Balance::<WxHOPR>::from(100u64);
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-1".to_string(), destination("dest-1", addr));
 
-        let result = from_balances(std::iter::once((&addr, &balance)));
+        let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].address, addr);
+        assert_eq!(result[0].matched_exit, Some("dest-1".to_string()));
+        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+    }
+
+    #[test]
+    fn from_balances_leaves_matched_exit_empty_for_unknown_address() {
+        let addr = address(2);
+        let balance = Balance::<WxHOPR>::from(50u64);
+
+        let result = from_balances(std::iter::once((&addr, &balance)), &HashMap::new());
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].address, addr);
+        assert_eq!(result[0].matched_exit, None);
         assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
     }
 
@@ -152,6 +181,7 @@ mod tests {
 
         assert_eq!(channels_out.len(), 1);
         assert_eq!(channels_out[0].address, addr);
+        assert_eq!(channels_out[0].matched_exit, Some("dest-2".to_string()));
         assert_eq!(channels_out[0].balance, ChannelBalance::FundingOngoing);
     }
 
