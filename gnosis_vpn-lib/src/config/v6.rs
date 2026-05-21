@@ -214,7 +214,6 @@ impl Connection {
     pub fn default_http_timeout() -> Duration {
         Duration::from_secs(60)
     }
-
 }
 
 impl From<BufferOptions> for options::BufferSizes {
