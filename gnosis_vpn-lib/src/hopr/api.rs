@@ -390,7 +390,7 @@ impl Hopr {
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn announced_peers(&self, _minimum_score: f64) -> Result<HashMap<Address, Peer>, HoprError> {
+    pub async fn announced_peers(&self) -> Result<HashMap<Address, Peer>, HoprError> {
         tracing::debug!("query hopr connected peers");
         let offchain_keys = self
             .edgli

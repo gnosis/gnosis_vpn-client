@@ -14,7 +14,6 @@ pub struct Options {
     pub ping_options: ping::Options,
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
-    pub announced_peer_minimum_score: f64,
     pub health_check_intervals: HealthCheckIntervals,
 }
 
@@ -75,7 +74,6 @@ impl Options {
         buffer_sizes: BufferSizes,
         max_surb_upstream: MaxSurbUpstream,
         timeouts: Timeouts,
-        announced_peer_minimum_score: f64,
         health_check_intervals: HealthCheckIntervals,
     ) -> Self {
         Self {
@@ -84,7 +82,6 @@ impl Options {
             buffer_sizes,
             max_surb_upstream,
             timeouts,
-            announced_peer_minimum_score,
             health_check_intervals,
         }
     }

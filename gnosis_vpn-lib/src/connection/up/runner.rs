@@ -96,7 +96,7 @@ impl Runner {
         // gather peers before we start any routing attempt to ensure static routing might still work
         // 5. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
+        let mut peer_ips = gather_peer_ips(&self.hopr).await?;
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
 
@@ -484,8 +484,8 @@ async fn request_static_wg_tunnel(
     )
 }
 
-async fn gather_peer_ips(hopr: &Hopr, minimum_score: f64) -> Result<Vec<Ipv4Addr>, HoprError> {
-    let peers = hopr.announced_peers(minimum_score).await?;
+async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
+    let peers = hopr.announced_peers().await?;
     let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
     Ok(peer_ips)
 }

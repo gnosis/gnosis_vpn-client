@@ -86,9 +86,6 @@ impl Connection {
         Duration::from_secs(60)
     }
 
-    pub fn default_announced_peer_minimum_score() -> f64 {
-        0.1
-    }
 }
 
 impl From<BufferOptions> for options::BufferSizes {
@@ -168,10 +165,6 @@ impl From<Option<Connection>> for options::Options {
 
         let timeouts = options::Timeouts { http: http_timeout };
 
-        let announced_peer_minimum_score = connection
-            .and_then(|c| c.announced_peer_minimum_score)
-            .unwrap_or(Connection::default_announced_peer_minimum_score());
-
         let def_intervals = options::HealthCheckIntervals::default();
         let health_check_intervals = connection
             .and_then(|c| c.health_check_intervals.as_ref())
@@ -192,7 +185,6 @@ impl From<Option<Connection>> for options::Options {
             buffer_sizes,
             max_surb_upstream,
             timeouts,
-            announced_peer_minimum_score,
             health_check_intervals,
         )
     }
