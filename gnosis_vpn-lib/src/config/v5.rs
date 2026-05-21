@@ -19,7 +19,9 @@ use crate::ping;
 // Types from v6 that are schema-identical in v5 are re-used directly.
 // Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below
 // because v5 includes a `bridge` field that v6 does not have.
-pub(super) use super::v6::{BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags};
+pub(super) use super::v6::{
+    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
+};
 use super::v6::{MAX_HOPS, validate_hops};
 
 // v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
