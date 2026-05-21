@@ -83,15 +83,6 @@ protocol:
         timeout: 3s
         interval: 3s
         recheck_threshold: 3s
-    # Cap session-establishment retries so the total create_session duration
-    # stays below the health-check HTTP timeout (60 s).
-    # 1-hop formula: SESSION_INITIATION_TIMEOUT_BASE(5s) × (1+1+2) = 20s/attempt.
-    # With the default 3 retries: 4 × 20s + 3 × 2s = 86s > 60s — reqwest fires
-    # mid-attempt and the health check never gets a proper error to retry on.
-    # 1 retry → 2 × 20s + 2s = 42s < 60s — the health-check GRAPH_WARMUP_RETRY
-    # mechanism then handles transient failures at the outer level.
-    session:
-        establish_max_retries: 1
 "##,
         safe_address = safe_module.safe_address,
         module_address = safe_module.module_address,

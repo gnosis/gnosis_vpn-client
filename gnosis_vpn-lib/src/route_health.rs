@@ -52,8 +52,6 @@ const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
 ///     unreachable relay again.
 ///   - 90 s > 60 s cache TTL, so each warmup retry triggers a fresh relay
 ///     selection with an up-to-date connected-peer set.
-///   - Each failed attempt takes ~42 s (establish_max_retries=1:
-///     2 × 20 s + 2 s delay).  90 s wait → full cycle ≈ 132 s/retry.
 ///   - After GRAPH_WARMUP_RETRY_COUNT retries (≈ 396 s total) the path
 ///     selector is expected to have discovered all reachable relays and
 ///     session establishment succeeds.
