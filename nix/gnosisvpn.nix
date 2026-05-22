@@ -170,8 +170,7 @@ let
       cargoToml = ../Cargo.toml;
       extraBuildInputs = linuxExtraBuildInputs;
     };
-in
-{
+
   # Adds bash/fish/zsh completions by running the built binary in postInstall.
   # Only applied to native (local) builds — cross-compiled binaries can't be executed on the host.
   withShellCompletions =
@@ -187,7 +186,8 @@ in
             --zsh  <($out/bin/gnosis_vpn-ctl completions zsh)
         '';
     });
-
+in
+{
   # Local builds
 
   # binary-gnosis_vpn (renamed from gnosis_vpn-release)
