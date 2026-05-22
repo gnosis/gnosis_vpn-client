@@ -6,6 +6,7 @@ version = { workspace = true }
 
 [dependencies]
 clap.workspace           = true
+clap_complete.workspace  = true
 exitcode.workspace       = true
 gnosis_vpn-lib.workspace = true
 humantime.workspace      = true

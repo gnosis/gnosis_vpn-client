@@ -23,6 +23,11 @@ async fn main() {
     let args = cli::parse();
     let format = args.output.unwrap_or(OutputFormat::Plain);
 
+    if let cli::Command::Completions { shell } = args.command {
+        cli::generate_completions(shell);
+        process::exit(exitcode::OK);
+    }
+
     if let cli::Command::CheckUpdate { force } = args.command {
         let exit = run_check_update(format, &args.socket_path, force).await;
         process::exit(exit);
