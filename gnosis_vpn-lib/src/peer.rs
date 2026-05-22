@@ -7,11 +7,11 @@ use crate::connection::destination::Address;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
     pub address: Address,
-    pub ips: Vec<Ipv4Addr>,
+    pub ipv4_addrs: Vec<Ipv4Addr>,
 }
 
 impl Peer {
-    pub fn new(address: Address, ips: Vec<Ipv4Addr>) -> Self {
-        Self { address, ips }
+    pub fn new(address: Address, ipv4_addrs: Vec<Ipv4Addr>) -> Self {
+        Self { address, ipv4_addrs }
     }
 }

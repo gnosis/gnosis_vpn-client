@@ -417,7 +417,7 @@ impl Hopr {
             let hopr = self.edgli.clone();
             set.spawn(async move {
                 let observed = hopr.transport().network_observed_multiaddresses(&key).await;
-                let ips: Vec<Ipv4Addr> = observed
+                let ipv4_addrs: Vec<Ipv4Addr> = observed
                     .iter()
                     .flat_map(|addr| {
                         let mut addr = addr.clone();
@@ -432,10 +432,10 @@ impl Hopr {
                     .collect::<HashSet<_>>()
                     .into_iter()
                     .collect();
-                if ips.is_empty() {
+                if ipv4_addrs.is_empty() {
                     None
                 } else {
-                    Some(Peer::new(address, ips))
+                    Some(Peer::new(address, ipv4_addrs))
                 }
             });
         }
