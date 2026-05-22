@@ -33,7 +33,10 @@ use std::{
     fmt::{self, Display},
     str::FromStr,
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use crate::peer::Peer;
 use crate::{
@@ -414,15 +417,20 @@ impl Hopr {
             let hopr = self.edgli.clone();
             set.spawn(async move {
                 let observed = hopr.transport().network_observed_multiaddresses(&key).await;
-                for addr in observed.iter() {
-                    let mut addr = addr.clone();
-                    while let Some(protocol) = addr.pop() {
-                        if let Protocol::Ip4(ipv4) = protocol {
-                            return Some(Peer::new(address, ipv4));
+                let ips: Vec<Ipv4Addr> = observed
+                    .iter()
+                    .flat_map(|addr| {
+                        let mut addr = addr.clone();
+                        let mut found = vec![];
+                        while let Some(protocol) = addr.pop() {
+                            if let Protocol::Ip4(ipv4) = protocol {
+                                found.push(ipv4);
+                            }
                         }
-                    }
-                }
-                None
+                        found
+                    })
+                    .collect();
+                if ips.is_empty() { None } else { Some(Peer::new(address, ips)) }
             });
         }
 
