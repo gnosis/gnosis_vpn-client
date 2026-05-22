@@ -172,23 +172,43 @@ let
     };
 in
 {
+  # Adds bash/fish/zsh completions by running the built binary in postInstall.
+  # Only applied to native (local) builds — cross-compiled binaries can't be executed on the host.
+  withShellCompletions =
+    drv:
+    drv.overrideAttrs (prev: {
+      nativeBuildInputs = (prev.nativeBuildInputs or [ ]) ++ [ pkgs.installShellFiles ];
+      postInstall =
+        lib.optionalString (prev ? postInstall && prev.postInstall != null) prev.postInstall
+        + ''
+          installShellCompletion --cmd gnosis_vpn-ctl \
+            --bash <($out/bin/gnosis_vpn-ctl completions bash) \
+            --fish <($out/bin/gnosis_vpn-ctl completions fish) \
+            --zsh  <($out/bin/gnosis_vpn-ctl completions zsh)
+        '';
+    });
+
   # Local builds
 
   # binary-gnosis_vpn (renamed from gnosis_vpn-release)
-  binary-gnosis_vpn = builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
-    src = sources.main;
-    depsSrc = sources.deps;
-  });
-
-  # binary-gnosis_vpn-dev (renamed from gnosis_vpn-dev)
-  binary-gnosis_vpn-dev = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
+  binary-gnosis_vpn = withShellCompletions (
+    builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
-    // {
-      CARGO_PROFILE = "dev";
-    }
+  );
+
+  # binary-gnosis_vpn-dev (renamed from gnosis_vpn-dev)
+  binary-gnosis_vpn-dev = withShellCompletions (
+    builders.local.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      })
+      // {
+        CARGO_PROFILE = "dev";
+      }
+    )
   );
 
   # Cross-compiled — x86_64 Linux

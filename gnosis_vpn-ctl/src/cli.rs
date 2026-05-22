@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use gnosis_vpn_lib::command::Command as LibCommand;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
@@ -103,6 +103,10 @@ pub enum Command {
         #[arg(short = 'f', long)]
         force: bool,
     },
+
+    /// Print shell completion script for the given shell to stdout
+    #[command(hide = true)]
+    Completions { shell: clap_complete::Shell },
 }
 
 impl From<Command> for LibCommand {
@@ -121,10 +125,15 @@ impl From<Command> for LibCommand {
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
             Command::CheckUpdate { .. } => unreachable!("CheckUpdate is handled before socket dispatch"),
+            Command::Completions { .. } => unreachable!("Completions is handled before socket dispatch"),
         }
     }
 }
 
 pub fn parse() -> Cli {
     Cli::parse()
+}
+
+pub fn generate_completions(shell: clap_complete::Shell) {
+    clap_complete::generate(shell, &mut Cli::command(), "gnosis_vpn-ctl", &mut std::io::stdout());
 }
