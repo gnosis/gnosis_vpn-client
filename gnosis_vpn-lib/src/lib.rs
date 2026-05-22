@@ -16,6 +16,7 @@ pub mod ping;
 pub mod route_health;
 pub mod shell_command_ext;
 pub mod socket;
+pub mod update;
 pub mod wireguard;
 pub mod worker;
 pub mod worker_params;

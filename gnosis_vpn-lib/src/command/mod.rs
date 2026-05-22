@@ -10,11 +10,13 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
 use crate::balance::{self, FundingIssue};
+use crate::check_update::{Channel, ChannelRelease};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::ticket_stats::TicketStats;
+use crate::update::UpdateStatus;
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
@@ -46,6 +48,29 @@ pub enum Command {
     StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
+    /// Fetch the update manifest from the daemon and report the candidate release on the chosen channel.
+    /// `force = true` bypasses the VPN-connected gate (insecure: queries the
+    /// manifest host without traversing the VPN tunnel).
+    CheckUpdate { channel: Channel, force: bool },
+    /// Trigger an update install on the daemon. This is a *streaming* command:
+    /// the daemon writes a sequence of `Response::UpdateStatus(..)` records
+    /// and closes the socket when the install reaches a terminal status.
+    /// `force = true` bypasses the VPN-connected gate.
+    StartUpdate {
+        channel: Channel,
+        allow_downgrade: bool,
+        force: bool,
+    },
+    /// Return the daemon's compiled-in package version (semver string).
+    GetCurrentVersion,
+}
+
+impl Command {
+    /// Streaming commands produce a sequence of `Response`s on the same
+    /// socket connection until terminal. One-shot commands produce exactly one.
+    pub fn is_streaming(&self) -> bool {
+        matches!(self, Command::StartUpdate { .. })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -75,6 +100,18 @@ pub enum Response {
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
     WorkerOffline,
+    CheckUpdate(CheckUpdateResponse),
+    StartUpdateRejected(String),
+    UpdateStatus(UpdateStatus),
+    Version(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CheckUpdateResponse {
+    UpToDate { current: String },
+    Available { current: String, release: ChannelRelease },
+    NoReleaseForChannel(Channel),
+    Error(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -574,7 +611,13 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
+            Command::Info
+            | Command::Ping
+            | Command::StartClient(_)
+            | Command::StopClient
+            | Command::CheckUpdate { .. }
+            | Command::StartUpdate { .. }
+            | Command::GetCurrentVersion => Err(()),
         }
     }
 }

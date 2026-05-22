@@ -6,7 +6,7 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -31,6 +31,7 @@ use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 mod cli;
 mod network_info;
 mod routing;
+mod update_paths;
 mod wg_tooling;
 
 use routing::Routing;
@@ -66,7 +67,7 @@ struct DaemonState {
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
     pending_response_counter: u64,
-    pending_responses: HashMap<u64, oneshot::Sender<Response>>,
+    pending_responses: HashMap<u64, mpsc::Sender<Response>>,
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
 }
@@ -86,7 +87,11 @@ enum SignalMessage {
 
 struct SocketCmd {
     cmd: LibCommand,
-    resp: oneshot::Sender<Response>,
+    // `mpsc` instead of `oneshot` so streaming commands (e.g. StartUpdate)
+    // can push a sequence of `Response::UpdateStatus(..)` records on the
+    // same socket connection. One-shot handlers send once and drop the
+    // sender; the per-connection writer task closes when the channel does.
+    resp: mpsc::Sender<Response>,
 }
 
 struct WorkerChild {
@@ -170,23 +175,23 @@ async fn incoming_on_root_socket(
             match res_decode {
                 Ok(cmd) => {
                     tracing::debug!(command = ?cmd, "received socket command");
-                    let (resp_sender, resp_receiver) = oneshot::channel();
+                    let streaming = cmd.is_streaming();
+                    let buf = if streaming { 64 } else { 1 };
+                    let (resp_sender, mut resp_receiver) = mpsc::channel::<Response>(buf);
                     let socket_cmd = SocketCmd { cmd, resp: resp_sender };
                     if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
                         tracing::error!(error = ?err, "failed to send socket command to main loop");
                         return None;
                     }
-                    // wait for response and send back to socket
+                    // drain responses to the socket; loop until the daemon
+                    // drops the sender (terminal status for streaming, or
+                    // single send + drop for one-shot)
                     let handle = tokio::spawn(async move {
-                        match resp_receiver.await {
-                            Ok(resp) => {
-                                let mut writer = BufWriter::new(socket_writer_half);
-                                if let Err(err) = send_to_socket(&resp, &mut writer).await {
-                                    tracing::error!(error = ?err, "failed to send response to socket");
-                                }
-                            }
-                            Err(err) => {
-                                tracing::error!(error = ?err, "socket command response channel closed");
+                        let mut writer = BufWriter::new(socket_writer_half);
+                        while let Some(resp) = resp_receiver.recv().await {
+                            if let Err(err) = send_to_socket(&resp, &mut writer).await {
+                                tracing::error!(error = ?err, "failed to send response to socket");
+                                break;
                             }
                         }
                     });
@@ -452,6 +457,20 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_NAME")
     );
 
+    // First-boot update replay: if the previous instance died mid-install we
+    // wrote `last_update_attempt.json` before exiting. Surface that to the
+    // operator log once, then clear the file so we don't re-report.
+    let attempt_state_path = update_paths::attempt_state_path();
+    if let Some(attempt) =
+        gnosis_vpn_lib::update::LastUpdateAttempt::take_if_present(&attempt_state_path).await
+    {
+        tracing::info!(
+            ?attempt.channel,
+            status = %attempt.final_status,
+            "previous update attempt outcome"
+        );
+    }
+
     let network_info = network_info::NetworkInfo::gather().await;
     tracing::info!(%network_info, "host network info");
 
@@ -575,6 +594,41 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
         exitcode::IOERR
     })?;
     Ok(())
+}
+
+/// Runs the manifest fetch + gating logic for `Command::CheckUpdate`.
+///
+/// Spawned off the daemon loop so it can self-connect through
+/// `ensure_vpn_connected` without deadlocking the socket listener, and so
+/// the HTTPS round-trip doesn't block other socket commands.
+async fn check_update_in_task(
+    channel: gnosis_vpn_lib::check_update::Channel,
+    force: bool,
+    socket_path: &Path,
+) -> Response {
+    use gnosis_vpn_lib::check_update as cu;
+    use gnosis_vpn_lib::update::{ensure_installable, GateError};
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
+        Ok(c) => c,
+        Err(e) => return Response::CheckUpdate(command::CheckUpdateResponse::Error(format!("{e}"))),
+    };
+    let gate = (!force).then_some(socket_path);
+    let manifest = match cu::download(&client, gate).await {
+        Ok(m) => m,
+        Err(e) => return Response::CheckUpdate(command::CheckUpdateResponse::Error(format!("{e}"))),
+    };
+    let Some(release) = manifest.pick(channel).cloned() else {
+        return Response::CheckUpdate(command::CheckUpdateResponse::NoReleaseForChannel(channel));
+    };
+    match ensure_installable(&release, &current, false) {
+        Ok(_) => Response::CheckUpdate(command::CheckUpdateResponse::Available { current, release }),
+        Err(GateError::AlreadyInstalled { .. }) | Err(GateError::Downgrade { .. }) => {
+            Response::CheckUpdate(command::CheckUpdateResponse::UpToDate { current })
+        }
+        Err(e) => Response::CheckUpdate(command::CheckUpdateResponse::Error(format!("{e}"))),
+    }
 }
 
 async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
@@ -798,25 +852,100 @@ impl DaemonState {
                     Ok(())
                 } else if matches!(w_cmd, WorkerCommand::Status) {
                     let response = self.status_response_offline();
-                    let _ = resp.send(response).map_err(|error| {
+                    if let Err(error) = resp.send(response).await {
                         tracing::error!(?error, "socket command response channel closed");
-                    });
+                    }
                     Ok(())
                 } else {
-                    let _ = resp.send(Response::WorkerOffline).map_err(|error| {
+                    if let Err(error) = resp.send(Response::WorkerOffline).await {
                         tracing::error!(?error, "socket command response channel closed");
-                    });
+                    }
                     Ok(())
                 }
             }
             Err(_) => {
+                if matches!(cmd, LibCommand::StartUpdate { .. }) {
+                    self.handle_start_update(cmd, resp).await;
+                    return Ok(());
+                }
+                if matches!(cmd, LibCommand::CheckUpdate { .. }) {
+                    self.handle_check_update(cmd, resp);
+                    return Ok(());
+                }
                 let response = self.incoming_root_command(cmd).await?;
-                let _ = resp.send(response).map_err(|error| {
+                if let Err(error) = resp.send(response).await {
                     tracing::error!(?error, "socket command response channel closed");
-                });
+                }
                 Ok(())
             }
         }
+    }
+
+    async fn handle_start_update(&mut self, cmd: LibCommand, resp: mpsc::Sender<Response>) {
+        let LibCommand::StartUpdate { channel, allow_downgrade, force } = cmd else {
+            return;
+        };
+        // build the engine input from compile-time + daemon-owned paths so
+        // the IPC caller can only choose channel + downgrade + force
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = resp
+                    .send(Response::UpdateStatus(gnosis_vpn_lib::update::UpdateStatus::Failed {
+                        stage: gnosis_vpn_lib::update::UpdateStage::Check,
+                        error: format!("http client: {e}"),
+                    }))
+                    .await;
+                return;
+            }
+        };
+
+        let download_dir = update_paths::download_dir();
+        let attempt_state_path = Some(update_paths::attempt_state_path());
+        let audit_log_path = Some(update_paths::audit_log_path());
+        let socket_path = std::path::PathBuf::from(gnosis_vpn_lib::socket::root::DEFAULT_PATH);
+        let input = gnosis_vpn_lib::update::EngineInput {
+            client,
+            channel,
+            allow_downgrade,
+            current_app_version: env!("CARGO_PKG_VERSION").to_string(),
+            download_dir,
+            attempt_state_path,
+            audit_log_path,
+            skip_vpn_check: force,
+            socket_path,
+        };
+        let mut engine_rx = gnosis_vpn_lib::update::install_engine(input);
+        tokio::spawn(async move {
+            while let Some(status) = engine_rx.recv().await {
+                let terminal = status.is_terminal();
+                if resp.send(Response::UpdateStatus(status)).await.is_err() {
+                    break;
+                }
+                if terminal {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Spawn the manifest-fetch off the daemon loop so it doesn't block on
+    /// the HTTP roundtrip — and so the optional VPN-connected gate can
+    /// self-connect on the socket without deadlocking the listener.
+    fn handle_check_update(&self, cmd: LibCommand, resp: mpsc::Sender<Response>) {
+        let LibCommand::CheckUpdate { channel, force } = cmd else {
+            return;
+        };
+        let socket_path = std::path::PathBuf::from(gnosis_vpn_lib::socket::root::DEFAULT_PATH);
+        tokio::spawn(async move {
+            let response = check_update_in_task(channel, force, &socket_path).await;
+            if let Err(error) = resp.send(response).await {
+                tracing::error!(?error, "check-update response channel closed");
+            }
+        });
     }
 
     async fn incoming_config_change(&mut self) -> Result<(), exitcode::ExitCode> {
@@ -941,6 +1070,13 @@ impl DaemonState {
                 }
             },
 
+            LibCommand::CheckUpdate { .. } | LibCommand::StartUpdate { .. } => {
+                // routed via `handle_check_update` / `handle_start_update` in
+                // `incoming_socket_command` (off-thread to keep the daemon
+                // loop unblocked); not reached here.
+                Ok(Response::WorkerOffline)
+            }
+            LibCommand::GetCurrentVersion => Ok(Response::Version(env!("CARGO_PKG_VERSION").to_string())),
             LibCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
                 (Shutdown::None, None) => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
                 (Shutdown::None, Some(child)) => {
@@ -985,7 +1121,7 @@ impl DaemonState {
     async fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?resp, "received worker response");
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
-            if resp_sender.send(resp).is_err() {
+            if resp_sender.send(resp).await.is_err() {
                 tracing::error!(id, "unexpected channel closure");
             }
         } else {

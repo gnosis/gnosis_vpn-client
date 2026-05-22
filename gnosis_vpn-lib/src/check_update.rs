@@ -41,6 +41,23 @@ const MANIFEST_FILENAME: &str = "linux-arm64.json";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const MANIFEST_FILENAME: &str = "macos-arm64.json";
 
+/// Release channel selector for picking an entry out of a `Manifest`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    Stable,
+    Snapshot,
+}
+
+impl fmt::Display for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Channel::Stable => f.write_str("stable"),
+            Channel::Snapshot => f.write_str("snapshot"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema_version: u32,
@@ -76,6 +93,17 @@ pub enum Error {
     #[error("VPN not connected — checking for updates without an active VPN connection is insecure")]
     VpnNotConnected,
 }
+
+impl Manifest {
+    /// Returns the release entry for the requested channel, if present.
+    pub fn pick(&self, channel: Channel) -> Option<&ChannelRelease> {
+        match channel {
+            Channel::Stable => self.channels.stable.as_ref(),
+            Channel::Snapshot => self.channels.snapshot.as_ref(),
+        }
+    }
+}
+
 
 /// Verify the daemon reports an active VPN connection.
 ///

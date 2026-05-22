@@ -1,6 +1,7 @@
 /// Module for communicating with the Gnosis VPN root service over a Unix domain socket.
+use futures_util::Stream;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use std::io;
@@ -30,6 +31,46 @@ pub async fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, 
     push_command(&mut stream, &json_cmd).await?;
     let str_resp = pull_response(&mut stream).await?;
     serde_json::from_str::<Response>(&str_resp).map_err(Error::Serialization)
+}
+
+/// Open a streaming connection to the daemon: write one `Command`, then read
+/// a sequence of newline-delimited `Response` records until the daemon closes
+/// the socket. Used for commands that produce a status stream
+/// (e.g. `Command::StartUpdate`).
+pub async fn stream_cmd(
+    socket_path: &Path,
+    cmd: &Command,
+) -> Result<impl Stream<Item = Result<Response, Error>> + use<>, Error> {
+    use futures_util::stream::unfold;
+
+    check_path(socket_path)?;
+    let stream = UnixStream::connect(socket_path).await?;
+    let (read_half, mut write_half) = stream.into_split();
+
+    let json_cmd = serde_json::to_string(cmd)?;
+    write_half.write_all(json_cmd.as_bytes()).await?;
+    write_half.write_all(b"\n").await?;
+    write_half.flush().await?;
+    // Keep the write half open: incoming_on_root_socket on the daemon uses
+    // `lines().next_line()` to terminate the command read, so a trailing
+    // newline is sufficient and we must not half-close (that would race
+    // against the daemon writing back its first status).
+
+    let reader = BufReader::new(read_half).lines();
+    Ok(unfold(Some((reader, write_half)), |state| async move {
+        let (mut reader, write_half) = state?;
+        loop {
+            match reader.next_line().await {
+                Ok(Some(line)) if line.is_empty() => continue,
+                Ok(Some(line)) => {
+                    let parsed = serde_json::from_str::<Response>(&line).map_err(Error::Serialization);
+                    return Some((parsed, Some((reader, write_half))));
+                }
+                Ok(None) => return None,
+                Err(e) => return Some((Err(Error::IO(e)), None)),
+            }
+        }
+    }))
 }
 
 fn check_path(socket_path: &Path) -> Result<(), Error> {
