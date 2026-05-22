@@ -1405,10 +1405,14 @@ impl Core {
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
+            // Evict expired entries on each connect to prevent the cache from accumulating
+            // stale pseudonyms as destinations change over time.
+            let ttl = self.config.connection.session_pseudonym_ttl;
+            self.cached_session_pseudonym
+                .retain(|_, (_, cached_at)| cached_at.elapsed() < ttl);
             let cached_pseudonym = self
                 .cached_session_pseudonym
                 .remove(&destination.address)
-                .filter(|(_, cached_at)| cached_at.elapsed() < self.config.connection.session_pseudonym_ttl)
                 .map(|(pseudonym, _)| pseudonym);
             if let Some(pseudonym) = &cached_pseudonym {
                 tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
