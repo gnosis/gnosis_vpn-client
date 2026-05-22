@@ -3,9 +3,7 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
 use edgli::hopr_lib::{
-    HoprSessionClientConfig,
-    api::types::internal::protocol::HoprPseudonym,
-    exports::transport::SurbBalancerConfig,
+    HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym, exports::transport::SurbBalancerConfig,
 };
 use tokio::sync::{mpsc, oneshot};
 

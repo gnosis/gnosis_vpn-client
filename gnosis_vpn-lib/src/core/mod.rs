@@ -1541,10 +1541,11 @@ impl Core {
         // Cache the session pseudonym so reconnection within 30s can reuse exit node SURBs
         if let Some(session) = &conn.session
             && let Some(client_id) = session.active_clients.first()
-                && let Ok(session_id) = SessionId::from_str(client_id) {
-                    self.cached_session_pseudonym
-                        .insert(session.destination, (*session_id.pseudonym(), Instant::now()));
-                }
+            && let Ok(session_id) = SessionId::from_str(client_id)
+        {
+            self.cached_session_pseudonym
+                .insert(session.destination, (*session_id.pseudonym(), Instant::now()));
+        }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         self.phase = Phase::HoprRunning;
