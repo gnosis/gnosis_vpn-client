@@ -28,7 +28,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::{
     fmt::{self, Display},
     str::FromStr,
@@ -429,7 +429,7 @@ impl Hopr {
                         }
                         found
                     })
-                    .collect::<HashSet<_>>()
+                    .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect();
                 if ipv4_addrs.is_empty() {
