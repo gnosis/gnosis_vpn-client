@@ -1410,8 +1410,8 @@ impl Core {
                 .remove(&destination.address)
                 .filter(|(_, cached_at)| cached_at.elapsed() < Duration::from_secs(30))
                 .map(|(pseudonym, _)| pseudonym);
-            if cached_pseudonym.is_some() {
-                tracing::info!(%destination, "reusing cached session pseudonym for reconnection");
+            if let Some(pseudonym) = &cached_pseudonym {
+                tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
             }
             let runner = connection::up::runner::Runner::new(
                 conn.destination.clone(),
