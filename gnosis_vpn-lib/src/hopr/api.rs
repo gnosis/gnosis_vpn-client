@@ -430,7 +430,11 @@ impl Hopr {
                         found
                     })
                     .collect();
-                if ips.is_empty() { None } else { Some(Peer::new(address, ips)) }
+                if ips.is_empty() {
+                    None
+                } else {
+                    Some(Peer::new(address, ips))
+                }
             });
         }
 
