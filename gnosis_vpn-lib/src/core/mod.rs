@@ -1538,7 +1538,8 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // Cache the session pseudonym so reconnection within 30s can reuse exit node SURBs
+        // Cache the session pseudonym so reconnection while it remains valid under the configured
+        // `session_pseudonym_ttl` can reuse exit node SURBs.
         if let Some(session) = &conn.session
             && let Some(client_id) = session.active_clients.first()
             && let Ok(session_id) = SessionId::from_str(client_id)
