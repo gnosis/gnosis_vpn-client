@@ -28,7 +28,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{
     fmt::{self, Display},
     str::FromStr,
@@ -429,6 +429,8 @@ impl Hopr {
                         }
                         found
                     })
+                    .collect::<HashSet<_>>()
+                    .into_iter()
                     .collect();
                 if ips.is_empty() {
                     None
