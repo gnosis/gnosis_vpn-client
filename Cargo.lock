@@ -1866,6 +1866,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0a7a9bfdb35811f9e59832f0f05975114d2251b415fb534108e6f34060fd772"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3329,6 +3338,7 @@ name = "gnosis_vpn-ctl"
 version = "0.86.0"
 dependencies = [
  "clap",
+ "clap_complete",
  "exitcode",
  "gnosis_vpn-lib",
  "humantime",
