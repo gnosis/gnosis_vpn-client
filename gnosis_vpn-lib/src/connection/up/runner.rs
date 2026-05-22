@@ -547,7 +547,7 @@ async fn request_static_wg_tunnel(
 
 async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
     let peers = hopr.announced_peers().await?;
-    let peer_ips = peers.iter().map(|p| p.1.ipv4).collect();
+    let peer_ips = peers.into_values().flat_map(|p| p.ipv4_addrs).collect();
     Ok(peer_ips)
 }
 
