@@ -2,7 +2,11 @@
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
-use edgli::hopr_lib::{HoprSessionClientConfig, exports::transport::SurbBalancerConfig};
+use edgli::hopr_lib::{
+    HoprSessionClientConfig,
+    api::types::internal::protocol::HoprPseudonym,
+    exports::transport::SurbBalancerConfig,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use std::fmt::{self, Display};
@@ -30,6 +34,7 @@ pub struct Runner {
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
     cached_blokli_ips: Vec<Ipv4Addr>,
+    cached_pseudonym: Option<HoprPseudonym>,
 }
 
 impl Runner {
@@ -40,6 +45,7 @@ impl Runner {
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
         cached_blokli_ips: Vec<Ipv4Addr>,
+        cached_pseudonym: Option<HoprPseudonym>,
     ) -> Self {
         Self {
             destination,
@@ -48,6 +54,7 @@ impl Runner {
             wg_config,
             worker_params,
             cached_blokli_ips,
+            cached_pseudonym,
         }
     }
 
@@ -101,6 +108,7 @@ impl Runner {
             &self.destination,
             &self.options,
             ping_config,
+            self.cached_pseudonym,
             &results_sender,
         )
         .await?;
@@ -196,6 +204,7 @@ impl Runner {
             &self.destination,
             &self.options,
             ping_config,
+            self.cached_pseudonym,
             results_sender,
         )
         .await?;
@@ -386,6 +395,7 @@ async fn open_ping_session(
     destination: &Destination,
     options: &Options,
     surb_management: SurbBalancerConfig,
+    pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
@@ -393,6 +403,7 @@ async fn open_ping_session(
         forward_path: destination.routing,
         return_path: destination.routing,
         surb_management: Some(surb_management),
+        pseudonym,
         ..Default::default()
     };
     (|| async {

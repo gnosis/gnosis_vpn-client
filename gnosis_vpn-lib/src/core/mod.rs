@@ -1,7 +1,9 @@
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
+use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -11,8 +13,9 @@ use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
 use std::net;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
@@ -89,6 +92,7 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     ongoing_channel_fundings: Vec<Address>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
+    cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +192,7 @@ impl Core {
             responder_duration: None,
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
+            cached_session_pseudonym: HashMap::new(),
         };
         Ok((core, incoming_sender))
     }
@@ -1400,6 +1405,14 @@ impl Core {
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
+            let cached_pseudonym = self
+                .cached_session_pseudonym
+                .get(&destination.address)
+                .filter(|(_, cached_at)| cached_at.elapsed() < Duration::from_secs(30))
+                .map(|(pseudonym, _)| *pseudonym);
+            if cached_pseudonym.is_some() {
+                tracing::info!(%destination, "reusing cached session pseudonym for reconnection");
+            }
             let runner = connection::up::runner::Runner::new(
                 conn.destination.clone(),
                 config_connection,
@@ -1407,6 +1420,7 @@ impl Core {
                 hopr,
                 self.worker_params.clone(),
                 self.cached_resolved_blokli_ips.clone(),
+                cached_pseudonym,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1524,6 +1538,13 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        // Cache the session pseudonym so reconnection within 30s can reuse exit node SURBs
+        if let Some(session) = &conn.session
+            && let Some(client_id) = session.active_clients.first()
+                && let Ok(session_id) = SessionId::from_str(client_id) {
+                    self.cached_session_pseudonym
+                        .insert(session.destination, (*session_id.pseudonym(), Instant::now()));
+                }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         self.phase = Phase::HoprRunning;
