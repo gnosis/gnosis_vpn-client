@@ -787,6 +787,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
+                    self.cached_session_pseudonym.remove(&conn.destination.address);
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -1410,10 +1411,12 @@ impl Core {
             let ttl = self.config.connection.session_pseudonym_ttl;
             self.cached_session_pseudonym
                 .retain(|_, (_, cached_at)| cached_at.elapsed() < ttl);
+            // Peek without consuming — the entry stays available for retries within the TTL
+            // window. It is removed only once the connection is confirmed established.
             let cached_pseudonym = self
                 .cached_session_pseudonym
-                .remove(&destination.address)
-                .map(|(pseudonym, _)| pseudonym);
+                .get(&destination.address)
+                .map(|(pseudonym, _)| *pseudonym);
             if let Some(pseudonym) = &cached_pseudonym {
                 tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
             }
