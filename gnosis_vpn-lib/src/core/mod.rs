@@ -1408,7 +1408,7 @@ impl Core {
             let cached_pseudonym = self
                 .cached_session_pseudonym
                 .remove(&destination.address)
-                .filter(|(_, cached_at)| cached_at.elapsed() < Duration::from_secs(30))
+                .filter(|(_, cached_at)| cached_at.elapsed() < self.config.connection.session_pseudonym_ttl)
                 .map(|(pseudonym, _)| pseudonym);
             if let Some(pseudonym) = &cached_pseudonym {
                 tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");

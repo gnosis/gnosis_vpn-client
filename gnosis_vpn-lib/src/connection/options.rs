@@ -16,6 +16,10 @@ pub struct Options {
     pub max_surb_upstream: MaxSurbUpstream,
     pub health_check_intervals: HealthCheckIntervals,
     pub lan_lockdown: bool,
+    /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
+    /// Exit nodes retain session SURBs for ~30s, so reconnecting within this window
+    /// avoids a cold-start SURB exchange.
+    pub session_pseudonym_ttl: Duration,
 }
 
 /// Controls how often each tier of health check runs.
