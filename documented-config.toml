@@ -50,6 +50,11 @@ path    = { hops = 1 }
 # internet traffic through the VPN.
 # lan_lockdown = false
 
+# session_pseudonym_ttl - how long to keep a closed session's pseudonym cached for reuse
+# on reconnect. Exit nodes retain session SURBs for ~30s, so reconnecting within this
+# window avoids a cold-start SURB exchange. Defaults to 30s.
+# session_pseudonym_ttl = "30s"
+
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]

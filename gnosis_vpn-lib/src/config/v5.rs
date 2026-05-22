@@ -186,6 +186,8 @@ impl From<Option<Connection>> for options::Options {
             timeouts,
             health_check_intervals,
             lan_lockdown: false,
+            // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
+            session_pseudonym_ttl: Duration::from_secs(1),
         }
     }
 }

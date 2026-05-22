@@ -41,6 +41,8 @@ pub(super) struct Connection {
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) session_pseudonym_ttl: Option<Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +308,11 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
+        // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
+        let session_pseudonym_ttl = connection
+            .and_then(|c| c.session_pseudonym_ttl)
+            .unwrap_or(Duration::from_secs(1));
+
         options::Options {
             sessions,
             ping_options: ping_opts,
@@ -314,6 +321,7 @@ impl From<Option<Connection>> for options::Options {
             timeouts,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+            session_pseudonym_ttl,
         }
     }
 }
@@ -400,7 +408,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "connection" {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
-                    if k == "http_timeout" || k == "announced_peer_minimum_score" || k == "lan_lockdown" {
+                    if k == "http_timeout"
+                        || k == "announced_peer_minimum_score"
+                        || k == "lan_lockdown"
+                        || k == "session_pseudonym_ttl"
+                    {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
