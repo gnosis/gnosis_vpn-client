@@ -37,9 +37,7 @@ humantime = "2.3.0"
 humantime-serde = "1.1.1"
 ipnetwork = "0.21"
 libc = "0.2.183"
-mimalloc = { version = "0.1.48", default-features = false, features = [
-  "secure",
-] }
+tikv-jemallocator = "0.6"
 mnl = "0.3.1"
 multiaddr = "0.18.2"
 nftnl = "0.9.1"
