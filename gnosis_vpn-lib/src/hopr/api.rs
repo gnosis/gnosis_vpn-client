@@ -16,12 +16,15 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::{
     fmt::{self, Display},
     str::FromStr,
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use crate::peer::Peer;
 use crate::{
@@ -416,14 +419,26 @@ impl Hopr {
                     }
                 };
                 let observed = hopr.network_observed_multiaddresses(&peer_id).await;
-                for addr in observed.clone().iter_mut() {
-                    while let Some(protocol) = addr.pop() {
-                        if let Protocol::Ip4(ipv4) = protocol {
-                            return Some(Peer::new(address, ipv4));
+                let ipv4_addrs: Vec<Ipv4Addr> = observed
+                    .iter()
+                    .flat_map(|addr| {
+                        let mut addr = addr.clone();
+                        let mut found = vec![];
+                        while let Some(protocol) = addr.pop() {
+                            if let Protocol::Ip4(ipv4) = protocol {
+                                found.push(ipv4);
+                            }
                         }
-                    }
+                        found
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                if ipv4_addrs.is_empty() {
+                    None
+                } else {
+                    Some(Peer::new(address, ipv4_addrs))
                 }
-                None
             });
         }
 
