@@ -18,7 +18,8 @@ pub struct Options {
     pub lan_lockdown: bool,
     /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
     /// Exit nodes retain session SURBs for ~30s, so reconnecting within this window
-    /// avoids a cold-start SURB exchange.
+    /// avoids a cold-start SURB exchange. Currently set to 1s (effectively disabled)
+    /// until hopr-lib supports PIX.
     pub session_pseudonym_ttl: Duration,
 }
 

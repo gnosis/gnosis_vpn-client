@@ -308,9 +308,10 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
+        // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
         let session_pseudonym_ttl = connection
             .and_then(|c| c.session_pseudonym_ttl)
-            .unwrap_or(Duration::from_secs(30));
+            .unwrap_or(Duration::from_secs(1));
 
         options::Options {
             sessions,
