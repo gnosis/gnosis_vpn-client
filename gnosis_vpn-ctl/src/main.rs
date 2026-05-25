@@ -28,6 +28,22 @@ async fn main() {
         process::exit(exitcode::OK);
     }
 
+    if let cli::Command::Destinations {} = args.command {
+        // Destinations goes through the socket like every other command,
+        // so completions only work when the service is running — same constraint as connect itself.
+        let cmd: Command = args.command.into();
+        let resp = match socket::root::process_cmd(&args.socket_path, &cmd).await {
+            Ok(resp) => resp,
+            Err(_) => process::exit(exitcode::UNAVAILABLE),
+        };
+        if let Response::Destinations(ids) = resp {
+            for id in ids {
+                println!("{id}");
+            }
+        }
+        process::exit(exitcode::OK);
+    }
+
     if let cli::Command::CheckUpdate { force } = args.command {
         let exit = run_check_update(format, &args.socket_path, force).await;
         process::exit(exit);
@@ -337,6 +353,11 @@ fn pretty_print(resp: &Response) {
         Response::StopClient(command::StopClientResponse::NotRunning) => {
             eprintln!("Worker client not running");
         }
+        Response::Destinations(ids) => {
+            for id in ids {
+                println!("{id}");
+            }
+        }
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
@@ -370,6 +391,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
+        Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
     }
 }

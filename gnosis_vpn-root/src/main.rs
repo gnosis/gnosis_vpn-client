@@ -879,6 +879,11 @@ impl DaemonState {
             | LibCommand::Telemetry
             | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
+            LibCommand::Destinations => {
+                let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
+                ids.sort();
+                Ok(Response::Destinations(ids))
+            }
             LibCommand::Info => {
                 let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
                     .await

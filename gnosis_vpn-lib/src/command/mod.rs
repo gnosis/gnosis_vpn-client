@@ -46,6 +46,8 @@ pub enum Command {
     StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
+    /// List configured destination IDs
+    Destinations,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -74,6 +76,7 @@ pub enum Response {
     Info(InfoResponse),
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
+    Destinations(Vec<String>),
     WorkerOffline,
 }
 
@@ -577,7 +580,7 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
+            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient | Command::Destinations => Err(()),
         }
     }
 }
