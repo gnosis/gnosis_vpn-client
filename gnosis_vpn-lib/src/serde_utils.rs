@@ -74,6 +74,10 @@ pub mod duration_ms {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
         let ms = f64::deserialize(d)?;
+        let is_valid = ms.is_finite() && ms >= 0.0;
+        if !is_valid {
+            return Err(serde::de::Error::custom(format!("invalid duration: {ms} ms")));
+        }
         Ok(Duration::from_secs_f64(ms / 1000.0))
     }
 }
@@ -90,6 +94,13 @@ pub mod opt_duration_ms {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
         let ms = Option::<f64>::deserialize(d)?;
-        Ok(ms.map(|ms| Duration::from_secs_f64(ms / 1000.0)))
+        ms.map(|ms| {
+            let is_valid = ms.is_finite() && ms >= 0.0;
+            if !is_valid {
+                return Err(serde::de::Error::custom(format!("invalid duration: {ms} ms")));
+            }
+            Ok(Duration::from_secs_f64(ms / 1000.0))
+        })
+        .transpose()
     }
 }
