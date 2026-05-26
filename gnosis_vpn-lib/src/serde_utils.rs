@@ -32,14 +32,17 @@ pub mod balance {
 pub mod system_time {
     use super::*;
 
+    // u64 milliseconds covers ~584 million years from UNIX_EPOCH, which is
+    // sufficient for any real timestamp. Using u64 avoids the need for u128,
+    // which serde_json doesn't natively support.
     pub fn serialize<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
-        let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis();
-        s.serialize_u128(ms)
+        let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis() as u64;
+        s.serialize_u64(ms)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SystemTime, D::Error> {
-        let ms = u128::deserialize(d)?;
-        Ok(UNIX_EPOCH + Duration::from_millis(ms as u64))
+        let ms = u64::deserialize(d)?;
+        Ok(UNIX_EPOCH + Duration::from_millis(ms))
     }
 }
 
@@ -50,15 +53,15 @@ pub mod opt_system_time {
         match t {
             None => s.serialize_none(),
             Some(t) => {
-                let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis();
+                let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis() as u64;
                 s.serialize_some(&ms)
             }
         }
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<SystemTime>, D::Error> {
-        let ms = Option::<u128>::deserialize(d)?;
-        Ok(ms.map(|ms| UNIX_EPOCH + Duration::from_millis(ms as u64)))
+        let ms = Option::<u64>::deserialize(d)?;
+        Ok(ms.map(|ms| UNIX_EPOCH + Duration::from_millis(ms)))
     }
 }
 
