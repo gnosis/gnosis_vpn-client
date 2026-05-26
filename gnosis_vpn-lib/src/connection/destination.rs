@@ -41,7 +41,7 @@ impl Destination {
             .iter()
             .map(|(key, value)| format!("{key}: {value}"))
             .collect::<Vec<String>>();
-        metas.sort();
+        metas.sort_unstable();
         metas.join(", ")
     }
 

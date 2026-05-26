@@ -337,6 +337,11 @@ fn pretty_print(resp: &Response) {
         Response::StopClient(command::StopClientResponse::NotRunning) => {
             eprintln!("Worker client not running");
         }
+        Response::Destinations(ids) => {
+            for id in ids {
+                println!("{id}");
+            }
+        }
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
@@ -370,6 +375,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
+        Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
     }
 }
