@@ -9,30 +9,39 @@ use crate::{
     balance::{self, FundingIssue},
     connection::destination::Destination,
     info::Info,
+    serde_utils,
     ticket_stats::{self, TicketStats},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
+    #[serde(with = "serde_utils::address")]
     pub address: Address,
     pub balance: ChannelBalance,
     pub matched_exit: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum ChannelBalance {
     Unknown,
     FundingOngoing,
-    Completed(Balance<WxHOPR>),
+    Completed {
+        #[serde(with = "serde_utils::balance")]
+        amount: Balance<WxHOPR>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceResponse {
+    #[serde(with = "serde_utils::balance")]
     pub node: Balance<XDai>,
+    #[serde(with = "serde_utils::balance")]
     pub safe: Balance<WxHOPR>,
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
+    #[serde(with = "serde_utils::balance")]
     pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
 }
@@ -77,7 +86,7 @@ fn from_balances<'a>(
     channels_out
         .map(|(address, balance)| ChannelOut {
             address: *address,
-            balance: ChannelBalance::Completed(*balance),
+            balance: ChannelBalance::Completed { amount: *balance },
             matched_exit: addr_to_id.get(address).map(|id| (*id).to_string()),
         })
         .collect()
@@ -124,7 +133,7 @@ impl Display for ChannelBalance {
         match self {
             ChannelBalance::Unknown => write!(f, "unknown balance"),
             ChannelBalance::FundingOngoing => write!(f, "funding ongoing"),
-            ChannelBalance::Completed(balance) => write!(f, "{balance}"),
+            ChannelBalance::Completed { amount } => write!(f, "{amount}"),
         }
     }
 }
@@ -159,7 +168,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].address, addr);
         assert_eq!(result[0].matched_exit, Some("dest-1".to_string()));
-        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+        assert_eq!(result[0].balance, ChannelBalance::Completed { amount: balance });
     }
 
     #[test]
@@ -172,7 +181,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].address, addr);
         assert_eq!(result[0].matched_exit, None);
-        assert_eq!(result[0].balance, ChannelBalance::Completed(balance));
+        assert_eq!(result[0].balance, ChannelBalance::Completed { amount: balance });
     }
 
     #[test]

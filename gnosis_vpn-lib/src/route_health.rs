@@ -38,6 +38,7 @@ use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::serde_utils;
 use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
@@ -133,8 +134,10 @@ pub enum UnrecoverableReason {
 /// snapshot so the state always exposes a full picture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExitHealth {
+    #[serde(with = "serde_utils::system_time")]
     pub checked_at: SystemTime,
     pub versions: gvpn_client::Versions,
+    #[serde(with = "serde_utils::duration_ms")]
     pub ping_rtt: Duration,
     pub health: gvpn_client::Health,
 }
@@ -144,6 +147,7 @@ pub struct ExitHealth {
 /// Also the wire-format shown to the CLI via the command API, so variant
 /// names and payloads are part of the user-visible surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state")]
 pub enum RouteHealthState {
     Unrecoverable {
         reason: UnrecoverableReason,
@@ -166,6 +170,7 @@ pub enum RouteHealthState {
     /// frequency (version skipped).
     Connecting {
         exit: ExitHealth,
+        #[serde(with = "serde_utils::opt_duration_ms")]
         tunnel_ping_rtt: Option<Duration>,
     },
 }

@@ -6,11 +6,13 @@ use std::collections::HashMap;
 use std::fmt::{self, Display};
 
 use crate::log_output;
+use crate::serde_utils;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
     pub id: String,
     pub meta: HashMap<String, String>,
+    #[serde(with = "serde_utils::address")]
     pub address: Address,
     pub routing: HopRouting,
 }

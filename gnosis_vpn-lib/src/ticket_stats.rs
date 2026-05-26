@@ -6,6 +6,8 @@ use thiserror::Error;
 
 use std::fmt::{self, Display};
 
+use crate::serde_utils;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -14,6 +16,7 @@ pub enum Error {
 
 #[derive(Copy, Debug, Clone, Serialize, Deserialize)]
 pub struct TicketStats {
+    #[serde(with = "serde_utils::balance")]
     pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
 }
