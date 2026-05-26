@@ -408,7 +408,7 @@ impl Core {
                             })
                             .collect();
                         let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
-                        vals.sort_by(|a, b| a.id.cmp(&b.id));
+                        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
                         let destinations = vals
                             .into_iter()
                             .map(|v| command::DestinationState {

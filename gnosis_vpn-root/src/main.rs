@@ -850,7 +850,7 @@ impl DaemonState {
 
     fn status_response_offline(&self) -> Response {
         let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
-        vals.sort_by(|a, b| a.id.cmp(&b.id));
+        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
         let destinations = vals
             .into_iter()
             .map(|dest| command::DestinationState {
@@ -881,7 +881,7 @@ impl DaemonState {
             LibCommand::Ping => Ok(Response::Pong),
             LibCommand::Destinations => {
                 let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
-                ids.sort();
+                ids.sort_unstable();
                 Ok(Response::Destinations(ids))
             }
             LibCommand::Info => {
