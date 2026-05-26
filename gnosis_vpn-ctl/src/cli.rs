@@ -198,8 +198,10 @@ _gnosis_vpn-ctl() {{
             );
         }
         clap_complete::Shell::Zsh => {
-            // Use zsh's `functions` array to patch the connect id spec in-place:
-            // replace _default (file completion) with a helper that calls `destinations`.
+            // Use zsh's `functions` array to patch the connect id spec in-place.
+            // The glob :id*:_default matches the positional arg spec regardless of
+            // its description text, so a help-text or clap-version change won't
+            // silently break the substitution.
             print!(
                 r#"
 _gnosis_vpn_ctl_destinations() {{
@@ -207,7 +209,7 @@ _gnosis_vpn_ctl_destinations() {{
     dests=("${{(@f)$(gnosis_vpn-ctl destinations 2>/dev/null)}}")
     _describe 'destination' dests
 }}
-functions[_gnosis_vpn-ctl]=${{functions[_gnosis_vpn-ctl]//:id -- Endpoint node address:_default/:id -- Endpoint node address:_gnosis_vpn_ctl_destinations}}
+functions[_gnosis_vpn-ctl]=${{functions[_gnosis_vpn-ctl]//:id*:_default/:id:_gnosis_vpn_ctl_destinations}}
 "#
             );
         }
