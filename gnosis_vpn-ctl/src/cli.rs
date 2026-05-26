@@ -156,13 +156,40 @@ pub fn generate_completions(shell: clap_complete::Shell) {
         clap_complete::Shell::Bash => {
             // Save the clap-generated function under a private name, then redefine
             // _gnosis_vpn-ctl to intercept the connect-id position with dynamic destinations.
+            // Global flags (e.g. --socket-path) may appear before the connect subcommand,
+            // so we locate connect by scanning COMP_WORDS instead of assuming index 1.
             print!(
                 r#"
 eval "_gnosis_vpn_ctl_clap() $(declare -f _gnosis_vpn-ctl | tail -n +2)"
 _gnosis_vpn-ctl() {{
     local cur="${{COMP_WORDS[COMP_CWORD]}}"
-    if [[ "${{COMP_WORDS[1]}}" == "connect" && ${{COMP_CWORD}} -eq 2 && "$cur" != -* ]]; then
-        COMPREPLY=($(compgen -W "$(gnosis_vpn-ctl destinations 2>/dev/null)" -- "$cur"))
+
+    local connect_index=0
+    local i
+    for (( i=1; i<${{#COMP_WORDS[@]}}; i++ )); do
+        if [[ "${{COMP_WORDS[i]}}" == "connect" ]]; then
+            connect_index=$i
+            break
+        fi
+    done
+
+    if [[ $connect_index -gt 0 && $COMP_CWORD -eq $((connect_index+1)) && "$cur" != -* ]]; then
+        local socket_args=()
+        for (( i=1; i<connect_index; i++ )); do
+            case "${{COMP_WORDS[i]}}" in
+                --socket-path=*)
+                    socket_args=(--socket-path "${{COMP_WORDS[i]#*=}}")
+                    ;;
+                --socket-path|-s)
+                    if (( i+1 < connect_index )); then
+                        socket_args=(--socket-path "${{COMP_WORDS[i+1]}}")
+                    fi
+                    ;;
+            esac
+        done
+        local dests
+        dests=$(gnosis_vpn-ctl "${{socket_args[@]}}" destinations 2>/dev/null)
+        COMPREPLY=($(compgen -W "$dests" -- "$cur"))
         return
     fi
     _gnosis_vpn_ctl_clap "$@"
