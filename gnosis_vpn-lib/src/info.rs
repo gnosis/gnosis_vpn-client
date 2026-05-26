@@ -3,10 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
 
+use crate::serde_utils;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Info {
+    #[serde(with = "serde_utils::address")]
     pub node_address: Address,
     pub node_peer_id: String,
+    #[serde(with = "serde_utils::address")]
     pub safe_address: Address,
 }
 

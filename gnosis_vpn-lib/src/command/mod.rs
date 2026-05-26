@@ -14,6 +14,7 @@ use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
+use crate::serde_utils;
 use crate::ticket_stats::TicketStats;
 
 mod balance_response;
@@ -90,6 +91,7 @@ pub struct StatusResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::up::Phase,
 }
@@ -97,12 +99,14 @@ pub struct ConnectingInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectedInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DisconnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::down::Phase,
 }
@@ -119,15 +123,21 @@ pub enum RunMode {
     Init,
     /// after creating safe this state will not be reached again
     PreparingSafe {
+        #[serde(with = "serde_utils::address")]
         node_address: Address,
+        #[serde(with = "serde_utils::balance")]
         node_xdai: Balance<XDai>,
+        #[serde(with = "serde_utils::balance")]
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
         ticket_stats: Option<TicketStats>,
     },
     /// Safe deployment ongoing
-    DeployingSafe { node_address: Address },
+    DeployingSafe {
+        #[serde(with = "serde_utils::address")]
+        node_address: Address,
+    },
     /// Hopr started, determining ticket value for strategies
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
@@ -224,6 +234,7 @@ pub enum FundingToolResponse {
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
+    #[serde(with = "serde_utils::opt_system_time")]
     pub checking_since: Option<SystemTime>,
     pub consecutive_failures: u32,
 }
@@ -248,6 +259,7 @@ pub enum NerdStatsResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnStats {
+    #[serde(with = "serde_utils::address")]
     pub node_address: Address,
     pub destination: Destination,
     pub wg_pubkey: Option<String>,

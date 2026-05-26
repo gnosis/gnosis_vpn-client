@@ -25,6 +25,7 @@ pub mod worker_params;
 mod log_output;
 mod peer;
 mod remote_data;
+mod serde_utils;
 mod ticket_stats;
 
 pub mod prelude {

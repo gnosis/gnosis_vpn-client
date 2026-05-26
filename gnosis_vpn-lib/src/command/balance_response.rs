@@ -7,6 +7,7 @@ use std::fmt::{self, Display};
 use crate::balance::{self, FundingIssue};
 use crate::connection::destination::Destination;
 use crate::info::Info;
+use crate::serde_utils;
 use crate::ticket_stats::{self, TicketStats};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -22,19 +23,26 @@ pub enum ChannelDestination {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum ChannelBalance {
     Unknown,
     FundingOngoing,
-    Completed(Balance<WxHOPR>),
+    Completed {
+        #[serde(with = "serde_utils::balance")]
+        amount: Balance<WxHOPR>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceResponse {
+    #[serde(with = "serde_utils::balance")]
     pub node: Balance<XDai>,
+    #[serde(with = "serde_utils::balance")]
     pub safe: Balance<WxHOPR>,
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
     pub issues: Vec<FundingIssue>,
+    #[serde(with = "serde_utils::balance")]
     pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
 }
@@ -89,7 +97,7 @@ fn from_balances<'a, 'b>(
             } else {
                 ChannelDestination::Unconfigured(*address)
             };
-            let balance = ChannelBalance::Completed(*balance);
+            let balance = ChannelBalance::Completed { amount: *balance };
             ChannelOut { destination, balance }
         })
         .collect()
@@ -139,7 +147,7 @@ impl Display for ChannelBalance {
         match self {
             ChannelBalance::Unknown => write!(f, "unknown balance"),
             ChannelBalance::FundingOngoing => write!(f, "funding ongoing"),
-            ChannelBalance::Completed(balance) => write!(f, "{balance}"),
+            ChannelBalance::Completed { amount } => write!(f, "{amount}"),
         }
     }
 }
