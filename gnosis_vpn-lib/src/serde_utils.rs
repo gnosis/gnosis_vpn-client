@@ -33,10 +33,7 @@ pub mod system_time {
     use super::*;
 
     pub fn serialize<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
-        let ms = t
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis();
+        let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis();
         s.serialize_u128(ms)
     }
 
@@ -53,10 +50,7 @@ pub mod opt_system_time {
         match t {
             None => s.serialize_none(),
             Some(t) => {
-                let ms = t
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or(Duration::ZERO)
-                    .as_millis();
+                let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis();
                 s.serialize_some(&ms)
             }
         }
