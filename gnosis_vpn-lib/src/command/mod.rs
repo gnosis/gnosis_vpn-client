@@ -752,8 +752,7 @@ mod tests {
         let no_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":null}}"#).unwrap();
         assert!(matches!(no_error, RunMode::Init { last_error: None }));
 
-        let with_error: RunMode =
-            serde_json::from_str(r#"{"Init":{"last_error":"connection refused"}}"#).unwrap();
+        let with_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":"connection refused"}}"#).unwrap();
         assert!(matches!(with_error, RunMode::Init { last_error: Some(ref e) } if e == "connection refused"));
     }
 }
