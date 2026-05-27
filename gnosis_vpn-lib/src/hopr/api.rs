@@ -7,10 +7,7 @@ use edgli::{
         api::{
             chain::ChainKeyOperations,
             node::{HasChainApi, HasTransportApi},
-            types::{
-                internal::channels::ChannelStatus,
-                primitive::prelude::Address,
-            },
+            types::{internal::channels::ChannelStatus, primitive::prelude::Address},
         },
         exports::{
             network::types::types::IpProtocol,

@@ -157,5 +157,4 @@ mod tests {
         assert_eq!(result[0].matched_exit, None);
         assert_eq!(result[0].balance, ChannelBalance::Completed { amount: balance });
     }
-
 }

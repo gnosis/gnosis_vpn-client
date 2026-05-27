@@ -615,16 +615,17 @@ impl Core {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
                     if !balances.channels_out.is_empty()
-                        && let Some(hopr) = self.hopr.clone() {
-                            let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                            for id in &dest_ids {
-                                if let (Some(rh), Some(dest)) =
-                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
-                                {
-                                    rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
-                                }
+                        && let Some(hopr) = self.hopr.clone()
+                    {
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        for id in &dest_ids {
+                            if let (Some(rh), Some(dest)) =
+                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                            {
+                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
                             }
                         }
+                    }
                     self.balances = Some(balances);
                     let balances_delay = if route_health::any_needs_channel(self.route_healths.values()) {
                         Duration::from_secs(10)
