@@ -36,7 +36,7 @@ use std::{
 
 use crate::peer::Peer;
 use crate::{
-    balance::Balances,
+    balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
 };
@@ -393,6 +393,34 @@ impl Hopr {
             }
         }
         Ok(peers)
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn ideal_balance_recommendation(
+        &self,
+        cfg: &edgli::strategy::IncentiveConfiguration,
+    ) -> Result<balance::BalanceRecommendation, HoprError> {
+        let rec = self
+            .edgli
+            .ideal_balance_recommendation(cfg)
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        Ok(balance::BalanceRecommendation {
+            wxhopr: rec.wxhopr,
+            xdai: rec.xdai,
+        })
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn capacity_allocations(
+        &self,
+    ) -> Result<HashMap<balance::CapacityAllocator, balance::Capacity>, HoprError> {
+        let raw = self
+            .edgli
+            .describe_current_capacity_allocations()
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

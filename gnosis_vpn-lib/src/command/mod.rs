@@ -3,13 +3,14 @@ use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::{self, FundingIssue};
+use crate::balance;
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
@@ -149,7 +150,8 @@ pub enum RunMode {
     },
     /// Normal operation where connections can be made
     Running {
-        funding: FundingState,
+        ideal_balance: Option<balance::BalanceRecommendation>,
+        capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
         hopr_status: Option<HoprStatus>,
     },
     /// Shutting down edge client,
@@ -204,13 +206,6 @@ pub enum HoprInitStatus {
     Ready,
 }
 
-// in order of priority
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum FundingState {
-    Querying,               // currently checking balances to determine FundingState
-    TopIssue(FundingIssue), // there is at least one issue
-    WellFunded,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
@@ -323,9 +318,14 @@ impl RunMode {
         }
     }
 
-    pub fn running(issues: Option<Vec<FundingIssue>>, hopr_state: Option<HoprState>) -> Self {
+    pub fn running(
+        ideal_balance: Option<balance::BalanceRecommendation>,
+        capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
+        hopr_state: Option<HoprState>,
+    ) -> Self {
         RunMode::Running {
-            funding: issues.map(|i| i.into()).unwrap_or(FundingState::Querying),
+            ideal_balance,
+            capacity_allocations,
             hopr_status: hopr_state.map(|s| s.into()),
         }
     }
@@ -404,16 +404,6 @@ impl FromStr for Command {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         serde_json::from_str(s)
-    }
-}
-
-impl From<Vec<FundingIssue>> for FundingState {
-    fn from(issues: Vec<FundingIssue>) -> Self {
-        if issues.is_empty() {
-            FundingState::WellFunded
-        } else {
-            FundingState::TopIssue(issues[0].clone())
-        }
     }
 }
 
@@ -498,10 +488,19 @@ impl Display for RunMode {
                 (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
                 (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
             },
-            RunMode::Running { funding, hopr_status } => match hopr_status {
-                Some(hopr_status) => write!(f, "Ready ({hopr_status}), {funding}"),
-                None => write!(f, "Ready, {funding}"),
-            },
+            RunMode::Running { ideal_balance, capacity_allocations, hopr_status } => {
+                let balance_str = ideal_balance
+                    .map(|b| format!(", ideal: wxHOPR >= {}, xDAI >= {}", b.wxhopr, b.xdai))
+                    .unwrap_or_default();
+                let capacity_str = capacity_allocations
+                    .as_ref()
+                    .map(|m| format!(", capacity allocations: {} entries", m.len()))
+                    .unwrap_or_default();
+                match hopr_status {
+                    Some(hopr_status) => write!(f, "Ready ({hopr_status}){balance_str}{capacity_str}"),
+                    None => write!(f, "Ready{balance_str}{capacity_str}"),
+                }
+            }
             RunMode::Shutdown => write!(f, "Shutting down"),
             RunMode::NotRunning => write!(f, "Worker offline"),
         }
@@ -540,16 +539,6 @@ impl Display for DisconnectingInfo {
             log_output::elapsed(&self.since),
             self.phase
         )
-    }
-}
-
-impl Display for FundingState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FundingState::Querying => write!(f, "Determining funding"),
-            FundingState::TopIssue(issue) => write!(f, "Issue: {}", issue),
-            FundingState::WellFunded => write!(f, "Well funded"),
-        }
     }
 }
 
@@ -679,30 +668,17 @@ mod tests {
     }
 
     #[test]
-    fn runmode_running_uses_top_issue_and_hopr_status() -> anyhow::Result<()> {
-        let issues = Some(vec![FundingIssue::NodeLowOnFunds]);
+    fn runmode_running_passes_through_hopr_status() -> anyhow::Result<()> {
         let hopr_state = Some(HoprState::Running);
 
-        match RunMode::running(issues, hopr_state) {
-            RunMode::Running { funding, hopr_status } => {
-                assert_eq!(funding, FundingState::TopIssue(FundingIssue::NodeLowOnFunds));
+        match RunMode::running(None, None, hopr_state) {
+            RunMode::Running { ideal_balance, capacity_allocations, hopr_status } => {
+                assert!(ideal_balance.is_none());
+                assert!(capacity_allocations.is_none());
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
             }
             other => panic!("unexpected run mode {other:?}"),
         }
-        Ok(())
-    }
-
-    #[test]
-    fn funding_state_from_option_applies_priority_rules() -> anyhow::Result<()> {
-        let empty: Vec<FundingIssue> = vec![];
-        assert_eq!(FundingState::from(empty), FundingState::WellFunded);
-
-        let top = vec![FundingIssue::SafeLowOnFunds];
-        assert_eq!(
-            FundingState::from(top),
-            FundingState::TopIssue(FundingIssue::SafeLowOnFunds)
-        );
         Ok(())
     }
 

@@ -39,6 +39,42 @@ impl Display for FundingIssue {
     }
 }
 
+/// Which entity holds a wxHOPR stake: either an open outgoing channel to a peer,
+/// or the unallocated balance in the Safe contract.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum CapacityAllocator {
+    Peer(#[serde(with = "serde_utils::address")] Address),
+    Safe,
+}
+
+impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
+    fn from(a: edgli::strategy::CapacityAllocator) -> Self {
+        match a {
+            edgli::strategy::CapacityAllocator::Peer(addr) => CapacityAllocator::Peer(addr),
+            edgli::strategy::CapacityAllocator::Safe => CapacityAllocator::Safe,
+        }
+    }
+}
+
+/// Data-throughput capacity for a wxHOPR stake at the current ticket price.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct Capacity {
+    #[serde(with = "serde_utils::balance")]
+    pub stake: Balance<WxHOPR>,
+    pub expected_messages: u64,
+    pub byte_capacity: u64,
+}
+
+impl From<edgli::strategy::Capacity> for Capacity {
+    fn from(c: edgli::strategy::Capacity) -> Self {
+        Capacity {
+            stake: c.stake,
+            expected_messages: c.expected_messages,
+            byte_capacity: c.byte_capacity,
+        }
+    }
+}
+
 /// Minimum recommended wxHOPR and xDAI balance to open the target number of channels.
 /// Computed once during onboarding and surfaced in the PreparingSafe run mode.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]

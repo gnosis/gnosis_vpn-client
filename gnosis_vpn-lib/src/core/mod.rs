@@ -85,6 +85,8 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
+    ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
+    capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
@@ -186,6 +188,8 @@ impl Core {
             incentive_operations: None,
             ticket_stats: None,
             minimum_balance_recommendation: None,
+            ideal_balance_recommendation: None,
+            capacity_allocations: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             route_healths,
@@ -376,12 +380,11 @@ impl Core {
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                let issues = self.balances.as_ref().zip(self.ticket_stats.as_ref()).and_then(
-                                    |(balances, stats)| {
-                                        stats.ticket_value().ok().map(|tv| balances.to_funding_issues(tv))
-                                    },
-                                );
-                                RunMode::running(issues, self.hopr.as_ref().map(|h| h.status()))
+                                RunMode::running(
+                                    self.ideal_balance_recommendation,
+                                    self.capacity_allocations.clone(),
+                                    self.hopr.as_ref().map(|h| h.status()),
+                                )
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
@@ -603,6 +606,28 @@ impl Core {
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch minimum balance recommendation - retrying");
                     self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::from_secs(10));
+                }
+            },
+            Results::IdealBalanceRecommendation { res } => match res {
+                Ok(rec) => {
+                    tracing::info!(?rec, "received ideal balance recommendation");
+                    self.ideal_balance_recommendation = Some(rec);
+                    self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::from_secs(60));
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "failed to fetch ideal balance recommendation - retrying");
+                    self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::from_secs(10));
+                }
+            },
+            Results::CapacityAllocations { res } => match res {
+                Ok(allocations) => {
+                    tracing::info!(count = allocations.len(), "received capacity allocations");
+                    self.capacity_allocations = Some(allocations);
+                    self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "failed to fetch capacity allocations - retrying");
+                    self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -1320,6 +1345,37 @@ impl Core {
         }
     }
 
+    fn spawn_ideal_balance_recommendation_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_on_shutdown.clone();
+            let cfg = self.config.strategy.clone().into();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::ideal_balance_recommendation(hopr, cfg, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_capacity_allocations_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_on_shutdown.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::capacity_allocations(hopr, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
             let safe_address = hopr.info().safe_address;
@@ -1549,6 +1605,8 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
+        self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
+        self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         if route_health::any_needs_peers(self.route_healths.values()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         } else {

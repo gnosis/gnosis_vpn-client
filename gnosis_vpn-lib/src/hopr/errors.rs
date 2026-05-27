@@ -31,4 +31,7 @@ pub enum HoprError {
 
     #[error("Failed to start telemetry reactor: {0}")]
     TelemetryReactorStart(String),
+
+    #[error("Strategy error: {0}")]
+    Strategy(String),
 }

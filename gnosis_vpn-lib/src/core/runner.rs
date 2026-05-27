@@ -51,6 +51,12 @@ pub enum Results {
     MinimumBalanceRecommendation {
         res: Result<balance::BalanceRecommendation, Error>,
     },
+    IdealBalanceRecommendation {
+        res: Result<balance::BalanceRecommendation, Error>,
+    },
+    CapacityAllocations {
+        res: Result<std::collections::HashMap<balance::CapacityAllocator, balance::Capacity>, Error>,
+    },
     PersistSafe {
         res: Result<(), hopr_config::Error>,
         safe_module: SafeModule,
@@ -150,6 +156,26 @@ pub async fn minimum_balance_recommendation(
 ) {
     let res = run_minimum_balance_recommendation(incentive_operations, cfg).await;
     let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
+}
+
+pub async fn ideal_balance_recommendation(
+    hopr: Arc<Hopr>,
+    cfg: edgli::strategy::IncentiveConfiguration,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = hopr
+        .ideal_balance_recommendation(&cfg)
+        .await
+        .map_err(|e| Error::Chain(e.to_string()));
+    let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
+}
+
+pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    let res = hopr
+        .capacity_allocations()
+        .await
+        .map_err(|e| Error::Chain(e.to_string()));
+    let _ = results_sender.send(Results::CapacityAllocations { res }).await;
 }
 
 pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
@@ -559,6 +585,18 @@ impl Display for Results {
                     rec.wxhopr, rec.xdai
                 ),
                 Err(err) => write!(f, "MinimumBalanceRecommendation: Error({})", err),
+            },
+            Results::IdealBalanceRecommendation { res } => match res {
+                Ok(rec) => write!(
+                    f,
+                    "IdealBalanceRecommendation: wxHOPR >= {}, xDAI >= {}",
+                    rec.wxhopr, rec.xdai
+                ),
+                Err(err) => write!(f, "IdealBalanceRecommendation: Error({})", err),
+            },
+            Results::CapacityAllocations { res } => match res {
+                Ok(map) => write!(f, "CapacityAllocations: {} entries", map.len()),
+                Err(err) => write!(f, "CapacityAllocations: Error({})", err),
             },
             Results::DeploySafe { res } => match res {
                 Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),
