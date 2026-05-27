@@ -90,6 +90,7 @@ pub struct Core {
     responder_string: Option<oneshot::Sender<Result<String, String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
+    ongoing_channel_fundings: Vec<Address>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
 }
@@ -186,6 +187,7 @@ impl Core {
             ticket_stats: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
+            ongoing_channel_fundings: Vec::new(),
             route_healths,
             responder_unit: None,
             responder_string: None,
@@ -493,6 +495,7 @@ impl Core {
                                 &balances,
                                 ticket_stats,
                                 &self.config.destinations.clone(),
+                                self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
                             match balance_response {
                                 Ok(res) => {
@@ -627,25 +630,24 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
-                    if !balances.channels_out.is_empty()
-                        && let Some(hopr) = self.hopr.clone()
-                    {
+                    // For AnyChannel routes stuck in NeedsFunding, notify them that channels
+                    // exist so they can transition to Routable. channel_funded() gates itself
+                    // by static_need so this is safe to broadcast.
+                    if let Some(hopr) = self.hopr.clone() {
+                        let channel_addrs: Vec<Address> = balances.channels_out.keys().cloned().collect();
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                        for id in &dest_ids {
-                            if let (Some(rh), Some(dest)) =
-                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
-                            {
-                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
+                        for addr in &channel_addrs {
+                            for id in &dest_ids {
+                                if let (Some(rh), Some(dest)) =
+                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                                {
+                                    rh.channel_funded(*addr, &hopr, dest, &self.config.connection, results_sender);
+                                }
                             }
                         }
                     }
                     self.balances = Some(balances);
-                    let balances_delay = if route_health::any_needs_channel(self.route_healths.values()) {
-                        Duration::from_secs(10)
-                    } else {
-                        Duration::from_secs(60)
-                    };
-                    self.spawn_balances_runner(results_sender, balances_delay);
+                    self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch balances from hopr");
@@ -670,18 +672,33 @@ impl Core {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    let channels_already_available = self.balances.as_ref().is_some_and(|b| !b.channels_out.is_empty());
                     for id in dest_ids {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
-                            && let Some(hopr) = self.hopr.clone()
                         {
-                            rh.peers(&all_peers, &hopr, &dest, &self.config.connection, results_sender);
-                            // If peers just moved this route into NeedsChannel and we already
-                            // know channels exist, complete the transition immediately rather
-                            // than waiting up to 60s for the next balances tick.
-                            if channels_already_available && rh.needs_channel() {
-                                rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
+                            let transition = rh.peers(
+                                &all_peers,
+                                self.hopr.as_ref().unwrap(),
+                                &dest,
+                                &self.config.connection,
+                                results_sender,
+                            );
+                            match transition {
+                                route_health::PeerTransition::NowNeedsFunding => {
+                                    // `needs_channel_funding()` returns Some only for
+                                    // `StaticNeed::Channel` routes (test/future use).
+                                    // All production 1+ hop routes use `StaticNeed::AnyChannel`,
+                                    // so nothing is spawned here — the ChannelLifecycleStrategy
+                                    // reactor opens and funds relay channels; the route exits
+                                    // NeedsFunding on the next Balances poll once a funded
+                                    // outgoing channel appears and `channel_funded` fires.
+                                    if let Some(addr) = rh.needs_channel_funding() {
+                                        self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
+                                    }
+                                }
+                                route_health::PeerTransition::BecameRoutable => {}
+                                route_health::PeerTransition::LostPeer => {}
+                                route_health::PeerTransition::NoChange => {}
                             }
                         }
                     }
@@ -698,6 +715,39 @@ impl Core {
                     self.spawn_connected_peers(results_sender, Duration::from_secs(10));
                 }
             },
+
+            Results::FundChannel { address, res } => {
+                self.ongoing_channel_fundings.retain(|a| a != &address);
+                // Broadcast to all route healths — channel_funded() itself determines
+                // applicability via static_need (Channel match or AnyChannel).
+                let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                match res {
+                    Ok(()) => {
+                        tracing::info!(address = %address.to_checksum(), "channel funded");
+                        for id in &dest_ids {
+                            if let (Some(rh), Some(dest)) =
+                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                            {
+                                rh.channel_funded(
+                                    address,
+                                    self.hopr.as_ref().unwrap(),
+                                    dest,
+                                    &self.config.connection,
+                                    results_sender,
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(?err, address = %address.to_checksum(), "failed to ensure channel funding");
+                        for id in &dest_ids {
+                            if let Some(rh) = self.route_healths.get_mut(id) {
+                                rh.with_error(err.to_string());
+                            }
+                        }
+                    }
+                }
+            }
 
             Results::ConnectionEvent(evt) => {
                 tracing::debug!(%evt, "handling connection runner event");
@@ -1315,6 +1365,29 @@ impl Core {
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
                         runner::wait_for_running(hopr, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
+    fn spawn_channel_funding(&mut self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if self.ongoing_channel_fundings.contains(&address) {
+            tracing::debug!(address = %address.to_checksum(), "channel funding already ongoing - skipping");
+            return;
+        }
+        self.ongoing_channel_fundings.push(address);
+        tracing::debug!(ticket_stats = ?self.ticket_stats, hopr_present = self.hopr.is_some(), "checking channel funding");
+        let ticket_value = self.ticket_stats.and_then(|s| s.ticket_value().ok());
+        if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), ticket_value) {
+            let cancel = self.cancel_on_shutdown.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::fund_channel(hopr, address, ticket_value, results_sender).await;
                     })
                     .await
             });
