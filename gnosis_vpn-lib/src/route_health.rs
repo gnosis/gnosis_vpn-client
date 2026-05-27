@@ -195,7 +195,6 @@ pub enum HealthCheckOutcome {
     },
 }
 
-
 /// Per-destination route health tracker.
 ///
 /// Owns the health-check lifecycle: state transitions, the background
