@@ -483,19 +483,16 @@ impl Core {
                     }
 
                     WorkerCommand::Balance => {
-                        let response = match (self.hopr.clone(), self.incentive_operations.clone()) {
+                        let result = match (self.hopr.clone(), self.incentive_operations.clone()) {
                             (Some(hopr), Some(ops)) => {
                                 let balances = hopr.balances().await;
                                 let ticket_stats = ops
                                     .ticket_stats()
                                     .await
-                                    .map_err(|e| anyhow::anyhow!(e))
-                                    .and_then(|ts| {
-                                        Ok(crate::ticket_stats::TicketStats {
+                                    .map_err(|e| anyhow::anyhow!(e)).map(|ts| crate::ticket_stats::TicketStats {
                                             ticket_price: ts.ticket_price,
                                             winning_probability: ts.winning_probability.into(),
-                                        })
-                                    });
+                                        });
                                 match (balances, ticket_stats) {
                                     (Ok(b), Ok(ts)) => command::BalanceResponse::try_build(
                                         &hopr.info(),
@@ -505,22 +502,21 @@ impl Core {
                                     )
                                     .map_err(|e| {
                                         tracing::error!(?e, "failed to build balance response");
-                                        e
-                                    })
-                                    .ok(),
+                                        e.to_string()
+                                    }),
                                     (Err(e), _) => {
                                         tracing::error!(?e, "failed to fetch balances");
-                                        None
+                                        Err(e.to_string())
                                     }
                                     (_, Err(e)) => {
                                         tracing::error!(?e, "failed to fetch ticket stats");
-                                        None
+                                        Err(e.to_string())
                                     }
                                 }
                             }
-                            _ => None,
+                            _ => Err("balance query requires an active worker and HOPR node".to_string()),
                         };
-                        let _ = resp.send(Response::Balance(response));
+                        let _ = resp.send(Response::Balance(result));
                     }
 
                     WorkerCommand::Telemetry => {
@@ -618,8 +614,8 @@ impl Core {
                     tracing::info!(count = allocations.len(), "received capacity allocations");
                     let has_channels = allocations.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
                     self.capacity_allocations = Some(allocations);
-                    if has_channels {
-                        if let Some(hopr) = self.hopr.clone() {
+                    if has_channels
+                        && let Some(hopr) = self.hopr.clone() {
                             let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                             for id in &dest_ids {
                                 if let (Some(rh), Some(dest)) =
@@ -629,7 +625,6 @@ impl Core {
                                 }
                             }
                         }
-                    }
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {

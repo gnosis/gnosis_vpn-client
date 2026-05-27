@@ -67,7 +67,7 @@ pub enum Response {
     NerdStats(NerdStatsResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
-    Balance(Option<BalanceResponse>),
+    Balance(Result<BalanceResponse, String>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
     Pong,

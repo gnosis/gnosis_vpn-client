@@ -250,7 +250,7 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
-        Response::Balance(Some(command::BalanceResponse {
+        Response::Balance(Ok(command::BalanceResponse {
             node,
             safe,
             channels_out,
@@ -284,8 +284,8 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
-        Response::Balance(None) => {
-            println!("No balance information available.");
+        Response::Balance(Err(msg)) => {
+            eprintln!("Balance error: {msg}");
         }
         Response::Pong => {
             println!("Pong");
@@ -355,7 +355,8 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
-        Response::Balance(..) => exitcode::OK,
+        Response::Balance(Ok(..)) => exitcode::OK,
+        Response::Balance(Err(..)) => exitcode::SOFTWARE,
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,

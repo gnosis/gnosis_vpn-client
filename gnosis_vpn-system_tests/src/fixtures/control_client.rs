@@ -56,9 +56,10 @@ impl ControlClient {
     }
 
     /// Retrieves the node and safe balances.
-    pub async fn balance(&self) -> anyhow::Result<Option<BalanceResponse>> {
+    pub async fn balance(&self) -> anyhow::Result<BalanceResponse> {
         match self.send(&Command::Balance).await {
-            Ok(Response::Balance(balance)) => Ok(balance),
+            Ok(Response::Balance(Ok(balance))) => Ok(balance),
+            Ok(Response::Balance(Err(msg))) => Err(anyhow::anyhow!("balance error: {msg}")),
             Ok(resp) => Err(anyhow::anyhow!("unexpected balance response {resp:?}")),
             Err(e) => Err(e),
         }
@@ -145,7 +146,7 @@ impl ControlClient {
     pub async fn wait_for_node_funding(&self, timeout: Duration) -> anyhow::Result<()> {
         lib::wait_for_condition("node funds", timeout, Duration::from_secs(5), || async {
             match self.balance().await {
-                Ok(Some(BalanceResponse { node, safe, .. })) => {
+                Ok(BalanceResponse { node, safe, .. }) => {
                     if node.is_zero() || safe.is_zero() {
                         debug!("node or safe have zero funds");
                         Ok(ConditionCheck::Pending)
@@ -154,7 +155,6 @@ impl ControlClient {
                         Ok(ConditionCheck::Ready(()))
                     }
                 }
-                Ok(None) => Ok(ConditionCheck::Pending),
                 Err(_) => Ok(ConditionCheck::Pending),
             }
         })
