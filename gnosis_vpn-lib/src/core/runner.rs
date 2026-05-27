@@ -526,7 +526,11 @@ async fn run_create_incentive_operations(
     .retry(remote_data::backoff_expo_long_delay())
     .notify(move |err: &Error, delay| {
         tracing::warn!(?err, ?delay, "IncentiveOperations creation attempt failed, retrying...");
-        let _ = results_sender.try_send(Results::IncentiveOperationsRetry { error: err.to_string() });
+        let sender = results_sender.clone();
+        let error = err.to_string();
+        tokio::spawn(async move {
+            let _ = sender.send(Results::IncentiveOperationsRetry { error }).await;
+        });
     })
     .await
 }
