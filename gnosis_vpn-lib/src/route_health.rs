@@ -1055,7 +1055,7 @@ impl Display for RouteHealthState {
         match self {
             RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
             RouteHealthState::NeedsPeering { has_channel: false } => write!(f, "Needs peering"),
-            RouteHealthState::NeedsPeering { has_channel: true } => write!(f, "Needs peering (had channel)"),
+            RouteHealthState::NeedsPeering { has_channel: true } => write!(f, "Needs peering (has channel)"),
             RouteHealthState::NeedsChannel => write!(f, "Needs channel"),
             RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
             RouteHealthState::ReadyToConnect { exit } => match select_api_version(&exit.versions.versions) {
