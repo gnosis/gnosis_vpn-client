@@ -325,9 +325,13 @@ impl RunMode {
         hopr_state: Option<HoprState>,
     ) -> Self {
         let capacity_allocations = capacity_allocations.map(|map| {
-            map.into_iter()
+            let mut entries: Vec<_> = map
+                .into_iter()
                 .map(|(allocator, capacity)| balance::CapacityEntry { allocator, capacity })
-                .collect()
+                .collect();
+            // safe always first, then peers in arbitrary order
+            entries.sort_by_key(|e| matches!(e.allocator, balance::CapacityAllocator::Peer(_)));
+            entries
         });
         RunMode::Running {
             ideal_balance,
