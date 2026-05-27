@@ -95,7 +95,9 @@ pub struct Core {
 enum Phase {
     // initial phase - instantiate safeless interactor (blokli)
     // and determine if safe is present
-    Initial,
+    Initial {
+        last_error: Option<String>,
+    },
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
@@ -174,7 +176,7 @@ impl Core {
             target_destination,
 
             // runtime data
-            phase: Phase::Initial,
+            phase: Phase::Initial { last_error: None },
             balances: None,
             hopr: None,
             safeless_interactor: None,
@@ -321,7 +323,7 @@ impl Core {
 
                     WorkerCommand::Status => {
                         let runmode = match self.phase.clone() {
-                            Phase::Initial => RunMode::Init,
+                            Phase::Initial { last_error } => RunMode::Init { last_error },
                             Phase::CheckingSafe {
                                 node_balance,
                                 query_safe,
@@ -575,7 +577,18 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
-            Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
+            Results::SafelessInteractor { res } => {
+                if !self.on_results_safeless_interactor(res, results_sender).await {
+                    return false;
+                }
+            }
+            Results::SafelessInteractorRetry { error } => {
+                if matches!(self.phase, Phase::Initial { .. }) {
+                    self.phase = Phase::Initial {
+                        last_error: Some(error),
+                    };
+                }
+            }
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -908,21 +921,26 @@ impl Core {
         return true;
     }
 
+    // Returns false to signal core exit, which lets root restart the worker.
     async fn on_results_safeless_interactor(
         &mut self,
         res: Result<SafelessInteractor, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
-    ) {
+    ) -> bool {
         match res {
             Ok(safeless_interactor) => {
                 tracing::info!("safeless interactor created successfully");
                 self.safeless_interactor = Some(Arc::new(safeless_interactor));
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
+                true
             }
             Err(err) => {
-                tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
-                self.spawn_initial_runner(results_sender, Duration::from_secs(30));
+                tracing::error!(
+                    ?err,
+                    "failed to create safeless interactor after all retries - restarting core"
+                );
+                false
             }
         }
     }

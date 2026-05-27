@@ -66,6 +66,9 @@ pub enum Results {
     SafelessInteractor {
         res: Result<SafelessInteractor, Error>,
     },
+    SafelessInteractorRetry {
+        error: String,
+    },
     Balances {
         res: Result<balance::Balances, Error>,
     },
@@ -274,7 +277,7 @@ pub async fn create_safeless_interactor(
     blokli_config: BlockchainConnectorConfig,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_create_safeless_interactor(worker_params, blokli_config).await;
+    let res = run_create_safeless_interactor(worker_params, blokli_config, results_sender.clone()).await;
     let _ = results_sender.send(Results::SafelessInteractor { res }).await;
 }
 
@@ -511,6 +514,7 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
 async fn run_create_safeless_interactor(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
+    results_sender: mpsc::Sender<Results>,
 ) -> Result<SafelessInteractor, Error> {
     let blokli_provider = worker_params.blokli_url();
     let chain_key = worker_params.calc_keys().await?.chain_key;
@@ -521,8 +525,13 @@ async fn run_create_safeless_interactor(
         Ok(res)
     })
     .retry(remote_data::backoff_expo_long_delay())
-    .notify(|err, delay| {
+    .notify(move |err: &Error, delay| {
         tracing::warn!(?err, ?delay, "SafelessInteractor creation attempt failed, retrying...");
+        let sender = results_sender.clone();
+        let error = err.to_string();
+        tokio::spawn(async move {
+            let _ = sender.send(Results::SafelessInteractorRetry { error }).await;
+        });
     })
     .await
 }
@@ -581,6 +590,9 @@ impl Display for Results {
                 Ok(_) => write!(f, "SafelessInteractor: Created Successfully"),
                 Err(err) => write!(f, "SafelessInteractor: Error({})", err),
             },
+            Results::SafelessInteractorRetry { error } => {
+                write!(f, "SafelessInteractorRetry: Error({})", error)
+            }
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent(evt) => {
                 write!(f, "ConnectionEvent: {}", evt)
