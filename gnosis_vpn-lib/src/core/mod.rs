@@ -84,6 +84,7 @@ pub struct Core {
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
+    minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
@@ -184,6 +185,7 @@ impl Core {
             hopr: None,
             incentive_operations: None,
             ticket_stats: None,
+            minimum_balance_recommendation: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             route_healths,
@@ -364,6 +366,7 @@ impl Core {
                                     funding_tool,
                                     error,
                                     self.ticket_stats,
+                                    self.minimum_balance_recommendation,
                                 )
                             }
                             Phase::DeployingSafe {
@@ -590,6 +593,16 @@ impl Core {
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch ticket stats - retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                }
+            },
+            Results::MinimumBalanceRecommendation { res } => match res {
+                Ok(rec) => {
+                    tracing::info!(?rec, "received minimum balance recommendation");
+                    self.minimum_balance_recommendation = Some(rec);
+                }
+                Err(err) => {
+                    tracing::error!(?err, "failed to fetch minimum balance recommendation - retrying");
+                    self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -893,6 +906,7 @@ impl Core {
                 tracing::info!("incentive operations handle created successfully");
                 self.incentive_operations = Some(incentive_operations);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
+                self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
                 true
             }
@@ -1269,6 +1283,22 @@ impl Core {
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
                         runner::ticket_stats(incentive_operations, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_minimum_balance_recommendation_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        let cfg = self.config.strategy.clone().into();
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::minimum_balance_recommendation(incentive_operations, cfg, results_sender).await;
                     })
                     .await
             });

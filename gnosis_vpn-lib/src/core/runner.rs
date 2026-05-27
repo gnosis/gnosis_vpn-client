@@ -48,6 +48,9 @@ pub enum Results {
     TicketStats {
         res: Result<TicketStats, Error>,
     },
+    MinimumBalanceRecommendation {
+        res: Result<balance::BalanceRecommendation, Error>,
+    },
     PersistSafe {
         res: Result<(), hopr_config::Error>,
         safe_module: SafeModule,
@@ -138,6 +141,15 @@ struct UnauthorizedError {
 pub async fn ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
     let res = run_ticket_stats(incentive_operations).await;
     let _ = results_sender.send(Results::TicketStats { res }).await;
+}
+
+pub async fn minimum_balance_recommendation(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    cfg: edgli::strategy::IncentiveConfiguration,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_minimum_balance_recommendation(incentive_operations, cfg).await;
+    let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
 }
 
 pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
@@ -358,6 +370,30 @@ async fn run_ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>) ->
     .await
 }
 
+async fn run_minimum_balance_recommendation(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    cfg: edgli::strategy::IncentiveConfiguration,
+) -> Result<balance::BalanceRecommendation, Error> {
+    tracing::debug!("starting minimum balance recommendation runner");
+    (|| {
+        let ops = incentive_operations.clone();
+        async move {
+            let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+            Ok(balance::BalanceRecommendation {
+                wxhopr: rec.wxhopr,
+                xdai: rec.xdai,
+            })
+        }
+    })
+    .retry(remote_data::backoff_expo_long_delay())
+    .notify(|err, delay| {
+        tracing::warn!(?err, ?delay, "Minimum balance recommendation attempt failed, retrying...");
+    })
+    .await
+}
+
 async fn run_safe_deployment(
     incentive_operations: Arc<dyn IncentiveOperations>,
     presafe: balance::PreSafe,
@@ -511,6 +547,10 @@ impl Display for Results {
             Results::TicketStats { res } => match res {
                 Ok(stats) => write!(f, "TicketStats: {}", stats),
                 Err(err) => write!(f, "TicketStats: Error({})", err),
+            },
+            Results::MinimumBalanceRecommendation { res } => match res {
+                Ok(rec) => write!(f, "MinimumBalanceRecommendation: wxHOPR >= {}, xDAI >= {}", rec.wxhopr, rec.xdai),
+                Err(err) => write!(f, "MinimumBalanceRecommendation: Error({})", err),
             },
             Results::DeploySafe { res } => match res {
                 Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),

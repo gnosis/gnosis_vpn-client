@@ -135,6 +135,7 @@ pub enum RunMode {
         funding_tool: Option<String>,
         error: Option<String>,
         ticket_stats: Option<TicketStats>,
+        balance_recommendation: Option<balance::BalanceRecommendation>,
     },
     /// Safe deployment ongoing
     DeployingSafe {
@@ -298,6 +299,7 @@ impl RunMode {
         funding_tool: Option<String>,
         error: Option<String>,
         ticket_stats: Option<TicketStats>,
+        balance_recommendation: Option<balance::BalanceRecommendation>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
@@ -306,6 +308,7 @@ impl RunMode {
             funding_tool,
             error,
             ticket_stats,
+            balance_recommendation,
         }
     }
 
@@ -459,6 +462,7 @@ impl Display for RunMode {
                 funding_tool,
                 error,
                 ticket_stats,
+                balance_recommendation,
             } => {
                 let mut msg = format!(
                     "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
@@ -468,6 +472,12 @@ impl Display for RunMode {
                     msg = format!(
                         "{msg}, ticket price: {}, winning probability: {:.4}",
                         ts.ticket_price, ts.winning_probability
+                    );
+                }
+                if let Some(rec) = balance_recommendation {
+                    msg = format!(
+                        "{msg}, recommended: wxHOPR >= {}, xDAI >= {}",
+                        rec.wxhopr, rec.xdai
                     );
                 }
                 msg = match (funding_tool, error) {

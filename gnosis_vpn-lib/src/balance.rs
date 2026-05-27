@@ -1,6 +1,8 @@
 pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+use crate::serde_utils;
+
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 
@@ -35,6 +37,16 @@ impl Display for FundingIssue {
         };
         write!(f, "{s}")
     }
+}
+
+/// Minimum recommended wxHOPR and xDAI balance to open the target number of channels.
+/// Computed once during onboarding and surfaced in the PreparingSafe run mode.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct BalanceRecommendation {
+    #[serde(with = "serde_utils::balance")]
+    pub wxhopr: Balance<WxHOPR>,
+    #[serde(with = "serde_utils::balance")]
+    pub xdai: Balance<XDai>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
