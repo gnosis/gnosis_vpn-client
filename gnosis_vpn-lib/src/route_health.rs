@@ -396,7 +396,11 @@ impl RouteHealth {
                     self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
-                    self.state = RouteHealthState::NeedsPeering { has_channel: true };
+                    // 0-hop routes never go through a channel wait, so has_channel
+                    // stays false. 1+ hop routes reached Routable via a channel, so
+                    // has_channel: true lets re-peering skip straight back to Routable.
+                    let has_channel = matches!(self.static_need, StaticNeed::AnyChannel);
+                    self.state = RouteHealthState::NeedsPeering { has_channel };
                 }
             }
             RouteHealthState::Unrecoverable { .. } => {}
