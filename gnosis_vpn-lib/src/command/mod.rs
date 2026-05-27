@@ -732,6 +732,11 @@ mod tests {
 
     #[test]
     fn runmode_init_serializes_to_expected_json_shape() {
+        // Asserting the exact string rather than a serde_json::Value is intentional:
+        // serde_json serializes struct fields in definition order (not a HashMap), so the
+        // output is deterministic. The string form documents the exact wire contract and
+        // will catch serde attribute changes (e.g. rename, rename_all) just as well as a
+        // Value comparison would, while keeping the expected payload directly readable.
         let no_error = serde_json::to_string(&RunMode::Init { last_error: None }).unwrap();
         assert_eq!(no_error, r#"{"Init":{"last_error":null}}"#);
 
