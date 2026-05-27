@@ -729,4 +729,26 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn runmode_init_serializes_to_expected_json_shape() {
+        let no_error = serde_json::to_string(&RunMode::Init { last_error: None }).unwrap();
+        assert_eq!(no_error, r#"{"Init":{"last_error":null}}"#);
+
+        let with_error = serde_json::to_string(&RunMode::Init {
+            last_error: Some("connection refused".into()),
+        })
+        .unwrap();
+        assert_eq!(with_error, r#"{"Init":{"last_error":"connection refused"}}"#);
+    }
+
+    #[test]
+    fn runmode_init_deserializes_from_json_fixture() {
+        let no_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":null}}"#).unwrap();
+        assert!(matches!(no_error, RunMode::Init { last_error: None }));
+
+        let with_error: RunMode =
+            serde_json::from_str(r#"{"Init":{"last_error":"connection refused"}}"#).unwrap();
+        assert!(matches!(with_error, RunMode::Init { last_error: Some(ref e) } if e == "connection refused"));
+    }
 }
