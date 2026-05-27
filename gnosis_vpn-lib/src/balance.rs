@@ -59,7 +59,7 @@ impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
 impl Display for CapacityAllocator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CapacityAllocator::Peer(addr) => write!(f, "peer({})", addr.to_checksum()),
+            CapacityAllocator::Peer(addr) => write!(f, "channel({})", addr.to_checksum()),
             CapacityAllocator::Safe => write!(f, "safe"),
         }
     }
