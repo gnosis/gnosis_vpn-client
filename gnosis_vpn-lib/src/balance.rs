@@ -65,6 +65,14 @@ pub struct Capacity {
     pub byte_capacity: u64,
 }
 
+/// A single capacity entry pairing an allocator with its capacity.
+/// Used in status responses instead of a HashMap so JSON keys remain strings.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CapacityEntry {
+    pub allocator: CapacityAllocator,
+    pub capacity: Capacity,
+}
+
 impl From<edgli::strategy::Capacity> for Capacity {
     fn from(c: edgli::strategy::Capacity) -> Self {
         Capacity {

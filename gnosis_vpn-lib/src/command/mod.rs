@@ -151,7 +151,7 @@ pub enum RunMode {
     /// Normal operation where connections can be made
     Running {
         ideal_balance: Option<balance::BalanceRecommendation>,
-        capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
+        capacity_allocations: Option<Vec<balance::CapacityEntry>>,
         hopr_status: Option<HoprStatus>,
     },
     /// Shutting down edge client,
@@ -323,6 +323,11 @@ impl RunMode {
         capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
         hopr_state: Option<HoprState>,
     ) -> Self {
+        let capacity_allocations = capacity_allocations.map(|map| {
+            map.into_iter()
+                .map(|(allocator, capacity)| balance::CapacityEntry { allocator, capacity })
+                .collect()
+        });
         RunMode::Running {
             ideal_balance,
             capacity_allocations,
@@ -494,7 +499,7 @@ impl Display for RunMode {
                     .unwrap_or_default();
                 let capacity_str = capacity_allocations
                     .as_ref()
-                    .map(|m| format!(", capacity allocations: {} entries", m.len()))
+                    .map(|v| format!(", capacity allocations: {} entries", v.len()))
                     .unwrap_or_default();
                 match hopr_status {
                     Some(hopr_status) => write!(f, "Ready ({hopr_status}){balance_str}{capacity_str}"),
