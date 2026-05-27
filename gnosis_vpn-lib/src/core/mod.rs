@@ -657,17 +657,28 @@ impl Core {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                    let channels_already_available = self
+                        .balances
+                        .as_ref()
+                        .is_some_and(|b| !b.channels_out.is_empty());
                     for id in dest_ids {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
+                            && let Some(hopr) = self.hopr.clone()
                         {
                             rh.peers(
                                 &all_peers,
-                                self.hopr.as_ref().unwrap(),
+                                &hopr,
                                 &dest,
                                 &self.config.connection,
                                 results_sender,
                             );
+                            // If peers just moved this route into NeedsChannel and we already
+                            // know channels exist, complete the transition immediately rather
+                            // than waiting up to 60s for the next balances tick.
+                            if channels_already_available && rh.needs_channel() {
+                                rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
+                            }
                         }
                     }
 
