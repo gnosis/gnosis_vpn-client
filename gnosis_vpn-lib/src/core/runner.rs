@@ -5,7 +5,7 @@ use backon::{ExponentialBuilder, Retryable};
 use bytesize::ByteSize;
 use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::api::node::HoprState;
-use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use edgli::hopr_lib::exports::network::types::types::IpProtocol;
 use edgli::hopr_lib::exports::transport::SurbBalancerConfig;
@@ -27,8 +27,7 @@ use std::time::Duration;
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError, api as hopr_api, config as hopr_config};
-use crate::log_output;
+use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
 use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
@@ -37,10 +36,6 @@ use crate::{balance, connection, event, ping, remote_data};
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
 pub enum Results {
-    FundChannel {
-        address: Address,
-        res: Result<(), hopr_api::ChannelError>,
-    },
     NodeBalance {
         res: Result<balance::PreSafe, Error>,
     },
@@ -118,8 +113,6 @@ pub enum Error {
     Hopr(#[from] HoprError),
     #[error(transparent)]
     Url(#[from] url::ParseError),
-    #[error(transparent)]
-    ChannelError(#[from] hopr_api::ChannelError),
     #[error("Funding tool error: {0}")]
     FundingTool(String),
     #[error("IncentiveOperations creation error: {0}")]
@@ -214,16 +207,6 @@ pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resu
         time::sleep(Duration::from_secs(1)).await;
     }
     let _ = results_sender.send(Results::HoprRunning).await;
-}
-
-pub async fn fund_channel(
-    hopr: Arc<Hopr>,
-    address: Address,
-    ticket_value: Balance<WxHOPR>,
-    results_sender: mpsc::Sender<Results>,
-) {
-    let res = run_fund_channel(hopr, address, ticket_value).await;
-    let _ = results_sender.send(Results::FundChannel { address, res }).await;
 }
 
 pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
@@ -474,24 +457,6 @@ async fn run_hopr(
         .map_err(Error::from)
 }
 
-async fn run_fund_channel(
-    hopr: Arc<Hopr>,
-    address: Address,
-    ticket_value: Balance<WxHOPR>,
-) -> Result<(), hopr_api::ChannelError> {
-    let amount = balance::funding_amount(ticket_value);
-    tracing::debug!(address = %address.to_checksum(), %amount, "starting fund channel runner");
-    (|| async {
-        hopr.ensure_channel_open(address, amount).await?;
-        Ok(())
-    })
-    .retry(remote_data::backoff_expo_long_delay())
-    .notify(|err, delay| {
-        tracing::warn!(?err, ?delay, "Fund channel attempt failed, retrying...");
-    })
-    .await
-}
-
 async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
     tracing::debug!(?session, "starting session monitor runner");
     loop {
@@ -529,15 +494,6 @@ async fn run_create_incentive_operations(
 impl Display for Results {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Results::FundChannel { address, res } => match res {
-                Ok(_) => write!(f, "FundChannel (-> {} ->): Success", log_output::address(address),),
-                Err(err) => write!(
-                    f,
-                    "FundChannel (-> {} ->): Error({})",
-                    log_output::address(address),
-                    err
-                ),
-            },
             Results::HoprConstruction(state) => write!(f, "HoprConstruction: {:?}", state),
             Results::NodeBalance { res } => match res {
                 Ok(presafe) => write!(f, "NodeBalance: {}", presafe),

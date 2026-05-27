@@ -328,15 +328,8 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::NeedsPeering { .. })
     }
 
-    pub fn needs_channel_funding(&self) -> Option<Address> {
-        match (&self.state, &self.static_need) {
-            (RouteHealthState::NeedsFunding, StaticNeed::Channel(addr)) => Some(*addr),
-            _ => None,
-        }
-    }
-
-    pub fn needs_any_channel_funding(&self) -> bool {
-        matches!(self.state, RouteHealthState::NeedsFunding) && matches!(self.static_need, StaticNeed::AnyChannel)
+    pub fn needs_funding(&self) -> bool {
+        matches!(self.state, RouteHealthState::NeedsFunding)
     }
 
     pub fn is_routable(&self) -> bool {
@@ -1023,6 +1016,13 @@ impl RouteHealth {
 /// any route is not yet routable.
 pub fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
     healths.into_iter().any(|rh| rh.needs_peer())
+}
+
+/// True iff at least one route is waiting for a funded outgoing channel.
+/// Core uses this to pick a tighter balances polling interval while
+/// edge_client has not yet opened any channel.
+pub fn any_needs_funding<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
+    healths.into_iter().any(|rh| rh.needs_funding())
 }
 
 // ---------------------------------------------------------------------------

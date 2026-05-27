@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::{BlockchainConnectorConfig, ChannelEntry, EdgeNodeApi, EdgliInitState};
+use edgli::{BlockchainConnectorConfig, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
@@ -9,10 +9,9 @@ use edgli::{
             node::{HasChainApi, HasTransportApi},
             types::{
                 internal::channels::ChannelStatus,
-                primitive::prelude::{Address, Balance, WxHOPR},
+                primitive::prelude::Address,
             },
         },
-        errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
             transport::{SESSION_MTU, SURB_SIZE, SessionId, SessionTarget, SurbBalancerConfig},
@@ -24,7 +23,6 @@ use hopr_utils_session::{
     ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
 };
 use multiaddr::Protocol;
-use thiserror::Error;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
@@ -44,16 +42,6 @@ use crate::{
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
 };
-
-#[derive(Debug, Error)]
-pub enum ChannelError {
-    #[error("channel is pending to close")]
-    PendingToClose,
-    #[error("failed to open channel: {0}")]
-    Open(HoprError),
-    #[error("HOPR library error: {0}")]
-    HoprLibError(#[from] HoprLibError),
-}
 
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
@@ -85,46 +73,6 @@ impl Hopr {
             edgli: Arc::new(edge_node),
             open_listeners: Default::default(),
         })
-    }
-
-    // --- channel management ---
-    /// Ensure a channel to the specified target is open with the specified amount.
-    ///
-    /// This API assumes that hopr object implements 2 strategies to avoid edge scenarios and race conditions:
-    /// 1. ClosureFinalizer to make sure that every PendingToClose channel is eventually closed
-    /// 2. AutoFunding making sure that once a channel is open, it will stay funded
-    #[instrument(skip(self), level = "debug", ret, err)]
-    pub async fn ensure_channel_open(&self, target: Address, amount: Balance<WxHOPR>) -> Result<(), ChannelError> {
-        tracing::debug!("ensure hopr channel open");
-        let channels_from_me: Vec<ChannelEntry> = self
-            .edgli
-            .my_outgoing_channels()
-            .await
-            .map_err(ChannelError::HoprLibError)?;
-
-        let open_channel = || async {
-            self.edgli
-                .open_channel(target, amount)
-                .await
-                .map_err(|e| ChannelError::Open(HoprError::HoprLib(e)))
-        };
-
-        if let Some(channel) = channels_from_me.iter().find(|ch| ch.destination == target) {
-            match channel.status {
-                ChannelStatus::Open => Ok(()),
-                ChannelStatus::PendingToClose(_) => {
-                    tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is pending to close, cannot fund or open a new one");
-                    Err(ChannelError::PendingToClose)
-                }
-                ChannelStatus::Closed => {
-                    tracing::debug!(destination = %target, %amount, channel = %channel.get_id(), "channel is closed, opening a new one");
-                    open_channel().await
-                }
-            }
-        } else {
-            tracing::debug!(destination = %target, %amount, "no existing channel found, opening a new one");
-            open_channel().await
-        }
     }
 
     // --- session management ---
