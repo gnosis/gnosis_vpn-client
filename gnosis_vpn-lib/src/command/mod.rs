@@ -201,7 +201,6 @@ pub enum HoprInitStatus {
     Ready,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     AlreadyConnected(Destination),
@@ -492,7 +491,11 @@ impl Display for RunMode {
                 (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
                 (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
             },
-            RunMode::Running { ideal_balance, capacity_allocations, hopr_status } => {
+            RunMode::Running {
+                ideal_balance,
+                capacity_allocations,
+                hopr_status,
+            } => {
                 let header = match hopr_status {
                     Some(s) => format!("Ready ({s})"),
                     None => "Ready".to_string(),
@@ -505,13 +508,15 @@ impl Display for RunMode {
                     .map(|entries| {
                         entries
                             .iter()
-                            .map(|e| format!(
-                                "\n{}: {} ({}, {})",
-                                e.allocator,
-                                e.capacity.stake,
-                                fmt_msgs(e.capacity.expected_messages),
-                                ByteSize::b(e.capacity.byte_capacity),
-                            ))
+                            .map(|e| {
+                                format!(
+                                    "\n{}: {} ({}, {})",
+                                    e.allocator,
+                                    e.capacity.stake,
+                                    fmt_msgs(e.capacity.expected_messages),
+                                    ByteSize::b(e.capacity.byte_capacity),
+                                )
+                            })
                             .collect::<String>()
                     })
                     .unwrap_or_default();
@@ -692,7 +697,11 @@ mod tests {
         let hopr_state = Some(HoprState::Running);
 
         match RunMode::running(None, None, hopr_state) {
-            RunMode::Running { ideal_balance, capacity_allocations, hopr_status } => {
+            RunMode::Running {
+                ideal_balance,
+                capacity_allocations,
+                hopr_status,
+            } => {
                 assert!(ideal_balance.is_none());
                 assert!(capacity_allocations.is_none());
                 assert_eq!(hopr_status, Some(HoprStatus::Running));

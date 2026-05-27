@@ -371,13 +371,11 @@ impl Core {
                             } => RunMode::deploying_safe(self.node_address),
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
-                            Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                RunMode::running(
-                                    self.ideal_balance_recommendation,
-                                    self.capacity_allocations.clone(),
-                                    self.hopr.as_ref().map(|h| h.status()),
-                                )
-                            }
+                            Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => RunMode::running(
+                                self.ideal_balance_recommendation,
+                                self.capacity_allocations.clone(),
+                                self.hopr.as_ref().map(|h| h.status()),
+                            ),
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
@@ -486,13 +484,12 @@ impl Core {
                         let result = match (self.hopr.clone(), self.incentive_operations.clone()) {
                             (Some(hopr), Some(ops)) => {
                                 let balances = hopr.balances().await;
-                                let ticket_stats = ops
-                                    .ticket_stats()
-                                    .await
-                                    .map_err(|e| anyhow::anyhow!(e)).map(|ts| crate::ticket_stats::TicketStats {
-                                            ticket_price: ts.ticket_price,
-                                            winning_probability: ts.winning_probability.into(),
-                                        });
+                                let ticket_stats = ops.ticket_stats().await.map_err(|e| anyhow::anyhow!(e)).map(|ts| {
+                                    crate::ticket_stats::TicketStats {
+                                        ticket_price: ts.ticket_price,
+                                        winning_probability: ts.winning_probability.into(),
+                                    }
+                                });
                                 match (balances, ticket_stats) {
                                     (Ok(b), Ok(ts)) => command::BalanceResponse::try_build(
                                         &hopr.info(),
@@ -612,19 +609,20 @@ impl Core {
             Results::CapacityAllocations { res } => match res {
                 Ok(allocations) => {
                     tracing::info!(count = allocations.len(), "received capacity allocations");
-                    let has_channels = allocations.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
+                    let has_channels = allocations
+                        .keys()
+                        .any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
                     self.capacity_allocations = Some(allocations);
-                    if has_channels
-                        && let Some(hopr) = self.hopr.clone() {
-                            let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                            for id in &dest_ids {
-                                if let (Some(rh), Some(dest)) =
-                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
-                                {
-                                    rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
-                                }
+                    if has_channels && let Some(hopr) = self.hopr.clone() {
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        for id in &dest_ids {
+                            if let (Some(rh), Some(dest)) =
+                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                            {
+                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
                             }
                         }
+                    }
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {
@@ -680,9 +678,10 @@ impl Core {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    let channels_already_available = self.capacity_allocations.as_ref().is_some_and(|map| {
-                        map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)))
-                    });
+                    let channels_already_available = self
+                        .capacity_allocations
+                        .as_ref()
+                        .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
                     for id in dest_ids {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
@@ -1586,5 +1585,4 @@ impl Core {
                 .await
         });
     }
-
 }
