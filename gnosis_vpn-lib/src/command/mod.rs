@@ -499,7 +499,18 @@ impl Display for RunMode {
                     .unwrap_or_default();
                 let capacity_str = capacity_allocations
                     .as_ref()
-                    .map(|v| format!(", capacity allocations: {} entries", v.len()))
+                    .map(|entries| {
+                        let listed = entries
+                            .iter()
+                            .map(|e| format!(
+                                "{}: {} wxHOPR ({} msgs, {} bytes)",
+                                e.allocator, e.capacity.stake,
+                                e.capacity.expected_messages, e.capacity.byte_capacity
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(", capacity: [{listed}]")
+                    })
                     .unwrap_or_default();
                 match hopr_status {
                     Some(hopr_status) => write!(f, "Ready ({hopr_status}){balance_str}{capacity_str}"),
