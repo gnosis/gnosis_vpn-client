@@ -626,7 +626,7 @@ impl Core {
                             }
                         }
                     self.balances = Some(balances);
-                    let balances_delay = if route_health::any_needs_funding(self.route_healths.values()) {
+                    let balances_delay = if route_health::any_needs_channel(self.route_healths.values()) {
                         Duration::from_secs(10)
                     } else {
                         Duration::from_secs(60)

@@ -99,16 +99,9 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 /// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
-    /// A funded outgoing channel to this specific address.
-    ///
-    /// Not derived from routing in production: `derive_static_need` returns
-    /// `Peering` for 0-hop and `AnyChannel` for 1+ hop. This variant is kept
-    /// for tests and future routing modes that require funding to a known
-    /// peer (e.g. an explicit single-relay path).
-    Channel(Address),
-    /// Any funded outgoing channel is sufficient — used for all 1+ hop
-    /// routes. Multi-hop payments flow through relay channels kept funded
-    /// by the AutoFunding strategy, independently of the destination.
+    /// Any outgoing channel is sufficient — used for all 1+ hop routes.
+    /// Multi-hop payments flow through relay channels kept open by the
+    /// AutoFunding strategy, independently of the destination.
     AnyChannel,
     /// Direct peering with the destination — no channel needed (0-hop route).
     Peering(Address),
@@ -152,14 +145,15 @@ pub enum RouteHealthState {
     Unrecoverable {
         reason: UnrecoverableReason,
     },
-    /// `funded` remembers whether the channel funding step has already been
-    /// completed for this route. On re-peering after a transient peer loss we
-    /// can then skip straight to `Routable` instead of triggering redundant
-    /// funding ops on every flap.
+    /// `had_channel` remembers whether the route has previously had a channel.
+    /// On re-peering after a transient peer loss we skip straight to `Routable`
+    /// instead of waiting for a channel to appear again.
     NeedsPeering {
-        funded: bool,
+        had_channel: bool,
     },
-    NeedsFunding,
+    /// Peers are available but no outgoing channel exists yet. Transitions to
+    /// `Routable` once the balances poll sees a non-empty `channels_out`.
+    NeedsChannel,
     /// Static need met. Health checking in progress.
     Routable,
     /// Exit health confirmed healthy. Safe to connect.
@@ -285,7 +279,7 @@ fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHeal
             reason: UnrecoverableReason::NotAllowed,
         }
     } else {
-        RouteHealthState::NeedsPeering { funded: false }
+        RouteHealthState::NeedsPeering { had_channel: false }
     }
 }
 
@@ -326,8 +320,8 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::NeedsPeering { .. })
     }
 
-    pub fn needs_funding(&self) -> bool {
-        matches!(self.state, RouteHealthState::NeedsFunding)
+    pub fn needs_channel(&self) -> bool {
+        matches!(self.state, RouteHealthState::NeedsChannel)
     }
 
     pub fn is_routable(&self) -> bool {
@@ -361,14 +355,18 @@ impl RouteHealth {
     /// Apply a fresh snapshot of connected peer addresses.
     ///
     /// Advances or regresses the state depending on whether the route's
-    /// [`StaticNeed`] is currently satisfied. When a previously funded route
-    /// loses its peer we transition back to `NeedsPeering { funded: true }`
-    /// so that re-peering can skip funding. When the route first becomes
-    /// routable we spawn the initial health check.
+    /// Apply a fresh snapshot of connected peer addresses.
+    ///
+    /// Advances or regresses the state depending on whether the route's
+    /// [`StaticNeed`] is currently satisfied. When a route that previously had
+    /// a channel loses its peer we transition back to
+    /// `NeedsPeering { had_channel: true }` so that re-peering skips straight
+    /// to `Routable`. When the route first becomes routable we spawn the
+    /// initial health check.
     ///
     /// The returned [`PeerTransition`] tells Core which external side effect
-    /// (if any) needs to run — Core handles funding, the tracker handles
-    /// health-check spawn/cancel internally.
+    /// (if any) needs to run — the tracker handles health-check spawn/cancel
+    /// internally.
     pub fn peers(
         &mut self,
         addresses: &HashSet<Address>,
@@ -378,37 +376,36 @@ impl RouteHealth {
         sender: &mpsc::Sender<Results>,
     ) -> PeerTransition {
         let is_peered = match &self.static_need {
-            // 0-hop: destination must be a direct transport peer — packets go straight to it.
+            // 0-hop: destination must be a direct transport peer.
             StaticNeed::Peering(addr) => addresses.contains(addr),
-            // 1+ hop and AnyChannel: any connected relay can carry packets to the destination;
-            // the exit node itself does not need to be a direct transport peer.
-            StaticNeed::Channel(_) | StaticNeed::AnyChannel => !addresses.is_empty(),
+            // 1+ hop: any connected relay can carry packets; the exit node
+            // itself does not need to be a direct transport peer.
+            StaticNeed::AnyChannel => !addresses.is_empty(),
         };
 
         match &self.state {
-            RouteHealthState::NeedsPeering { funded } => {
+            RouteHealthState::NeedsPeering { had_channel } => {
                 if !is_peered {
                     return PeerTransition::NoChange;
                 }
-                // Peering needs do not require funding. Channel/AnyChannel needs
-                // can also skip funding when we already funded earlier in this
-                // route's lifetime (transient peer flap).
-                let skip_funding = matches!(self.static_need, StaticNeed::Peering(_)) || *funded;
-                if skip_funding {
+                // 0-hop routes never need a channel. For 1+ hop routes, skip
+                // NeedsChannel if one already existed (transient peer flap).
+                let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *had_channel;
+                if skip_channel_wait {
                     self.state = RouteHealthState::Routable;
                     self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
                     PeerTransition::BecameRoutable
                 } else {
-                    self.state = RouteHealthState::NeedsFunding;
+                    self.state = RouteHealthState::NeedsChannel;
                     PeerTransition::NoChange
                 }
             }
-            RouteHealthState::NeedsFunding => {
+            RouteHealthState::NeedsChannel => {
                 if is_peered {
                     PeerTransition::NoChange
                 } else {
-                    // Funding never completed, so leave `funded: false`.
-                    self.state = RouteHealthState::NeedsPeering { funded: false };
+                    // No channel was ever seen, so had_channel stays false.
+                    self.state = RouteHealthState::NeedsPeering { had_channel: false };
                     PeerTransition::LostPeer
                 }
             }
@@ -423,9 +420,7 @@ impl RouteHealth {
                     self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
-                    // We previously made it past funding (or never needed it),
-                    // so remember that to avoid re-funding on re-peer.
-                    self.state = RouteHealthState::NeedsPeering { funded: true };
+                    self.state = RouteHealthState::NeedsPeering { had_channel: true };
                     PeerTransition::LostPeer
                 }
             }
@@ -435,9 +430,8 @@ impl RouteHealth {
 
     /// Notify that at least one outgoing channel exists.
     ///
-    /// Routes waiting on any channel (`AnyChannel` need, which is every
-    /// production 1+ hop route) become routable and schedule their first
-    /// health check immediately. No-op for routes not in `NeedsFunding`.
+    /// Routes in `NeedsChannel` become routable and schedule their first
+    /// health check immediately. No-op for routes in any other state.
     pub fn any_channel_available(
         &mut self,
         hopr: &Arc<Hopr>,
@@ -445,7 +439,7 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if !matches!(self.state, RouteHealthState::NeedsFunding) {
+        if !matches!(self.state, RouteHealthState::NeedsChannel) {
             return;
         }
         self.state = RouteHealthState::Routable;
@@ -1007,11 +1001,10 @@ pub fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bo
     healths.into_iter().any(|rh| rh.needs_peer())
 }
 
-/// True iff at least one route is waiting for a funded outgoing channel.
-/// Core uses this to pick a tighter balances polling interval while
-/// edge_client has not yet opened any channel.
-pub fn any_needs_funding<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
-    healths.into_iter().any(|rh| rh.needs_funding())
+/// True iff at least one route is in `NeedsChannel`. Core uses this to pick
+/// a tighter balances polling interval until a channel appears.
+pub fn any_needs_channel<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
+    healths.into_iter().any(|rh| rh.needs_channel())
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,9 +1054,9 @@ impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
-            RouteHealthState::NeedsPeering { funded: false } => write!(f, "Needs peering"),
-            RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
-            RouteHealthState::NeedsFunding => write!(f, "Needs channel funding"),
+            RouteHealthState::NeedsPeering { had_channel: false } => write!(f, "Needs peering"),
+            RouteHealthState::NeedsPeering { had_channel: true } => write!(f, "Needs peering (had channel)"),
+            RouteHealthState::NeedsChannel => write!(f, "Needs channel"),
             RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
             RouteHealthState::ReadyToConnect { exit } => match select_api_version(&exit.versions.versions) {
                 Some(selected) => {
@@ -1108,7 +1101,7 @@ mod tests {
     fn is_peered(need: &StaticNeed, connected: &HashSet<Address>) -> bool {
         match need {
             StaticNeed::Peering(a) => connected.contains(a),
-            StaticNeed::Channel(_) | StaticNeed::AnyChannel => !connected.is_empty(),
+            StaticNeed::AnyChannel => !connected.is_empty(),
         }
     }
 
@@ -1123,16 +1116,12 @@ mod tests {
 
     #[test]
     fn one_hop_routing_yields_any_channel() {
-        // For 1+ hop routes the exit is reached through HOPR relays; any relay
-        // channel satisfies the need. derive_static_need must return AnyChannel,
-        // not Channel(dest), so we never proactively fund a direct exit channel
-        // (which would only enable 0-hop routing, not 1-hop).
         let dest = addr(2);
         let routing = HopRouting::try_from(1).expect("1-hop is valid");
         assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
     }
 
-    // --- is_peered for Channel / AnyChannel routes ---
+    // --- is_peered for AnyChannel routes ---
 
     #[test]
     fn any_channel_is_peered_when_any_relay_is_connected() {
@@ -1146,24 +1135,8 @@ mod tests {
     }
 
     #[test]
-    fn channel_route_is_peered_when_any_relay_is_connected() {
-        // Channel(dest) also uses any-peer semantics; the dest need not be a
-        // direct transport peer for multi-hop routing.
-        let dest = addr(10);
-        let relay = addr(20);
-        let need = StaticNeed::Channel(dest);
-
-        let mut peers = HashSet::new();
-        peers.insert(relay); // relay present, dest absent
-
-        assert!(is_peered(&need, &peers), "relay peer should satisfy Channel need");
-    }
-
-    #[test]
-    fn channel_route_is_not_peered_when_no_peers_at_all() {
-        let dest = addr(10);
-        let need = StaticNeed::Channel(dest);
-        assert!(!is_peered(&need, &HashSet::new()));
+    fn any_channel_is_not_peered_when_no_peers_at_all() {
+        assert!(!is_peered(&StaticNeed::AnyChannel, &HashSet::new()));
     }
 
     // --- failure_backoff ---
