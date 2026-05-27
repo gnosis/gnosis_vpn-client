@@ -25,7 +25,6 @@ pub struct ChannelOut {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ChannelBalance {
     Unknown,
-    FundingOngoing,
     Completed {
         #[serde(with = "serde_utils::balance")]
         amount: Balance<WxHOPR>,
@@ -52,12 +51,10 @@ impl BalanceResponse {
         balances: &balance::Balances,
         ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
-        ongoing_channel_fundings: &[&Address],
     ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
-        let mut channels_out = from_balances(balances.channels_out.iter(), destinations);
-        add_from_destinations(&mut channels_out, destinations.iter(), ongoing_channel_fundings);
+        let channels_out = from_balances(balances.channels_out.iter(), destinations);
 
         let ticket_value = ticket_stats.ticket_value()?;
         let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
@@ -92,28 +89,6 @@ fn from_balances<'a>(
         .collect()
 }
 
-fn add_from_destinations<'a>(
-    channels_out: &mut Vec<ChannelOut>,
-    destinations: impl Iterator<Item = (&'a String, &'a Destination)>,
-    ongoing_channel_fundings: &[&Address],
-) {
-    for (id, dest) in destinations {
-        let already_present = channels_out.iter().any(|channel| channel.address == dest.address);
-        if already_present {
-            continue;
-        }
-
-        let is_funding = ongoing_channel_fundings.iter().any(|&&addr| addr == dest.address);
-        if is_funding {
-            channels_out.push(ChannelOut {
-                address: dest.address,
-                balance: ChannelBalance::FundingOngoing,
-                matched_exit: Some(id.clone()),
-            });
-        }
-    }
-}
-
 impl Display for ChannelOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.matched_exit {
@@ -132,7 +107,6 @@ impl Display for ChannelBalance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ChannelBalance::Unknown => write!(f, "unknown balance"),
-            ChannelBalance::FundingOngoing => write!(f, "funding ongoing"),
             ChannelBalance::Completed { amount } => write!(f, "{amount}"),
         }
     }
@@ -182,32 +156,5 @@ mod tests {
         assert_eq!(result[0].address, addr);
         assert_eq!(result[0].matched_exit, None);
         assert_eq!(result[0].balance, ChannelBalance::Completed { amount: balance });
-    }
-
-    #[test]
-    fn add_from_destinations_adds_funding_ongoing_for_funded_exit() {
-        let addr = address(3);
-        let mut channels_out = Vec::new();
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-2".to_string(), destination("dest-2", addr));
-
-        add_from_destinations(&mut channels_out, destinations.iter(), &[&addr]);
-
-        assert_eq!(channels_out.len(), 1);
-        assert_eq!(channels_out[0].address, addr);
-        assert_eq!(channels_out[0].matched_exit, Some("dest-2".to_string()));
-        assert_eq!(channels_out[0].balance, ChannelBalance::FundingOngoing);
-    }
-
-    #[test]
-    fn add_from_destinations_skips_when_not_funding() {
-        let addr = address(4);
-        let mut channels_out = Vec::new();
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-3".to_string(), destination("dest-3", addr));
-
-        add_from_destinations(&mut channels_out, destinations.iter(), &[]);
-
-        assert!(channels_out.is_empty());
     }
 }
