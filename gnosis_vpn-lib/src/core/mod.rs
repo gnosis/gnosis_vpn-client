@@ -661,14 +661,13 @@ impl Core {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
                         {
-                            let transition = rh.peers(
+                            rh.peers(
                                 &all_peers,
                                 self.hopr.as_ref().unwrap(),
                                 &dest,
                                 &self.config.connection,
                                 results_sender,
                             );
-                            let _ = transition;
                         }
                     }
 

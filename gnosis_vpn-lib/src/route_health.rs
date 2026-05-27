@@ -16,8 +16,7 @@
 //!   session to the exit and performs version, health, and ping checks.
 //!
 //! [`RouteHealthState`] captures the combined state. State changes flow
-//! outward through [`PeerTransition`] return values and through
-//! [`HealthCheckOutcome`] messages posted back on the runner channel.
+//! outward through [`HealthCheckOutcome`] messages posted back on the runner channel.
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
 //! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
@@ -196,15 +195,6 @@ pub enum HealthCheckOutcome {
     },
 }
 
-/// Returned from `peers()` so Core knows what side effects to trigger.
-#[derive(Debug, PartialEq)]
-pub enum PeerTransition {
-    NoChange,
-    /// Route became routable. Health check spawned internally.
-    BecameRoutable,
-    /// Peer lost. Health check cancelled internally.
-    LostPeer,
-}
 
 /// Per-destination route health tracker.
 ///
@@ -364,9 +354,6 @@ impl RouteHealth {
     /// to `Routable`. When the route first becomes routable we spawn the
     /// initial health check.
     ///
-    /// The returned [`PeerTransition`] tells Core which external side effect
-    /// (if any) needs to run — the tracker handles health-check spawn/cancel
-    /// internally.
     pub fn peers(
         &mut self,
         addresses: &HashSet<Address>,
@@ -374,7 +361,7 @@ impl RouteHealth {
         dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
-    ) -> PeerTransition {
+    ) {
         let is_peered = match &self.static_need {
             // 0-hop: destination must be a direct transport peer.
             StaticNeed::Peering(addr) => addresses.contains(addr),
@@ -386,7 +373,7 @@ impl RouteHealth {
         match &self.state {
             RouteHealthState::NeedsPeering { has_channel } => {
                 if !is_peered {
-                    return PeerTransition::NoChange;
+                    return;
                 }
                 // 0-hop routes never need a channel. For 1+ hop routes, skip
                 // NeedsChannel if one already existed (transient peer flap).
@@ -394,37 +381,29 @@ impl RouteHealth {
                 if skip_channel_wait {
                     self.state = RouteHealthState::Routable;
                     self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
-                    PeerTransition::BecameRoutable
                 } else {
                     self.state = RouteHealthState::NeedsChannel;
-                    PeerTransition::NoChange
                 }
             }
             RouteHealthState::NeedsChannel => {
-                if is_peered {
-                    PeerTransition::NoChange
-                } else {
+                if !is_peered {
                     // No channel was ever seen, so has_channel stays false.
                     self.state = RouteHealthState::NeedsPeering { has_channel: false };
-                    PeerTransition::LostPeer
                 }
             }
             RouteHealthState::Routable
             | RouteHealthState::ReadyToConnect { .. }
             | RouteHealthState::Connecting { .. } => {
-                if is_peered {
-                    PeerTransition::NoChange
-                } else {
+                if !is_peered {
                     self.cancel_health_check();
                     self.checking_since = None;
                     self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
                     self.state = RouteHealthState::NeedsPeering { has_channel: true };
-                    PeerTransition::LostPeer
                 }
             }
-            RouteHealthState::Unrecoverable { .. } => PeerTransition::NoChange,
+            RouteHealthState::Unrecoverable { .. } => {}
         }
     }
 
