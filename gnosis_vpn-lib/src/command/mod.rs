@@ -123,7 +123,7 @@ pub struct DestinationState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RunMode {
     /// Initial start
-    Init,
+    Init { last_error: Option<String> },
     /// after creating safe this state will not be reached again
     PreparingSafe {
         #[serde(with = "serde_utils::address")]
@@ -450,7 +450,8 @@ impl From<EdgliInitState> for HoprInitStatus {
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RunMode::Init => write!(f, "Initializing"),
+            RunMode::Init { last_error: None } => write!(f, "Initializing"),
+            RunMode::Init { last_error: Some(err) } => write!(f, "Initializing (last error: {err})"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
@@ -727,5 +728,31 @@ mod tests {
         assert!(matches!(Response::disconnect(disc), Response::Disconnect(_)));
 
         Ok(())
+    }
+
+    #[test]
+    fn runmode_init_serializes_to_expected_json_shape() {
+        // Asserting the exact string rather than a serde_json::Value is intentional:
+        // serde_json serializes struct fields in definition order (not a HashMap), so the
+        // output is deterministic. The string form documents the exact wire contract and
+        // will catch serde attribute changes (e.g. rename, rename_all) just as well as a
+        // Value comparison would, while keeping the expected payload directly readable.
+        let no_error = serde_json::to_string(&RunMode::Init { last_error: None }).unwrap();
+        assert_eq!(no_error, r#"{"Init":{"last_error":null}}"#);
+
+        let with_error = serde_json::to_string(&RunMode::Init {
+            last_error: Some("connection refused".into()),
+        })
+        .unwrap();
+        assert_eq!(with_error, r#"{"Init":{"last_error":"connection refused"}}"#);
+    }
+
+    #[test]
+    fn runmode_init_deserializes_from_json_fixture() {
+        let no_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":null}}"#).unwrap();
+        assert!(matches!(no_error, RunMode::Init { last_error: None }));
+
+        let with_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":"connection refused"}}"#).unwrap();
+        assert!(matches!(with_error, RunMode::Init { last_error: Some(ref e) } if e == "connection refused"));
     }
 }

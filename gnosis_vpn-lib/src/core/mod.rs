@@ -98,7 +98,9 @@ pub struct Core {
 enum Phase {
     // initial phase — create the IncentiveOperations handle (Blokli-backed)
     // and determine if a Safe has been deployed for this node
-    Initial,
+    Initial {
+        last_error: Option<String>,
+    },
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
@@ -177,7 +179,7 @@ impl Core {
             target_destination,
 
             // runtime data
-            phase: Phase::Initial,
+            phase: Phase::Initial { last_error: None },
             balances: None,
             hopr: None,
             incentive_operations: None,
@@ -324,7 +326,7 @@ impl Core {
 
                     WorkerCommand::Status => {
                         let runmode = match self.phase.clone() {
-                            Phase::Initial => RunMode::Init,
+                            Phase::Initial { last_error } => RunMode::Init { last_error },
                             Phase::CheckingSafe {
                                 node_balance,
                                 query_safe,
@@ -564,7 +566,18 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
-            Results::IncentiveOperations { res } => self.on_results_incentive_operations(res, results_sender).await,
+            Results::IncentiveOperations { res } => {
+                if !self.on_results_incentive_operations(res, results_sender).await {
+                    return false;
+                }
+            }
+            Results::IncentiveOperationsRetry { error } => {
+                if matches!(self.phase, Phase::Initial { .. }) {
+                    self.phase = Phase::Initial {
+                        last_error: Some(error),
+                    };
+                }
+            }
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -869,24 +882,26 @@ impl Core {
         return true;
     }
 
+    // Returns false to signal core exit, which lets root restart the worker.
     async fn on_results_incentive_operations(
         &mut self,
         res: Result<Arc<dyn IncentiveOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
-    ) {
+    ) -> bool {
         match res {
             Ok(incentive_operations) => {
                 tracing::info!("incentive operations handle created successfully");
                 self.incentive_operations = Some(incentive_operations);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
+                true
             }
             Err(err) => {
                 tracing::error!(
                     ?err,
-                    "failed to create incentive operations handle - retrying in 30 seconds"
+                    "failed to create incentive operations handle after all retries - restarting core"
                 );
-                self.spawn_initial_runner(results_sender, Duration::from_secs(30));
+                false
             }
         }
     }

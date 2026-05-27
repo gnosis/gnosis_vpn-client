@@ -62,6 +62,9 @@ pub enum Results {
     IncentiveOperations {
         res: Result<Arc<dyn IncentiveOperations>, Error>,
     },
+    IncentiveOperationsRetry {
+        error: String,
+    },
     Balances {
         res: Result<balance::Balances, Error>,
     },
@@ -259,7 +262,7 @@ pub async fn create_incentive_operations(
     blokli_config: BlockchainConnectorConfig,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_create_incentive_operations(worker_params, blokli_config).await;
+    let res = run_create_incentive_operations(worker_params, blokli_config, results_sender.clone()).await;
     let _ = results_sender.send(Results::IncentiveOperations { res }).await;
 }
 
@@ -475,6 +478,7 @@ async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
 async fn run_create_incentive_operations(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
+    results_sender: mpsc::Sender<Results>,
 ) -> Result<Arc<dyn IncentiveOperations>, Error> {
     let blokli_provider = worker_params.blokli_url();
     let chain_key = worker_params.calc_keys().await?.chain_key;
@@ -485,8 +489,13 @@ async fn run_create_incentive_operations(
         Ok(Arc::from(ops))
     })
     .retry(remote_data::backoff_expo_long_delay())
-    .notify(|err, delay| {
+    .notify(move |err: &Error, delay| {
         tracing::warn!(?err, ?delay, "IncentiveOperations creation attempt failed, retrying...");
+        let sender = results_sender.clone();
+        let error = err.to_string();
+        tokio::spawn(async move {
+            let _ = sender.send(Results::IncentiveOperationsRetry { error }).await;
+        });
     })
     .await
 }
@@ -536,6 +545,9 @@ impl Display for Results {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),
                 Err(err) => write!(f, "IncentiveOperations: Error({})", err),
             },
+            Results::IncentiveOperationsRetry { error } => {
+                write!(f, "IncentiveOperationsRetry: Error({})", error)
+            }
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent(evt) => {
                 write!(f, "ConnectionEvent: {}", evt)
