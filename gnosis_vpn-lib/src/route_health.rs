@@ -344,9 +344,6 @@ impl RouteHealth {
     /// Apply a fresh snapshot of connected peer addresses.
     ///
     /// Advances or regresses the state depending on whether the route's
-    /// Apply a fresh snapshot of connected peer addresses.
-    ///
-    /// Advances or regresses the state depending on whether the route's
     /// [`StaticNeed`] is currently satisfied. When a route that previously had
     /// a channel loses its peer we transition back to
     /// `NeedsPeering { has_channel: true }` so that re-peering skips straight
