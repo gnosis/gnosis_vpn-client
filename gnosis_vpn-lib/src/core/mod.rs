@@ -614,22 +614,17 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
-                    // For AnyChannel routes stuck in NeedsFunding, notify them that channels
-                    // exist so they can transition to Routable. channel_funded() gates itself
-                    // by static_need so this is safe to broadcast.
-                    if let Some(hopr) = self.hopr.clone() {
-                        let channel_addrs: Vec<Address> = balances.channels_out.keys().cloned().collect();
-                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                        for addr in &channel_addrs {
+                    if !balances.channels_out.is_empty()
+                        && let Some(hopr) = self.hopr.clone() {
+                            let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                             for id in &dest_ids {
                                 if let (Some(rh), Some(dest)) =
                                     (self.route_healths.get_mut(id), self.config.destinations.get(id))
                                 {
-                                    rh.channel_funded(*addr, &hopr, dest, &self.config.connection, results_sender);
+                                    rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
                                 }
                             }
                         }
-                    }
                     self.balances = Some(balances);
                     let balances_delay = if route_health::any_needs_funding(self.route_healths.values()) {
                         Duration::from_secs(10)

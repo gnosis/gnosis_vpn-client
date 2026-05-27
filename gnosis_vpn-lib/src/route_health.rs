@@ -9,7 +9,7 @@
 //! * **Network reachability** — do we have the peering/channel relationship
 //!   that the routing option requires? This is driven from outside by Core
 //!   feeding in the current peer set ([`RouteHealth::peers`]) and channel
-//!   funding results ([`RouteHealth::channel_funded`]).
+//!   funding results ([`RouteHealth::any_channel_available`]).
 //! * **Exit-node health** — once reachable, can we actually reach the exit
 //!   server behind the destination, and is it reporting healthy? This is
 //!   driven internally by a background task that opens a short-lived TCP
@@ -206,8 +206,6 @@ pub enum HealthCheckOutcome {
 #[derive(Debug, PartialEq)]
 pub enum PeerTransition {
     NoChange,
-    /// Core should spawn channel funding.
-    NowNeedsFunding,
     /// Route became routable. Health check spawned internally.
     BecameRoutable,
     /// Peer lost. Health check cancelled internally.
@@ -402,7 +400,7 @@ impl RouteHealth {
                     PeerTransition::BecameRoutable
                 } else {
                     self.state = RouteHealthState::NeedsFunding;
-                    PeerTransition::NowNeedsFunding
+                    PeerTransition::NoChange
                 }
             }
             RouteHealthState::NeedsFunding => {
@@ -435,15 +433,13 @@ impl RouteHealth {
         }
     }
 
-    /// Notify that a channel funding operation succeeded for `address`.
+    /// Notify that at least one outgoing channel exists.
     ///
-    /// If this route was waiting on that funding (or on any funding, for
-    /// `AnyChannel` needs) it becomes routable and the first health check
-    /// is scheduled immediately. Calls that do not apply to this route are
-    /// ignored.
-    pub fn channel_funded(
+    /// Routes waiting on any channel (`AnyChannel` need, which is every
+    /// production 1+ hop route) become routable and schedule their first
+    /// health check immediately. No-op for routes not in `NeedsFunding`.
+    pub fn any_channel_available(
         &mut self,
-        address: Address,
         hopr: &Arc<Hopr>,
         dest: &Destination,
         options: &Options,
@@ -452,15 +448,8 @@ impl RouteHealth {
         if !matches!(self.state, RouteHealthState::NeedsFunding) {
             return;
         }
-        let satisfies_need = match &self.static_need {
-            StaticNeed::Channel(addr) => *addr == address,
-            StaticNeed::AnyChannel => true,
-            StaticNeed::Peering(_) => false,
-        };
-        if satisfies_need {
-            self.state = RouteHealthState::Routable;
-            self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
-        }
+        self.state = RouteHealthState::Routable;
+        self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
     }
 
     /// Consume an outcome from a background health-check cycle and schedule
