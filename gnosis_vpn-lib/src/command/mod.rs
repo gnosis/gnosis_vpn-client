@@ -123,7 +123,7 @@ pub struct DestinationState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RunMode {
     /// Initial start
-    Init,
+    Init { last_error: Option<String> },
     /// after creating safe this state will not be reached again
     PreparingSafe {
         #[serde(with = "serde_utils::address")]
@@ -450,7 +450,8 @@ impl From<EdgliInitState> for HoprInitStatus {
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RunMode::Init => write!(f, "Initializing"),
+            RunMode::Init { last_error: None } => write!(f, "Initializing"),
+            RunMode::Init { last_error: Some(err) } => write!(f, "Initializing (last error: {err})"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,

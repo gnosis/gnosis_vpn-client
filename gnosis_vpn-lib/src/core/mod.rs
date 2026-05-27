@@ -99,7 +99,7 @@ pub struct Core {
 enum Phase {
     // initial phase — create the IncentiveOperations handle (Blokli-backed)
     // and determine if a Safe has been deployed for this node
-    Initial,
+    Initial { last_error: Option<String> },
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
@@ -178,7 +178,7 @@ impl Core {
             target_destination,
 
             // runtime data
-            phase: Phase::Initial,
+            phase: Phase::Initial { last_error: None },
             balances: None,
             hopr: None,
             incentive_operations: None,
@@ -326,7 +326,7 @@ impl Core {
 
                     WorkerCommand::Status => {
                         let runmode = match self.phase.clone() {
-                            Phase::Initial => RunMode::Init,
+                            Phase::Initial { last_error } => RunMode::Init { last_error },
                             Phase::CheckingSafe {
                                 node_balance,
                                 query_safe,
@@ -570,6 +570,11 @@ impl Core {
             Results::IncentiveOperations { res } => {
                 if !self.on_results_incentive_operations(res, results_sender).await {
                     return false;
+                }
+            }
+            Results::IncentiveOperationsRetry { error } => {
+                if matches!(self.phase, Phase::Initial { .. }) {
+                    self.phase = Phase::Initial { last_error: Some(error) };
                 }
             }
             Results::HoprConstruction(edgli_state) => {
