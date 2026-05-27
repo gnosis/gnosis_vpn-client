@@ -389,7 +389,11 @@ async fn run_minimum_balance_recommendation(
     })
     .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
-        tracing::warn!(?err, ?delay, "Minimum balance recommendation attempt failed, retrying...");
+        tracing::warn!(
+            ?err,
+            ?delay,
+            "Minimum balance recommendation attempt failed, retrying..."
+        );
     })
     .await
 }
@@ -549,7 +553,11 @@ impl Display for Results {
                 Err(err) => write!(f, "TicketStats: Error({})", err),
             },
             Results::MinimumBalanceRecommendation { res } => match res {
-                Ok(rec) => write!(f, "MinimumBalanceRecommendation: wxHOPR >= {}, xDAI >= {}", rec.wxhopr, rec.xdai),
+                Ok(rec) => write!(
+                    f,
+                    "MinimumBalanceRecommendation: wxHOPR >= {}, xDAI >= {}",
+                    rec.wxhopr, rec.xdai
+                ),
                 Err(err) => write!(f, "MinimumBalanceRecommendation: Error({})", err),
             },
             Results::DeploySafe { res } => match res {
