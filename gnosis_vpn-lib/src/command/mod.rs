@@ -1,3 +1,4 @@
+use bytesize::ByteSize;
 use edgli::EdgliInitState;
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR, XDai};
@@ -445,6 +446,15 @@ impl From<EdgliInitState> for HoprInitStatus {
     }
 }
 
+fn fmt_msgs(n: u64) -> String {
+    match n {
+        0..1_000 => format!("{n} msgs"),
+        1_000..1_000_000 => format!("{:.1}K msgs", n as f64 / 1_000.0),
+        1_000_000..1_000_000_000 => format!("{:.1}M msgs", n as f64 / 1_000_000.0),
+        _ => format!("{:.1}B msgs", n as f64 / 1_000_000_000.0),
+    }
+}
+
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -507,16 +517,18 @@ impl Display for RunMode {
                         entries
                             .iter()
                             .map(|e| format!(
-                                "\n{}: {} ({} msgs, {} bytes)",
-                                e.allocator, e.capacity.stake,
-                                e.capacity.expected_messages, e.capacity.byte_capacity
+                                "\n{}: {} ({}, {})",
+                                e.allocator,
+                                e.capacity.stake,
+                                fmt_msgs(e.capacity.expected_messages),
+                                ByteSize::b(e.capacity.byte_capacity),
                             ))
                             .collect::<String>()
                     })
                     .unwrap_or_default();
                 let has_section = ideal_balance.is_some() || capacity_allocations.is_some();
                 if has_section {
-                    write!(f, "{header}\n---{ideal_line}{capacity_lines}\n---")
+                    write!(f, "{header}\n---{ideal_line}{capacity_lines}")
                 } else {
                     write!(f, "{header}")
                 }
