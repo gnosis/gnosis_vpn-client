@@ -311,9 +311,6 @@ fn pretty_print(resp: &Response) {
         Response::FundingTool(command::FundingToolResponse::Done) => {
             println!("Funding complete");
         }
-        Response::RefreshNodeTriggered => {
-            println!("Node balance check triggered");
-        }
         Response::Info(info) => {
             println!(
                 "Gnosis VPN: client service version: {}, package version: {}{}",
@@ -369,7 +366,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
-        Response::RefreshNodeTriggered => exitcode::OK,
         Response::Info(..) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,

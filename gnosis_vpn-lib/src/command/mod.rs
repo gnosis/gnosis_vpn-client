@@ -17,7 +17,6 @@ use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::serde_utils;
-use crate::ticket_stats::TicketStats;
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut};
@@ -39,8 +38,6 @@ pub enum Command {
     FundingTool(String),
     /// Return telemetry metrics of the underlying edge client, if running
     Telemetry,
-    /// Retrigger a balance check
-    RefreshNode,
     /// Determine service liveness
     Ping,
     /// Deliver service version and other meta
@@ -62,7 +59,6 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
-    RefreshNode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,7 +70,6 @@ pub enum Response {
     Balance(Option<BalanceResponse>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
-    RefreshNodeTriggered,
     Pong,
     Info(InfoResponse),
     StartClient(StartClientResponse),
@@ -136,7 +131,6 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
-        ticket_stats: Option<TicketStats>,
         balance_recommendation: Option<balance::BalanceRecommendation>,
     },
     /// Safe deployment ongoing
@@ -294,7 +288,6 @@ impl RunMode {
         pre_safe: &Option<balance::PreSafe>,
         funding_tool: Option<String>,
         error: Option<String>,
-        ticket_stats: Option<TicketStats>,
         balance_recommendation: Option<balance::BalanceRecommendation>,
     ) -> Self {
         RunMode::PreparingSafe {
@@ -303,7 +296,6 @@ impl RunMode {
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
             error,
-            ticket_stats,
             balance_recommendation,
         }
     }
@@ -470,19 +462,12 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                ticket_stats,
                 balance_recommendation,
             } => {
                 let mut msg = format!(
                     "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
                     node_address.to_checksum()
                 );
-                if let Some(ts) = ticket_stats {
-                    msg = format!(
-                        "{msg}, ticket price: {}, winning probability: {:.4}",
-                        ts.ticket_price, ts.winning_probability
-                    );
-                }
                 if let Some(rec) = balance_recommendation {
                     msg = format!("{msg}, recommended: wxHOPR >= {}, xDAI >= {}", rec.wxhopr, rec.xdai);
                 }
@@ -621,7 +606,6 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Connect(dest) => Ok(WorkerCommand::Connect(dest)),
             Command::Disconnect => Ok(WorkerCommand::Disconnect),
             Command::Balance => Ok(WorkerCommand::Balance),
-            Command::RefreshNode => Ok(WorkerCommand::RefreshNode),
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
@@ -696,10 +680,10 @@ mod tests {
 
     #[test]
     fn command_should_serialize_and_deserialize_to_the_same_value() -> anyhow::Result<()> {
-        let cmd_str = serde_json::to_string(&Command::RefreshNode).expect("serialize refresh command");
+        let cmd_str = serde_json::to_string(&Command::Balance).expect("serialize balance command");
         let parsed: Command = cmd_str.parse().expect("parse serialized command");
 
-        assert_eq!(parsed, Command::RefreshNode);
+        assert_eq!(parsed, Command::Balance);
         Ok(())
     }
 

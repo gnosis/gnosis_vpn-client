@@ -29,7 +29,7 @@ use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
-use crate::ticket_stats::{self, TicketStats};
+use crate::ticket_stats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, ping, remote_data};
 
@@ -44,9 +44,6 @@ pub enum Results {
     },
     DeploySafe {
         res: Result<SafeModule, Error>,
-    },
-    TicketStats {
-        res: Result<TicketStats, Error>,
     },
     MinimumBalanceRecommendation {
         res: Result<balance::BalanceRecommendation, Error>,
@@ -73,9 +70,6 @@ pub enum Results {
     },
     IncentiveOperationsRetry {
         error: String,
-    },
-    Balances {
-        res: Result<balance::Balances, Error>,
     },
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
@@ -142,11 +136,6 @@ pub enum SurbConfigError {
 #[derive(Debug, Deserialize)]
 struct UnauthorizedError {
     error: String,
-}
-
-pub async fn ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
-    let res = run_ticket_stats(incentive_operations).await;
-    let _ = results_sender.send(Results::TicketStats { res }).await;
 }
 
 pub async fn minimum_balance_recommendation(
@@ -235,12 +224,6 @@ pub async fn node_wxhopr_withdraw(
 ) {
     let res = run_node_wxhopr_withdraw(incentive_operations, safe_address).await;
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
-}
-
-pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting balances runner");
-    let res = hopr.balances().await.map_err(Error::from);
-    let _ = results_sender.send(Results::Balances { res }).await;
 }
 
 pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
@@ -372,26 +355,6 @@ async fn run_node_balance(incentive_operations: Arc<dyn IncentiveOperations>) ->
     .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "PreSafe attempt failed, retrying...");
-    })
-    .await
-}
-
-async fn run_ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<TicketStats, Error> {
-    tracing::debug!("starting ticket stats runner");
-    (|| {
-        let ops = incentive_operations.clone();
-        async move {
-            let ticket_stats = ops.ticket_stats().await.map_err(|e| Error::Chain(e.to_string()))?;
-
-            Ok(TicketStats {
-                ticket_price: ticket_stats.ticket_price,
-                winning_probability: ticket_stats.winning_probability.into(),
-            })
-        }
-    })
-    .retry(remote_data::backoff_expo_long_delay())
-    .notify(|err, delay| {
-        tracing::warn!(?err, ?delay, "Ticket stats attempt failed, retrying...");
     })
     .await
 }
@@ -574,10 +537,6 @@ impl Display for Results {
                 Ok(presafe) => write!(f, "NodeBalance: {}", presafe),
                 Err(err) => write!(f, "NodeBalance: Error({})", err),
             },
-            Results::TicketStats { res } => match res {
-                Ok(stats) => write!(f, "TicketStats: {}", stats),
-                Err(err) => write!(f, "TicketStats: Error({})", err),
-            },
             Results::MinimumBalanceRecommendation { res } => match res {
                 Ok(rec) => write!(
                     f,
@@ -614,10 +573,6 @@ impl Display for Results {
             Results::Hopr { res, safe_module: _ } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
-            },
-            Results::Balances { res } => match res {
-                Ok(balances) => write!(f, "Balances: {}", balances),
-                Err(err) => write!(f, "Balances: Error({})", err),
             },
             Results::NodeWxhoprWithdraw { res } => match res {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),

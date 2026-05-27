@@ -26,7 +26,6 @@ use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, 
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
-use crate::ticket_stats::TicketStats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wireguard};
 
@@ -69,7 +68,6 @@ pub struct Core {
     incoming_receiver: mpsc::Receiver<WorkerToCore>,
 
     // cancellation tokens
-    cancel_balances: CancellationToken,
     cancel_connection: CancellationToken,
     cancel_node_wxhopr: CancellationToken,
     cancel_on_shutdown: CancellationToken,
@@ -80,10 +78,8 @@ pub struct Core {
 
     // runtime data
     phase: Phase,
-    balances: Option<balance::Balances>,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
-    ticket_stats: Option<TicketStats>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
@@ -172,7 +168,6 @@ impl Core {
             incoming_receiver,
 
             // cancellation tokens
-            cancel_balances: cancel_on_shutdown.child_token(),
             cancel_connection: cancel_on_shutdown.child_token(),
             cancel_node_wxhopr: cancel_on_shutdown.child_token(),
             cancel_on_shutdown: cancel_on_shutdown.clone(),
@@ -183,10 +178,8 @@ impl Core {
 
             // runtime data
             phase: Phase::Initial { last_error: None },
-            balances: None,
             hopr: None,
             incentive_operations: None,
-            ticket_stats: None,
             minimum_balance_recommendation: None,
             ideal_balance_recommendation: None,
             capacity_allocations: None,
@@ -369,7 +362,6 @@ impl Core {
                                     &balance,
                                     funding_tool,
                                     error,
-                                    self.ticket_stats,
                                     self.minimum_balance_recommendation,
                                 )
                             }
@@ -491,27 +483,44 @@ impl Core {
                     }
 
                     WorkerCommand::Balance => {
-                        if let (Some(hopr), Some(balances), Some(ticket_stats)) =
-                            (self.hopr.clone(), self.balances.clone(), self.ticket_stats.as_ref())
-                        {
-                            let balance_response = command::BalanceResponse::try_build(
-                                &hopr.info(),
-                                &balances,
-                                ticket_stats,
-                                &self.config.destinations.clone(),
-                            );
-                            match balance_response {
-                                Ok(res) => {
-                                    let _ = resp.send(Response::Balance(Some(res)));
-                                }
-                                Err(err) => {
-                                    tracing::error!(?err, "failed to compute balance response");
-                                    let _ = resp.send(Response::Balance(None));
+                        let response = match (self.hopr.clone(), self.incentive_operations.clone()) {
+                            (Some(hopr), Some(ops)) => {
+                                let balances = hopr.balances().await;
+                                let ticket_stats = ops
+                                    .ticket_stats()
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!(e))
+                                    .and_then(|ts| {
+                                        Ok(crate::ticket_stats::TicketStats {
+                                            ticket_price: ts.ticket_price,
+                                            winning_probability: ts.winning_probability.into(),
+                                        })
+                                    });
+                                match (balances, ticket_stats) {
+                                    (Ok(b), Ok(ts)) => command::BalanceResponse::try_build(
+                                        &hopr.info(),
+                                        &b,
+                                        &ts,
+                                        &self.config.destinations.clone(),
+                                    )
+                                    .map_err(|e| {
+                                        tracing::error!(?e, "failed to build balance response");
+                                        e
+                                    })
+                                    .ok(),
+                                    (Err(e), _) => {
+                                        tracing::error!(?e, "failed to fetch balances");
+                                        None
+                                    }
+                                    (_, Err(e)) => {
+                                        tracing::error!(?e, "failed to fetch ticket stats");
+                                        None
+                                    }
                                 }
                             }
-                        } else {
-                            let _ = resp.send(Response::Balance(None));
-                        }
+                            _ => None,
+                        };
+                        let _ = resp.send(Response::Balance(response));
                     }
 
                     WorkerCommand::Telemetry => {
@@ -523,14 +532,6 @@ impl Core {
                             }
                         };
                         let _ = resp.send(Response::Telemetry(res));
-                    }
-
-                    WorkerCommand::RefreshNode => {
-                        // immediately request balances and cancel existing balance loop
-                        self.cancel_balances.cancel();
-                        self.cancel_balances = self.cancel_on_shutdown.child_token();
-                        self.spawn_balances_runner(results_sender, Duration::ZERO);
-                        let _ = resp.send(Response::RefreshNodeTriggered);
                     }
 
                     WorkerCommand::FundingTool(secret) => match self.phase.clone() {
@@ -591,13 +592,6 @@ impl Core {
                     tracing::warn!(?self.phase, "hopr construction result received in unexpected phase");
                 }
             }
-            Results::TicketStats { res } => match res {
-                Ok(stats) => self.on_ticket_stats(stats, results_sender).await,
-                Err(err) => {
-                    tracing::error!(?err, "failed to fetch ticket stats - retrying");
-                    self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
-                }
-            },
             Results::MinimumBalanceRecommendation { res } => match res {
                 Ok(rec) => {
                     tracing::info!(?rec, "received minimum balance recommendation");
@@ -622,7 +616,20 @@ impl Core {
             Results::CapacityAllocations { res } => match res {
                 Ok(allocations) => {
                     tracing::info!(count = allocations.len(), "received capacity allocations");
+                    let has_channels = allocations.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
                     self.capacity_allocations = Some(allocations);
+                    if has_channels {
+                        if let Some(hopr) = self.hopr.clone() {
+                            let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                            for id in &dest_ids {
+                                if let (Some(rh), Some(dest)) =
+                                    (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                                {
+                                    rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
+                                }
+                            }
+                        }
+                    }
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {
@@ -651,7 +658,6 @@ impl Core {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
                     self.hopr = Some(Arc::new(hopr));
-                    self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
                     self.try_start_reactor(results_sender).await;
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
@@ -659,35 +665,6 @@ impl Core {
                 Err(err) => {
                     tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
                     self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
-                }
-            },
-
-            Results::Balances { res } => match res {
-                Ok(balances) => {
-                    tracing::info!(%balances, "received balances from hopr");
-                    if !balances.channels_out.is_empty()
-                        && let Some(hopr) = self.hopr.clone()
-                    {
-                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                        for id in &dest_ids {
-                            if let (Some(rh), Some(dest)) =
-                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
-                            {
-                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
-                            }
-                        }
-                    }
-                    self.balances = Some(balances);
-                    let balances_delay = if route_health::any_needs_channel(self.route_healths.values()) {
-                        Duration::from_secs(10)
-                    } else {
-                        Duration::from_secs(60)
-                    };
-                    self.spawn_balances_runner(results_sender, balances_delay);
-                }
-                Err(err) => {
-                    tracing::error!(?err, "failed to fetch balances from hopr");
-                    self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -708,16 +685,18 @@ impl Core {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    let channels_already_available = self.balances.as_ref().is_some_and(|b| !b.channels_out.is_empty());
+                    let channels_already_available = self.capacity_allocations.as_ref().is_some_and(|map| {
+                        map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)))
+                    });
                     for id in dest_ids {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
                             && let Some(hopr) = self.hopr.clone()
                         {
                             rh.peers(&all_peers, &hopr, &dest, &self.config.connection, results_sender);
-                            // If peers just moved this route into NeedsChannel and we already
-                            // know channels exist, complete the transition immediately rather
-                            // than waiting up to 60s for the next balances tick.
+                            // If peers just moved this route into NeedsChannel and capacity
+                            // allocations already show open channels, complete the transition
+                            // immediately rather than waiting for the next capacity tick.
                             if channels_already_available && rh.needs_channel() {
                                 rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
                             }
@@ -930,7 +909,6 @@ impl Core {
             Ok(incentive_operations) => {
                 tracing::info!("incentive operations handle created successfully");
                 self.incentive_operations = Some(incentive_operations);
-                self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
                 true
@@ -1299,21 +1277,6 @@ impl Core {
         });
     }
 
-    fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        let cancel = self.cancel_on_shutdown.clone();
-        let results_sender = results_sender.clone();
-        if let Some(incentive_operations) = self.incentive_operations.clone() {
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        runner::ticket_stats(incentive_operations, results_sender).await;
-                    })
-                    .await
-            });
-        }
-    }
-
     fn spawn_minimum_balance_recommendation_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
@@ -1324,21 +1287,6 @@ impl Core {
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
                         runner::minimum_balance_recommendation(incentive_operations, cfg, results_sender).await;
-                    })
-                    .await
-            });
-        }
-    }
-
-    fn spawn_balances_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_balances.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        runner::balances(hopr, results_sender).await;
                     })
                     .await
             });
@@ -1644,18 +1592,4 @@ impl Core {
         });
     }
 
-    async fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
-        tracing::info!("received ticket stats from runner");
-        match stats.ticket_value() {
-            Ok(tv) => {
-                tracing::info!(%stats, %tv, "determined ticket value from stats");
-                self.ticket_stats = Some(stats);
-                self.try_start_reactor(results_sender).await;
-            }
-            Err(err) => {
-                tracing::error!(?err, %stats, "failed to determine ticket value from stats - retrying");
-                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
-            }
-        }
-    }
 }
