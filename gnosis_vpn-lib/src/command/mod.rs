@@ -494,27 +494,31 @@ impl Display for RunMode {
                 (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
             },
             RunMode::Running { ideal_balance, capacity_allocations, hopr_status } => {
-                let balance_str = ideal_balance
-                    .map(|b| format!(", ideal: wxHOPR >= {}, xDAI >= {}", b.wxhopr, b.xdai))
+                let header = match hopr_status {
+                    Some(s) => format!("Ready ({s})"),
+                    None => "Ready".to_string(),
+                };
+                let ideal_line = ideal_balance
+                    .map(|b| format!("\nideal balance: wxHOPR >= {}, xDAI >= {}", b.wxhopr, b.xdai))
                     .unwrap_or_default();
-                let capacity_str = capacity_allocations
+                let capacity_lines = capacity_allocations
                     .as_ref()
                     .map(|entries| {
-                        let listed = entries
+                        entries
                             .iter()
                             .map(|e| format!(
-                                "{}: {} wxHOPR ({} msgs, {} bytes)",
+                                "\n{}: {} ({} msgs, {} bytes)",
                                 e.allocator, e.capacity.stake,
                                 e.capacity.expected_messages, e.capacity.byte_capacity
                             ))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!(", capacity: [{listed}]")
+                            .collect::<String>()
                     })
                     .unwrap_or_default();
-                match hopr_status {
-                    Some(hopr_status) => write!(f, "Ready ({hopr_status}){balance_str}{capacity_str}"),
-                    None => write!(f, "Ready{balance_str}{capacity_str}"),
+                let has_section = ideal_balance.is_some() || capacity_allocations.is_some();
+                if has_section {
+                    write!(f, "{header}\n---{ideal_line}{capacity_lines}\n---")
+                } else {
+                    write!(f, "{header}")
                 }
             }
             RunMode::Shutdown => write!(f, "Shutting down"),
