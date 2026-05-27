@@ -145,11 +145,11 @@ pub enum RouteHealthState {
     Unrecoverable {
         reason: UnrecoverableReason,
     },
-    /// `had_channel` remembers whether the route has previously had a channel.
+    /// `has_channel` remembers whether the route has previously had a channel.
     /// On re-peering after a transient peer loss we skip straight to `Routable`
     /// instead of waiting for a channel to appear again.
     NeedsPeering {
-        had_channel: bool,
+        has_channel: bool,
     },
     /// Peers are available but no outgoing channel exists yet. Transitions to
     /// `Routable` once the balances poll sees a non-empty `channels_out`.
@@ -279,7 +279,7 @@ fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHeal
             reason: UnrecoverableReason::NotAllowed,
         }
     } else {
-        RouteHealthState::NeedsPeering { had_channel: false }
+        RouteHealthState::NeedsPeering { has_channel: false }
     }
 }
 
@@ -360,7 +360,7 @@ impl RouteHealth {
     /// Advances or regresses the state depending on whether the route's
     /// [`StaticNeed`] is currently satisfied. When a route that previously had
     /// a channel loses its peer we transition back to
-    /// `NeedsPeering { had_channel: true }` so that re-peering skips straight
+    /// `NeedsPeering { has_channel: true }` so that re-peering skips straight
     /// to `Routable`. When the route first becomes routable we spawn the
     /// initial health check.
     ///
@@ -384,13 +384,13 @@ impl RouteHealth {
         };
 
         match &self.state {
-            RouteHealthState::NeedsPeering { had_channel } => {
+            RouteHealthState::NeedsPeering { has_channel } => {
                 if !is_peered {
                     return PeerTransition::NoChange;
                 }
                 // 0-hop routes never need a channel. For 1+ hop routes, skip
                 // NeedsChannel if one already existed (transient peer flap).
-                let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *had_channel;
+                let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *has_channel;
                 if skip_channel_wait {
                     self.state = RouteHealthState::Routable;
                     self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
@@ -404,8 +404,8 @@ impl RouteHealth {
                 if is_peered {
                     PeerTransition::NoChange
                 } else {
-                    // No channel was ever seen, so had_channel stays false.
-                    self.state = RouteHealthState::NeedsPeering { had_channel: false };
+                    // No channel was ever seen, so has_channel stays false.
+                    self.state = RouteHealthState::NeedsPeering { has_channel: false };
                     PeerTransition::LostPeer
                 }
             }
@@ -420,7 +420,7 @@ impl RouteHealth {
                     self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
-                    self.state = RouteHealthState::NeedsPeering { had_channel: true };
+                    self.state = RouteHealthState::NeedsPeering { has_channel: true };
                     PeerTransition::LostPeer
                 }
             }
@@ -1054,8 +1054,8 @@ impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
-            RouteHealthState::NeedsPeering { had_channel: false } => write!(f, "Needs peering"),
-            RouteHealthState::NeedsPeering { had_channel: true } => write!(f, "Needs peering (had channel)"),
+            RouteHealthState::NeedsPeering { has_channel: false } => write!(f, "Needs peering"),
+            RouteHealthState::NeedsPeering { has_channel: true } => write!(f, "Needs peering (had channel)"),
             RouteHealthState::NeedsChannel => write!(f, "Needs channel"),
             RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
             RouteHealthState::ReadyToConnect { exit } => match select_api_version(&exit.versions.versions) {
