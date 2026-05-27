@@ -17,7 +17,8 @@ use edgli::{
 };
 use futures_util::future::AbortHandle;
 use hopr_utils_session::{
-    ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
+    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
+    create_udp_client_binding,
 };
 use multiaddr::Protocol;
 use tokio::task::JoinSet;
@@ -137,7 +138,7 @@ impl Hopr {
             IpProtocol::TCP => create_tcp_client_binding(
                 bind_host,
                 port_range,
-                self.edgli.as_hopr(),
+                HopSessionFactory::new(self.edgli.as_hopr()),
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
@@ -150,7 +151,7 @@ impl Hopr {
             IpProtocol::UDP => create_udp_client_binding(
                 bind_host,
                 port_range,
-                self.edgli.as_hopr(),
+                HopSessionFactory::new(self.edgli.as_hopr()),
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
