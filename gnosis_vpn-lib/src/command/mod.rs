@@ -145,7 +145,7 @@ pub enum RunMode {
     /// Normal operation where connections can be made
     Running {
         hopr_status: Option<HoprStatus>,
-        top_funding_issue: Option<balance::FundingIssue>,
+        funding_issues: Option<Vec<balance::FundingIssue>>,
     },
     /// Shutting down edge client,
     Shutdown,
@@ -316,10 +316,10 @@ impl RunMode {
         }
     }
 
-    pub fn running(hopr_state: Option<HoprState>, top_funding_issue: Option<balance::FundingIssue>) -> Self {
+    pub fn running(hopr_state: Option<HoprState>, funding_issues: Option<Vec<balance::FundingIssue>>) -> Self {
         RunMode::Running {
             hopr_status: hopr_state.map(|s| s.into()),
-            top_funding_issue,
+            funding_issues,
         }
     }
 }
@@ -481,15 +481,24 @@ impl Display for RunMode {
             },
             RunMode::Running {
                 hopr_status,
-                top_funding_issue,
+                funding_issues,
             } => {
                 match hopr_status {
                     Some(s) => write!(f, "Ready ({s})")?,
                     None => write!(f, "Ready")?,
                 }
-                match top_funding_issue {
-                    Some(issue) => write!(f, " - funding issue: {issue}")?,
-                    None => write!(f, " - well funded")?,
+                match funding_issues.as_deref() {
+                    None => write!(f, " - waiting for funding calculations")?,
+                    Some([]) => write!(f, " - well funded")?,
+                    Some(issues) => {
+                        writeln!(f, "\n---")?;
+                        for (i, issue) in issues.iter().enumerate() {
+                            if i > 0 {
+                                writeln!(f)?;
+                            }
+                            write!(f, "Funding issue: {issue}")?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -665,10 +674,10 @@ mod tests {
         match RunMode::running(hopr_state, None) {
             RunMode::Running {
                 hopr_status,
-                top_funding_issue,
+                funding_issues,
             } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
-                assert_eq!(top_funding_issue, None);
+                assert_eq!(funding_issues, None);
             }
             other => panic!("unexpected run mode {other:?}"),
         }

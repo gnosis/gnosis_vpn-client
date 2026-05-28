@@ -387,19 +387,17 @@ impl Core {
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                let top_funding_issue = match (
+                                let funding_issues = match (
                                     &self.ideal_balance_recommendation,
                                     &self.capacity_allocations,
                                     &self.balances,
                                 ) {
                                     (Some(ideal), Some(allocs), Some(bals)) => {
-                                        balance::to_funding_issues(*ideal, allocs, bals.node_xdai)
-                                            .into_iter()
-                                            .next()
+                                        Some(balance::to_funding_issues(*ideal, allocs, bals.node_xdai))
                                     }
                                     _ => None,
                                 };
-                                RunMode::running(self.hopr.as_ref().map(|h| h.status()), top_funding_issue)
+                                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_issues)
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
@@ -511,9 +509,9 @@ impl Core {
                                 let funding_issues =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
                                         (Some(ideal), Some(allocs)) => {
-                                            balance::to_funding_issues(*ideal, allocs, balances.node_xdai)
+                                            Some(balance::to_funding_issues(*ideal, allocs, balances.node_xdai))
                                         }
-                                        _ => vec![],
+                                        _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(
                                     &hopr.info(),
