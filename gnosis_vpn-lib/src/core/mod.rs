@@ -625,7 +625,12 @@ impl Core {
                             }
                         }
                     }
-                    self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
+                    let delay = if route_health::any_needs_channel(self.route_healths.values()) {
+                        Duration::from_secs(10)
+                    } else {
+                        Duration::from_secs(60)
+                    };
+                    self.spawn_capacity_allocations_runner(results_sender, delay);
                 }
                 Err(err) => {
                     tracing::warn!(?err, "failed to fetch capacity allocations - retrying");
