@@ -312,19 +312,8 @@ fn pretty_print(resp: &Response) {
         Response::Pong => {
             println!("Pong");
         }
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => match ticket_stats {
-            Some(ts) => println!(
-                "Ticket Price: {}\nWinning Probability: {}",
-                balance::human_wxhopr(ts.ticket_price),
-                format_probability(ts.winning_probability)
-            ),
-            None => eprintln!("No extra stats available. Try connecting to a destination first."),
-        },
-        Response::NerdStats(command::NerdStatsResponse::Connecting(stats)) => {
-            print_connecting_stats(stats);
-        }
-        Response::NerdStats(command::NerdStatsResponse::Connected(stats)) => {
-            print_connected_stats(stats);
+        Response::NerdStats(nerd_stats) => {
+            print_nerd_stats(nerd_stats);
         }
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => {
             eprintln!("Already past potential funding phase - no longer possible to fund");
@@ -417,10 +406,17 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(None)) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(Some(_))) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Available(_))) => {
+            exitcode::OK
+        }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Waiting)) => {
+            exitcode::UNAVAILABLE
+        }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Error(_))) => {
+            exitcode::SOFTWARE
+        }
+        Response::NerdStats(command::NerdStatsResponse::Connecting(..)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse::Connected(..)) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
@@ -432,6 +428,38 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
+    }
+}
+
+fn print_ticket_stats_status(status: &command::TicketStatsStatus) {
+    match status {
+        command::TicketStatsStatus::Available(ts) => println!(
+            "Ticket Price: {}\nWinning Probability: {}",
+            balance::human_wxhopr(ts.ticket_price),
+            format_probability(ts.winning_probability)
+        ),
+        command::TicketStatsStatus::Waiting => {
+            println!("waiting for incentive operations to become available")
+        }
+        command::TicketStatsStatus::Error(e) => eprintln!("Error fetching ticket stats: {e}"),
+    }
+}
+
+fn print_nerd_stats(nerd_stats: &command::NerdStatsResponse) {
+    match nerd_stats {
+        command::NerdStatsResponse::NoInfo(ts_status) => {
+            print_ticket_stats_status(ts_status);
+        }
+        command::NerdStatsResponse::Connecting(ts_status, conn) => {
+            print_ticket_stats_status(ts_status);
+            println!("---");
+            print_connecting_stats(conn);
+        }
+        command::NerdStatsResponse::Connected(ts_status, conn) => {
+            print_ticket_stats_status(ts_status);
+            println!("---");
+            print_connected_stats(conn);
+        }
     }
 }
 
@@ -482,13 +510,6 @@ fn print_connecting_stats(stats: &command::ConnStats) {
         )
         .as_str(),
     );
-    if let Some(ts) = &stats.ticket_stats {
-        str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {}\n",
-            balance::human_wxhopr(ts.ticket_price),
-            format_probability(ts.winning_probability)
-        ));
-    }
     println!("{str_resp}");
 }
 
@@ -510,13 +531,6 @@ fn print_connected_stats(stats: &command::ConnStats) {
 
     if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
-    }
-    if let Some(ts) = &stats.ticket_stats {
-        str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {}\n",
-            balance::human_wxhopr(ts.ticket_price),
-            format_probability(ts.winning_probability)
-        ));
     }
     println!("{str_resp}");
 }

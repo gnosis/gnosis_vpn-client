@@ -240,10 +240,18 @@ impl From<&RouteHealth> for RouteHealthView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TicketStatsStatus {
+    Available(TicketStats),
+    /// incentive operations not yet initialized
+    Waiting,
+    Error(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NerdStatsResponse {
-    NoInfo(Option<TicketStats>),
-    Connecting(ConnStats),
-    Connected(ConnStats),
+    NoInfo(TicketStatsStatus),
+    Connecting(TicketStatsStatus, ConnStats),
+    Connected(TicketStatsStatus, ConnStats),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -256,7 +264,6 @@ pub struct ConnStats {
     pub wg_ip: Option<String>,
     pub session_bound_host: Option<SocketAddr>,
     pub session_id: Option<String>,
-    pub ticket_stats: Option<TicketStats>,
 }
 
 impl ConnStats {
@@ -273,7 +280,6 @@ impl ConnStats {
                 .as_ref()
                 .and_then(|s| s.active_clients.first())
                 .map(|id| id.to_string()),
-            ticket_stats: None,
         }
     }
 }

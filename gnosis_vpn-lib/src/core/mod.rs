@@ -305,27 +305,35 @@ impl Core {
                 match cmd {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
-                        let ticket_stats = match &self.incentive_operations {
-                            Some(ops) => ops.ticket_stats().await.ok().map(|ts| ticket_stats::TicketStats {
-                                ticket_price: ts.ticket_price,
-                                winning_probability: ts.winning_probability.into(),
-                            }),
-                            None => None,
+                        let ticket_stats_status = match &self.incentive_operations {
+                            None => command::TicketStatsStatus::Waiting,
+                            Some(ops) => match ops.ticket_stats().await {
+                                Ok(ts) => command::TicketStatsStatus::Available(ticket_stats::TicketStats {
+                                    ticket_price: ts.ticket_price,
+                                    winning_probability: ts.winning_probability.into(),
+                                }),
+                                Err(e) => command::TicketStatsStatus::Error(e.to_string()),
+                            },
                         };
                         match &self.phase {
                             Phase::Connecting(conn) => {
-                                let mut stats = command::ConnStats::from_conn(conn, self.node_address);
-                                stats.ticket_stats = ticket_stats;
-                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(stats)));
+                                let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
+                                    ticket_stats_status,
+                                    conn_stats,
+                                )));
                             }
                             Phase::Connected(conn) => {
-                                let mut stats = command::ConnStats::from_conn(conn, self.node_address);
-                                stats.ticket_stats = ticket_stats;
-                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(stats)));
+                                let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
+                                    ticket_stats_status,
+                                    conn_stats,
+                                )));
                             }
                             _ => {
-                                let _ =
-                                    resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(ticket_stats)));
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
+                                    ticket_stats_status,
+                                )));
                             }
                         }
                     }
