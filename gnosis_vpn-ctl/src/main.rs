@@ -268,7 +268,8 @@ fn pretty_print(resp: &Response) {
             if let Some(rec) = ideal_balance {
                 str_resp.push_str(&format!(
                     "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}\n",
-                    rec.xdai, human_wxhopr(rec.wxhopr)
+                    rec.xdai,
+                    human_wxhopr(rec.wxhopr)
                 ));
             }
             str_resp.push_str(&format!("---\nNode: {node}\n"));
@@ -311,15 +312,13 @@ fn pretty_print(resp: &Response) {
         Response::Pong => {
             println!("Pong");
         }
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => {
-            match ticket_stats {
-                Some(ts) => println!(
-                    "Ticket Price: {}\nWinning Probability: {:.4}",
-                    ts.ticket_price, ts.winning_probability
-                ),
-                None => eprintln!("No extra stats available. Try connecting to a destination first."),
-            }
-        }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => match ticket_stats {
+            Some(ts) => println!(
+                "Ticket Price: {}\nWinning Probability: {:.4}",
+                ts.ticket_price, ts.winning_probability
+            ),
+            None => eprintln!("No extra stats available. Try connecting to a destination first."),
+        },
         Response::NerdStats(command::NerdStatsResponse::Connecting(stats)) => {
             print_connecting_stats(stats);
         }
@@ -375,13 +374,13 @@ fn pretty_print(resp: &Response) {
 fn human_wxhopr(b: balance::Balance<balance::WxHOPR>) -> String {
     let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
     match v {
-        v if v >= 1.0    => format!("{:.1} wxHOPR", v),
-        v if v >= 1e-3   => format!("{:.1} Milli wxHOPR", v / 1e-3),
-        v if v >= 1e-6   => format!("{:.1} Micro wxHOPR", v / 1e-6),
-        v if v >= 1e-9   => format!("{:.1} Gwei wxHopli", v / 1e-9),
-        v if v >= 1e-12  => format!("{:.1} Mwei wxHopli", v / 1e-12),
-        v if v >= 1e-15  => format!("{:.1} Kwei wxHopli", v / 1e-15),
-        _                => format!("{:.0} wxHopli", v * 1e18),
+        v if v >= 1.0 => format!("{:.1} wxHOPR", v),
+        v if v >= 1e-3 => format!("{:.1} MilliwxHOPR", v / 1e-3),
+        v if v >= 1e-6 => format!("{:.1} MicrowxHOPR", v / 1e-6),
+        v if v >= 1e-9 => format!("{:.1} GwxHopli", v / 1e-9),
+        v if v >= 1e-12 => format!("{:.1} MwxHopli", v / 1e-12),
+        v if v >= 1e-15 => format!("{:.1} KwxHopli", v / 1e-15),
+        _ => format!("{:.0} wxHopli", v * 1e18),
     }
 }
 
