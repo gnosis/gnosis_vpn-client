@@ -293,7 +293,7 @@ fn pretty_print(resp: &Response) {
                         "{}: {} ({} msgs, {})\n",
                         label,
                         e.capacity.stake,
-                        e.capacity.expected_messages,
+                        human_msgs(e.capacity.expected_messages),
                         human_bytes(e.capacity.byte_capacity)
                     ));
                 }
@@ -375,6 +375,18 @@ fn human_bytes(bytes: u64) -> String {
         b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
         b if b >= KB => format!("{:.1} KB", b as f64 / KB as f64),
         b => format!("{b} B"),
+    }
+}
+
+fn human_msgs(msgs: u64) -> String {
+    const K: u64 = 1_000;
+    const M: u64 = 1_000 * K;
+    const G: u64 = 1_000 * M;
+    match msgs {
+        m if m >= G => format!("{:.1}B", m as f64 / G as f64),
+        m if m >= M => format!("{:.1}M", m as f64 / M as f64),
+        m if m >= K => format!("{:.1}K", m as f64 / K as f64),
+        m => format!("{m}"),
     }
 }
 
