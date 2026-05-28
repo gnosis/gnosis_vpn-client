@@ -449,6 +449,7 @@ fn print_nerd_stats(nerd_stats: &command::NerdStatsResponse) {
     match nerd_stats {
         command::NerdStatsResponse::NoInfo(ts_status) => {
             print_ticket_stats_status(ts_status);
+            println!("(connect to a destination to see more stats)");
         }
         command::NerdStatsResponse::Connecting(ts_status, conn) => {
             print_ticket_stats_status(ts_status);
