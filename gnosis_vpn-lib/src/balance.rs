@@ -213,11 +213,19 @@ mod tests {
     }
 
     fn peer_capacity(stake: u64, msgs: u64) -> Capacity {
-        Capacity { stake: Balance::<WxHOPR>::from(stake), expected_messages: msgs, byte_capacity: 0 }
+        Capacity {
+            stake: Balance::<WxHOPR>::from(stake),
+            expected_messages: msgs,
+            byte_capacity: 0,
+        }
     }
 
     fn safe_capacity(stake: u64, msgs: u64) -> Capacity {
-        Capacity { stake: Balance::<WxHOPR>::from(stake), expected_messages: msgs, byte_capacity: 0 }
+        Capacity {
+            stake: Balance::<WxHOPR>::from(stake),
+            expected_messages: msgs,
+            byte_capacity: 0,
+        }
     }
 
     #[test]
@@ -230,7 +238,11 @@ mod tests {
     fn channels_out_of_funds_when_no_peer_messages() {
         let mut allocs = HashMap::new();
         allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        let issues = to_funding_issues(ideal(100, 100), &allocs, Balance::<XDai>::from(1_000_000_000_000_000_u64));
+        let issues = to_funding_issues(
+            ideal(100, 100),
+            &allocs,
+            Balance::<XDai>::from(1_000_000_000_000_000_u64),
+        );
         assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
     }
 
@@ -242,7 +254,11 @@ mod tests {
             peer_capacity(100, 10),
         );
         allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 0));
-        let issues = to_funding_issues(ideal(100, 100), &allocs, Balance::<XDai>::from(1_000_000_000_000_000_u64));
+        let issues = to_funding_issues(
+            ideal(100, 100),
+            &allocs,
+            Balance::<XDai>::from(1_000_000_000_000_000_u64),
+        );
         assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
     }
 
@@ -255,7 +271,11 @@ mod tests {
         );
         // safe stake 30, ideal wxhopr 100 → 30*2=60 < 100 → SafeLowOnFunds
         allocs.insert(CapacityAllocator::Safe, safe_capacity(30, 5));
-        let issues = to_funding_issues(ideal(100, 100), &allocs, Balance::<XDai>::from(1_000_000_000_000_000_u64));
+        let issues = to_funding_issues(
+            ideal(100, 100),
+            &allocs,
+            Balance::<XDai>::from(1_000_000_000_000_000_u64),
+        );
         assert!(issues.contains(&FundingIssue::SafeLowOnFunds));
     }
 
@@ -268,7 +288,11 @@ mod tests {
         );
         allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
         // xdai well above 0.0015 xDai (2x threshold)
-        let issues = to_funding_issues(ideal(100, 100), &allocs, Balance::<XDai>::from(2_000_000_000_000_000_u64));
+        let issues = to_funding_issues(
+            ideal(100, 100),
+            &allocs,
+            Balance::<XDai>::from(2_000_000_000_000_000_u64),
+        );
         assert!(issues.is_empty());
     }
 }

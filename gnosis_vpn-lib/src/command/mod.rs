@@ -479,7 +479,10 @@ impl Display for RunMode {
                 (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
                 (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
             },
-            RunMode::Running { hopr_status, top_funding_issue } => {
+            RunMode::Running {
+                hopr_status,
+                top_funding_issue,
+            } => {
                 match hopr_status {
                     Some(s) => write!(f, "Ready ({s})")?,
                     None => write!(f, "Ready")?,
@@ -659,7 +662,10 @@ mod tests {
         let hopr_state = Some(HoprState::Running);
 
         match RunMode::running(hopr_state, None) {
-            RunMode::Running { hopr_status, top_funding_issue } => {
+            RunMode::Running {
+                hopr_status,
+                top_funding_issue,
+            } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
                 assert_eq!(top_funding_issue, None);
             }
