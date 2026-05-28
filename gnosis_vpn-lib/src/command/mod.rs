@@ -487,8 +487,9 @@ impl Display for RunMode {
                     Some(s) => write!(f, "Ready ({s})")?,
                     None => write!(f, "Ready")?,
                 }
-                if let Some(issue) = top_funding_issue {
-                    write!(f, " - funding issue: {issue}")?;
+                match top_funding_issue {
+                    Some(issue) => write!(f, " - funding issue: {issue}")?,
+                    None => write!(f, " - well funded")?,
                 }
                 Ok(())
             }

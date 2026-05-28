@@ -511,9 +511,9 @@ impl Core {
                                 let funding_issues =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
                                         (Some(ideal), Some(allocs)) => {
-                                            Some(balance::to_funding_issues(*ideal, allocs, balances.node_xdai))
+                                            balance::to_funding_issues(*ideal, allocs, balances.node_xdai)
                                         }
-                                        _ => None,
+                                        _ => vec![],
                                     };
                                 Ok(command::BalanceResponse::build(
                                     &hopr.info(),

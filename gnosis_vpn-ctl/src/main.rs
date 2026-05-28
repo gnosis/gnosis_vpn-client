@@ -305,11 +305,11 @@ fn pretty_print(resp: &Response) {
                     str_resp.push_str(&format!("{ch}\n"));
                 }
             }
-            if let Some(issues) = funding_issues
-                && !issues.is_empty()
-            {
-                str_resp.push_str("---\n");
-                for issue in issues {
+            str_resp.push_str("---\n");
+            if funding_issues.is_empty() {
+                str_resp.push_str("Well funded\n");
+            } else {
+                for issue in funding_issues {
                     str_resp.push_str(&format!("Funding issue: {issue}\n"));
                 }
             }
