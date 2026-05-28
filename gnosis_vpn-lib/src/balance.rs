@@ -2,6 +2,7 @@ pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHO
 use serde::{Deserialize, Serialize};
 
 pub fn human_wxhopr(b: Balance<WxHOPR>) -> String {
+    // amount_in_base_units() already converts from wei to wxHOPR (divides by 10^18)
     let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
     match v {
         v if v >= 1.0 => format!("{:.1} wxHOPR", v),
