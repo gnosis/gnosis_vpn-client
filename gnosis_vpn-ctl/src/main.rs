@@ -376,8 +376,8 @@ fn human_wxhopr(b: balance::Balance<balance::WxHOPR>) -> String {
     let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
     match v {
         v if v >= 1.0    => format!("{:.1} wxHOPR", v),
-        v if v >= 1e-3   => format!("{:.1} Milli wxHopli", v / 1e-3),
-        v if v >= 1e-6   => format!("{:.1} Micro wxHopli", v / 1e-6),
+        v if v >= 1e-3   => format!("{:.1} Milli wxHOPR", v / 1e-3),
+        v if v >= 1e-6   => format!("{:.1} Micro wxHOPR", v / 1e-6),
         v if v >= 1e-9   => format!("{:.1} Gwei wxHopli", v / 1e-9),
         v if v >= 1e-12  => format!("{:.1} Mwei wxHopli", v / 1e-12),
         v if v >= 1e-15  => format!("{:.1} Kwei wxHopli", v / 1e-15),
