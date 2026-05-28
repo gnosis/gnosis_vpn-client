@@ -258,6 +258,8 @@ fn pretty_print(resp: &Response) {
             info,
             ticket_price,
             winning_probability,
+            capacity_allocations,
+            ideal_balance,
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -280,6 +282,20 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str("---\nFunding Issues:\n");
                 for issue in issues {
                     str_resp.push_str(&format!("  - {issue}\n"));
+                }
+            }
+            if let Some(rec) = ideal_balance {
+                str_resp.push_str(&format!(
+                    "---\nIdeal Balance: wxHOPR >= {}, xDAI >= {}\n",
+                    rec.wxhopr, rec.xdai
+                ));
+            }
+            if let Some(entries) = capacity_allocations {
+                if !entries.is_empty() {
+                    str_resp.push_str("---\n");
+                    for e in entries {
+                        str_resp.push_str(&format!("{}: {}\n", e.allocator, e.capacity.stake));
+                    }
                 }
             }
             println!("{str_resp}");
