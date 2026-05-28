@@ -241,7 +241,7 @@ impl From<&RouteHealth> for RouteHealthView {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NerdStatsResponse {
-    NoInfo,
+    NoInfo(Option<TicketStats>),
     Connecting(ConnStats),
     Connected(ConnStats),
 }

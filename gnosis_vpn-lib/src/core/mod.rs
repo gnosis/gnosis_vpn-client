@@ -324,7 +324,7 @@ impl Core {
                                 let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(stats)));
                             }
                             _ => {
-                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo));
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(ticket_stats)));
                             }
                         }
                     }

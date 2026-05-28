@@ -311,8 +311,14 @@ fn pretty_print(resp: &Response) {
         Response::Pong => {
             println!("Pong");
         }
-        Response::NerdStats(command::NerdStatsResponse::NoInfo) => {
-            eprintln!("No extra stats available. Try connecting to a destination first.");
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => {
+            match ticket_stats {
+                Some(ts) => println!(
+                    "Ticket Price: {}\nWinning Probability: {:.4}",
+                    ts.ticket_price, ts.winning_probability
+                ),
+                None => eprintln!("No extra stats available. Try connecting to a destination first."),
+            }
         }
         Response::NerdStats(command::NerdStatsResponse::Connecting(stats)) => {
             print_connecting_stats(stats);
@@ -418,7 +424,8 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse::NoInfo) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(None)) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(Some(_))) => exitcode::OK,
         Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
         Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
