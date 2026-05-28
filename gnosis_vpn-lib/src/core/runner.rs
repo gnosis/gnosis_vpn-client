@@ -30,6 +30,7 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
 use crate::worker_params::{self, WorkerParams};
+use crate::command::{self, Response};
 use crate::{balance, connection, event, ping, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
@@ -103,6 +104,10 @@ pub enum Results {
         outcome: HealthCheckOutcome,
     },
     RetryReactor,
+    NerdStatsTicketStats {
+        res: command::TicketStatsStatus,
+        resp: oneshot::Sender<Response>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -629,6 +634,7 @@ impl Display for Results {
             },
             Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
             Results::RetryReactor => write!(f, "RetryReactor"),
+            Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
         }
     }
 }

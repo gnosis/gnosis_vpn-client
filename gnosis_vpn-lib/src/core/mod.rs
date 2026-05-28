@@ -305,37 +305,23 @@ impl Core {
                 match cmd {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
-                        let ticket_stats_status = match &self.incentive_operations {
-                            None => command::TicketStatsStatus::Waiting,
-                            Some(ops) => match ops.ticket_stats().await {
+                        let Some(ops) = self.incentive_operations.clone() else {
+                            let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
+                                command::TicketStatsStatus::Waiting,
+                            )));
+                            return true;
+                        };
+                        let sender = results_sender.clone();
+                        tokio::spawn(async move {
+                            let ticket_stats_status = match ops.ticket_stats().await {
                                 Ok(ts) => command::TicketStatsStatus::Available(ticket_stats::TicketStats {
                                     ticket_price: ts.ticket_price,
                                     winning_probability: ts.winning_probability.into(),
                                 }),
                                 Err(e) => command::TicketStatsStatus::Error(e.to_string()),
-                            },
-                        };
-                        match &self.phase {
-                            Phase::Connecting(conn) => {
-                                let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
-                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
-                                    ticket_stats_status,
-                                    conn_stats,
-                                )));
-                            }
-                            Phase::Connected(conn) => {
-                                let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
-                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
-                                    ticket_stats_status,
-                                    conn_stats,
-                                )));
-                            }
-                            _ => {
-                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
-                                    ticket_stats_status,
-                                )));
-                            }
-                        }
+                            };
+                            let _ = sender.send(Results::NerdStatsTicketStats { res: ticket_stats_status, resp }).await;
+                        });
                     }
 
                     WorkerCommand::Status => {
@@ -910,6 +896,30 @@ impl Core {
 
             Results::RetryReactor => {
                 self.try_start_reactor(results_sender).await;
+            }
+
+            Results::NerdStatsTicketStats { res: ticket_stats_status, resp } => {
+                match &self.phase {
+                    Phase::Connecting(conn) => {
+                        let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                        let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
+                            ticket_stats_status,
+                            conn_stats,
+                        )));
+                    }
+                    Phase::Connected(conn) => {
+                        let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                        let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
+                            ticket_stats_status,
+                            conn_stats,
+                        )));
+                    }
+                    _ => {
+                        let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
+                            ticket_stats_status,
+                        )));
+                    }
+                }
             }
         };
         return true;
