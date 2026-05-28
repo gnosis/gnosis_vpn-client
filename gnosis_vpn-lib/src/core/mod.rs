@@ -320,7 +320,12 @@ impl Core {
                                 }),
                                 Err(e) => command::TicketStatsStatus::Error(e.to_string()),
                             };
-                            let _ = sender.send(Results::NerdStatsTicketStats { res: ticket_stats_status, resp }).await;
+                            let _ = sender
+                                .send(Results::NerdStatsTicketStats {
+                                    res: ticket_stats_status,
+                                    resp,
+                                })
+                                .await;
                         });
                     }
 
@@ -898,29 +903,30 @@ impl Core {
                 self.try_start_reactor(results_sender).await;
             }
 
-            Results::NerdStatsTicketStats { res: ticket_stats_status, resp } => {
-                match &self.phase {
-                    Phase::Connecting(conn) => {
-                        let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
-                        let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
-                            ticket_stats_status,
-                            conn_stats,
-                        )));
-                    }
-                    Phase::Connected(conn) => {
-                        let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
-                        let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
-                            ticket_stats_status,
-                            conn_stats,
-                        )));
-                    }
-                    _ => {
-                        let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
-                            ticket_stats_status,
-                        )));
-                    }
+            Results::NerdStatsTicketStats {
+                res: ticket_stats_status,
+                resp,
+            } => match &self.phase {
+                Phase::Connecting(conn) => {
+                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
+                        ticket_stats_status,
+                        conn_stats,
+                    )));
                 }
-            }
+                Phase::Connected(conn) => {
+                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
+                        ticket_stats_status,
+                        conn_stats,
+                    )));
+                }
+                _ => {
+                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
+                        ticket_stats_status,
+                    )));
+                }
+            },
         };
         return true;
     }
