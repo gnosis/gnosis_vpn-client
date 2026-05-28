@@ -373,11 +373,9 @@ impl Core {
                             } => RunMode::deploying_safe(self.node_address),
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
-                            Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => RunMode::running(
-                                self.ideal_balance_recommendation,
-                                self.capacity_allocations.clone(),
-                                self.hopr.as_ref().map(|h| h.status()),
-                            ),
+                            Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
+                                RunMode::running(self.hopr.as_ref().map(|h| h.status()))
+                            }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
@@ -498,6 +496,8 @@ impl Core {
                                         &b,
                                         &ts,
                                         &self.config.destinations.clone(),
+                                        self.capacity_allocations.as_ref(),
+                                        self.ideal_balance_recommendation,
                                     )
                                     .map_err(|e| {
                                         tracing::error!(?e, "failed to build balance response");

@@ -1,10 +1,8 @@
-use bytesize::ByteSize;
 use edgli::EdgliInitState;
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -145,8 +143,6 @@ pub enum RunMode {
     },
     /// Normal operation where connections can be made
     Running {
-        ideal_balance: Option<balance::BalanceRecommendation>,
-        capacity_allocations: Option<Vec<balance::CapacityEntry>>,
         hopr_status: Option<HoprStatus>,
     },
     /// Shutting down edge client,
@@ -310,23 +306,8 @@ impl RunMode {
         }
     }
 
-    pub fn running(
-        ideal_balance: Option<balance::BalanceRecommendation>,
-        capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
-        hopr_state: Option<HoprState>,
-    ) -> Self {
-        let capacity_allocations = capacity_allocations.map(|map| {
-            let mut entries: Vec<_> = map
-                .into_iter()
-                .map(|(allocator, capacity)| balance::CapacityEntry { allocator, capacity })
-                .collect();
-            // safe always first, then peers in arbitrary order
-            entries.sort_by_key(|e| matches!(e.allocator, balance::CapacityAllocator::Peer(_)));
-            entries
-        });
+    pub fn running(hopr_state: Option<HoprState>) -> Self {
         RunMode::Running {
-            ideal_balance,
-            capacity_allocations,
             hopr_status: hopr_state.map(|s| s.into()),
         }
     }
@@ -441,15 +422,6 @@ impl From<EdgliInitState> for HoprInitStatus {
     }
 }
 
-fn fmt_msgs(n: u64) -> String {
-    match n {
-        0..1_000 => format!("{n} msgs"),
-        1_000..1_000_000 => format!("{:.1}K msgs", n as f64 / 1_000.0),
-        1_000_000..1_000_000_000 => format!("{:.1}M msgs", n as f64 / 1_000_000.0),
-        _ => format!("{:.1}B msgs", n as f64 / 1_000_000_000.0),
-    }
-}
-
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -491,42 +463,10 @@ impl Display for RunMode {
                 (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
                 (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
             },
-            RunMode::Running {
-                ideal_balance,
-                capacity_allocations,
-                hopr_status,
-            } => {
-                let header = match hopr_status {
-                    Some(s) => format!("Ready ({s})"),
-                    None => "Ready".to_string(),
-                };
-                let ideal_line = ideal_balance
-                    .map(|b| format!("\nideal balance: wxHOPR >= {}, xDAI >= {}", b.wxhopr, b.xdai))
-                    .unwrap_or_default();
-                let capacity_lines = capacity_allocations
-                    .as_ref()
-                    .map(|entries| {
-                        entries
-                            .iter()
-                            .map(|e| {
-                                format!(
-                                    "\n{}: {} ({}, {})",
-                                    e.allocator,
-                                    e.capacity.stake,
-                                    fmt_msgs(e.capacity.expected_messages),
-                                    ByteSize::b(e.capacity.byte_capacity),
-                                )
-                            })
-                            .collect::<String>()
-                    })
-                    .unwrap_or_default();
-                let has_section = ideal_balance.is_some() || capacity_allocations.is_some();
-                if has_section {
-                    write!(f, "{header}\n---{ideal_line}{capacity_lines}")
-                } else {
-                    write!(f, "{header}")
-                }
-            }
+            RunMode::Running { hopr_status } => match hopr_status {
+                Some(s) => write!(f, "Ready ({s})"),
+                None => write!(f, "Ready"),
+            },
             RunMode::Shutdown => write!(f, "Shutting down"),
             RunMode::NotRunning => write!(f, "Worker offline"),
         }
@@ -696,14 +636,8 @@ mod tests {
     fn runmode_running_passes_through_hopr_status() -> anyhow::Result<()> {
         let hopr_state = Some(HoprState::Running);
 
-        match RunMode::running(None, None, hopr_state) {
-            RunMode::Running {
-                ideal_balance,
-                capacity_allocations,
-                hopr_status,
-            } => {
-                assert!(ideal_balance.is_none());
-                assert!(capacity_allocations.is_none());
+        match RunMode::running(hopr_state) {
+            RunMode::Running { hopr_status } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
             }
             other => panic!("unexpected run mode {other:?}"),

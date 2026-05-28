@@ -43,6 +43,8 @@ pub struct BalanceResponse {
     #[serde(with = "serde_utils::balance")]
     pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
+    pub capacity_allocations: Option<Vec<balance::CapacityEntry>>,
+    pub ideal_balance: Option<balance::BalanceRecommendation>,
 }
 
 impl BalanceResponse {
@@ -51,6 +53,8 @@ impl BalanceResponse {
         balances: &balance::Balances,
         ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
+        capacity_allocations: Option<&HashMap<balance::CapacityAllocator, balance::Capacity>>,
+        ideal_balance: Option<balance::BalanceRecommendation>,
     ) -> Result<Self, ticket_stats::Error> {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
@@ -60,6 +64,19 @@ impl BalanceResponse {
         let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
         let info = info.clone();
 
+        let capacity_allocations = capacity_allocations.map(|map| {
+            let mut entries: Vec<_> = map
+                .iter()
+                .map(|(a, c)| balance::CapacityEntry {
+                    allocator: a.clone(),
+                    capacity: *c,
+                })
+                .collect();
+            // safe first, then peers
+            entries.sort_by_key(|e| matches!(e.allocator, balance::CapacityAllocator::Peer(_)));
+            entries
+        });
+
         Ok(BalanceResponse {
             node,
             safe,
@@ -68,6 +85,8 @@ impl BalanceResponse {
             info,
             ticket_price: ticket_stats.ticket_price,
             winning_probability: ticket_stats.winning_probability,
+            capacity_allocations,
+            ideal_balance,
         })
     }
 }
