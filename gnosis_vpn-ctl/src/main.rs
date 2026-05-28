@@ -268,7 +268,7 @@ fn pretty_print(resp: &Response) {
             if let Some(rec) = ideal_balance {
                 str_resp.push_str(&format!(
                     "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}\n",
-                    rec.xdai, rec.wxhopr
+                    rec.xdai, human_wxhopr(rec.wxhopr)
                 ));
             }
             str_resp.push_str(&format!("---\nNode: {node}\n"));
@@ -292,13 +292,13 @@ fn pretty_print(resp: &Response) {
                     str_resp.push_str(&format!(
                         "{}: {} ({} msgs, {})\n",
                         label,
-                        e.capacity.stake,
+                        human_wxhopr(e.capacity.stake),
                         human_msgs(e.capacity.expected_messages),
                         human_bytes(e.capacity.byte_capacity)
                     ));
                 }
             } else {
-                str_resp.push_str(&format!("Safe: {safe}\n"));
+                str_resp.push_str(&format!("Safe: {}\n", human_wxhopr(*safe)));
                 for ch in channels_out {
                     str_resp.push_str(&format!("{ch}\n"));
                 }
@@ -363,6 +363,19 @@ fn pretty_print(resp: &Response) {
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
+    }
+}
+
+fn human_wxhopr(b: balance::Balance<balance::WxHOPR>) -> String {
+    let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
+    match v {
+        v if v >= 1.0    => format!("{:.1} wxHOPR", v),
+        v if v >= 1e-3   => format!("{:.1} Milli wxHOPR", v / 1e-3),
+        v if v >= 1e-6   => format!("{:.1} Micro wxHOPR", v / 1e-6),
+        v if v >= 1e-9   => format!("{:.1} Gwei wxHOPR", v / 1e-9),
+        v if v >= 1e-12  => format!("{:.1} Mwei wxHOPR", v / 1e-12),
+        v if v >= 1e-15  => format!("{:.1} Kwei wxHOPR", v / 1e-15),
+        _                => format!("{:.0} wei wxHOPR", v * 1e18),
     }
 }
 
