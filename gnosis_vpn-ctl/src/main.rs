@@ -269,7 +269,7 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str(&format!(
                     "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}\n",
                     rec.xdai,
-                    human_wxhopr(rec.wxhopr)
+                    balance::human_wxhopr(rec.wxhopr)
                 ));
             }
             str_resp.push_str(&format!("---\nNode: {node}\n"));
@@ -293,13 +293,13 @@ fn pretty_print(resp: &Response) {
                     str_resp.push_str(&format!(
                         "{}: {} ({} msgs, {})\n",
                         label,
-                        human_wxhopr(e.capacity.stake),
+                        balance::human_wxhopr(e.capacity.stake),
                         human_msgs(e.capacity.expected_messages),
                         human_bytes(e.capacity.byte_capacity)
                     ));
                 }
             } else {
-                str_resp.push_str(&format!("Safe: {}\n", human_wxhopr(*safe)));
+                str_resp.push_str(&format!("Safe: {}\n", balance::human_wxhopr(*safe)));
                 for ch in channels_out {
                     str_resp.push_str(&format!("{ch}\n"));
                 }
@@ -314,8 +314,8 @@ fn pretty_print(resp: &Response) {
         }
         Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => match ticket_stats {
             Some(ts) => println!(
-                "Ticket Price: {}\nWinning Probability: {:.4}",
-                ts.ticket_price, ts.winning_probability
+                "Ticket Price: {}\nWinning Probability: {}",
+                balance::human_wxhopr(ts.ticket_price), ts.winning_probability
             ),
             None => eprintln!("No extra stats available. Try connecting to a destination first."),
         },
@@ -371,18 +371,6 @@ fn pretty_print(resp: &Response) {
     }
 }
 
-fn human_wxhopr(b: balance::Balance<balance::WxHOPR>) -> String {
-    let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
-    match v {
-        v if v >= 1.0 => format!("{:.1} wxHOPR", v),
-        v if v >= 1e-3 => format!("{:.1} MilliwxHOPR", v / 1e-3),
-        v if v >= 1e-6 => format!("{:.1} MicrowxHOPR", v / 1e-6),
-        v if v >= 1e-9 => format!("{:.1} GwxHopli", v / 1e-9),
-        v if v >= 1e-12 => format!("{:.1} MwxHopli", v / 1e-12),
-        v if v >= 1e-15 => format!("{:.1} KwxHopli", v / 1e-15),
-        _ => format!("{:.0} wxHopli", v * 1e18),
-    }
-}
 
 fn human_bytes(bytes: u64) -> String {
     const KB: u64 = 1_024;
@@ -490,8 +478,8 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     );
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {:.4}\n",
-            ts.ticket_price, ts.winning_probability
+            "---\nTicket Price: {}\nWinning Probability: {}\n",
+            balance::human_wxhopr(ts.ticket_price), ts.winning_probability
         ));
     }
     println!("{str_resp}");
@@ -518,8 +506,8 @@ fn print_connected_stats(stats: &command::ConnStats) {
     }
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {:.4}\n",
-            ts.ticket_price, ts.winning_probability
+            "---\nTicket Price: {}\nWinning Probability: {}\n",
+            balance::human_wxhopr(ts.ticket_price), ts.winning_probability
         ));
     }
     println!("{str_resp}");

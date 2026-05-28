@@ -1,6 +1,19 @@
 pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+pub fn human_wxhopr(b: Balance<WxHOPR>) -> String {
+    let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
+    match v {
+        v if v >= 1.0 => format!("{:.1} wxHOPR", v),
+        v if v >= 1e-3 => format!("{:.1} MilliwxHOPR", v / 1e-3),
+        v if v >= 1e-6 => format!("{:.1} MicrowxHOPR", v / 1e-6),
+        v if v >= 1e-9 => format!("{:.1} GwxHopli", v / 1e-9),
+        v if v >= 1e-12 => format!("{:.1} MwxHopli", v / 1e-12),
+        v if v >= 1e-15 => format!("{:.1} KwxHopli", v / 1e-15),
+        _ => format!("{:.0} wxHopli", v * 1e18),
+    }
+}
+
 use crate::serde_utils;
 
 use std::collections::HashMap;
