@@ -387,7 +387,13 @@ impl Core {
                             Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                RunMode::running(self.hopr.as_ref().map(|h| h.status()))
+                                let top_funding_issue = match (&self.ideal_balance_recommendation, &self.capacity_allocations, &self.balances) {
+                                    (Some(ideal), Some(allocs), Some(bals)) => {
+                                        balance::to_funding_issues(*ideal, allocs, bals.node_xdai).into_iter().next()
+                                    }
+                                    _ => None,
+                                };
+                                RunMode::running(self.hopr.as_ref().map(|h| h.status()), top_funding_issue)
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
@@ -495,13 +501,22 @@ impl Core {
 
                     WorkerCommand::Balance => {
                         let result = match (&self.hopr, &self.balances) {
-                            (Some(hopr), Some(balances)) => Ok(command::BalanceResponse::build(
-                                &hopr.info(),
-                                balances,
-                                &self.config.destinations.clone(),
-                                self.capacity_allocations.as_ref(),
-                                self.ideal_balance_recommendation,
-                            )),
+                            (Some(hopr), Some(balances)) => {
+                                let funding_issues = match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
+                                    (Some(ideal), Some(allocs)) => {
+                                        Some(balance::to_funding_issues(*ideal, allocs, balances.node_xdai))
+                                    }
+                                    _ => None,
+                                };
+                                Ok(command::BalanceResponse::build(
+                                    &hopr.info(),
+                                    balances,
+                                    &self.config.destinations.clone(),
+                                    self.capacity_allocations.as_ref(),
+                                    self.ideal_balance_recommendation,
+                                    funding_issues,
+                                ))
+                            }
                             _ => Err("balance data not yet available".to_string()),
                         };
                         let _ = resp.send(Response::Balance(result));
