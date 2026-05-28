@@ -142,9 +142,7 @@ pub enum RunMode {
         hopr_status: Option<HoprStatus>,
     },
     /// Normal operation where connections can be made
-    Running {
-        hopr_status: Option<HoprStatus>,
-    },
+    Running { hopr_status: Option<HoprStatus> },
     /// Shutting down edge client,
     Shutdown,
     /// Worker process is not running; only config-level information is available

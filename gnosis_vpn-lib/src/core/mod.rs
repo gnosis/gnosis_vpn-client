@@ -481,39 +481,15 @@ impl Core {
                     }
 
                     WorkerCommand::Balance => {
-                        let result = match (self.hopr.clone(), self.incentive_operations.clone()) {
-                            (Some(hopr), Some(ops)) => {
-                                let balances = hopr.balances().await;
-                                let ticket_stats = ops.ticket_stats().await.map_err(|e| anyhow::anyhow!(e)).map(|ts| {
-                                    crate::ticket_stats::TicketStats {
-                                        ticket_price: ts.ticket_price,
-                                        winning_probability: ts.winning_probability.into(),
-                                    }
-                                });
-                                match (balances, ticket_stats) {
-                                    (Ok(b), Ok(ts)) => command::BalanceResponse::try_build(
-                                        &hopr.info(),
-                                        &b,
-                                        &ts,
-                                        &self.config.destinations.clone(),
-                                        self.capacity_allocations.as_ref(),
-                                        self.ideal_balance_recommendation,
-                                    )
-                                    .map_err(|e| {
-                                        tracing::error!(?e, "failed to build balance response");
-                                        e.to_string()
-                                    }),
-                                    (Err(e), _) => {
-                                        tracing::error!(?e, "failed to fetch balances");
-                                        Err(e.to_string())
-                                    }
-                                    (_, Err(e)) => {
-                                        tracing::error!(?e, "failed to fetch ticket stats");
-                                        Err(e.to_string())
-                                    }
-                                }
-                            }
-                            _ => Err("balance query requires an active worker and HOPR node".to_string()),
+                        let result = match (&self.hopr, &self.balances) {
+                            (Some(hopr), Some(balances)) => Ok(command::BalanceResponse::build(
+                                &hopr.info(),
+                                balances,
+                                &self.config.destinations.clone(),
+                                self.capacity_allocations.as_ref(),
+                                self.ideal_balance_recommendation,
+                            )),
+                            _ => Err("balance data not yet available".to_string()),
                         };
                         let _ = resp.send(Response::Balance(result));
                     }

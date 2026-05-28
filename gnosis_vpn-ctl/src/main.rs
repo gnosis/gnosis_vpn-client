@@ -254,10 +254,7 @@ fn pretty_print(resp: &Response) {
             node,
             safe,
             channels_out,
-            issues,
             info,
-            ticket_price,
-            winning_probability,
             capacity_allocations,
             ideal_balance,
         })) => {
@@ -267,9 +264,7 @@ fn pretty_print(resp: &Response) {
                 info.node_address.to_checksum(),
                 info.safe_address.to_checksum()
             ));
-            str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}\nTicket Price: {ticket_price}\nWinning Probability: {winning_probability:.4}\n"
-            ));
+            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}\n"));
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
@@ -278,24 +273,24 @@ fn pretty_print(resp: &Response) {
             for ch in channels_out {
                 str_resp.push_str(&format!("{ch}\n"));
             }
-            if !issues.is_empty() {
-                str_resp.push_str("---\nFunding Issues:\n");
-                for issue in issues {
-                    str_resp.push_str(&format!("  - {issue}\n"));
-                }
-            }
             if let Some(rec) = ideal_balance {
                 str_resp.push_str(&format!(
                     "---\nIdeal Balance: wxHOPR >= {}, xDAI >= {}\n",
                     rec.wxhopr, rec.xdai
                 ));
             }
-            if let Some(entries) = capacity_allocations {
-                if !entries.is_empty() {
-                    str_resp.push_str("---\n");
-                    for e in entries {
-                        str_resp.push_str(&format!("{}: {}\n", e.allocator, e.capacity.stake));
-                    }
+            if let Some(entries) = capacity_allocations
+                && !entries.is_empty()
+            {
+                str_resp.push_str("---\n");
+                for e in entries {
+                    str_resp.push_str(&format!(
+                        "{}: {} ({} msgs, {})\n",
+                        e.allocator,
+                        e.capacity.stake,
+                        e.capacity.expected_messages,
+                        human_bytes(e.capacity.byte_capacity)
+                    ));
                 }
             }
             println!("{str_resp}");
@@ -358,6 +353,18 @@ fn pretty_print(resp: &Response) {
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
+    }
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KB: u64 = 1_024;
+    const MB: u64 = 1_024 * KB;
+    const GB: u64 = 1_024 * MB;
+    match bytes {
+        b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
+        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{:.1} KB", b as f64 / KB as f64),
+        b => format!("{b} B"),
     }
 }
 

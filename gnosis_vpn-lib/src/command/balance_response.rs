@@ -5,13 +5,7 @@ use std::{
     fmt::{self, Display},
 };
 
-use crate::{
-    balance::{self, FundingIssue},
-    connection::destination::Destination,
-    info::Info,
-    serde_utils,
-    ticket_stats::{self, TicketStats},
-};
+use crate::{balance, connection::destination::Destination, info::Info, serde_utils};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
@@ -39,29 +33,21 @@ pub struct BalanceResponse {
     pub safe: Balance<WxHOPR>,
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
-    pub issues: Vec<FundingIssue>,
-    #[serde(with = "serde_utils::balance")]
-    pub ticket_price: Balance<WxHOPR>,
-    pub winning_probability: f64,
     pub capacity_allocations: Option<Vec<balance::CapacityEntry>>,
     pub ideal_balance: Option<balance::BalanceRecommendation>,
 }
 
 impl BalanceResponse {
-    pub fn try_build(
+    pub fn build(
         info: &Info,
         balances: &balance::Balances,
-        ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
         capacity_allocations: Option<&HashMap<balance::CapacityAllocator, balance::Capacity>>,
         ideal_balance: Option<balance::BalanceRecommendation>,
-    ) -> Result<Self, ticket_stats::Error> {
+    ) -> Self {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
         let channels_out = from_balances(balances.channels_out.iter(), destinations);
-
-        let ticket_value = ticket_stats.ticket_value()?;
-        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
         let info = info.clone();
 
         let capacity_allocations = capacity_allocations.map(|map| {
@@ -77,17 +63,14 @@ impl BalanceResponse {
             entries
         });
 
-        Ok(BalanceResponse {
+        BalanceResponse {
             node,
             safe,
             channels_out,
-            issues,
             info,
-            ticket_price: ticket_stats.ticket_price,
-            winning_probability: ticket_stats.winning_probability,
             capacity_allocations,
             ideal_balance,
-        })
+        }
     }
 }
 

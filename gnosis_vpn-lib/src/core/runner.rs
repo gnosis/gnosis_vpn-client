@@ -29,7 +29,6 @@ use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
-use crate::ticket_stats;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, ping, remote_data};
 
@@ -110,8 +109,6 @@ pub enum Results {
 pub enum Error {
     #[error(transparent)]
     WorkerParams(#[from] worker_params::Error),
-    #[error(transparent)]
-    TicketStats(#[from] ticket_stats::Error),
     #[error("chain error: {0}")]
     Chain(String),
     #[error(transparent)]
