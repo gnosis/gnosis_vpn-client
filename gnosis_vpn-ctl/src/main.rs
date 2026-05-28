@@ -314,7 +314,7 @@ fn pretty_print(resp: &Response) {
         }
         Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => match ticket_stats {
             Some(ts) => println!(
-                "Ticket Price: {}\nWinning Probability: {}",
+                "Ticket Price: {}\nWinning Probability: {:.8}",
                 balance::human_wxhopr(ts.ticket_price),
                 ts.winning_probability
             ),
@@ -478,7 +478,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     );
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {}\n",
+            "---\nTicket Price: {}\nWinning Probability: {:.8}\n",
             balance::human_wxhopr(ts.ticket_price),
             ts.winning_probability
         ));
@@ -507,7 +507,7 @@ fn print_connected_stats(stats: &command::ConnStats) {
     }
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {}\n",
+            "---\nTicket Price: {}\nWinning Probability: {:.8}\n",
             balance::human_wxhopr(ts.ticket_price),
             ts.winning_probability
         ));
