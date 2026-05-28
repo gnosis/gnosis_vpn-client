@@ -314,9 +314,9 @@ fn pretty_print(resp: &Response) {
         }
         Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => match ticket_stats {
             Some(ts) => println!(
-                "Ticket Price: {}\nWinning Probability: {:.8}",
+                "Ticket Price: {}\nWinning Probability: {}",
                 balance::human_wxhopr(ts.ticket_price),
-                ts.winning_probability
+                format_probability(ts.winning_probability)
             ),
             None => eprintln!("No extra stats available. Try connecting to a destination first."),
         },
@@ -370,6 +370,12 @@ fn pretty_print(resp: &Response) {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
     }
+}
+
+fn format_probability(p: f64) -> String {
+    let s = format!("{:.8}", p);
+    let trimmed = s.trim_end_matches('0');
+    trimmed.trim_end_matches('.').to_string()
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -478,9 +484,9 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     );
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {:.8}\n",
+            "---\nTicket Price: {}\nWinning Probability: {}\n",
             balance::human_wxhopr(ts.ticket_price),
-            ts.winning_probability
+            format_probability(ts.winning_probability)
         ));
     }
     println!("{str_resp}");
@@ -507,9 +513,9 @@ fn print_connected_stats(stats: &command::ConnStats) {
     }
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
-            "---\nTicket Price: {}\nWinning Probability: {:.8}\n",
+            "---\nTicket Price: {}\nWinning Probability: {}\n",
             balance::human_wxhopr(ts.ticket_price),
-            ts.winning_probability
+            format_probability(ts.winning_probability)
         ));
     }
     println!("{str_resp}");
