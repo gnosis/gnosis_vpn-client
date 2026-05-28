@@ -315,7 +315,8 @@ fn pretty_print(resp: &Response) {
         Response::NerdStats(command::NerdStatsResponse::NoInfo(ticket_stats)) => match ticket_stats {
             Some(ts) => println!(
                 "Ticket Price: {}\nWinning Probability: {}",
-                balance::human_wxhopr(ts.ticket_price), ts.winning_probability
+                balance::human_wxhopr(ts.ticket_price),
+                ts.winning_probability
             ),
             None => eprintln!("No extra stats available. Try connecting to a destination first."),
         },
@@ -370,7 +371,6 @@ fn pretty_print(resp: &Response) {
         }
     }
 }
-
 
 fn human_bytes(bytes: u64) -> String {
     const KB: u64 = 1_024;
@@ -479,7 +479,8 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
             "---\nTicket Price: {}\nWinning Probability: {}\n",
-            balance::human_wxhopr(ts.ticket_price), ts.winning_probability
+            balance::human_wxhopr(ts.ticket_price),
+            ts.winning_probability
         ));
     }
     println!("{str_resp}");
@@ -507,7 +508,8 @@ fn print_connected_stats(stats: &command::ConnStats) {
     if let Some(ts) = &stats.ticket_stats {
         str_resp.push_str(&format!(
             "---\nTicket Price: {}\nWinning Probability: {}\n",
-            balance::human_wxhopr(ts.ticket_price), ts.winning_probability
+            balance::human_wxhopr(ts.ticket_price),
+            ts.winning_probability
         ));
     }
     println!("{str_resp}");

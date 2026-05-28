@@ -442,7 +442,11 @@ impl Display for RunMode {
                     balance::human_wxhopr(*node_wxhopr)
                 );
                 if let Some(rec) = balance_recommendation {
-                    msg = format!("{msg}, recommended: wxHOPR >= {}, xDAI >= {}", balance::human_wxhopr(rec.wxhopr), rec.xdai);
+                    msg = format!(
+                        "{msg}, recommended: wxHOPR >= {}, xDAI >= {}",
+                        balance::human_wxhopr(rec.wxhopr),
+                        rec.xdai
+                    );
                 }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
