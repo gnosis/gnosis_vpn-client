@@ -4,6 +4,7 @@ use std::fmt;
 use std::process;
 use std::time::Duration;
 
+use gnosis_vpn_lib::balance;
 use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
@@ -264,33 +265,42 @@ fn pretty_print(resp: &Response) {
                 info.node_address.to_checksum(),
                 info.safe_address.to_checksum()
             ));
-            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}\n"));
-            if channels_out.is_empty() {
-                str_resp.push_str("---\nNo outgoing channels.\n");
-            } else {
-                str_resp.push_str("---\n");
-            }
-            for ch in channels_out {
-                str_resp.push_str(&format!("{ch}\n"));
-            }
             if let Some(rec) = ideal_balance {
                 str_resp.push_str(&format!(
-                    "---\nIdeal Balance: wxHOPR >= {}, xDAI >= {}\n",
-                    rec.wxhopr, rec.xdai
+                    "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}\n",
+                    rec.xdai, rec.wxhopr
                 ));
             }
+            str_resp.push_str(&format!("---\nNode: {node}\n"));
             if let Some(entries) = capacity_allocations
                 && !entries.is_empty()
             {
-                str_resp.push_str("---\n");
                 for e in entries {
+                    let label = match &e.allocator {
+                        balance::CapacityAllocator::Safe => "Safe".to_string(),
+                        balance::CapacityAllocator::Peer(addr) => {
+                            let exit = channels_out
+                                .iter()
+                                .find(|ch| ch.address == *addr)
+                                .and_then(|ch| ch.matched_exit.as_deref());
+                            match exit {
+                                Some(exit) => format!("Channel({},{})", addr.to_checksum(), exit),
+                                None => format!("Channel({})", addr.to_checksum()),
+                            }
+                        }
+                    };
                     str_resp.push_str(&format!(
                         "{}: {} ({} msgs, {})\n",
-                        e.allocator,
+                        label,
                         e.capacity.stake,
                         e.capacity.expected_messages,
                         human_bytes(e.capacity.byte_capacity)
                     ));
+                }
+            } else {
+                str_resp.push_str(&format!("Safe: {safe}\n"));
+                for ch in channels_out {
+                    str_resp.push_str(&format!("{ch}\n"));
                 }
             }
             println!("{str_resp}");
