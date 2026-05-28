@@ -27,7 +27,7 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, wireguard};
+use crate::{balance, log_output, ticket_stats, wireguard};
 
 pub mod runner;
 
@@ -305,22 +305,26 @@ impl Core {
                 match cmd {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
+                        let ticket_stats = match &self.incentive_operations {
+                            Some(ops) => ops.ticket_stats().await.ok().map(|ts| ticket_stats::TicketStats {
+                                ticket_price: ts.ticket_price,
+                                winning_probability: ts.winning_probability.into(),
+                            }),
+                            None => None,
+                        };
                         match &self.phase {
                             Phase::Connecting(conn) => {
-                                let res = Response::nerd_stats(command::NerdStatsResponse::Connecting(
-                                    command::ConnStats::from_conn(conn, self.node_address),
-                                ));
-                                let _ = resp.send(res);
+                                let mut stats = command::ConnStats::from_conn(conn, self.node_address);
+                                stats.ticket_stats = ticket_stats;
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(stats)));
                             }
                             Phase::Connected(conn) => {
-                                let res = Response::nerd_stats(command::NerdStatsResponse::Connected(
-                                    command::ConnStats::from_conn(conn, self.node_address),
-                                ));
-                                let _ = resp.send(res);
+                                let mut stats = command::ConnStats::from_conn(conn, self.node_address);
+                                stats.ticket_stats = ticket_stats;
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(stats)));
                             }
                             _ => {
-                                let res = Response::nerd_stats(command::NerdStatsResponse::NoInfo);
-                                let _ = resp.send(res);
+                                let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo));
                             }
                         }
                     }

@@ -447,6 +447,12 @@ fn print_connecting_stats(stats: &command::ConnStats) {
         )
         .as_str(),
     );
+    if let Some(ts) = &stats.ticket_stats {
+        str_resp.push_str(&format!(
+            "---\nTicket Price: {}\nWinning Probability: {:.4}\n",
+            ts.ticket_price, ts.winning_probability
+        ));
+    }
     println!("{str_resp}");
 }
 
@@ -468,6 +474,12 @@ fn print_connected_stats(stats: &command::ConnStats) {
 
     if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
+    }
+    if let Some(ts) = &stats.ticket_stats {
+        str_resp.push_str(&format!(
+            "---\nTicket Price: {}\nWinning Probability: {:.4}\n",
+            ts.ticket_price, ts.winning_probability
+        ));
     }
     println!("{str_resp}");
 }

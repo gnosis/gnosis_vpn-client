@@ -15,6 +15,7 @@ use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::serde_utils;
+use crate::ticket_stats::TicketStats;
 
 mod balance_response;
 pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut};
@@ -255,6 +256,7 @@ pub struct ConnStats {
     pub wg_ip: Option<String>,
     pub session_bound_host: Option<SocketAddr>,
     pub session_id: Option<String>,
+    pub ticket_stats: Option<TicketStats>,
 }
 
 impl ConnStats {
@@ -271,6 +273,7 @@ impl ConnStats {
                 .as_ref()
                 .and_then(|s| s.active_clients.first())
                 .map(|id| id.to_string()),
+            ticket_stats: None,
         }
     }
 }
