@@ -54,6 +54,9 @@ pub enum Results {
     CapacityAllocations {
         res: Result<std::collections::HashMap<balance::CapacityAllocator, balance::Capacity>, Error>,
     },
+    Balances {
+        res: Result<balance::Balances, Error>,
+    },
     PersistSafe {
         res: Result<(), hopr_config::Error>,
         safe_module: SafeModule,
@@ -165,6 +168,12 @@ pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<
         .await
         .map_err(|e| Error::Chain(e.to_string()));
     let _ = results_sender.send(Results::CapacityAllocations { res }).await;
+}
+
+pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting balances runner");
+    let res = hopr.balances().await.map_err(Error::from);
+    let _ = results_sender.send(Results::Balances { res }).await;
 }
 
 pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
@@ -556,6 +565,10 @@ impl Display for Results {
             Results::CapacityAllocations { res } => match res {
                 Ok(map) => write!(f, "CapacityAllocations: {} entries", map.len()),
                 Err(err) => write!(f, "CapacityAllocations: Error({})", err),
+            },
+            Results::Balances { res } => match res {
+                Ok(balances) => write!(f, "Balances: {}", balances),
+                Err(err) => write!(f, "Balances: Error({})", err),
             },
             Results::DeploySafe { res } => match res {
                 Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),

@@ -83,6 +83,7 @@ pub struct Core {
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
+    balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
@@ -183,6 +184,7 @@ impl Core {
             minimum_balance_recommendation: None,
             ideal_balance_recommendation: None,
             capacity_allocations: None,
+            balances: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             route_healths,
@@ -628,6 +630,17 @@ impl Core {
                 Err(err) => {
                     tracing::warn!(?err, "failed to fetch capacity allocations - retrying");
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(10));
+                }
+            },
+            Results::Balances { res } => match res {
+                Ok(balances) => {
+                    tracing::info!(%balances, "received balances from hopr");
+                    self.balances = Some(balances);
+                    self.spawn_balances_runner(results_sender, Duration::from_secs(60));
+                }
+                Err(err) => {
+                    tracing::error!(?err, "failed to fetch balances from hopr - retrying");
+                    self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -1318,6 +1331,21 @@ impl Core {
         }
     }
 
+    fn spawn_balances_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_on_shutdown.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::balances(hopr, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
             let safe_address = hopr.info().safe_address;
@@ -1549,6 +1577,7 @@ impl Core {
         self.phase = Phase::HoprRunning;
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
+        self.spawn_balances_runner(results_sender, Duration::ZERO);
         if route_health::any_needs_peers(self.route_healths.values()) {
             self.spawn_connected_peers(results_sender, Duration::ZERO);
         } else {
