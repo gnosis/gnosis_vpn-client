@@ -1,7 +1,9 @@
 use edgli::EdgliInitState;
-use edgli::blokli::SafelessInteractor;
-use edgli::hopr_lib::Address;
-use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
+use edgli::blokli::IncentiveOperations;
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::builder::Keypair;
+use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -10,8 +12,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
+use std::net;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
@@ -50,8 +54,8 @@ pub enum Error {
     Url(#[from] url::ParseError),
     #[error("Hopr params error: {0}")]
     HoprParams(#[from] worker_params::Error),
-    #[error("Safeless Interactor creation error: {0}")]
-    SafelessInteractorCreation(String),
+    #[error("IncentiveOperations creation error: {0}")]
+    IncentiveOperationsCreation(String),
 }
 
 pub struct Core {
@@ -77,22 +81,26 @@ pub struct Core {
     // runtime data
     phase: Phase,
     balances: Option<balance::Balances>,
-    safeless_interactor: Option<Arc<SafelessInteractor>>,
+    incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     ticket_stats: Option<TicketStats>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     responder_unit: Option<oneshot::Sender<Result<(), String>>>,
+    responder_string: Option<oneshot::Sender<Result<String, String>>>,
     responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
     ongoing_disconnections: Vec<connection::down::Down>,
-    ongoing_channel_fundings: Vec<Address>,
+    cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
+    cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
 }
 
 #[derive(Debug, Clone)]
 enum Phase {
-    // initial phase - instantiate safeless interactor (blokli)
-    // and determine if safe is present
-    Initial,
+    // initial phase — create the IncentiveOperations handle (Blokli-backed)
+    // and determine if a Safe has been deployed for this node
+    Initial {
+        last_error: Option<String>,
+    },
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
@@ -149,6 +157,7 @@ impl Core {
         let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
+        let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
             // config data
             config,
@@ -170,17 +179,20 @@ impl Core {
             target_destination,
 
             // runtime data
-            phase: Phase::Initial,
+            phase: Phase::Initial { last_error: None },
             balances: None,
             hopr: None,
-            safeless_interactor: None,
+            incentive_operations: None,
             ticket_stats: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
-            ongoing_channel_fundings: Vec::new(),
             route_healths,
             responder_unit: None,
+            responder_string: None,
             responder_duration: None,
+            // needed to keep working during enabled killswitch
+            cached_resolved_blokli_ips,
+            cached_session_pseudonym: HashMap::new(),
         };
         Ok((core, incoming_sender))
     }
@@ -246,8 +258,17 @@ impl Core {
             WorkerToCore::ResponseFromRoot(resp) => {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
-                    ResponseFromRoot::DynamicWgRouting { res } => {
+                    ResponseFromRoot::KillswitchLockdown { res } => {
                         if let Some(responder) = self.responder_unit.take() {
+                            let _ = responder.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for killswitch lockdown response");
+                            });
+                        } else {
+                            tracing::warn!(?res, "no responder channel available for root response");
+                        }
+                    }
+                    ResponseFromRoot::DynamicWgRouting { res } => {
+                        if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for dynamic wg routing response");
                             });
@@ -256,7 +277,7 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::StaticWgRouting { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
+                        if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for static wg routing response");
                             });
@@ -305,7 +326,7 @@ impl Core {
 
                     WorkerCommand::Status => {
                         let runmode = match self.phase.clone() {
-                            Phase::Initial => RunMode::Init,
+                            Phase::Initial { last_error } => RunMode::Init { last_error },
                             Phase::CheckingSafe {
                                 node_balance,
                                 query_safe,
@@ -387,25 +408,12 @@ impl Core {
                             })
                             .collect();
                         let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
-                        vals.sort_by(|a, b| a.id.cmp(&b.id));
+                        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
                         let destinations = vals
                             .into_iter()
                             .map(|v| command::DestinationState {
                                 destination: v.clone(),
-                                route_health: Some(
-                                    self.route_healths
-                                        .get(&v.id)
-                                        .map(command::RouteHealthView::from)
-                                        // should never be here - mark unrecoverable to indicate misconfiguration
-                                        .unwrap_or_else(|| command::RouteHealthView {
-                                            state: route_health::RouteHealthState::Unrecoverable {
-                                                reason: route_health::UnrecoverableReason::InvalidId,
-                                            },
-                                            last_error: None,
-                                            checking_since: None,
-                                            consecutive_failures: 0,
-                                        }),
-                                ),
+                                route_health: self.route_healths.get(&v.id).map(command::RouteHealthView::from),
                             })
                             .collect();
                         let res = Response::status(command::StatusResponse {
@@ -460,6 +468,7 @@ impl Core {
 
                     WorkerCommand::Disconnect => {
                         self.target_destination = None;
+                        self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
@@ -484,7 +493,6 @@ impl Core {
                                 &balances,
                                 ticket_stats,
                                 &self.config.destinations.clone(),
-                                self.ongoing_channel_fundings.iter().collect::<Vec<_>>().as_slice(),
                             );
                             match balance_response {
                                 Ok(res) => {
@@ -558,7 +566,18 @@ impl Core {
     async fn on_results(&mut self, results: Results, results_sender: &mpsc::Sender<Results>) -> bool {
         tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
-            Results::SafelessInteractor { res } => self.on_results_safeless_interactor(res, results_sender).await,
+            Results::IncentiveOperations { res } => {
+                if !self.on_results_incentive_operations(res, results_sender).await {
+                    return false;
+                }
+            }
+            Results::IncentiveOperationsRetry { error } => {
+                if matches!(self.phase, Phase::Initial { .. }) {
+                    self.phase = Phase::Initial {
+                        last_error: Some(error),
+                    };
+                }
+            }
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting(_)) {
                     self.phase = Phase::Starting(Some(edgli_state));
@@ -567,7 +586,7 @@ impl Core {
                 }
             }
             Results::TicketStats { res } => match res {
-                Ok(stats) => self.on_ticket_stats(stats, results_sender),
+                Ok(stats) => self.on_ticket_stats(stats, results_sender).await,
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch ticket stats - retrying");
                     self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
@@ -596,7 +615,7 @@ impl Core {
                     self.hopr = Some(Arc::new(hopr));
                     self.spawn_balances_runner(results_sender, Duration::ZERO);
                     self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
-                    self.try_start_reactor(results_sender);
+                    self.try_start_reactor(results_sender).await;
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -608,8 +627,25 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
+                    if !balances.channels_out.is_empty()
+                        && let Some(hopr) = self.hopr.clone()
+                    {
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        for id in &dest_ids {
+                            if let (Some(rh), Some(dest)) =
+                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
+                            {
+                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
+                            }
+                        }
+                    }
                     self.balances = Some(balances);
-                    self.spawn_balances_runner(results_sender, Duration::from_secs(60));
+                    let balances_delay = if route_health::any_needs_channel(self.route_healths.values()) {
+                        Duration::from_secs(10)
+                    } else {
+                        Duration::from_secs(60)
+                    };
+                    self.spawn_balances_runner(results_sender, balances_delay);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch balances from hopr");
@@ -634,26 +670,18 @@ impl Core {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                    let channels_already_available = self.balances.as_ref().is_some_and(|b| !b.channels_out.is_empty());
                     for id in dest_ids {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
+                            && let Some(hopr) = self.hopr.clone()
                         {
-                            let transition = rh.peers(
-                                &all_peers,
-                                self.hopr.as_ref().unwrap(),
-                                &dest,
-                                &self.config.connection,
-                                results_sender,
-                            );
-                            match transition {
-                                route_health::PeerTransition::NowNeedsFunding => {
-                                    if let Some(addr) = rh.needs_channel_funding() {
-                                        self.spawn_channel_funding(addr, results_sender, Duration::ZERO);
-                                    }
-                                }
-                                route_health::PeerTransition::BecameRoutable => {}
-                                route_health::PeerTransition::LostPeer => {}
-                                route_health::PeerTransition::NoChange => {}
+                            rh.peers(&all_peers, &hopr, &dest, &self.config.connection, results_sender);
+                            // If peers just moved this route into NeedsChannel and we already
+                            // know channels exist, complete the transition immediately rather
+                            // than waiting up to 60s for the next balances tick.
+                            if channels_already_available && rh.needs_channel() {
+                                rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
                             }
                         }
                     }
@@ -671,53 +699,18 @@ impl Core {
                 }
             },
 
-            Results::FundChannel { address, res } => {
-                self.ongoing_channel_fundings.retain(|a| a != &address);
-                let dest_ids: Vec<String> = self
-                    .config
-                    .destinations
-                    .iter()
-                    .filter_map(|(_, d)| {
-                        if d.has_intermediate_channel(address) {
-                            Some(d.id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                match res {
-                    Ok(()) => {
-                        tracing::info!(address = %address.to_checksum(), "channel funded");
-                        for id in &dest_ids {
-                            if let (Some(rh), Some(dest)) =
-                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
-                            {
-                                rh.channel_funded(
-                                    address,
-                                    self.hopr.as_ref().unwrap(),
-                                    dest,
-                                    &self.config.connection,
-                                    results_sender,
-                                );
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!(?err, address = %address.to_checksum(), "failed to ensure channel funding");
-                        for id in &dest_ids {
-                            if let Some(rh) = self.route_healths.get_mut(id) {
-                                rh.with_error(err.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-
             Results::ConnectionEvent(evt) => {
                 tracing::debug!(%evt, "handling connection runner event");
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
+                            if let connection::up::Progress::GenerateWg(blokli_ips) = e.as_ref() {
+                                self.cached_resolved_blokli_ips = blokli_ips.clone();
+                                let request = RequestToRoot::CacheBlokliIps {
+                                    ips: blokli_ips.clone(),
+                                };
+                                let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                            }
                             conn.connect_progress(e);
                             self.phase = Phase::Connecting(conn);
                         }
@@ -757,6 +750,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
+                    self.cached_session_pseudonym.remove(&conn.destination.address);
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -823,8 +817,18 @@ impl Core {
             }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
+                RunnerToRoot::KillswitchLockdown {
+                    peer_ips,
+                    interface,
+                    resp,
+                } => {
                     self.responder_unit = Some(resp);
+                    let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+
+                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
+                    self.responder_string = Some(resp);
                     let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -834,7 +838,7 @@ impl Core {
                     peer_ips,
                     resp,
                 } => {
-                    self.responder_unit = Some(resp);
+                    self.responder_string = Some(resp);
                     let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -870,25 +874,34 @@ impl Core {
                     }
                 }
             }
+
+            Results::RetryReactor => {
+                self.try_start_reactor(results_sender).await;
+            }
         };
         return true;
     }
 
-    async fn on_results_safeless_interactor(
+    // Returns false to signal core exit, which lets root restart the worker.
+    async fn on_results_incentive_operations(
         &mut self,
-        res: Result<SafelessInteractor, runner::Error>,
+        res: Result<Arc<dyn IncentiveOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
-    ) {
+    ) -> bool {
         match res {
-            Ok(safeless_interactor) => {
-                tracing::info!("safeless interactor created successfully");
-                self.safeless_interactor = Some(Arc::new(safeless_interactor));
+            Ok(incentive_operations) => {
+                tracing::info!("incentive operations handle created successfully");
+                self.incentive_operations = Some(incentive_operations);
                 self.spawn_ticket_stats_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
+                true
             }
             Err(err) => {
-                tracing::error!(?err, "failed to create safeless interactor - retrying in 30 seconds");
-                self.spawn_initial_runner(results_sender, Duration::from_secs(30));
+                tracing::error!(
+                    ?err,
+                    "failed to create incentive operations handle after all retries - restarting core"
+                );
+                false
             }
         }
     }
@@ -1126,7 +1139,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::create_safeless_interactor(&worker_params, blokli_config.into(), results_sender).await;
+                    runner::create_incentive_operations(&worker_params, blokli_config.into(), results_sender).await;
                 })
                 .await
         });
@@ -1142,11 +1155,11 @@ impl Core {
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
-                    tracing::info!("no persisted safe module found - querying safeless interactor");
+                    tracing::info!("no persisted safe module found - querying incentive operations");
                 } else {
                     tracing::warn!(
                         ?err,
-                        "error deserializing existing safe module - querying safeless interactor"
+                        "error deserializing existing safe module - querying incentive operations"
                     );
                 }
                 self.phase = Phase::CheckingSafe {
@@ -1164,12 +1177,12 @@ impl Core {
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::query_safe(safeless_interactor, results_sender).await
+                        runner::query_safe(incentive_operations, results_sender).await
                     })
                     .await
             });
@@ -1179,12 +1192,12 @@ impl Core {
     fn spawn_node_balance_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_balance(safeless_interactor, results_sender).await
+                        runner::node_balance(incentive_operations, results_sender).await
                     })
                     .await
             });
@@ -1206,11 +1219,11 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let presafe = presafe.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
-                        runner::safe_deployment(safeless_interactor, presafe, results_sender).await;
+                        runner::safe_deployment(incentive_operations, presafe, results_sender).await;
                     })
                     .await
             });
@@ -1250,12 +1263,12 @@ impl Core {
     fn spawn_ticket_stats_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
-        if let Some(safeless_interactor) = self.safeless_interactor.clone() {
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::ticket_stats(safeless_interactor, results_sender).await;
+                        runner::ticket_stats(incentive_operations, results_sender).await;
                     })
                     .await
             });
@@ -1278,7 +1291,7 @@ impl Core {
     }
 
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let (Some(safeless), Some(hopr)) = (self.safeless_interactor.clone(), self.hopr.clone()) {
+        if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
             let safe_address = hopr.info().safe_address;
             let cancel = self.cancel_node_wxhopr.clone();
             let results_sender = results_sender.clone();
@@ -1286,7 +1299,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_wxhopr_withdraw(safeless, safe_address, results_sender).await;
+                        runner::node_wxhopr_withdraw(ops, safe_address, results_sender).await;
                     })
                     .await
             });
@@ -1302,29 +1315,6 @@ impl Core {
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
                         runner::wait_for_running(hopr, results_sender).await;
-                    })
-                    .await
-            });
-        }
-    }
-
-    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
-    fn spawn_channel_funding(&mut self, address: Address, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if self.ongoing_channel_fundings.contains(&address) {
-            tracing::debug!(address = %address.to_checksum(), "channel funding already ongoing - skipping");
-            return;
-        }
-        self.ongoing_channel_fundings.push(address);
-        tracing::debug!(ticket_stats = ?self.ticket_stats, hopr_present = self.hopr.is_some(), "checking channel funding");
-        let ticket_value = self.ticket_stats.and_then(|s| s.ticket_value().ok());
-        if let (Some(hopr), Some(ticket_value)) = (self.hopr.clone(), ticket_value) {
-            let cancel = self.cancel_on_shutdown.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        runner::fund_channel(hopr, address, ticket_value, results_sender).await;
                     })
                     .await
             });
@@ -1358,12 +1348,28 @@ impl Core {
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
+            // Evict expired entries on each connect to prevent the cache from accumulating
+            // stale pseudonyms as destinations change over time.
+            let ttl = self.config.connection.session_pseudonym_ttl;
+            self.cached_session_pseudonym
+                .retain(|_, (_, cached_at)| cached_at.elapsed() < ttl);
+            // Peek without consuming — the entry stays available for retries within the TTL
+            // window. It is removed only once the connection is confirmed established.
+            let cached_pseudonym = self
+                .cached_session_pseudonym
+                .get(&destination.address)
+                .map(|(pseudonym, _)| *pseudonym);
+            if let Some(pseudonym) = &cached_pseudonym {
+                tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
+            }
             let runner = connection::up::runner::Runner::new(
                 conn.destination.clone(),
                 config_connection,
                 config_wireguard,
                 hopr,
                 self.worker_params.clone(),
+                self.cached_resolved_blokli_ips.clone(),
+                cached_pseudonym,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1481,6 +1487,15 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        // Cache the session pseudonym so reconnection while it remains valid under the configured
+        // `session_pseudonym_ttl` can reuse exit node SURBs.
+        if let Some(session) = &conn.session
+            && let Some(client_id) = session.active_clients.first()
+            && let Ok(session_id) = SessionId::from_str(client_id)
+        {
+            self.cached_session_pseudonym
+                .insert(session.destination, (*session_id.pseudonym(), Instant::now()));
+        }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         self.phase = Phase::HoprRunning;
@@ -1511,36 +1526,43 @@ impl Core {
         }
     }
 
-    fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
+    async fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
         if self.strategy_handle.is_some() {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        let Some(tv) = self.ticket_stats.and_then(|s| s.ticket_value().ok()) else {
-            return;
-        };
-        match edgli.start_telemetry_reactor(tv) {
+        match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(strategy_process);
             }
             Err(err) => {
-                tracing::error!(
-                    ?err,
-                    "failed to start edge node telemetry reactor - retrying ticket stats"
-                );
-                self.spawn_ticket_stats_runner(results_sender, Duration::from_secs(10));
+                tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
+                self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
             }
         }
     }
 
-    fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_retry_reactor(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    let _ = results_sender.send(Results::RetryReactor).await;
+                })
+                .await
+        });
+    }
+
+    async fn on_ticket_stats(&mut self, stats: TicketStats, results_sender: &mpsc::Sender<Results>) {
         tracing::info!("received ticket stats from runner");
         match stats.ticket_value() {
             Ok(tv) => {
                 tracing::info!(%stats, %tv, "determined ticket value from stats");
                 self.ticket_stats = Some(stats);
-                self.try_start_reactor(results_sender);
+                self.try_start_reactor(results_sender).await;
             }
             Err(err) => {
                 tracing::error!(?err, %stats, "failed to determine ticket value from stats - retrying");

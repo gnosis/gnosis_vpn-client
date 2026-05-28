@@ -1,9 +1,12 @@
-use edgli::hopr_lib::UnitaryFloatOps;
-use edgli::hopr_lib::{Balance, GeneralError, WxHOPR};
+use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
+use edgli::hopr_lib::api::types::primitive::prelude::UnitaryFloatOps;
+use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
+
+use crate::serde_utils;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -13,6 +16,7 @@ pub enum Error {
 
 #[derive(Copy, Debug, Clone, Serialize, Deserialize)]
 pub struct TicketStats {
+    #[serde(with = "serde_utils::balance")]
     pub ticket_price: Balance<WxHOPR>,
     pub winning_probability: f64,
 }

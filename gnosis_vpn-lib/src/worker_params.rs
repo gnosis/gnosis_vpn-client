@@ -1,4 +1,4 @@
-use edgli::blokli::SafelessInteractor;
+use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::HoprKeys;
 use edgli::hopr_lib::config::HoprLibConfig;
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,9 @@ use thiserror::Error;
 use tokio::fs;
 use url::Url;
 
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
@@ -35,6 +37,7 @@ pub struct WorkerParams {
     blokli_url: Option<Url>,
     force_static_routing: bool,
     state_home: PathBuf,
+    cached_blokli_ips: Vec<Ipv4Addr>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,7 +64,16 @@ impl WorkerParams {
             blokli_url,
             force_static_routing,
             state_home,
+            cached_blokli_ips: Vec::new(),
         }
+    }
+
+    pub fn set_cached_blokli_ips(&mut self, ips: Vec<Ipv4Addr>) {
+        self.cached_blokli_ips = ips;
+    }
+
+    pub fn cached_blokli_ips(&self) -> &[Ipv4Addr] {
+        &self.cached_blokli_ips
     }
 
     pub async fn persist_identity_generation(&self) -> Result<HoprKeys, Error> {
@@ -128,14 +140,18 @@ impl WorkerParams {
         }
     }
 
-    /// Create safeless blokli instance
-    pub async fn create_safeless_interactor(&self, config: BlokliConfig) -> Result<SafelessInteractor, Error> {
+    /// Create an [`IncentiveOperations`] handle for pre-Safe on-chain interactions.
+    pub async fn create_incentive_operations(
+        &self,
+        config: BlokliConfig,
+    ) -> Result<Arc<dyn IncentiveOperations>, Error> {
         let keys = self.calc_keys().await?;
         let private_key = keys.chain_key;
         let url = self.blokli_url();
-        edgli::blokli::SafelessInteractor::new(url, &private_key, Some(config.into()))
+        let ops = make_incentive_operations(url, &private_key, Some(config.into()))
             .await
-            .map_err(|e| Error::BlokliCreation(e.to_string()))
+            .map_err(|e| Error::BlokliCreation(e.to_string()))?;
+        Ok(Arc::from(ops))
     }
 
     pub fn allow_insecure(&self) -> bool {

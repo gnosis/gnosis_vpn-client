@@ -1,12 +1,15 @@
-use edgli::hopr_lib::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
 
+use crate::serde_utils;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Info {
+    #[serde(with = "serde_utils::address")]
     pub node_address: Address,
-    pub node_peer_id: String,
+    #[serde(with = "serde_utils::address")]
     pub safe_address: Address,
 }
 
@@ -14,9 +17,8 @@ impl Display for Info {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Info(node_address: {}({}), safe_address: {})",
+            "Info(node_address: {}, safe_address: {})",
             self.node_address.to_checksum(),
-            self.node_peer_id,
             self.safe_address.to_checksum()
         )
     }

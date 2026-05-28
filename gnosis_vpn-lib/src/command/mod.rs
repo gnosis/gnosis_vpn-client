@@ -1,6 +1,6 @@
 use edgli::EdgliInitState;
-use edgli::hopr_lib::state::HoprState;
-use edgli::hopr_lib::{Balance, WxHOPR, XDai};
+use edgli::hopr_lib::api::node::HoprState;
+use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
@@ -15,11 +15,12 @@ use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
+use crate::serde_utils;
 use crate::ticket_stats::TicketStats;
 use crate::update::UpdateStatus;
 
 mod balance_response;
-pub use balance_response::{BalanceResponse, ChannelBalance, ChannelDestination, ChannelOut};
+pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut};
 
 /// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -48,6 +49,8 @@ pub enum Command {
     StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
+    /// List configured destination IDs
+    Destinations,
     /// Fetch the update manifest from the daemon and report the candidate release on the chosen channel.
     /// `force = true` bypasses the VPN-connected gate (insecure: queries the
     /// manifest host without traversing the VPN tunnel).
@@ -55,7 +58,14 @@ pub enum Command {
     /// Trigger an update install on the daemon. This is a *streaming* command:
     /// the daemon writes a sequence of `Response::UpdateStatus(..)` records
     /// and closes the socket when the install reaches a terminal status.
-    /// `force = true` bypasses the VPN-connected gate.
+    ///
+    /// `force = true` bypasses the VPN-connected gate on both macOS and Linux
+    /// (insecure: traffic for the install will not traverse the VPN tunnel).
+    /// On Linux the install is delegated to `apt-get`, which uses the apt
+    /// sources file configured by the gnosisvpn install script; `channel`
+    /// rewrites `/etc/apt/sources.list.d/gnosisvpn.sources` when it differs
+    /// from the current one. `allow_downgrade` has no effect on Linux — apt's
+    /// own dependency resolver decides what to install.
     StartUpdate {
         channel: Channel,
         allow_downgrade: bool,
@@ -99,6 +109,7 @@ pub enum Response {
     Info(InfoResponse),
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
+    Destinations(Vec<String>),
     WorkerOffline,
     CheckUpdate(CheckUpdateResponse),
     StartUpdateRejected(String),
@@ -127,6 +138,7 @@ pub struct StatusResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::up::Phase,
 }
@@ -134,12 +146,14 @@ pub struct ConnectingInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectedInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DisconnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::down::Phase,
 }
@@ -153,18 +167,24 @@ pub struct DestinationState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RunMode {
     /// Initial start
-    Init,
+    Init { last_error: Option<String> },
     /// after creating safe this state will not be reached again
     PreparingSafe {
+        #[serde(with = "serde_utils::address")]
         node_address: Address,
+        #[serde(with = "serde_utils::balance")]
         node_xdai: Balance<XDai>,
+        #[serde(with = "serde_utils::balance")]
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
         ticket_stats: Option<TicketStats>,
     },
     /// Safe deployment ongoing
-    DeployingSafe { node_address: Address },
+    DeployingSafe {
+        #[serde(with = "serde_utils::address")]
+        node_address: Address,
+    },
     /// Hopr started, determining ticket value for strategies
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
@@ -206,20 +226,21 @@ pub enum HoprStatus {
     WaitingForFunds,
     CheckingBalance,
     ValidatingNetworkConfig,
-    SubscribingToAnnouncements,
+    CheckingOnchainAddress,
     RegisteringSafe,
     AnnouncingNode,
     AwaitingKeyBinding,
     InitializingServices,
     Running,
     Terminated,
+    Degraded,
+    Failed,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum HoprInitStatus {
     ValidatingConfig,
     IdentifyingNode,
-    InitializingDatabase,
     ConnectingBlockchain,
     CreatingNode,
     StartingNode,
@@ -261,6 +282,7 @@ pub enum FundingToolResponse {
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
+    #[serde(with = "serde_utils::opt_system_time")]
     pub checking_since: Option<SystemTime>,
     pub consecutive_failures: u32,
 }
@@ -285,6 +307,7 @@ pub enum NerdStatsResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnStats {
+    #[serde(with = "serde_utils::address")]
     pub node_address: Address,
     pub destination: Destination,
     pub wg_pubkey: Option<String>,
@@ -442,13 +465,15 @@ impl From<HoprState> for HoprStatus {
             HoprState::WaitingForFunds => HoprStatus::WaitingForFunds,
             HoprState::CheckingBalance => HoprStatus::CheckingBalance,
             HoprState::ValidatingNetworkConfig => HoprStatus::ValidatingNetworkConfig,
-            HoprState::SubscribingToAnnouncements => HoprStatus::SubscribingToAnnouncements,
+            HoprState::CheckingOnchainAddress => HoprStatus::CheckingOnchainAddress,
             HoprState::RegisteringSafe => HoprStatus::RegisteringSafe,
             HoprState::AnnouncingNode => HoprStatus::AnnouncingNode,
             HoprState::AwaitingKeyBinding => HoprStatus::AwaitingKeyBinding,
             HoprState::InitializingServices => HoprStatus::InitializingServices,
             HoprState::Running => HoprStatus::Running,
             HoprState::Terminated => HoprStatus::Terminated,
+            HoprState::Degraded => HoprStatus::Degraded,
+            HoprState::Failed => HoprStatus::Failed,
         }
     }
 }
@@ -458,7 +483,6 @@ impl From<EdgliInitState> for HoprInitStatus {
         match state {
             EdgliInitState::ValidatingConfig => HoprInitStatus::ValidatingConfig,
             EdgliInitState::IdentifyingNode => HoprInitStatus::IdentifyingNode,
-            EdgliInitState::InitializingDatabase => HoprInitStatus::InitializingDatabase,
             EdgliInitState::ConnectingBlockchain => HoprInitStatus::ConnectingBlockchain,
             EdgliInitState::CreatingNode => HoprInitStatus::CreatingNode,
             EdgliInitState::StartingNode => HoprInitStatus::StartingNode,
@@ -470,7 +494,8 @@ impl From<EdgliInitState> for HoprInitStatus {
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RunMode::Init => write!(f, "Initializing"),
+            RunMode::Init { last_error: None } => write!(f, "Initializing"),
+            RunMode::Init { last_error: Some(err) } => write!(f, "Initializing (last error: {err})"),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
@@ -572,13 +597,15 @@ impl Display for HoprStatus {
             HoprStatus::WaitingForFunds => write!(f, "Waiting for initial wallet funding"),
             HoprStatus::CheckingBalance => write!(f, "Verifying wallet balance"),
             HoprStatus::ValidatingNetworkConfig => write!(f, "Validating network configuration"),
-            HoprStatus::SubscribingToAnnouncements => write!(f, "Subscribing to network announcements"),
+            HoprStatus::CheckingOnchainAddress => write!(f, "Checking onchain address"),
             HoprStatus::RegisteringSafe => write!(f, "Registering Safe contract"),
             HoprStatus::AnnouncingNode => write!(f, "Announcing node on chain"),
             HoprStatus::AwaitingKeyBinding => write!(f, "Waiting for on-chain key binding confirmation"),
             HoprStatus::InitializingServices => write!(f, "Initializing internal services"),
             HoprStatus::Running => write!(f, "Node is running"),
             HoprStatus::Terminated => write!(f, "Node has been terminated"),
+            HoprStatus::Degraded => write!(f, "Node is running in degraded state"),
+            HoprStatus::Failed => write!(f, "Node has failed"),
         }
     }
 }
@@ -588,7 +615,6 @@ impl Display for HoprInitStatus {
         match self {
             HoprInitStatus::ValidatingConfig => write!(f, "Validating configuration"),
             HoprInitStatus::IdentifyingNode => write!(f, "Identifying node"),
-            HoprInitStatus::InitializingDatabase => write!(f, "Initializing database"),
             HoprInitStatus::ConnectingBlockchain => write!(f, "Connecting blockchain"),
             HoprInitStatus::CreatingNode => write!(f, "Creating node"),
             HoprInitStatus::StartingNode => write!(f, "Starting node"),
@@ -615,6 +641,7 @@ impl TryFrom<Command> for WorkerCommand {
             | Command::Ping
             | Command::StartClient(_)
             | Command::StopClient
+            | Command::Destinations
             | Command::CheckUpdate { .. }
             | Command::StartUpdate { .. }
             | Command::GetCurrentVersion => Err(()),
@@ -641,7 +668,7 @@ impl Display for RouteHealthView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::RoutingOptions;
+    use crate::connection::destination::HopRouting;
     use crate::gvpn_client;
     use crate::route_health::ExitHealth;
     use std::collections::HashMap;
@@ -654,7 +681,7 @@ mod tests {
         Destination::new(
             "test-destination".to_string(),
             address(1),
-            RoutingOptions::IntermediatePath(Default::default()),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
         )
     }
@@ -750,5 +777,31 @@ mod tests {
         assert!(matches!(Response::disconnect(disc), Response::Disconnect(_)));
 
         Ok(())
+    }
+
+    #[test]
+    fn runmode_init_serializes_to_expected_json_shape() {
+        // Asserting the exact string rather than a serde_json::Value is intentional:
+        // serde_json serializes struct fields in definition order (not a HashMap), so the
+        // output is deterministic. The string form documents the exact wire contract and
+        // will catch serde attribute changes (e.g. rename, rename_all) just as well as a
+        // Value comparison would, while keeping the expected payload directly readable.
+        let no_error = serde_json::to_string(&RunMode::Init { last_error: None }).unwrap();
+        assert_eq!(no_error, r#"{"Init":{"last_error":null}}"#);
+
+        let with_error = serde_json::to_string(&RunMode::Init {
+            last_error: Some("connection refused".into()),
+        })
+        .unwrap();
+        assert_eq!(with_error, r#"{"Init":{"last_error":"connection refused"}}"#);
+    }
+
+    #[test]
+    fn runmode_init_deserializes_from_json_fixture() {
+        let no_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":null}}"#).unwrap();
+        assert!(matches!(no_error, RunMode::Init { last_error: None }));
+
+        let with_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":"connection refused"}}"#).unwrap();
+        assert!(matches!(with_error, RunMode::Init { last_error: Some(ref e) } if e == "connection refused"));
     }
 }

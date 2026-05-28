@@ -9,19 +9,18 @@
 //! * **Network reachability** — do we have the peering/channel relationship
 //!   that the routing option requires? This is driven from outside by Core
 //!   feeding in the current peer set ([`RouteHealth::peers`]) and channel
-//!   funding results ([`RouteHealth::channel_funded`]).
+//!   funding results ([`RouteHealth::any_channel_available`]).
 //! * **Exit-node health** — once reachable, can we actually reach the exit
 //!   server behind the destination, and is it reporting healthy? This is
 //!   driven internally by a background task that opens a short-lived TCP
 //!   session to the exit and performs version, health, and ping checks.
 //!
 //! [`RouteHealthState`] captures the combined state. State changes flow
-//! outward through [`PeerTransition`] return values and through
-//! [`HealthCheckOutcome`] messages posted back on the runner channel.
+//! outward through [`HealthCheckOutcome`] messages posted back on the runner channel.
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
 //! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
-use edgli::hopr_lib::SessionClientConfig;
+use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -33,15 +32,31 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
+use crate::connection::destination::{Address, Destination, HopRouting};
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::serde_utils;
 use crate::{gvpn_client, log_output};
 
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
+/// Retry interval for the first few health-check failures while the HOPR
+/// transport layer is still establishing P2P connections to relays.
+///
+/// Timing rationale:
+///   - The path planner caches selected relay paths for 60 s (PathPlannerConfig
+///     default, not YAML-configurable).  If the retry fires before the cache
+///     expires, the same relay set is reused — potentially picking the same
+///     unreachable relay again.
+///   - 90 s > 60 s cache TTL, so each warmup retry triggers a fresh relay
+///     selection with an up-to-date connected-peer set.
+///   - After GRAPH_WARMUP_RETRY_COUNT retries (≈ 396 s total) the path
+///     selector is expected to have discovered all reachable relays and
+///     session establishment succeeds.
+const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(90);
+const GRAPH_WARMUP_RETRY_COUNT: u32 = 3;
 
 /// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
 /// are returned unchanged so initial spawns are not delayed.
@@ -83,9 +98,9 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 /// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
-    /// A funded channel to this specific address (first intermediate hop).
-    Channel(Address),
-    /// Any funded outgoing channel is sufficient (hop count without a fixed path).
+    /// Any outgoing channel is sufficient — used for all 1+ hop routes.
+    /// Multi-hop payments flow through relay channels kept open by the
+    /// AutoFunding strategy, independently of the destination.
     AnyChannel,
     /// Direct peering with the destination — no channel needed (0-hop route).
     Peering(Address),
@@ -98,8 +113,6 @@ pub enum StaticNeed {
 pub enum UnrecoverableReason {
     /// Direct (0-hop) peering is configured but insecure peering is disabled.
     NotAllowed,
-    /// The configured path contains an offchain node ID, which is not supported.
-    InvalidId,
     /// The configured intermediate path is empty.
     InvalidPath,
     /// The exit server only offers API versions we do not support.
@@ -113,8 +126,10 @@ pub enum UnrecoverableReason {
 /// snapshot so the state always exposes a full picture.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExitHealth {
+    #[serde(with = "serde_utils::system_time")]
     pub checked_at: SystemTime,
     pub versions: gvpn_client::Versions,
+    #[serde(with = "serde_utils::duration_ms")]
     pub ping_rtt: Duration,
     pub health: gvpn_client::Health,
 }
@@ -124,18 +139,20 @@ pub struct ExitHealth {
 /// Also the wire-format shown to the CLI via the command API, so variant
 /// names and payloads are part of the user-visible surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state")]
 pub enum RouteHealthState {
     Unrecoverable {
         reason: UnrecoverableReason,
     },
-    /// `funded` remembers whether the channel funding step has already been
-    /// completed for this route. On re-peering after a transient peer loss we
-    /// can then skip straight to `Routable` instead of triggering redundant
-    /// funding ops on every flap.
+    /// `has_channel` remembers whether the route has previously had a channel.
+    /// On re-peering after a transient peer loss we skip straight to `Routable`
+    /// instead of waiting for a channel to appear again.
     NeedsPeering {
-        funded: bool,
+        has_channel: bool,
     },
-    NeedsFunding,
+    /// Peers are available but no outgoing channel exists yet. Transitions to
+    /// `Routable` once the balances poll sees a non-empty `channels_out`.
+    NeedsChannel,
     /// Static need met. Health checking in progress.
     Routable,
     /// Exit health confirmed healthy. Safe to connect.
@@ -146,6 +163,7 @@ pub enum RouteHealthState {
     /// frequency (version skipped).
     Connecting {
         exit: ExitHealth,
+        #[serde(with = "serde_utils::opt_duration_ms")]
         tunnel_ping_rtt: Option<Duration>,
     },
 }
@@ -175,18 +193,6 @@ pub enum HealthCheckOutcome {
         ping_rtt: Option<Duration>,
         health: Option<gvpn_client::Health>,
     },
-}
-
-/// Returned from `peers()` so Core knows what side effects to trigger.
-#[derive(Debug, PartialEq)]
-pub enum PeerTransition {
-    NoChange,
-    /// Core should spawn channel funding.
-    NowNeedsFunding,
-    /// Route became routable. Health check spawned internally.
-    BecameRoutable,
-    /// Peer lost. Health check cancelled internally.
-    LostPeer,
 }
 
 /// Per-destination route health tracker.
@@ -238,41 +244,31 @@ impl RouteHealth {
     }
 }
 
-/// Derive the static need from routing alone. For invalid routing variants
-/// (empty path / offchain-first), we fall back to `AnyChannel` — the resulting
-/// state will be `Unrecoverable` so the field is never observed.
-fn derive_static_need(routing: &RoutingOptions, dest_address: Address) -> StaticNeed {
-    match routing.clone() {
-        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 => StaticNeed::Peering(dest_address),
-        RoutingOptions::Hops(_) => StaticNeed::AnyChannel,
-        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(address)) => StaticNeed::Channel(address),
-            _ => StaticNeed::AnyChannel,
-        },
+/// Derive the static need from routing alone.
+///
+/// For 0-hop routes the destination must be a direct transport peer and no
+/// channel is needed. For 1+ hop routes any connected relay peer is sufficient;
+/// the HOPR AutoFunding strategy keeps this node's outgoing channels (e.g.
+/// edge → relay) topped up, and the route advances once at least one such
+/// outgoing channel appears in the balance state (`AnyChannel`).
+fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
+    if routing.hop_count() == 0 {
+        StaticNeed::Peering(dest_address)
+    } else {
+        StaticNeed::AnyChannel
     }
 }
 
-/// Pick the starting state purely from routing config. Invalid or
-/// disallowed routing variants short-circuit straight to `Unrecoverable`;
-/// everything else starts at `NeedsPeering` and waits for Core to feed in
-/// the peer set.
-fn derive_initial_state(routing: &RoutingOptions, allow_insecure: bool) -> RouteHealthState {
-    match routing.clone() {
-        RoutingOptions::Hops(hops) if Into::<u8>::into(hops) == 0 && !allow_insecure => {
-            RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::NotAllowed,
-            }
+/// Pick the starting state purely from routing config. 0-hop routing without
+/// `allow_insecure` short-circuits to `Unrecoverable`; everything else starts
+/// at `NeedsPeering` and waits for Core to feed in the peer set.
+fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHealthState {
+    if routing.hop_count() == 0 && !allow_insecure {
+        RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::NotAllowed,
         }
-        RoutingOptions::Hops(_) => RouteHealthState::NeedsPeering { funded: false },
-        RoutingOptions::IntermediatePath(nodes) => match nodes.into_iter().next() {
-            Some(NodeId::Chain(_)) => RouteHealthState::NeedsPeering { funded: false },
-            Some(NodeId::Offchain(_)) => RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::InvalidId,
-            },
-            None => RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::InvalidPath,
-            },
-        },
+    } else {
+        RouteHealthState::NeedsPeering { has_channel: false }
     }
 }
 
@@ -313,15 +309,8 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::NeedsPeering { .. })
     }
 
-    pub fn needs_channel_funding(&self) -> Option<Address> {
-        match (&self.state, &self.static_need) {
-            (RouteHealthState::NeedsFunding, StaticNeed::Channel(addr)) => Some(*addr),
-            _ => None,
-        }
-    }
-
-    pub fn needs_any_channel_funding(&self) -> bool {
-        matches!(self.state, RouteHealthState::NeedsFunding) && matches!(self.static_need, StaticNeed::AnyChannel)
+    pub fn needs_channel(&self) -> bool {
+        matches!(self.state, RouteHealthState::NeedsChannel)
     }
 
     pub fn is_routable(&self) -> bool {
@@ -355,14 +344,12 @@ impl RouteHealth {
     /// Apply a fresh snapshot of connected peer addresses.
     ///
     /// Advances or regresses the state depending on whether the route's
-    /// [`StaticNeed`] is currently satisfied. When a previously funded route
-    /// loses its peer we transition back to `NeedsPeering { funded: true }`
-    /// so that re-peering can skip funding. When the route first becomes
-    /// routable we spawn the initial health check.
+    /// [`StaticNeed`] is currently satisfied. When a route that previously had
+    /// a channel loses its peer we transition back to
+    /// `NeedsPeering { has_channel: true }` so that re-peering skips straight
+    /// to `Routable`. When the route first becomes routable we spawn the
+    /// initial health check.
     ///
-    /// The returned [`PeerTransition`] tells Core which external side effect
-    /// (if any) needs to run — Core handles funding, the tracker handles
-    /// health-check spawn/cancel internally.
     pub fn peers(
         &mut self,
         addresses: &HashSet<Address>,
@@ -370,86 +357,72 @@ impl RouteHealth {
         dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
-    ) -> PeerTransition {
+    ) {
         let is_peered = match &self.static_need {
-            StaticNeed::Channel(addr) | StaticNeed::Peering(addr) => addresses.contains(addr),
+            // 0-hop: destination must be a direct transport peer.
+            StaticNeed::Peering(addr) => addresses.contains(addr),
+            // 1+ hop: any connected relay can carry packets; the exit node
+            // itself does not need to be a direct transport peer.
             StaticNeed::AnyChannel => !addresses.is_empty(),
         };
 
         match &self.state {
-            RouteHealthState::NeedsPeering { funded } => {
+            RouteHealthState::NeedsPeering { has_channel } => {
                 if !is_peered {
-                    return PeerTransition::NoChange;
+                    return;
                 }
-                // Peering needs do not require funding. Channel/AnyChannel needs
-                // can also skip funding when we already funded earlier in this
-                // route's lifetime (transient peer flap).
-                let skip_funding = matches!(self.static_need, StaticNeed::Peering(_)) || *funded;
-                if skip_funding {
+                // 0-hop routes never need a channel. For 1+ hop routes, skip
+                // NeedsChannel if one already existed (transient peer flap).
+                let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *has_channel;
+                if skip_channel_wait {
                     self.state = RouteHealthState::Routable;
                     self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
-                    PeerTransition::BecameRoutable
                 } else {
-                    self.state = RouteHealthState::NeedsFunding;
-                    PeerTransition::NowNeedsFunding
+                    self.state = RouteHealthState::NeedsChannel;
                 }
             }
-            RouteHealthState::NeedsFunding => {
-                if is_peered {
-                    PeerTransition::NoChange
-                } else {
-                    // Funding never completed, so leave `funded: false`.
-                    self.state = RouteHealthState::NeedsPeering { funded: false };
-                    PeerTransition::LostPeer
+            RouteHealthState::NeedsChannel => {
+                if !is_peered {
+                    // No channel was ever seen, so has_channel stays false.
+                    self.state = RouteHealthState::NeedsPeering { has_channel: false };
                 }
             }
             RouteHealthState::Routable
             | RouteHealthState::ReadyToConnect { .. }
             | RouteHealthState::Connecting { .. } => {
-                if is_peered {
-                    PeerTransition::NoChange
-                } else {
+                if !is_peered {
                     self.cancel_health_check();
                     self.checking_since = None;
                     self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
-                    // We previously made it past funding (or never needed it),
-                    // so remember that to avoid re-funding on re-peer.
-                    self.state = RouteHealthState::NeedsPeering { funded: true };
-                    PeerTransition::LostPeer
+                    // 0-hop routes never go through a channel wait, so has_channel
+                    // stays false. 1+ hop routes reached Routable via a channel, so
+                    // has_channel: true lets re-peering skip straight back to Routable.
+                    let has_channel = matches!(self.static_need, StaticNeed::AnyChannel);
+                    self.state = RouteHealthState::NeedsPeering { has_channel };
                 }
             }
-            RouteHealthState::Unrecoverable { .. } => PeerTransition::NoChange,
+            RouteHealthState::Unrecoverable { .. } => {}
         }
     }
 
-    /// Notify that a channel funding operation succeeded for `address`.
+    /// Notify that at least one outgoing channel exists.
     ///
-    /// If this route was waiting on that funding (or on any funding, for
-    /// `AnyChannel` needs) it becomes routable and the first health check
-    /// is scheduled immediately. Calls that do not apply to this route are
-    /// ignored.
-    pub fn channel_funded(
+    /// Routes in `NeedsChannel` become routable and schedule their first
+    /// health check immediately. No-op for routes in any other state.
+    pub fn any_channel_available(
         &mut self,
-        address: Address,
         hopr: &Arc<Hopr>,
         dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        if !matches!(self.state, RouteHealthState::NeedsFunding) {
+        if !matches!(self.state, RouteHealthState::NeedsChannel) {
             return;
         }
-        let satisfies_need = match &self.static_need {
-            StaticNeed::Channel(addr) => *addr == address,
-            StaticNeed::AnyChannel => true,
-            StaticNeed::Peering(_) => false,
-        };
-        if satisfies_need {
-            self.state = RouteHealthState::Routable;
-            self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
-        }
+        self.state = RouteHealthState::Routable;
+        self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
     }
 
     /// Consume an outcome from a background health-check cycle and schedule
@@ -908,10 +881,13 @@ impl HealthSession {
     /// Uses the configured bridge capabilities/target but disables SURB
     /// management — the session is short-lived and not used for user traffic.
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
-        let cfg = SessionClientConfig {
+        let cfg = HoprSessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
-            forward_path_options: destination.routing.clone(),
-            return_path_options: destination.routing.clone(),
+            forward_path: destination.routing,
+            return_path: destination.routing,
+            // only send 1 SURB alongside our HTTP requests
+            // health responses always fit into one packet
+            always_max_out_surbs: false,
             surb_management: None,
             ..Default::default()
         };
@@ -973,10 +949,23 @@ async fn close_health_session(hopr: &Hopr, session: &SessionClientMetadata) {
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
-    /// Delay before the next retry after a failed exit-health cycle: linear growth in
-    /// `exit_failures`, clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
+    /// Delay before the next retry after a failed exit-health cycle.
+    ///
+    /// The first `GRAPH_WARMUP_RETRY_COUNT` failures use a short
+    /// `GRAPH_WARMUP_RETRY_INTERVAL` so the retry fires after the HOPR
+    /// transport heartbeat has had time to probe relay peers and populate
+    /// `is_connected()` in the channel graph (typically within one probe
+    /// cycle, ~3 s).  Subsequent failures fall through to the normal linear
+    /// backoff clamped at `MAX_INTERVAL_BETWEEN_FAILURES`.
     fn failure_backoff(&self) -> Duration {
-        (FAILURE_INTERVAL * self.exit_failures).min(MAX_INTERVAL_BETWEEN_FAILURES)
+        if self.exit_failures <= GRAPH_WARMUP_RETRY_COUNT {
+            GRAPH_WARMUP_RETRY_INTERVAL
+        } else {
+            let normal_failures = self.exit_failures - GRAPH_WARMUP_RETRY_COUNT;
+            FAILURE_INTERVAL
+                .saturating_mul(normal_failures)
+                .min(MAX_INTERVAL_BETWEEN_FAILURES)
+        }
     }
 }
 
@@ -989,6 +978,12 @@ impl RouteHealth {
 /// any route is not yet routable.
 pub fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
     healths.into_iter().any(|rh| rh.needs_peer())
+}
+
+/// True iff at least one route is in `NeedsChannel`. Core uses this to pick
+/// a tighter balances polling interval until a channel appears.
+pub fn any_needs_channel<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
+    healths.into_iter().any(|rh| rh.needs_channel())
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,7 +1017,6 @@ impl Display for UnrecoverableReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UnrecoverableReason::NotAllowed => write!(f, "direct peering not allowed (insecure peering disabled)"),
-            UnrecoverableReason::InvalidId => write!(f, "path contains offchain node ID (unsupported)"),
             UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
             UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
                 write!(
@@ -1039,9 +1033,9 @@ impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
-            RouteHealthState::NeedsPeering { funded: false } => write!(f, "Needs peering"),
-            RouteHealthState::NeedsPeering { funded: true } => write!(f, "Needs peering (channel funded)"),
-            RouteHealthState::NeedsFunding => write!(f, "Needs channel funding"),
+            RouteHealthState::NeedsPeering { has_channel: false } => write!(f, "Needs peering"),
+            RouteHealthState::NeedsPeering { has_channel: true } => write!(f, "Needs peering (has channel)"),
+            RouteHealthState::NeedsChannel => write!(f, "Needs channel"),
             RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
             RouteHealthState::ReadyToConnect { exit } => match select_api_version(&exit.versions.versions) {
                 Some(selected) => {
@@ -1070,5 +1064,131 @@ impl Display for ExitHealth {
             self.health,
             self.versions,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(byte: u8) -> Address {
+        Address::from([byte; 20])
+    }
+
+    /// Mirror the `is_peered` logic from `peers()` so we can test it without
+    /// constructing heavyweight `Arc<Hopr>` / `Options` / channel types.
+    fn is_peered(need: &StaticNeed, connected: &HashSet<Address>) -> bool {
+        match need {
+            StaticNeed::Peering(a) => connected.contains(a),
+            StaticNeed::AnyChannel => !connected.is_empty(),
+        }
+    }
+
+    // --- derive_static_need ---
+
+    #[test]
+    fn zero_hop_routing_yields_peering() {
+        let dest = addr(1);
+        let routing = HopRouting::try_from(0).expect("0-hop is valid");
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Peering(dest));
+    }
+
+    #[test]
+    fn one_hop_routing_yields_any_channel() {
+        let dest = addr(2);
+        let routing = HopRouting::try_from(1).expect("1-hop is valid");
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
+    }
+
+    // --- is_peered for AnyChannel routes ---
+
+    #[test]
+    fn any_channel_is_peered_when_any_relay_is_connected() {
+        let relay = addr(20);
+        let need = StaticNeed::AnyChannel;
+
+        let mut peers = HashSet::new();
+        peers.insert(relay);
+
+        assert!(is_peered(&need, &peers));
+    }
+
+    #[test]
+    fn any_channel_is_not_peered_when_no_peers_at_all() {
+        assert!(!is_peered(&StaticNeed::AnyChannel, &HashSet::new()));
+    }
+
+    // --- failure_backoff ---
+
+    fn backoff_at(failures: u32) -> Duration {
+        use crate::connection::destination::{Destination, HopRouting};
+        use tokio_util::sync::CancellationToken;
+        let dest = Destination::new(
+            "test".to_string(),
+            addr(1),
+            HopRouting::try_from(1).unwrap(),
+            Default::default(),
+        );
+        let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());
+        rh.exit_failures = failures;
+        rh.failure_backoff()
+    }
+
+    #[test]
+    fn failure_backoff_uses_warmup_interval_for_first_failures() {
+        for n in 1..=GRAPH_WARMUP_RETRY_COUNT {
+            assert_eq!(
+                backoff_at(n),
+                GRAPH_WARMUP_RETRY_INTERVAL,
+                "failure {n} should use warmup interval"
+            );
+        }
+    }
+
+    #[test]
+    fn failure_backoff_switches_to_linear_after_warmup() {
+        let first_normal = GRAPH_WARMUP_RETRY_COUNT + 1;
+        assert_eq!(
+            backoff_at(first_normal),
+            FAILURE_INTERVAL,
+            "first post-warmup failure should equal one FAILURE_INTERVAL"
+        );
+        assert_eq!(
+            backoff_at(first_normal + 1),
+            FAILURE_INTERVAL * 2,
+            "second post-warmup failure should equal two FAILURE_INTERVALs"
+        );
+    }
+
+    #[test]
+    fn failure_backoff_clamps_at_max_interval() {
+        assert_eq!(
+            backoff_at(u32::MAX),
+            MAX_INTERVAL_BETWEEN_FAILURES,
+            "backoff must not exceed MAX_INTERVAL_BETWEEN_FAILURES"
+        );
+    }
+
+    // --- is_peered for Peering routes (0-hop) ---
+
+    #[test]
+    fn peering_route_requires_dest_to_be_direct_peer() {
+        let dest = addr(10);
+        let relay = addr(20);
+        let need = StaticNeed::Peering(dest);
+
+        let mut only_relay = HashSet::new();
+        only_relay.insert(relay);
+        assert!(
+            !is_peered(&need, &only_relay),
+            "relay alone must not satisfy Peering need"
+        );
+
+        let mut with_dest = HashSet::new();
+        with_dest.insert(dest);
+        assert!(
+            is_peered(&need, &with_dest),
+            "dest as direct peer must satisfy Peering need"
+        );
     }
 }

@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +14,13 @@ pub struct Options {
     pub ping_options: ping::Options,
     pub buffer_sizes: BufferSizes,
     pub max_surb_upstream: MaxSurbUpstream,
-    pub announced_peer_minimum_score: f64,
     pub health_check_intervals: HealthCheckIntervals,
+    pub lan_lockdown: bool,
+    /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
+    /// Exit nodes retain session SURBs for ~30s, so reconnecting within this window
+    /// avoids a cold-start SURB exchange. Currently set to 1s (effectively disabled)
+    /// until hopr-lib supports PIX.
+    pub session_pseudonym_ttl: Duration,
 }
 
 /// Controls how often each tier of health check runs.
@@ -52,14 +57,12 @@ pub struct SessionParameters {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BufferSizes {
-    pub bridge: ByteSize,
     pub ping: ByteSize,
     pub main: ByteSize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaxSurbUpstream {
-    pub bridge: Bandwidth,
     pub ping: Bandwidth,
     pub main: Bandwidth,
 }
@@ -67,28 +70,6 @@ pub struct MaxSurbUpstream {
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
-    }
-}
-
-impl Options {
-    pub fn new(
-        sessions: Sessions,
-        ping_options: ping::Options,
-        buffer_sizes: BufferSizes,
-        max_surb_upstream: MaxSurbUpstream,
-        timeouts: Timeouts,
-        announced_peer_minimum_score: f64,
-        health_check_intervals: HealthCheckIntervals,
-    ) -> Self {
-        Self {
-            sessions,
-            ping_options,
-            buffer_sizes,
-            max_surb_upstream,
-            timeouts,
-            announced_peer_minimum_score,
-            health_check_intervals,
-        }
     }
 }
 
@@ -107,7 +88,6 @@ impl Default for HealthCheckIntervals {
 impl Default for MaxSurbUpstream {
     fn default() -> Self {
         Self {
-            bridge: Bandwidth::from_kbps(512),
             ping: Bandwidth::from_kbps(512),
             main: Bandwidth::from_mbps(16),
         }
@@ -117,10 +97,11 @@ impl Default for MaxSurbUpstream {
 impl Default for BufferSizes {
     fn default() -> Self {
         Self {
-            bridge: ByteSize::kb(32),
             ping: ByteSize::mb(1),
             // maximum allowed buffer size is 10 MB
-            main: ByteSize::mb(10),
+            // lowered to 5 MB as a compromise: the ping session currently inherits this value
+            // due to a bug workaround (see TODO in connection/up/runner.rs)
+            main: ByteSize::mb(5),
         }
     }
 }

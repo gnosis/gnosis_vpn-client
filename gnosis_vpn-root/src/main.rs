@@ -6,13 +6,13 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
@@ -31,6 +31,7 @@ use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 mod cli;
 mod network_info;
 mod routing;
+mod routing_actor;
 mod update_paths;
 mod wg_tooling;
 
@@ -40,7 +41,7 @@ use routing::Routing;
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
@@ -70,6 +71,7 @@ struct DaemonState {
     pending_responses: HashMap<u64, mpsc::Sender<Response>>,
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
+    routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -517,15 +519,32 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
     routing::reset_on_startup(worker_params.state_home()).await;
 
-    let mut state = DaemonState::new(
-        worker_user,
+    let cancel_routing_actor = CancellationToken::new();
+    let (routing_actor_sender, routing_actor_handle) =
+        routing_actor::start(cancel_routing_actor.clone()).map_err(|error| {
+            tracing::error!(?error, "failed to initialize firewall");
+            exitcode::UNAVAILABLE
+        })?;
+
+    let mut state = DaemonState {
         config,
         config_path,
-        worker_params,
+        incoming_worker_channel: mpsc::channel(32),
+        log_file: args.log_file,
+        pending_response_counter: 0,
+        pending_responses: HashMap::new(),
+        ping_tasks: JoinSet::new(),
         reload_handle,
-        args.log_file,
+        router: None,
+        shutdown_ongoing: Shutdown::None,
+        target_dest_id: None,
+        worker_child: None,
+        worker_exit_channel: mpsc::channel(1),
+        worker_params,
+        worker_user,
         keep_alive_instruction_sender,
-    );
+        routing_actor_sender,
+    };
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
         state.setup_worker().await?;
@@ -540,10 +559,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // cancel running tasks and run teardown logic
     state.teardown().await;
+    cancel_routing_actor.cancel();
     cancel_socket_listener.cancel();
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
     cancel_keep_alive_timer.cancel();
+    let _ = routing_actor_handle.await;
 
     // remove socket file
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
@@ -708,35 +729,6 @@ async fn main() {
 }
 
 impl DaemonState {
-    fn new(
-        worker_user: worker::Worker,
-        config: Config,
-        config_path: PathBuf,
-        worker_params: WorkerParams,
-        reload_handle: Option<LogReloadHandle>,
-        log_file: Option<PathBuf>,
-        keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
-    ) -> Self {
-        Self {
-            config,
-            config_path,
-            incoming_worker_channel: mpsc::channel(32),
-            log_file,
-            pending_response_counter: 0,
-            pending_responses: HashMap::new(),
-            ping_tasks: JoinSet::new(),
-            reload_handle,
-            router: None,
-            shutdown_ongoing: Shutdown::None,
-            target_dest_id: None,
-            worker_child: None,
-            worker_exit_channel: mpsc::channel(1),
-            worker_params,
-            worker_user,
-            keep_alive_instruction_sender,
-        }
-    }
-
     async fn daemon_loop(
         &mut self,
         mut signal_receiver: mpsc::Receiver<SignalMessage>,
@@ -987,7 +979,7 @@ impl DaemonState {
 
     fn status_response_offline(&self) -> Response {
         let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
-        vals.sort_by(|a, b| a.id.cmp(&b.id));
+        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
         let destinations = vals
             .into_iter()
             .map(|dest| command::DestinationState {
@@ -1016,6 +1008,11 @@ impl DaemonState {
             | LibCommand::Telemetry
             | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
+            LibCommand::Destinations => {
+                let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
+                ids.sort_unstable();
+                Ok(Response::Destinations(ids))
+            }
             LibCommand::Info => {
                 let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
                     .await
@@ -1130,9 +1127,47 @@ impl DaemonState {
         Ok(())
     }
 
+    async fn apply_killswitch(&self, interface: String, ips: Vec<IpAddr>) -> Result<(), String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::SetAllowedIps {
+                ips,
+                interface,
+                lan_lockdown: self.config.connection.lan_lockdown,
+                reply: reply_tx,
+            })
+            .await;
+        match reply_rx.await {
+            Ok(res) => res,
+            Err(_) => Err("killswitch actor dropped reply channel".to_string()),
+        }
+    }
+
+    async fn disable_killswitch(&self) {
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::DisableKillswitch)
+            .await;
+    }
+
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
+            RequestToRoot::KillswitchLockdown { peer_ips, interface } => {
+                let ips = peer_ips.into_iter().map(IpAddr::V4).collect();
+                let res = self.apply_killswitch(interface, ips).await;
+                if matches!(self.shutdown_ongoing, Shutdown::None)
+                    && let Some(ref mut child) = self.worker_child
+                {
+                    send_to_worker(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { res }),
+                        &mut child.socket_writer,
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
             RequestToRoot::DynamicWgRouting { wg_data } => {
                 let res = self.setup_dynamic_routing(wg_data).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
@@ -1165,6 +1200,11 @@ impl DaemonState {
             }
             RequestToRoot::Ping { options } => {
                 self.ping_tasks.spawn(async move { spawn_ping(options).await });
+                Ok(())
+            }
+            RequestToRoot::CacheBlokliIps { ips } => {
+                tracing::debug!(?ips, "caching blokli IPs for worker restart");
+                self.worker_params.set_cached_blokli_ips(ips);
                 Ok(())
             }
         }
@@ -1353,7 +1393,7 @@ impl DaemonState {
             .await;
     }
 
-    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<(), String> {
+    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<String, String> {
         // ensure clean slate
         self.teardown_any_routing().await;
 
@@ -1365,9 +1405,9 @@ impl DaemonState {
                 let res_setup = router.setup().await;
                 self.router = Some(Box::new(router));
                 match res_setup {
-                    Ok(_) => {
+                    Ok(interface_name) => {
                         tracing::info!("dynamic routing setup successfully");
-                        Ok(())
+                        Ok(interface_name)
                     }
                     Err(error) => {
                         tracing::error!(?error, "dynamic routing setup error");
@@ -1387,7 +1427,7 @@ impl DaemonState {
         &mut self,
         wg_data: event::WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         // ensure clean slate
         self.teardown_any_routing().await;
 
@@ -1398,9 +1438,9 @@ impl DaemonState {
                 let res_setup = router.setup().await;
                 self.router = Some(Box::new(router));
                 match res_setup {
-                    Ok(_) => {
+                    Ok(interface_name) => {
                         tracing::info!("static routing setup successfully");
-                        Ok(())
+                        Ok(interface_name)
                     }
                     Err(error) => {
                         tracing::error!(?error, "static routing setup error");
@@ -1429,6 +1469,8 @@ impl DaemonState {
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
+                self.worker_params.set_cached_blokli_ips(Vec::new());
+                self.disable_killswitch().await;
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Resume)

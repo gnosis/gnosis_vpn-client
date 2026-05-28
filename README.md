@@ -82,6 +82,14 @@ There are three environment variables that control the worker process setup:
 - `GNOSISVPN_WORKER_BINARY`: The path to the worker binary. The worker process
   will be spawned with this binary.
 
+## Testing
+
+### Unit tests
+
+```bash
+cargo test
+```
+
 ## Installation
 
 Use the latest

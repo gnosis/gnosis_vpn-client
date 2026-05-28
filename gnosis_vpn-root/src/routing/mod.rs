@@ -97,6 +97,7 @@ pub enum Error {
 
 #[async_trait]
 pub trait Routing {
-    async fn setup(&mut self) -> Result<(), Error>;
+    /// Set up the VPN tunnel. Returns the resolved WireGuard interface name on success.
+    async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
 }

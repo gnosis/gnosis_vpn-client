@@ -1,3 +1,5 @@
+pub mod killswitch;
+
 pub mod app_nap;
 pub mod balance;
 pub mod check_update;
@@ -17,6 +19,8 @@ pub mod route_health;
 pub mod shell_command_ext;
 pub mod socket;
 pub mod update;
+#[cfg(target_os = "linux")]
+pub mod update_apt;
 pub mod wireguard;
 pub mod worker;
 pub mod worker_params;
@@ -24,10 +28,11 @@ pub mod worker_params;
 mod log_output;
 mod peer;
 mod remote_data;
+mod serde_utils;
 mod ticket_stats;
 
 pub mod prelude {
-    pub use edgli::hopr_lib::Address;
+    pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
 }
 
 pub const IDENTIFIER: &str = "com.gnosisvpn.gnosisvpnclient";

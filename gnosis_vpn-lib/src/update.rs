@@ -12,6 +12,7 @@
 
 use std::cmp::Ordering;
 use std::path::PathBuf;
+#[cfg(not(target_os = "linux"))]
 use std::time::{Duration, SystemTime};
 
 use bytesize::ByteSize;
@@ -19,10 +20,14 @@ use futures_util::Stream;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "linux"))]
 use sha2::{Digest, Sha256};
+#[cfg(not(target_os = "linux"))]
 use tokio::fs::OpenOptions;
+#[cfg(not(target_os = "linux"))]
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
+#[cfg(not(target_os = "linux"))]
 use tokio::time::Instant;
 
 use crate::check_update::{self, Channel, ChannelRelease};
@@ -239,12 +244,26 @@ pub struct EngineInput {
 /// 6. `RestartingService` → write attempt-state file, then `Completed`
 ///
 /// On any failure the engine emits `Failed { stage, error }` and stops.
+///
+/// On Linux the engine delegates to apt — see [`crate::update_apt`]. The
+/// `channel`, `socket_path`, and `skip_vpn_check` fields are honoured there
+/// (the apt path uses the same `ensure_vpn_connected` gate as macOS).
+/// `download_dir`, `attempt_state_path`, `audit_log_path`, `allow_downgrade`,
+/// and `current_app_version` are macOS-only.
 pub fn install_engine(input: EngineInput) -> mpsc::Receiver<UpdateStatus> {
-    let (tx, rx) = mpsc::channel(32);
-    tokio::spawn(async move { run_engine(input, tx).await });
-    rx
+    #[cfg(target_os = "linux")]
+    {
+        return crate::update_apt::install_engine(input.channel, input.socket_path, input.skip_vpn_check);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let (tx, rx) = mpsc::channel(32);
+        tokio::spawn(async move { run_engine(input, tx).await });
+        rx
+    }
 }
 
+#[cfg(not(target_os = "linux"))]
 async fn run_engine(input: EngineInput, tx: mpsc::Sender<UpdateStatus>) {
     let outcome = drive_engine(&input, &tx).await;
     let last = match outcome {
@@ -256,6 +275,7 @@ async fn run_engine(input: EngineInput, tx: mpsc::Sender<UpdateStatus>) {
     let _ = tx.send(last).await;
 }
 
+#[cfg(not(target_os = "linux"))]
 async fn drive_engine(
     input: &EngineInput,
     tx: &mpsc::Sender<UpdateStatus>,
@@ -295,6 +315,7 @@ async fn drive_engine(
     Ok(release.version.clone())
 }
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug, thiserror::Error)]
 enum DownloadError {
     #[error("http: {0}")]
@@ -309,8 +330,10 @@ enum DownloadError {
     SizeMismatch { expected: u64, actual: u64 },
 }
 
+#[cfg(not(target_os = "linux"))]
 const FREE_SPACE_HEADROOM: u64 = 500 * 1024 * 1024; // plan: size + 500 MB headroom
 
+#[cfg(not(target_os = "linux"))]
 async fn download_artifact(
     input: &EngineInput,
     release: &ChannelRelease,
@@ -405,6 +428,7 @@ async fn download_artifact(
     Ok(target)
 }
 
+#[cfg(not(target_os = "linux"))]
 async fn verify_sha256(path: &std::path::Path, release: &ChannelRelease) -> Result<(), String> {
     let bytes = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
@@ -422,6 +446,7 @@ async fn verify_sha256(path: &std::path::Path, release: &ChannelRelease) -> Resu
 /// Best-effort free-space probe using `statvfs(3)` on Unix. Returns `None` if
 /// the call fails — callers should treat that as "skip the check" rather than
 /// blocking the install.
+#[cfg(not(target_os = "linux"))]
 fn free_bytes(path: &std::path::Path) -> Option<u64> {
     #[cfg(unix)]
     {
@@ -464,6 +489,7 @@ impl LastUpdateAttempt {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 async fn persist_attempt(input: &EngineInput, last: &UpdateStatus) {
     let Some(path) = input.attempt_state_path.as_ref() else {
         return;
@@ -482,6 +508,7 @@ async fn persist_attempt(input: &EngineInput, last: &UpdateStatus) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 async fn audit_log(input: &EngineInput, last: &UpdateStatus) {
     let Some(path) = input.audit_log_path.as_ref() else {
         return;
@@ -536,64 +563,30 @@ pub async fn install_stream(
     }))
 }
 
-/// Platform-specific install invocation. Split so tests on non-target
-/// platforms can compile.
+/// Platform-specific install invocation. macOS only — Linux goes through
+/// [`crate::update_apt`] and never calls this.
+#[cfg(target_os = "macos")]
 pub(crate) mod install_platform {
     use crate::shell_command_ext::{Logs, ShellCommandExt};
     use std::path::Path;
     use tokio::process::Command;
 
-    /// Spawn the platform installer and wait for it to exit. On macOS the
-    /// installer is `installer(8)`. On Linux it's `dpkg -i` for `.deb` or
-    /// `rpm -U` for `.rpm`, dispatched by extension.
+    /// Spawn `installer(8)` for the downloaded `.pkg` and wait for it to exit.
     ///
     /// The daemon should be ready to die immediately after this returns:
-    /// the postinstall reloads launchd/systemd which respawns the new
-    /// binary. Do **not** keep state past this point.
+    /// the postinstall reloads launchd which respawns the new binary. Do
+    /// **not** keep state past this point.
     pub async fn install(path: &Path) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            Command::new("installer")
-                .arg("-pkg")
-                .arg(path)
-                .arg("-target")
-                .arg("/")
-                .run(Logs::Print)
-                .await
-                .map_err(|e| format!("installer failed: {e}"))?;
-            Ok(())
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            match ext {
-                "deb" => Command::new("dpkg")
-                    .arg("-i")
-                    .arg(path)
-                    .run(Logs::Print)
-                    .await
-                    .map_err(|e| format!("dpkg failed: {e}"))?,
-                "rpm" => Command::new("rpm")
-                    .arg("-U")
-                    .arg(path)
-                    .run(Logs::Print)
-                    .await
-                    .map_err(|e| format!("rpm failed: {e}"))?,
-                other => return Err(format!("unsupported artifact extension: {other:?}")),
-            }
-            Ok(())
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            let _ = path;
-            let _ = Command::new("true");
-            Err("unsupported platform".into())
-        }
+        Command::new("installer")
+            .arg("-pkg")
+            .arg(path)
+            .arg("-target")
+            .arg("/")
+            .run(Logs::Print)
+            .await
+            .map_err(|e| format!("installer failed: {e}"))?;
+        Ok(())
     }
-
 }
 
 #[cfg(test)]

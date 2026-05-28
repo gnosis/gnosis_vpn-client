@@ -9,7 +9,6 @@ use std::process;
 
 use gnosis_vpn_lib::check_update::Channel;
 use gnosis_vpn_lib::command::{self, Command, Response};
-use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
 use gnosis_vpn_lib::socket;
 use gnosis_vpn_lib::update::{UpdateStage, UpdateStatus};
 
@@ -21,12 +20,17 @@ use cli::OutputFormat;
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[tokio::main]
 async fn main() {
     let args = cli::parse();
     let format = args.output.unwrap_or(OutputFormat::Plain);
+
+    if let cli::Command::Completions { shell } = args.command {
+        cli::generate_completions(shell);
+        process::exit(exitcode::OK);
+    }
 
     if let cli::Command::CheckUpdate { force, channel } = args.command {
         let exit = run_check_update(format, &args.socket_path, channel.into(), force).await;
@@ -378,9 +382,8 @@ fn pretty_print(resp: &Response) {
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
-                "Node Address: {}\nNode Peer ID: {}\nSafe Address: {}\n",
+                "Node Address: {}\nSafe Address: {}\n",
                 info.node_address.to_checksum(),
-                info.node_peer_id,
                 info.safe_address.to_checksum()
             ));
             str_resp.push_str(&format!(
@@ -455,6 +458,11 @@ fn pretty_print(resp: &Response) {
         Response::StopClient(command::StopClientResponse::NotRunning) => {
             eprintln!("Worker client not running");
         }
+        Response::Destinations(ids) => {
+            for id in ids {
+                println!("{id}");
+            }
+        }
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
@@ -512,6 +520,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
+        Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
         Response::CheckUpdate(command::CheckUpdateResponse::UpToDate { .. })
         | Response::CheckUpdate(command::CheckUpdateResponse::Available { .. }) => exitcode::OK,
@@ -597,56 +606,31 @@ fn print_connected_stats(stats: &command::ConnStats) {
 
 fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
     let mut str_resp = String::new();
-    match stats.destination.routing {
-        RoutingOptions::IntermediatePath(ref nodes) => {
+    match stats.destination.routing.hop_count() {
+        0 => {
             str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-VIA-->",
-                node_addr = stats.node_address.to_checksum()
-            ));
-            for n in nodes.clone() {
-                let formatted = match n {
-                    NodeId::Chain(addr) => addr.to_checksum(),
-                    NodeId::Offchain(peer_id) => peer_id.to_string(),
-                };
-                str_resp.push_str(&format!(" {formatted} --VIA-->"));
-            }
-            // safe to truncate as nodes cannot be empty - ensured by type definition
-            str_resp.truncate(str_resp.len() - 8);
-            str_resp.push_str(&format!(
-                "--TO--> {addr}(exit)\n",
-                addr = stats.destination.address.to_checksum()
+                "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
             ));
         }
-        RoutingOptions::Hops(nr) => {
-            let nr_val: usize = nr.into();
-            match nr_val {
-                0 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        exit = stats.destination.id,
-                    ));
-                }
-                1 => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        exit = stats.destination.id,
-                    ));
-                }
-                _ => {
-                    str_resp.push_str(&format!(
-                        "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
-                        node_addr = stats.node_address.to_checksum(),
-                        addr = stats.destination.address.to_checksum(),
-                        nr = nr_val,
-                        exit = stats.destination.id,
-                    ));
-                }
-            }
+        1 => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
         }
-    };
+        nr => {
+            str_resp.push_str(&format!(
+                "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
+                node_addr = stats.node_address.to_checksum(),
+                addr = stats.destination.address.to_checksum(),
+                exit = stats.destination.id,
+            ));
+        }
+    }
     str_resp
 }

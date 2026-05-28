@@ -23,27 +23,27 @@ chrono = { version = "0.4.38", default-features = false, features = [
 ] }
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8f684b7294af9382a6958a6aeefb5f74aee7a0d", features = [
-  "prometheus",
+clap_complete = "4"
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "7b010b9d6ced8c0a423ca2c5c4e6cdfdb5243446", features = [
+  "telemetry",
 ] }
 exitcode = "1.1.2"
 futures = "0.3.31"
 futures-util = "0.3.31"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "e8e0b63d26e67206e8192384ad8eb7a7de22a1c6", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "37d2a1cc14", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "0.1.4"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 indicatif = "0.18.0"
+ipnetwork = "0.21"
 libc = "0.2.183"
-mimalloc = { version = "0.1.48", default-features = false, features = [
-  "secure",
-] }
 mnl = "0.3.1"
 multiaddr = "0.18.2"
 nftnl = "0.9.1"
 notify = "8.2.0"
+pfctl = "0.7.0"
 pgp = "0.14"
 ping = "0.7.0"
 rand = "0.10.0"
@@ -55,7 +55,8 @@ serde_json = "1.0.148"
 serde_with = "3.16.1"
 sha2 = "0.10.8"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["full"] }
+tikv-jemallocator = "0.6"
+tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
 toml = "1.0.2"
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }

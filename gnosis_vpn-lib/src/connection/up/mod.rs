@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
+use std::net;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
@@ -20,14 +21,16 @@ pub enum Event {
     Setback(Box<Setback>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Progress {
-    GenerateWg,
+    ResolveBlokliIps,
+    GenerateWg(Vec<net::Ipv4Addr>),
     OpenBridge(WireGuard),
     RegisterWg,
     CloseBridge(Registration),
     OpenPing,
     PeerIps,
+    KillswitchLockdown,
     DynamicWgTunnel(SessionClientMetadata),
     StaticWgTunnel(SessionClientMetadata),
     Ping,
@@ -78,13 +81,15 @@ pub struct Up {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Init,
+    ResolvingBlokliIps,
     GeneratingWg,
     OpeningBridge,
     RegisterWg,
     ClosingBridge,
     OpeningPing,
-    EstablishDynamicWgTunnel,
     FallbackGatherPeerIps,
+    KillswitchLockdown,
+    EstablishDynamicWgTunnel,
     FallbackToStaticWgTunnel,
     VerifyPing,
     AdjustToMain,
@@ -111,7 +116,8 @@ impl Up {
     pub fn connect_progress(&mut self, evt: Box<Progress>) {
         let now = SystemTime::now();
         match *evt {
-            Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
+            Progress::ResolveBlokliIps => self.phase = (now, Phase::ResolvingBlokliIps),
+            Progress::GenerateWg(_) => self.phase = (now, Phase::GeneratingWg),
             Progress::OpenBridge(wg) => {
                 self.phase = (now, Phase::OpeningBridge);
                 self.wireguard = Some(wg);
@@ -127,6 +133,7 @@ impl Up {
                 self.session = Some(session);
             }
             Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
             Progress::StaticWgTunnel(session) => {
                 self.phase = (now, Phase::FallbackToStaticWgTunnel);
                 self.session = Some(session);
@@ -157,6 +164,7 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase_str = match self {
             Phase::Init => "Init",
+            Phase::ResolvingBlokliIps => "Resolving Blokli IPs",
             Phase::GeneratingWg => "Generating WireGuard keypairs",
             Phase::OpeningBridge => "Opening bridge connection",
             Phase::RegisterWg => "Registering WireGuard public key",
@@ -164,6 +172,7 @@ impl Display for Phase {
             Phase::OpeningPing => "Opening main connection",
             Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
             Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::KillswitchLockdown => "Activating killswitch",
             Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
@@ -185,13 +194,15 @@ impl Display for Event {
 impl Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Progress::GenerateWg => write!(f, "Generating WireGuard keypairs"),
+            Progress::ResolveBlokliIps => write!(f, "Resolving Blokli IPs"),
+            Progress::GenerateWg(_) => write!(f, "Generating WireGuard keypairs"),
             Progress::OpenBridge(_) => write!(f, "Opening bridge connection"),
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
             Progress::OpenPing => write!(f, "Opening main connection"),
             Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
+            Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {

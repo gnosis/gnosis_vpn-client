@@ -578,7 +578,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
     ///   7. Replace main default route to VPN interface (atomic replace)
     ///   8. Flush routing cache (ensure all traffic uses new routes)
     ///
-    async fn setup(&mut self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<String, Error> {
         if self.network_device_info.is_some() {
             return Err(Error::General("invalid state: already set up".into()));
         }
@@ -692,7 +692,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         tracing::debug!("ip route add default [oif={}]", vpn_info.if_index);
 
         tracing::info!("routing is ready");
-        Ok(())
+        Ok(interface_name)
     }
 
     /// Uninstalls VPN-specific routing (fwmark infrastructure remains active).
@@ -858,7 +858,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     ///   5. Add VPN subnet route (10.128.0.0/9) programmatically
     ///      The VPN subnet route overrides the 10.0.0.0/8 bypass for VPN server traffic
     ///
-    async fn setup(&mut self) -> Result<(), Error> {
+    async fn setup(&mut self) -> Result<String, Error> {
         // Phase 1: Add bypass routes to wg-quick up
         let (device, gateway) = self.route_ops.get_default_interface().await?;
         tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
@@ -879,9 +879,9 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
                 .wg
                 .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
 
-        self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
-        tracing::debug!("wg-quick up");
-        Ok(())
+        let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
+        tracing::debug!(%interface_name, "wg-quick up");
+        Ok(interface_name)
     }
 
     /// Teardown split-tunnel routing for FallbackRouter.

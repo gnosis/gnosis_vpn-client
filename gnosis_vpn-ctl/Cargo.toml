@@ -6,6 +6,7 @@ version = { workspace = true }
 
 [dependencies]
 clap.workspace           = true
+clap_complete.workspace  = true
 exitcode.workspace       = true
 futures-util.workspace   = true
 gnosis_vpn-lib.workspace = true
@@ -19,4 +20,4 @@ tokio.workspace          = true
 
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
-mimalloc = { workspace = true }
+tikv-jemallocator = { workspace = true }
