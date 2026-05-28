@@ -381,7 +381,7 @@ fn human_wxhopr(b: balance::Balance<balance::WxHOPR>) -> String {
         v if v >= 1e-9   => format!("{:.1} Gwei wxHOPR", v / 1e-9),
         v if v >= 1e-12  => format!("{:.1} Mwei wxHOPR", v / 1e-12),
         v if v >= 1e-15  => format!("{:.1} Kwei wxHOPR", v / 1e-15),
-        _                => format!("{:.0} wei wxHOPR", v * 1e18),
+        _                => format!("{:.0} wxHopli", v * 1e18),
     }
 }
 
