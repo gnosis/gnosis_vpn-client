@@ -191,9 +191,9 @@ pub fn to_funding_issues(
         }
     }
 
-    // 100 Gwei — below this the node cannot pay for any gas
-    let node_xdai_empty_threshold = Balance::<XDai>::from(100_000_000_000u64);
-    if node_xdai < node_xdai_empty_threshold {
+    // 100 Gwei — heuristic threshold below which the node is unlikely to cover the gas cost of a typical transaction
+    let node_xdai_min_gas_threshold = Balance::<XDai>::from(100_000_000_000u64);
+    if node_xdai < node_xdai_min_gas_threshold {
         issues.push(FundingIssue::NodeUnderfunded);
     } else if node_xdai < ideal.xdai {
         issues.push(FundingIssue::NodeLowOnFunds);
