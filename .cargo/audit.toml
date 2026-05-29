@@ -8,7 +8,6 @@
 [advisories]
 # Advisory IDs to ignore
 ignore = [
-  "RUSTSEC-2023-0071", # rsa: Marvin Attack timing sidechannel - transitive from pgp, no fixed version available
   "RUSTSEC-2024-0388", # derivative: unmaintained - transitive from alloy ecosystem
   "RUSTSEC-2024-0436", # paste: unmaintained - transitive from alloy-sol-macro
   # hickory-proto advisories: transitive via libp2p 0.56.0 → libp2p-mdns/libp2p-dns → hickory-*;
