@@ -86,6 +86,7 @@ pub struct Capacity {
     #[serde(with = "serde_utils::balance")]
     pub stake: Balance<WxHOPR>,
     pub expected_messages: u64,
+    pub min_guaranteed_messages: u64,
     pub byte_capacity: u64,
 }
 
@@ -102,6 +103,7 @@ impl From<edgli::strategy::Capacity> for Capacity {
         Capacity {
             stake: c.stake,
             expected_messages: c.expected_messages,
+            min_guaranteed_messages: c.min_guaranteed_messages,
             byte_capacity: c.byte_capacity,
         }
     }
@@ -177,14 +179,14 @@ pub fn to_funding_issues(
 
     let channel_messages: u64 = capacity_allocations
         .iter()
-        .filter_map(|(k, v)| matches!(k, CapacityAllocator::Peer(_)).then_some(v.expected_messages))
+        .filter_map(|(k, v)| matches!(k, CapacityAllocator::Peer(_)).then_some(v.min_guaranteed_messages))
         .sum();
     if channel_messages < 1 {
         issues.push(FundingIssue::ChannelsOutOfFunds);
     }
 
     let safe = capacity_allocations.get(&CapacityAllocator::Safe);
-    let safe_messages = safe.map(|c| c.expected_messages).unwrap_or(0);
+    let safe_messages = safe.map(|c| c.min_guaranteed_messages).unwrap_or(0);
     if safe_messages < 1 {
         issues.push(FundingIssue::SafeOutOfFunds);
     } else {
@@ -218,6 +220,7 @@ mod tests {
         Capacity {
             stake: Balance::<WxHOPR>::from(stake),
             expected_messages: msgs,
+            min_guaranteed_messages: msgs,
             byte_capacity: 0,
         }
     }
@@ -226,6 +229,7 @@ mod tests {
         Capacity {
             stake: Balance::<WxHOPR>::from(stake),
             expected_messages: msgs,
+            min_guaranteed_messages: msgs,
             byte_capacity: 0,
         }
     }
