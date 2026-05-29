@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::{self, FundingIssue};
+use crate::balance;
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::log_output;
@@ -37,8 +37,6 @@ pub enum Command {
     FundingTool(String),
     /// Return telemetry metrics of the underlying edge client, if running
     Telemetry,
-    /// Retrigger a balance check
-    RefreshNode,
     /// Determine service liveness
     Ping,
     /// Deliver service version and other meta
@@ -60,7 +58,6 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
-    RefreshNode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,10 +66,9 @@ pub enum Response {
     NerdStats(NerdStatsResponse),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
-    Balance(Option<BalanceResponse>),
+    Balance(Result<BalanceResponse, String>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
-    RefreshNodeTriggered,
     Pong,
     Info(InfoResponse),
     StartClient(StartClientResponse),
@@ -134,7 +130,7 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
-        ticket_stats: Option<TicketStats>,
+        balance_recommendation: Option<balance::BalanceRecommendation>,
     },
     /// Safe deployment ongoing
     DeployingSafe {
@@ -148,8 +144,8 @@ pub enum RunMode {
     },
     /// Normal operation where connections can be made
     Running {
-        funding: FundingState,
         hopr_status: Option<HoprStatus>,
+        funding_issues: Option<Vec<balance::FundingIssue>>,
     },
     /// Shutting down edge client,
     Shutdown,
@@ -203,14 +199,6 @@ pub enum HoprInitStatus {
     Ready,
 }
 
-// in order of priority
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum FundingState {
-    Querying,               // currently checking balances to determine FundingState
-    TopIssue(FundingIssue), // there is at least one issue
-    WellFunded,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConnectResponse {
     AlreadyConnected(Destination),
@@ -255,10 +243,18 @@ impl From<&RouteHealth> for RouteHealthView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TicketStatsStatus {
+    Available(TicketStats),
+    /// incentive operations not yet initialized
+    Waiting,
+    Error(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NerdStatsResponse {
-    NoInfo,
-    Connecting(ConnStats),
-    Connected(ConnStats),
+    NoInfo(TicketStatsStatus),
+    Connecting(TicketStatsStatus, ConnStats),
+    Connected(TicketStatsStatus, ConnStats),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -297,7 +293,7 @@ impl RunMode {
         pre_safe: &Option<balance::PreSafe>,
         funding_tool: Option<String>,
         error: Option<String>,
-        ticket_stats: Option<TicketStats>,
+        balance_recommendation: Option<balance::BalanceRecommendation>,
     ) -> Self {
         RunMode::PreparingSafe {
             node_address,
@@ -305,7 +301,7 @@ impl RunMode {
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
             error,
-            ticket_stats,
+            balance_recommendation,
         }
     }
 
@@ -320,10 +316,10 @@ impl RunMode {
         }
     }
 
-    pub fn running(issues: Option<Vec<FundingIssue>>, hopr_state: Option<HoprState>) -> Self {
+    pub fn running(hopr_state: Option<HoprState>, funding_issues: Option<Vec<balance::FundingIssue>>) -> Self {
         RunMode::Running {
-            funding: issues.map(|i| i.into()).unwrap_or(FundingState::Querying),
             hopr_status: hopr_state.map(|s| s.into()),
+            funding_issues,
         }
     }
 }
@@ -404,16 +400,6 @@ impl FromStr for Command {
     }
 }
 
-impl From<Vec<FundingIssue>> for FundingState {
-    fn from(issues: Vec<FundingIssue>) -> Self {
-        if issues.is_empty() {
-            FundingState::WellFunded
-        } else {
-            FundingState::TopIssue(issues[0].clone())
-        }
-    }
-}
-
 impl From<HoprState> for HoprStatus {
     fn from(state: HoprState) -> Self {
         match state {
@@ -458,16 +444,18 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                ticket_stats,
+                balance_recommendation,
             } => {
                 let mut msg = format!(
-                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
-                    node_address.to_checksum()
+                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {}",
+                    node_address.to_checksum(),
+                    balance::human_wxhopr(*node_wxhopr)
                 );
-                if let Some(ts) = ticket_stats {
+                if let Some(rec) = balance_recommendation {
                     msg = format!(
-                        "{msg}, ticket price: {}, winning probability: {:.4}",
-                        ts.ticket_price, ts.winning_probability
+                        "{msg}, recommended: wxHOPR >= {}, xDAI >= {}",
+                        balance::human_wxhopr(rec.wxhopr),
+                        rec.xdai
                     );
                 }
                 msg = match (funding_tool, error) {
@@ -491,10 +479,29 @@ impl Display for RunMode {
                 (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
                 (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
             },
-            RunMode::Running { funding, hopr_status } => match hopr_status {
-                Some(hopr_status) => write!(f, "Ready ({hopr_status}), {funding}"),
-                None => write!(f, "Ready, {funding}"),
-            },
+            RunMode::Running {
+                hopr_status,
+                funding_issues,
+            } => {
+                match hopr_status {
+                    Some(s) => write!(f, "Ready ({s})")?,
+                    None => write!(f, "Ready")?,
+                }
+                match funding_issues.as_deref() {
+                    None => write!(f, " - waiting for funding calculations")?,
+                    Some([]) => write!(f, " - well funded")?,
+                    Some(issues) => {
+                        writeln!(f, "\n---")?;
+                        for (i, issue) in issues.iter().enumerate() {
+                            if i > 0 {
+                                writeln!(f)?;
+                            }
+                            write!(f, "Funding issue: {issue}")?;
+                        }
+                    }
+                }
+                Ok(())
+            }
             RunMode::Shutdown => write!(f, "Shutting down"),
             RunMode::NotRunning => write!(f, "Worker offline"),
         }
@@ -533,16 +540,6 @@ impl Display for DisconnectingInfo {
             log_output::elapsed(&self.since),
             self.phase
         )
-    }
-}
-
-impl Display for FundingState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FundingState::Querying => write!(f, "Determining funding"),
-            FundingState::TopIssue(issue) => write!(f, "Issue: {}", issue),
-            FundingState::WellFunded => write!(f, "Well funded"),
-        }
     }
 }
 
@@ -589,7 +586,6 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Connect(dest) => Ok(WorkerCommand::Connect(dest)),
             Command::Disconnect => Ok(WorkerCommand::Disconnect),
             Command::Balance => Ok(WorkerCommand::Balance),
-            Command::RefreshNode => Ok(WorkerCommand::RefreshNode),
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             // Commands that are not relevant for the worker
@@ -664,38 +660,27 @@ mod tests {
 
     #[test]
     fn command_should_serialize_and_deserialize_to_the_same_value() -> anyhow::Result<()> {
-        let cmd_str = serde_json::to_string(&Command::RefreshNode).expect("serialize refresh command");
+        let cmd_str = serde_json::to_string(&Command::Balance).expect("serialize balance command");
         let parsed: Command = cmd_str.parse().expect("parse serialized command");
 
-        assert_eq!(parsed, Command::RefreshNode);
+        assert_eq!(parsed, Command::Balance);
         Ok(())
     }
 
     #[test]
-    fn runmode_running_uses_top_issue_and_hopr_status() -> anyhow::Result<()> {
-        let issues = Some(vec![FundingIssue::NodeLowOnFunds]);
+    fn runmode_running_passes_through_hopr_status() -> anyhow::Result<()> {
         let hopr_state = Some(HoprState::Running);
 
-        match RunMode::running(issues, hopr_state) {
-            RunMode::Running { funding, hopr_status } => {
-                assert_eq!(funding, FundingState::TopIssue(FundingIssue::NodeLowOnFunds));
+        match RunMode::running(hopr_state, None) {
+            RunMode::Running {
+                hopr_status,
+                funding_issues,
+            } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
+                assert_eq!(funding_issues, None);
             }
             other => panic!("unexpected run mode {other:?}"),
         }
-        Ok(())
-    }
-
-    #[test]
-    fn funding_state_from_option_applies_priority_rules() -> anyhow::Result<()> {
-        let empty: Vec<FundingIssue> = vec![];
-        assert_eq!(FundingState::from(empty), FundingState::WellFunded);
-
-        let top = vec![FundingIssue::SafeLowOnFunds];
-        assert_eq!(
-            FundingState::from(top),
-            FundingState::TopIssue(FundingIssue::SafeLowOnFunds)
-        );
         Ok(())
     }
 

@@ -24,12 +24,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::command::{self, Response};
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
-use crate::ticket_stats::{self, TicketStats};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, ping, remote_data};
 
@@ -45,8 +45,17 @@ pub enum Results {
     DeploySafe {
         res: Result<SafeModule, Error>,
     },
-    TicketStats {
-        res: Result<TicketStats, Error>,
+    MinimumBalanceRecommendation {
+        res: Result<balance::BalanceRecommendation, Error>,
+    },
+    IdealBalanceRecommendation {
+        res: Result<balance::BalanceRecommendation, Error>,
+    },
+    CapacityAllocations {
+        res: Result<std::collections::HashMap<balance::CapacityAllocator, balance::Capacity>, Error>,
+    },
+    Balances {
+        res: Result<balance::Balances, Error>,
     },
     PersistSafe {
         res: Result<(), hopr_config::Error>,
@@ -64,9 +73,6 @@ pub enum Results {
     },
     IncentiveOperationsRetry {
         error: String,
-    },
-    Balances {
-        res: Result<balance::Balances, Error>,
     },
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
@@ -98,14 +104,16 @@ pub enum Results {
         outcome: HealthCheckOutcome,
     },
     RetryReactor,
+    NerdStatsTicketStats {
+        res: command::TicketStatsStatus,
+        resp: oneshot::Sender<Response>,
+    },
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     WorkerParams(#[from] worker_params::Error),
-    #[error(transparent)]
-    TicketStats(#[from] ticket_stats::Error),
     #[error("chain error: {0}")]
     Chain(String),
     #[error(transparent)]
@@ -135,9 +143,39 @@ struct UnauthorizedError {
     error: String,
 }
 
-pub async fn ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
-    let res = run_ticket_stats(incentive_operations).await;
-    let _ = results_sender.send(Results::TicketStats { res }).await;
+pub async fn minimum_balance_recommendation(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    cfg: edgli::strategy::IncentiveConfiguration,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_minimum_balance_recommendation(incentive_operations, cfg).await;
+    let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
+}
+
+pub async fn ideal_balance_recommendation(
+    hopr: Arc<Hopr>,
+    cfg: edgli::strategy::IncentiveConfiguration,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = hopr
+        .ideal_balance_recommendation(&cfg)
+        .await
+        .map_err(|e| Error::Chain(e.to_string()));
+    let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
+}
+
+pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    let res = hopr
+        .capacity_allocations()
+        .await
+        .map_err(|e| Error::Chain(e.to_string()));
+    let _ = results_sender.send(Results::CapacityAllocations { res }).await;
+}
+
+pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting balances runner");
+    let res = hopr.balances().await.map_err(Error::from);
+    let _ = results_sender.send(Results::Balances { res }).await;
 }
 
 pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
@@ -197,12 +235,6 @@ pub async fn node_wxhopr_withdraw(
 ) {
     let res = run_node_wxhopr_withdraw(incentive_operations, safe_address).await;
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
-}
-
-pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting balances runner");
-    let res = hopr.balances().await.map_err(Error::from);
-    let _ = results_sender.send(Results::Balances { res }).await;
 }
 
 pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
@@ -338,22 +370,30 @@ async fn run_node_balance(incentive_operations: Arc<dyn IncentiveOperations>) ->
     .await
 }
 
-async fn run_ticket_stats(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<TicketStats, Error> {
-    tracing::debug!("starting ticket stats runner");
+async fn run_minimum_balance_recommendation(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    cfg: edgli::strategy::IncentiveConfiguration,
+) -> Result<balance::BalanceRecommendation, Error> {
+    tracing::debug!("starting minimum balance recommendation runner");
     (|| {
         let ops = incentive_operations.clone();
         async move {
-            let ticket_stats = ops.ticket_stats().await.map_err(|e| Error::Chain(e.to_string()))?;
-
-            Ok(TicketStats {
-                ticket_price: ticket_stats.ticket_price,
-                winning_probability: ticket_stats.winning_probability.into(),
+            let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
+                .await
+                .map_err(|e| Error::Chain(e.to_string()))?;
+            Ok(balance::BalanceRecommendation {
+                wxhopr: rec.wxhopr,
+                xdai: rec.xdai,
             })
         }
     })
     .retry(remote_data::backoff_expo_long_delay())
     .notify(|err, delay| {
-        tracing::warn!(?err, ?delay, "Ticket stats attempt failed, retrying...");
+        tracing::warn!(
+            ?err,
+            ?delay,
+            "Minimum balance recommendation attempt failed, retrying..."
+        );
     })
     .await
 }
@@ -508,9 +548,29 @@ impl Display for Results {
                 Ok(presafe) => write!(f, "NodeBalance: {}", presafe),
                 Err(err) => write!(f, "NodeBalance: Error({})", err),
             },
-            Results::TicketStats { res } => match res {
-                Ok(stats) => write!(f, "TicketStats: {}", stats),
-                Err(err) => write!(f, "TicketStats: Error({})", err),
+            Results::MinimumBalanceRecommendation { res } => match res {
+                Ok(rec) => write!(
+                    f,
+                    "MinimumBalanceRecommendation: wxHOPR >= {}, xDAI >= {}",
+                    rec.wxhopr, rec.xdai
+                ),
+                Err(err) => write!(f, "MinimumBalanceRecommendation: Error({})", err),
+            },
+            Results::IdealBalanceRecommendation { res } => match res {
+                Ok(rec) => write!(
+                    f,
+                    "IdealBalanceRecommendation: wxHOPR >= {}, xDAI >= {}",
+                    rec.wxhopr, rec.xdai
+                ),
+                Err(err) => write!(f, "IdealBalanceRecommendation: Error({})", err),
+            },
+            Results::CapacityAllocations { res } => match res {
+                Ok(map) => write!(f, "CapacityAllocations: {} entries", map.len()),
+                Err(err) => write!(f, "CapacityAllocations: Error({})", err),
+            },
+            Results::Balances { res } => match res {
+                Ok(balances) => write!(f, "Balances: {}", balances),
+                Err(err) => write!(f, "Balances: Error({})", err),
             },
             Results::DeploySafe { res } => match res {
                 Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),
@@ -528,10 +588,6 @@ impl Display for Results {
             Results::Hopr { res, safe_module: _ } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
-            },
-            Results::Balances { res } => match res {
-                Ok(balances) => write!(f, "Balances: {}", balances),
-                Err(err) => write!(f, "Balances: Error({})", err),
             },
             Results::NodeWxhoprWithdraw { res } => match res {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
@@ -578,6 +634,7 @@ impl Display for Results {
             },
             Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
             Results::RetryReactor => write!(f, "RetryReactor"),
+            Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
         }
     }
 }

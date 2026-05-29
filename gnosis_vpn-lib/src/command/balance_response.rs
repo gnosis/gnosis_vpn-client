@@ -5,13 +5,7 @@ use std::{
     fmt::{self, Display},
 };
 
-use crate::{
-    balance::{self, FundingIssue},
-    connection::destination::Destination,
-    info::Info,
-    serde_utils,
-    ticket_stats::{self, TicketStats},
-};
+use crate::{balance, connection::destination::Destination, info::Info, serde_utils};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
@@ -39,36 +33,47 @@ pub struct BalanceResponse {
     pub safe: Balance<WxHOPR>,
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
-    pub issues: Vec<FundingIssue>,
-    #[serde(with = "serde_utils::balance")]
-    pub ticket_price: Balance<WxHOPR>,
-    pub winning_probability: f64,
+    pub capacity_allocations: Option<Vec<balance::CapacityEntry>>,
+    pub ideal_balance: Option<balance::BalanceRecommendation>,
+    pub funding_issues: Option<Vec<balance::FundingIssue>>,
 }
 
 impl BalanceResponse {
-    pub fn try_build(
+    pub fn build(
         info: &Info,
         balances: &balance::Balances,
-        ticket_stats: &TicketStats,
         destinations: &HashMap<String, Destination>,
-    ) -> Result<Self, ticket_stats::Error> {
+        capacity_allocations: Option<&HashMap<balance::CapacityAllocator, balance::Capacity>>,
+        ideal_balance: Option<balance::BalanceRecommendation>,
+        funding_issues: Option<Vec<balance::FundingIssue>>,
+    ) -> Self {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
         let channels_out = from_balances(balances.channels_out.iter(), destinations);
-
-        let ticket_value = ticket_stats.ticket_value()?;
-        let issues: Vec<balance::FundingIssue> = balances.to_funding_issues(ticket_value);
         let info = info.clone();
 
-        Ok(BalanceResponse {
+        let capacity_allocations = capacity_allocations.map(|map| {
+            let mut entries: Vec<_> = map
+                .iter()
+                .map(|(a, c)| balance::CapacityEntry {
+                    allocator: a.clone(),
+                    capacity: *c,
+                })
+                .collect();
+            // safe first, then peers
+            entries.sort_by_key(|e| matches!(e.allocator, balance::CapacityAllocator::Peer(_)));
+            entries
+        });
+
+        BalanceResponse {
             node,
             safe,
             channels_out,
-            issues,
             info,
-            ticket_price: ticket_stats.ticket_price,
-            winning_probability: ticket_stats.winning_probability,
-        })
+            capacity_allocations,
+            ideal_balance,
+            funding_issues,
+        }
     }
 }
 
@@ -92,13 +97,8 @@ fn from_balances<'a>(
 impl Display for ChannelOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.matched_exit {
-            Some(id) => write!(
-                f,
-                "Channel to {} (exit: {id}): {}",
-                self.address.to_checksum(),
-                self.balance
-            ),
-            None => write!(f, "Channel to {}: {}", self.address.to_checksum(), self.balance),
+            Some(id) => write!(f, "Channel({},{}): {}", self.address.to_checksum(), id, self.balance),
+            None => write!(f, "Channel({}): {}", self.address.to_checksum(), self.balance),
         }
     }
 }
@@ -107,7 +107,7 @@ impl Display for ChannelBalance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ChannelBalance::Unknown => write!(f, "unknown balance"),
-            ChannelBalance::Completed { amount } => write!(f, "{amount}"),
+            ChannelBalance::Completed { amount } => write!(f, "{}", balance::human_wxhopr(*amount)),
         }
     }
 }

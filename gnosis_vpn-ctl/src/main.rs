@@ -4,6 +4,7 @@ use std::fmt;
 use std::process;
 use std::time::Duration;
 
+use gnosis_vpn_lib::balance;
 use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
@@ -250,14 +251,14 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
-        Response::Balance(Some(command::BalanceResponse {
+        Response::Balance(Ok(command::BalanceResponse {
             node,
             safe,
             channels_out,
-            issues,
             info,
-            ticket_price,
-            winning_probability,
+            capacity_allocations,
+            ideal_balance,
+            funding_issues,
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -265,39 +266,65 @@ fn pretty_print(resp: &Response) {
                 info.node_address.to_checksum(),
                 info.safe_address.to_checksum()
             ));
-            str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}\nTicket Price: {ticket_price}\nWinning Probability: {winning_probability:.4}\n"
-            ));
-            if channels_out.is_empty() {
-                str_resp.push_str("---\nNo outgoing channels.\n");
+            if let Some(rec) = ideal_balance {
+                str_resp.push_str(&format!(
+                    "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}\n",
+                    rec.xdai,
+                    balance::human_wxhopr(rec.wxhopr)
+                ));
+            }
+            str_resp.push_str(&format!("---\nNode: {node}\n"));
+            if let Some(entries) = capacity_allocations
+                && !entries.is_empty()
+            {
+                for e in entries {
+                    let label = match &e.allocator {
+                        balance::CapacityAllocator::Safe => "Safe".to_string(),
+                        balance::CapacityAllocator::Peer(addr) => {
+                            let exit = channels_out
+                                .iter()
+                                .find(|ch| ch.address == *addr)
+                                .and_then(|ch| ch.matched_exit.as_deref());
+                            match exit {
+                                Some(exit) => format!("Channel({},{})", addr.to_checksum(), exit),
+                                None => format!("Channel({})", addr.to_checksum()),
+                            }
+                        }
+                    };
+                    str_resp.push_str(&format!(
+                        "{}: {} ({} msgs, {})\n",
+                        label,
+                        balance::human_wxhopr(e.capacity.stake),
+                        human_msgs(e.capacity.expected_messages),
+                        human_bytes(e.capacity.byte_capacity)
+                    ));
+                }
             } else {
-                str_resp.push_str("---\n");
+                str_resp.push_str(&format!("Safe: {}\n", balance::human_wxhopr(*safe)));
+                for ch in channels_out {
+                    str_resp.push_str(&format!("{ch}\n"));
+                }
             }
-            for ch in channels_out {
-                str_resp.push_str(&format!("{ch}\n"));
-            }
-            if !issues.is_empty() {
-                str_resp.push_str("---\nFunding Issues:\n");
-                for issue in issues {
-                    str_resp.push_str(&format!("  - {issue}\n"));
+            match funding_issues.as_deref() {
+                None => str_resp.push_str("---\nWaiting for funding calculations\n"),
+                Some([]) => str_resp.push_str("---\nWell funded\n"),
+                Some(issues) => {
+                    str_resp.push_str("---\n");
+                    for issue in issues {
+                        str_resp.push_str(&format!("Funding issue: {issue}\n"));
+                    }
                 }
             }
             println!("{str_resp}");
         }
-        Response::Balance(None) => {
-            println!("No balance information available.");
+        Response::Balance(Err(msg)) => {
+            eprintln!("Balance error: {msg}");
         }
         Response::Pong => {
             println!("Pong");
         }
-        Response::NerdStats(command::NerdStatsResponse::NoInfo) => {
-            eprintln!("No extra stats available. Try connecting to a destination first.");
-        }
-        Response::NerdStats(command::NerdStatsResponse::Connecting(stats)) => {
-            print_connecting_stats(stats);
-        }
-        Response::NerdStats(command::NerdStatsResponse::Connected(stats)) => {
-            print_connected_stats(stats);
+        Response::NerdStats(nerd_stats) => {
+            print_nerd_stats(nerd_stats);
         }
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => {
             eprintln!("Already past potential funding phase - no longer possible to fund");
@@ -310,9 +337,6 @@ fn pretty_print(resp: &Response) {
         }
         Response::FundingTool(command::FundingToolResponse::Done) => {
             println!("Funding complete");
-        }
-        Response::RefreshNodeTriggered => {
-            println!("Node balance check triggered");
         }
         Response::Info(info) => {
             println!(
@@ -348,6 +372,36 @@ fn pretty_print(resp: &Response) {
     }
 }
 
+fn format_probability(p: f64) -> String {
+    let s = format!("{:.8}", p);
+    let trimmed = s.trim_end_matches('0');
+    trimmed.trim_end_matches('.').to_string()
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KB: u64 = 1_024;
+    const MB: u64 = 1_024 * KB;
+    const GB: u64 = 1_024 * MB;
+    match bytes {
+        b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
+        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{:.1} KB", b as f64 / KB as f64),
+        b => format!("{b} B"),
+    }
+}
+
+fn human_msgs(msgs: u64) -> String {
+    const K: u64 = 1_000;
+    const M: u64 = 1_000 * K;
+    const G: u64 = 1_000 * M;
+    match msgs {
+        m if m >= G => format!("{:.1}B", m as f64 / G as f64),
+        m if m >= M => format!("{:.1}M", m as f64 / M as f64),
+        m if m >= K => format!("{:.1}K", m as f64 / K as f64),
+        m => format!("{m}"),
+    }
+}
+
 fn determine_exitcode(resp: &Response) -> ExitCode {
     match resp {
         Response::Connect(command::ConnectResponse::AlreadyConnected(..)) => exitcode::OK,
@@ -358,18 +412,26 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
-        Response::Balance(..) => exitcode::OK,
+        Response::Balance(Ok(..)) => exitcode::OK,
+        Response::Balance(Err(..)) => exitcode::SOFTWARE,
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse::NoInfo) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse::Connecting(_)) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse::Connected(_)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Available(_))) => {
+            exitcode::OK
+        }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Waiting)) => {
+            exitcode::UNAVAILABLE
+        }
+        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Error(_))) => {
+            exitcode::SOFTWARE
+        }
+        Response::NerdStats(command::NerdStatsResponse::Connecting(..)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse::Connected(..)) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
-        Response::RefreshNodeTriggered => exitcode::OK,
         Response::Info(..) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
@@ -377,6 +439,39 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
+    }
+}
+
+fn print_ticket_stats_status(status: &command::TicketStatsStatus) {
+    match status {
+        command::TicketStatsStatus::Available(ts) => println!(
+            "Ticket Price: {}\nWinning Probability: {}",
+            balance::human_wxhopr(ts.ticket_price),
+            format_probability(ts.winning_probability)
+        ),
+        command::TicketStatsStatus::Waiting => {
+            println!("waiting for incentive operations to become available")
+        }
+        command::TicketStatsStatus::Error(e) => eprintln!("Error fetching ticket stats: {e}"),
+    }
+}
+
+fn print_nerd_stats(nerd_stats: &command::NerdStatsResponse) {
+    match nerd_stats {
+        command::NerdStatsResponse::NoInfo(ts_status) => {
+            print_ticket_stats_status(ts_status);
+            println!("(connect to a destination to see more stats)");
+        }
+        command::NerdStatsResponse::Connecting(ts_status, conn) => {
+            print_ticket_stats_status(ts_status);
+            println!("---");
+            print_connecting_stats(conn);
+        }
+        command::NerdStatsResponse::Connected(ts_status, conn) => {
+            print_ticket_stats_status(ts_status);
+            println!("---");
+            print_connected_stats(conn);
+        }
     }
 }
 
