@@ -56,9 +56,10 @@ impl Display for FundingIssue {
 /// Which entity holds a wxHOPR stake: either an open outgoing channel to a peer,
 /// or the unallocated balance in the Safe contract.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "type", content = "address", rename_all = "snake_case")]
 pub enum CapacityAllocator {
-    Peer(#[serde(with = "serde_utils::address")] Address),
     Safe,
+    Peer(#[serde(with = "serde_utils::address")] Address),
 }
 
 impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
