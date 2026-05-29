@@ -27,8 +27,8 @@ pub enum FundingIssue {
     ChannelsOutOfFunds, // less than 1 message available in all channels combined
     SafeOutOfFunds,     // less than 1 message available in safe
     SafeLowOnFunds,     // less than 0.5 of ideal safe balance
-    NodeUnderfunded,    // lower than recommended xDai
-    NodeLowOnFunds,     // lower than 2x recommended xDai
+    NodeUnderfunded,    // xDai is below 100 Gwei - unlikely to cover gas for a transaction
+    NodeLowOnFunds,     // xDai is below the ideal amount
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -191,9 +191,11 @@ pub fn to_funding_issues(
         }
     }
 
-    if node_xdai < ideal.xdai {
+    // 100 Gwei — heuristic threshold below which the node is unlikely to cover the gas cost of a typical transaction
+    let node_xdai_min_gas_threshold = Balance::<XDai>::from(100_000_000_000u64);
+    if node_xdai < node_xdai_min_gas_threshold {
         issues.push(FundingIssue::NodeUnderfunded);
-    } else if node_xdai < (ideal.xdai * 2) {
+    } else if node_xdai < ideal.xdai {
         issues.push(FundingIssue::NodeLowOnFunds);
     }
 
@@ -281,6 +283,40 @@ mod tests {
     }
 
     #[test]
+    fn node_underfunded_when_xdai_below_100_gwei() {
+        let mut allocs = HashMap::new();
+        allocs.insert(
+            CapacityAllocator::Peer(Address::from([1u8; 20])),
+            peer_capacity(100, 10),
+        );
+        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
+        let issues = to_funding_issues(
+            ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
+            &allocs,
+            Balance::<XDai>::from(50_000_000_000_u64), // 50 Gwei < 100 Gwei threshold
+        );
+        assert!(issues.contains(&FundingIssue::NodeUnderfunded));
+        assert!(!issues.contains(&FundingIssue::NodeLowOnFunds));
+    }
+
+    #[test]
+    fn node_low_on_funds_when_xdai_below_ideal() {
+        let mut allocs = HashMap::new();
+        allocs.insert(
+            CapacityAllocator::Peer(Address::from([1u8; 20])),
+            peer_capacity(100, 10),
+        );
+        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
+        let issues = to_funding_issues(
+            ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
+            &allocs,
+            Balance::<XDai>::from(500_000_000_000_u64), // 500 Gwei: above threshold, below ideal
+        );
+        assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
+        assert!(!issues.contains(&FundingIssue::NodeUnderfunded));
+    }
+
+    #[test]
     fn no_issues_when_well_funded() {
         let mut allocs = HashMap::new();
         allocs.insert(
@@ -288,7 +324,6 @@ mod tests {
             peer_capacity(100, 10),
         );
         allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        // xdai well above 2x the ideal xdai recommendation
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
