@@ -27,8 +27,8 @@ pub enum FundingIssue {
     ChannelsOutOfFunds, // less than 1 message available in all channels combined
     SafeOutOfFunds,     // less than 1 message available in safe
     SafeLowOnFunds,     // less than 0.5 of ideal safe balance
-    NodeUnderfunded,    // lower than 0.0075 xDai
-    NodeLowOnFunds,     // lower than 0.0075 xDai * 2
+    NodeUnderfunded,    // lower than recommended xDai
+    NodeLowOnFunds,     // lower than 2x recommended xDai
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -159,11 +159,6 @@ impl Display for Balances {
     }
 }
 
-/// Based on the fixed gas price we use (3gwei) and our average gas/tx consumption (250'000)
-pub fn min_funds_threshold() -> Balance<XDai> {
-    Balance::<XDai>::from(750000000000000_u64) // 0.00075 xDai = 3 gwei * 250'000 gas
-}
-
 pub fn to_funding_issues(
     ideal: BalanceRecommendation,
     capacity_allocations: &HashMap<CapacityAllocator, Capacity>,
@@ -196,9 +191,9 @@ pub fn to_funding_issues(
         }
     }
 
-    if node_xdai < min_funds_threshold() {
+    if node_xdai < ideal.xdai {
         issues.push(FundingIssue::NodeUnderfunded);
-    } else if node_xdai < (min_funds_threshold() * 2) {
+    } else if node_xdai < (ideal.xdai * 2) {
         issues.push(FundingIssue::NodeLowOnFunds);
     }
 
@@ -293,7 +288,7 @@ mod tests {
             peer_capacity(100, 10),
         );
         allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        // xdai well above 0.0015 xDai (2x threshold)
+        // xdai well above 2x the ideal xdai recommendation
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
