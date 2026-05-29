@@ -27,8 +27,8 @@ pub enum FundingIssue {
     ChannelsOutOfFunds, // less than 1 message available in all channels combined
     SafeOutOfFunds,     // less than 1 message available in safe
     SafeLowOnFunds,     // less than 0.5 of ideal safe balance
-    NodeUnderfunded,    // xDai is empty - cannot pay for any gas
-    NodeLowOnFunds,     // xDai is below ideal amount
+    NodeUnderfunded,    // xDai is below 100 Gwei - unlikely to cover gas for a transaction
+    NodeLowOnFunds,     // xDai is below the ideal amount
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
