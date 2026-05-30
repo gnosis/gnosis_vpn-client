@@ -3229,6 +3229,7 @@ dependencies = [
  "futures",
  "gnosis_vpn-lib",
  "humantime",
+ "ipnetwork",
  "libc",
  "mnl",
  "nftnl",

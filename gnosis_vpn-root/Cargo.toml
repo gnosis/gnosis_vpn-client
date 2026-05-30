@@ -30,6 +30,9 @@ nftnl             = { workspace = true }
 rtnetlink         = { workspace = true }
 tikv-jemallocator = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+ipnetwork = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
