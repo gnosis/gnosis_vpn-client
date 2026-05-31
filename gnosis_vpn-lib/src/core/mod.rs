@@ -5,6 +5,8 @@ use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
+use moka::sync::Cache;
+use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
@@ -32,6 +34,10 @@ use crate::{balance, log_output, ticket_stats, wireguard};
 pub mod runner;
 
 use runner::Results;
+
+type ResponderUnit = Cache<u64, Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>>;
+type ResponderString = Cache<u64, Arc<Mutex<Option<oneshot::Sender<Result<String, String>>>>>>;
+type ResponderDuration = Cache<u64, Arc<Mutex<Option<oneshot::Sender<Result<Duration, String>>>>>>;
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
 
@@ -86,9 +92,10 @@ pub struct Core {
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
-    responder_unit: Option<oneshot::Sender<Result<(), String>>>,
-    responder_string: Option<oneshot::Sender<Result<String, String>>>,
-    responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
+    next_request_id: u64,
+    responders_unit: ResponderUnit,
+    responders_string: ResponderString,
+    responders_duration: ResponderDuration,
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
@@ -188,14 +195,30 @@ impl Core {
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             route_healths,
-            responder_unit: None,
-            responder_string: None,
-            responder_duration: None,
+            next_request_id: 0,
+            responders_unit: Cache::builder()
+                .max_capacity(256)
+                .time_to_live(Duration::from_secs(120))
+                .build(),
+            responders_string: Cache::builder()
+                .max_capacity(256)
+                .time_to_live(Duration::from_secs(120))
+                .build(),
+            responders_duration: Cache::builder()
+                .max_capacity(256)
+                .time_to_live(Duration::from_secs(120))
+                .build(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
             cached_session_pseudonym: HashMap::new(),
         };
         Ok((core, incoming_sender))
+    }
+
+    fn next_request_id(&mut self) -> u64 {
+        let id = self.next_request_id;
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        id
     }
 
     pub async fn start(mut self) {
@@ -259,40 +282,64 @@ impl Core {
             WorkerToCore::ResponseFromRoot(resp) => {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
-                    ResponseFromRoot::KillswitchLockdown { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
-                            let _ = responder.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for killswitch lockdown response");
-                            });
+                    ResponseFromRoot::KillswitchLockdown { request_id, res } => {
+                        if let Some(entry) = self.responders_unit.get(&request_id) {
+                            if let Some(tx) = entry.lock().take() {
+                                let _ = tx.send(res).map_err(|_| {
+                                    tracing::warn!("responder channel closed for killswitch lockdown response");
+                                });
+                            }
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for killswitch lockdown response (evicted or duplicate)"
+                            );
                         }
                     }
-                    ResponseFromRoot::DynamicWgRouting { res } => {
-                        if let Some(responder) = self.responder_string.take() {
-                            let _ = responder.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for dynamic wg routing response");
-                            });
+                    ResponseFromRoot::DynamicWgRouting { request_id, res } => {
+                        if let Some(entry) = self.responders_string.get(&request_id) {
+                            if let Some(tx) = entry.lock().take() {
+                                let _ = tx.send(res).map_err(|_| {
+                                    tracing::warn!("responder channel closed for dynamic wg routing response");
+                                });
+                            }
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for dynamic wg routing response (evicted or duplicate)"
+                            );
                         }
                     }
-                    ResponseFromRoot::StaticWgRouting { res } => {
-                        if let Some(responder) = self.responder_string.take() {
-                            let _ = responder.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for static wg routing response");
-                            });
+                    ResponseFromRoot::StaticWgRouting { request_id, res } => {
+                        if let Some(entry) = self.responders_string.get(&request_id) {
+                            if let Some(tx) = entry.lock().take() {
+                                let _ = tx.send(res).map_err(|_| {
+                                    tracing::warn!("responder channel closed for static wg routing response");
+                                });
+                            }
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for static wg routing response (evicted or duplicate)"
+                            );
                         }
                     }
-                    ResponseFromRoot::Ping { res } => {
-                        if let Some(responder) = self.responder_duration.take() {
-                            let _ = responder.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for ping response");
-                            });
+                    ResponseFromRoot::Ping { request_id, res } => {
+                        if let Some(entry) = self.responders_duration.get(&request_id) {
+                            if let Some(tx) = entry.lock().take() {
+                                let _ = tx.send(res).map_err(|_| {
+                                    tracing::warn!("responder channel closed for ping response");
+                                });
+                            }
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for ping response (evicted or duplicate)"
+                            );
                         }
                     }
                 };
@@ -695,17 +742,26 @@ impl Core {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
-                    let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                    let mut dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                    dest_ids.sort();
                     let channels_already_available = self
                         .capacity_allocations
                         .as_ref()
                         .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
-                    for id in dest_ids {
+                    for (idx, id) in dest_ids.into_iter().enumerate() {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
                             && let Some(hopr) = self.hopr.clone()
                         {
-                            rh.peers(&all_peers, &hopr, &dest, &self.config.connection, results_sender);
+                            let stagger = Duration::from_millis((idx as u64) * 500);
+                            rh.peers(
+                                &all_peers,
+                                &hopr,
+                                &dest,
+                                &self.config.connection,
+                                results_sender,
+                                stagger,
+                            );
                             // If peers just moved this route into NeedsChannel and capacity
                             // allocations already show open channels, complete the transition
                             // immediately rather than waiting for the next capacity tick.
@@ -851,14 +907,22 @@ impl Core {
                     interface,
                     resp,
                 } => {
-                    self.responder_unit = Some(resp);
-                    let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
+                    let request_id = self.next_request_id();
+                    self.responders_unit
+                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    let request = RequestToRoot::KillswitchLockdown {
+                        request_id,
+                        peer_ips,
+                        interface,
+                    };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
                 RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
-                    self.responder_string = Some(resp);
-                    let request = RequestToRoot::DynamicWgRouting { wg_data };
+                    let request_id = self.next_request_id();
+                    self.responders_string
+                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    let request = RequestToRoot::DynamicWgRouting { request_id, wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
@@ -867,14 +931,22 @@ impl Core {
                     peer_ips,
                     resp,
                 } => {
-                    self.responder_string = Some(resp);
-                    let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
+                    let request_id = self.next_request_id();
+                    self.responders_string
+                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    let request = RequestToRoot::StaticWgRouting {
+                        request_id,
+                        wg_data,
+                        peer_ips,
+                    };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
                 RunnerToRoot::Ping { options, resp } => {
-                    self.responder_duration = Some(resp);
-                    let request = RequestToRoot::Ping { options };
+                    let request_id = self.next_request_id();
+                    self.responders_duration
+                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    let request = RequestToRoot::Ping { request_id, options };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
