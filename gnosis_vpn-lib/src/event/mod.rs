@@ -84,6 +84,11 @@ pub enum RunnerToRoot {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
     },
+    /// Fire-and-forget: refresh the peer-IP allowlist used by the killswitch and routing
+    /// bypass. Sent periodically from Core while in Phase::Connected. No response required.
+    UpdatePeerIps {
+        peer_ips: Vec<Ipv4Addr>,
+    },
 }
 
 /// Data required for WireGuard operations
@@ -126,6 +131,11 @@ pub enum RequestToRoot {
     /// Fire-and-forget: ask root to hold resolved IPs so they survive a worker restart.
     CacheBlokliIps {
         ips: Vec<Ipv4Addr>,
+    },
+    /// Fire-and-forget: refresh the peer-IP allowlist used by the killswitch and routing
+    /// bypass. Sent periodically while VPN is connected. No response required.
+    UpdatePeerIps {
+        peer_ips: Vec<Ipv4Addr>,
     },
 }
 

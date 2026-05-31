@@ -178,6 +178,13 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         Ok(iface.to_string())
     }
 
+    async fn update_peer_bypass(&mut self, peer_ips: &[Ipv4Addr]) -> Result<(), Error> {
+        if let Some(bypass) = self.bypass_manager.as_mut() {
+            bypass.update_peer_routes(peer_ips).await?;
+        }
+        Ok(())
+    }
+
     /// Teardown split-tunnel routing for macOS StaticRouter.
     ///
     /// Teardown order:
@@ -216,6 +223,10 @@ impl Routing for DynamicRouter {
     }
 
     async fn teardown(&mut self, _logs: Logs) {}
+
+    async fn update_peer_bypass(&mut self, _peer_ips: &[Ipv4Addr]) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// Try whatever teardown we can on startup to clean up from any previous unclean shutdowns.

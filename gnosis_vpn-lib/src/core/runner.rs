@@ -78,7 +78,7 @@ pub enum Results {
         res: Result<(), Error>,
     },
     ConnectedPeers {
-        res: Result<Vec<Address>, Error>,
+        res: Result<std::collections::HashMap<Address, crate::peer::Peer>, Error>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -246,7 +246,7 @@ pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resu
 
 pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting connected peers runner");
-    let res = hopr.connected_peers().await.map_err(Error::from);
+    let res = hopr.announced_peers().await.map_err(Error::from);
     let _ = results_sender.send(Results::ConnectedPeers { res }).await;
 }
 
@@ -594,7 +594,7 @@ impl Display for Results {
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
             Results::ConnectedPeers { res } => match res {
-                Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
+                Ok(peers) => write!(f, "ConnectedPeers: {} peers", peers.len()),
                 Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
             Results::IncentiveOperations { res } => match res {
