@@ -43,6 +43,17 @@ pub fn backoff_expo_short_delay() -> ExponentialBuilder {
         .with_jitter()
 }
 
+/// Like [`backoff_expo_short_delay`] but limited to 2 retries (3 total attempts).
+/// Used for bridge-session open, where a fast failure is preferable to a long stall.
+pub fn backoff_expo_short_delay_bridge() -> ExponentialBuilder {
+    ExponentialBuilder::new()
+        .with_min_delay(std::time::Duration::from_secs(1))
+        .with_max_delay(std::time::Duration::from_secs(10))
+        .with_factor(2.0)
+        .with_jitter()
+        .with_max_times(2)
+}
+
 /// Resolves the IPv4 addresses for the host and port specified in the provided URL.
 pub async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
     let host = url.host_str().ok_or(Error::NoHost)?;
