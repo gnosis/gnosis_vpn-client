@@ -317,10 +317,8 @@ async fn open_bridge_session(
         capabilities: options.sessions.bridge.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        // only send 1 SURB alongside our HTTP requests
-        // health responses always fit into one packet
         always_max_out_surbs: false,
-        surb_management: None,
+        surb_management: Some(SurbBalancerConfig::default()),
         ..Default::default()
     };
     (|| async {
@@ -334,7 +332,7 @@ async fn open_bridge_session(
         )
         .await
     })
-    .retry(remote_data::backoff_expo_short_delay())
+    .retry(remote_data::backoff_expo_short_delay_bridge())
     .notify(|err: &HoprError, dur: Duration| {
         tracing::warn!(error = ?err, "error opening bridge session - will retry after {:?}", dur);
         let tx = results_sender.clone();
