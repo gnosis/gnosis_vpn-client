@@ -21,7 +21,6 @@ humantime-serde.workspace    = true
 ipnetwork.workspace          = true
 libc.workspace               = true
 multiaddr.workspace          = true
-pgp.workspace                = true
 ping.workspace               = true
 rand.workspace               = true
 reqwest.workspace            = true

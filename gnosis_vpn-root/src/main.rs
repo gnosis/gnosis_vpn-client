@@ -1005,8 +1005,7 @@ impl DaemonState {
             | LibCommand::Disconnect
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
-            | LibCommand::Telemetry
-            | LibCommand::RefreshNode => Ok(Response::WorkerOffline),
+            | LibCommand::Telemetry => Ok(Response::WorkerOffline),
             LibCommand::Ping => Ok(Response::Pong),
             LibCommand::Destinations => {
                 let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();

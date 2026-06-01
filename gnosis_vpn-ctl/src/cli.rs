@@ -68,10 +68,6 @@ pub enum Command {
     #[command()]
     Balance {},
 
-    /// Trigger a refresh of node information including balance
-    #[command()]
-    RefreshNode {},
-
     /// Trigger a funding tool run to claim funds for your account during onboarding
     #[command()]
     FundingTool {
@@ -164,7 +160,6 @@ impl From<Command> for LibCommand {
             Command::Connect { id } => LibCommand::Connect(id),
             Command::Disconnect {} => LibCommand::Disconnect,
             Command::Balance {} => LibCommand::Balance,
-            Command::RefreshNode {} => LibCommand::RefreshNode,
             Command::FundingTool { secret } => LibCommand::FundingTool(secret),
             Command::Ping {} => LibCommand::Ping,
             Command::Telemetry {} => LibCommand::Telemetry,

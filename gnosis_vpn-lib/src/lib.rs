@@ -29,7 +29,7 @@ mod log_output;
 mod peer;
 mod remote_data;
 mod serde_utils;
-mod ticket_stats;
+pub mod ticket_stats;
 
 pub mod prelude {
     pub use edgli::hopr_lib::api::types::primitive::prelude::Address;

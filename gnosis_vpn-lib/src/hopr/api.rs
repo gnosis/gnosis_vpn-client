@@ -17,7 +17,8 @@ use edgli::{
 };
 use futures_util::future::AbortHandle;
 use hopr_utils_session::{
-    ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding, create_udp_client_binding,
+    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
+    create_udp_client_binding,
 };
 use multiaddr::Protocol;
 use tokio::task::JoinSet;
@@ -35,7 +36,7 @@ use std::{
 
 use crate::peer::Peer;
 use crate::{
-    balance::Balances,
+    balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
     info::Info,
 };
@@ -137,7 +138,7 @@ impl Hopr {
             IpProtocol::TCP => create_tcp_client_binding(
                 bind_host,
                 port_range,
-                self.edgli.as_hopr(),
+                HopSessionFactory::new(self.edgli.as_hopr()),
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
@@ -150,7 +151,7 @@ impl Hopr {
             IpProtocol::UDP => create_udp_client_binding(
                 bind_host,
                 port_range,
-                self.edgli.as_hopr(),
+                HopSessionFactory::new(self.edgli.as_hopr()),
                 open_listeners.clone(),
                 destination,
                 session_target_spec.clone(),
@@ -392,6 +393,34 @@ impl Hopr {
             }
         }
         Ok(peers)
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn ideal_balance_recommendation(
+        &self,
+        cfg: &edgli::strategy::IncentiveConfiguration,
+    ) -> Result<balance::BalanceRecommendation, HoprError> {
+        let rec = self
+            .edgli
+            .ideal_balance_recommendation(cfg)
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        Ok(balance::BalanceRecommendation {
+            wxhopr: rec.wxhopr,
+            xdai: rec.xdai,
+        })
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn capacity_allocations(
+        &self,
+    ) -> Result<HashMap<balance::CapacityAllocator, balance::Capacity>, HoprError> {
+        let raw = self
+            .edgli
+            .describe_current_capacity_allocations()
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

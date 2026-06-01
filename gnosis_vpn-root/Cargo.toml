@@ -26,7 +26,6 @@ url.workspace            = true
 [target.'cfg(target_os = "linux")'.dependencies]
 cidr              = { workspace = true }
 futures           = { workspace = true }
-ipnetwork         = { workspace = true }
 mnl               = { workspace = true }
 nftnl             = { workspace = true }
 rtnetlink         = { workspace = true }

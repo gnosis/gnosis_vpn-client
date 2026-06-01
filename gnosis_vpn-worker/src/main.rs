@@ -205,7 +205,7 @@ async fn send_to_root(
 }
 
 fn main() {
-    match hopr_lib::prepare_tokio_runtime(None, None) {
+    match hopr_lib::prepare_tokio_runtime(None, None, None) {
         Ok(rt) => {
             rt.block_on(main_inner());
         }
