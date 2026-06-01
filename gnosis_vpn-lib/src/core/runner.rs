@@ -253,12 +253,13 @@ pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
     let (connected, announced_ips) = tokio::join!(
         async { hopr.connected_peers().await.map_err(Error::from) },
         async {
-            hopr.announced_peers()
-                .await
-                .unwrap_or_default()
-                .into_values()
-                .flat_map(|p| p.ipv4_addrs)
-                .collect::<Vec<_>>()
+            match hopr.announced_peers().await {
+                Ok(peers) => peers.into_values().flat_map(|p| p.ipv4_addrs).collect::<Vec<_>>(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "announced_peers() failed; skipping allowlist refresh");
+                    Vec::new()
+                }
+            }
         }
     );
     let _ = results_sender
