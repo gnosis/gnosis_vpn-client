@@ -6,16 +6,19 @@ use crate::serde_utils;
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 
-/// wxHOPR amounts (in base units) below this are awkward to read in plain decimal,
-/// so we additionally surface them in scientific notation.
+/// wxHOPR amounts (in whole tokens, i.e. the value returned by
+/// `Balance::amount_in_base_units` after the wei→token conversion) below this are
+/// awkward to read in plain decimal, so we additionally surface them in scientific
+/// notation. `1e-3` here means 0.001 wxHOPR, not wei.
 const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
 
-/// Scientific-notation form of a wxHOPR balance (e.g. `7e-10`), but only for values
+/// Scientific-notation form of a wxHOPR balance (e.g. `7.00e-10`), but only for values
 /// small enough that the decimal form is hard to read. Returns `None` for zero and for
-/// amounts at or above `1e-3` (base units), where the decimal form is already legible.
+/// amounts at or above `1e-3` wxHOPR (the token value, already converted from wei),
+/// where the decimal form is already legible.
 pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     let v: f64 = b.amount_in_base_units().parse().ok()?;
-    (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| format!("{v:e}"))
+    (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| format!("{v:.2e}"))
 }
 
 // in order of priority
@@ -346,7 +349,7 @@ mod tests {
         // smallest possible non-zero balance: 1 wei = 1e-18 token
         assert_eq!(
             wxhopr_scientific(Balance::<WxHOPR>::from(1u64)),
-            Some("1e-18".to_string())
+            Some("1.00e-18".to_string())
         );
     }
 
@@ -355,7 +358,7 @@ mod tests {
         // 1e-4 token, well under the 1e-3 cutoff
         assert_eq!(
             wxhopr_scientific(Balance::<WxHOPR>::from(100_000_000_000_000u64)),
-            Some("1e-4".to_string())
+            Some("1.00e-4".to_string())
         );
     }
 

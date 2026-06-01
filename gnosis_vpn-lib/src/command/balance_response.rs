@@ -160,4 +160,41 @@ mod tests {
         assert_eq!(result[0].matched_exit, None);
         assert_eq!(result[0].balance, ChannelBalance::Completed { amount: balance });
     }
+
+    #[test]
+    fn display_unknown_balance() {
+        assert_eq!(ChannelBalance::Unknown.to_string(), "unknown balance");
+    }
+
+    #[test]
+    fn display_small_balance_appends_scientific() {
+        // 1 wei = 1e-18 token, well below the 1e-3 scientific threshold
+        let amount = Balance::<WxHOPR>::from(1u64);
+        let rendered = ChannelBalance::Completed { amount }.to_string();
+        // bare decimal followed by the scientific form in parentheses
+        assert_eq!(rendered, format!("{amount} (1.00e-18)"));
+    }
+
+    #[test]
+    fn display_large_balance_omits_scientific() {
+        // exactly 1e-3 token: at the threshold, decimal form is legible, no suffix
+        let amount = Balance::<WxHOPR>::from(1_000_000_000_000_000u64);
+        let rendered = ChannelBalance::Completed { amount }.to_string();
+        assert_eq!(rendered, amount.to_string());
+        assert!(
+            !rendered.contains('('),
+            "should not append scientific notation: {rendered}"
+        );
+    }
+
+    #[test]
+    fn display_zero_balance_omits_scientific() {
+        let amount = Balance::<WxHOPR>::zero();
+        let rendered = ChannelBalance::Completed { amount }.to_string();
+        assert_eq!(rendered, amount.to_string());
+        assert!(
+            !rendered.contains('('),
+            "should not append scientific notation: {rendered}"
+        );
+    }
 }

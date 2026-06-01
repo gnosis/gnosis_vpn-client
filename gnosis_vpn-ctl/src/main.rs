@@ -294,10 +294,10 @@ fn pretty_print(resp: &Response) {
                         }
                     };
                     let sci = balance::wxhopr_scientific(e.capacity.stake)
-                        .map(|s| format!("{s}, "))
+                        .map(|s| format!(" ({s})"))
                         .unwrap_or_default();
                     str_resp.push_str(&format!(
-                        "{}: {} ({}{} msgs, {})\n",
+                        "{}: {}{} [{} msgs, {}]\n",
                         label,
                         e.capacity.stake,
                         sci,
