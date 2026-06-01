@@ -12,7 +12,7 @@ const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
 
 /// Scientific-notation form of a wxHOPR balance (e.g. `7e-10`), but only for values
 /// small enough that the decimal form is hard to read. Returns `None` for zero and for
-/// amounts at or above [`WXHOPR_SCI_THRESHOLD`], where the decimal form is already legible.
+/// amounts at or above `1e-3` (base units), where the decimal form is already legible.
 pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     let v: f64 = b.amount_in_base_units().parse().ok()?;
     (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| format!("{v:e}"))
