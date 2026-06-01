@@ -152,20 +152,12 @@ pub enum UpdateStatus {
     Idle,
     Checking,
     Available(ChannelRelease),
-    Downloading {
-        bytes_done: u64,
-        bytes_total: u64,
-    },
+    Downloading { bytes_done: u64, bytes_total: u64 },
     Verifying,
     Installing,
     RestartingService,
-    Completed {
-        new_version: String,
-    },
-    Failed {
-        stage: UpdateStage,
-        error: String,
-    },
+    Completed { new_version: String },
+    Failed { stage: UpdateStage, error: String },
 }
 
 impl UpdateStatus {
@@ -276,10 +268,7 @@ async fn run_engine(input: EngineInput, tx: mpsc::Sender<UpdateStatus>) {
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn drive_engine(
-    input: &EngineInput,
-    tx: &mpsc::Sender<UpdateStatus>,
-) -> Result<String, (UpdateStage, String)> {
+async fn drive_engine(input: &EngineInput, tx: &mpsc::Sender<UpdateStatus>) -> Result<String, (UpdateStage, String)> {
     let _ = tx.send(UpdateStatus::Checking).await;
 
     let socket_gate = (!input.skip_vpn_check).then_some(input.socket_path.as_path());
@@ -287,10 +276,12 @@ async fn drive_engine(
         .await
         .map_err(|e| (UpdateStage::Check, e.to_string()))?;
 
-    let release = manifest
-        .pick(input.channel)
-        .cloned()
-        .ok_or_else(|| (UpdateStage::Check, GateError::NoReleaseForChannel(input.channel).to_string()))?;
+    let release = manifest.pick(input.channel).cloned().ok_or_else(|| {
+        (
+            UpdateStage::Check,
+            GateError::NoReleaseForChannel(input.channel).to_string(),
+        )
+    })?;
 
     ensure_installable(&release, &input.current_app_version, input.allow_downgrade)
         .map_err(|e| (UpdateStage::Check, e.to_string()))?;
@@ -328,6 +319,8 @@ enum DownloadError {
     SymlinkDownloadPath,
     #[error("manifest size {expected} but downloaded {actual}")]
     SizeMismatch { expected: u64, actual: u64 },
+    #[error("refusing to download artifact over insecure scheme: {0}")]
+    InsecureUrl(String),
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -339,6 +332,14 @@ async fn download_artifact(
     release: &ChannelRelease,
     tx: &mpsc::Sender<UpdateStatus>,
 ) -> Result<PathBuf, DownloadError> {
+    // The privileged updater must never fetch the artifact over cleartext.
+    // Manifest PGP verification is currently disabled, so an http:// URL would
+    // leave the SHA256 check as the sole integrity control over an exposed
+    // channel — reject anything that isn't HTTPS before issuing the request.
+    if release.download_url.scheme() != "https" {
+        return Err(DownloadError::InsecureUrl(release.download_url.scheme().to_string()));
+    }
+
     tokio::fs::create_dir_all(&input.download_dir).await?;
     #[cfg(unix)]
     {
@@ -371,20 +372,19 @@ async fn download_artifact(
         }
     }
 
-    let mut response = input.client.get(release.download_url.clone()).send().await?.error_for_status()?;
+    let mut response = input
+        .client
+        .get(release.download_url.clone())
+        .send()
+        .await?
+        .error_for_status()?;
     let total = response.content_length().unwrap_or(expected);
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&target)
-        .await?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&target).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = file
-            .set_permissions(std::fs::Permissions::from_mode(0o600))
-            .await;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600)).await;
     }
 
     let mut bytes_done: u64 = 0;
@@ -430,15 +430,23 @@ async fn download_artifact(
 
 #[cfg(not(target_os = "linux"))]
 async fn verify_sha256(path: &std::path::Path, release: &ChannelRelease) -> Result<(), String> {
-    let bytes = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
+    use tokio::io::AsyncReadExt;
+    // Stream the artifact through the hasher with a fixed buffer instead of
+    // reading the whole (potentially hundreds-of-MB) file into memory — this
+    // runs in the root daemon, so a full-file allocation risks an OOM spike.
+    let mut file = tokio::fs::File::open(path).await.map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     let got = hasher.finalize();
     if got.as_slice() != release.sha256.0.as_slice() {
-        return Err(format!(
-            "sha256 mismatch: expected {}, got {:x}",
-            release.sha256, got
-        ));
+        return Err(format!("sha256 mismatch: expected {}, got {:x}", release.sha256, got));
     }
     Ok(())
 }
@@ -666,21 +674,27 @@ mod tests {
 
     #[test]
     fn update_status_terminal_variants() {
-        assert!(UpdateStatus::Completed {
-            new_version: "1.0.0".into()
-        }
-        .is_terminal());
-        assert!(UpdateStatus::Failed {
-            stage: UpdateStage::Check,
-            error: "x".into()
-        }
-        .is_terminal());
+        assert!(
+            UpdateStatus::Completed {
+                new_version: "1.0.0".into()
+            }
+            .is_terminal()
+        );
+        assert!(
+            UpdateStatus::Failed {
+                stage: UpdateStage::Check,
+                error: "x".into()
+            }
+            .is_terminal()
+        );
         assert!(!UpdateStatus::Checking.is_terminal());
-        assert!(!UpdateStatus::Downloading {
-            bytes_done: 0,
-            bytes_total: 0
-        }
-        .is_terminal());
+        assert!(
+            !UpdateStatus::Downloading {
+                bytes_done: 0,
+                bytes_total: 0
+            }
+            .is_terminal()
+        );
     }
 
     #[test]

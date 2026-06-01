@@ -104,7 +104,6 @@ impl Manifest {
     }
 }
 
-
 /// Verify the daemon reports an active VPN connection.
 ///
 /// Returns `Err(Error::VpnNotConnected)` if the daemon is unreachable or the

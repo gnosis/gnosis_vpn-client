@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
-use crate::balance::{self, FundingIssue};
+use crate::balance;
 use crate::check_update::{Channel, ChannelRelease};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
@@ -118,6 +118,8 @@ pub enum CheckUpdateResponse {
     UpToDate { current: String },
     Available { current: String, release: ChannelRelease },
     NoReleaseForChannel(Channel),
+    VpnNotConnected,
+    IntegrityError(String),
     Error(String),
 }
 

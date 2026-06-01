@@ -18,6 +18,8 @@ use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
@@ -72,6 +74,10 @@ struct DaemonState {
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
+    // set while an install engine is running so concurrent StartUpdate
+    // requests are rejected instead of racing on apt/dpkg locks and shared
+    // download/state paths
+    update_in_progress: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -463,9 +469,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // wrote `last_update_attempt.json` before exiting. Surface that to the
     // operator log once, then clear the file so we don't re-report.
     let attempt_state_path = update_paths::attempt_state_path();
-    if let Some(attempt) =
-        gnosis_vpn_lib::update::LastUpdateAttempt::take_if_present(&attempt_state_path).await
-    {
+    if let Some(attempt) = gnosis_vpn_lib::update::LastUpdateAttempt::take_if_present(&attempt_state_path).await {
         tracing::info!(
             ?attempt.channel,
             status = %attempt.final_status,
@@ -544,6 +548,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_user,
         keep_alive_instruction_sender,
         routing_actor_sender,
+        update_in_progress: Arc::new(AtomicBool::new(false)),
     };
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
@@ -628,7 +633,7 @@ async fn check_update_in_task(
     socket_path: &Path,
 ) -> Response {
     use gnosis_vpn_lib::check_update as cu;
-    use gnosis_vpn_lib::update::{ensure_installable, GateError};
+    use gnosis_vpn_lib::update::{GateError, ensure_installable};
 
     let current = env!("CARGO_PKG_VERSION").to_string();
     let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
@@ -638,6 +643,12 @@ async fn check_update_in_task(
     let gate = (!force).then_some(socket_path);
     let manifest = match cu::download(&client, gate).await {
         Ok(m) => m,
+        Err(cu::Error::VpnNotConnected) => {
+            return Response::CheckUpdate(command::CheckUpdateResponse::VpnNotConnected);
+        }
+        Err(cu::Error::Integrity(msg)) => {
+            return Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(msg));
+        }
         Err(e) => return Response::CheckUpdate(command::CheckUpdateResponse::Error(format!("{e}"))),
     };
     let Some(release) = manifest.pick(channel).cloned() else {
@@ -874,17 +885,30 @@ impl DaemonState {
     }
 
     async fn handle_start_update(&mut self, cmd: LibCommand, resp: mpsc::Sender<Response>) {
-        let LibCommand::StartUpdate { channel, allow_downgrade, force } = cmd else {
+        let LibCommand::StartUpdate {
+            channel,
+            allow_downgrade,
+            force,
+        } = cmd
+        else {
             return;
         };
+        // Reject if an install engine is already running. Concurrent engines
+        // would race on the apt/dpkg lock and on shared download/state paths.
+        if self.update_in_progress.swap(true, Ordering::SeqCst) {
+            let _ = resp
+                .send(Response::StartUpdateRejected(
+                    "an update is already in progress".to_string(),
+                ))
+                .await;
+            return;
+        }
         // build the engine input from compile-time + daemon-owned paths so
         // the IPC caller can only choose channel + downgrade + force
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-        {
+        let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
             Ok(c) => c,
             Err(e) => {
+                self.update_in_progress.store(false, Ordering::SeqCst);
                 let _ = resp
                     .send(Response::UpdateStatus(gnosis_vpn_lib::update::UpdateStatus::Failed {
                         stage: gnosis_vpn_lib::update::UpdateStage::Check,
@@ -911,6 +935,7 @@ impl DaemonState {
             socket_path,
         };
         let mut engine_rx = gnosis_vpn_lib::update::install_engine(input);
+        let in_progress = self.update_in_progress.clone();
         tokio::spawn(async move {
             while let Some(status) = engine_rx.recv().await {
                 let terminal = status.is_terminal();
@@ -921,6 +946,9 @@ impl DaemonState {
                     break;
                 }
             }
+            // clear on any exit: terminal status, engine channel close, or
+            // client disconnect — otherwise the daemon stays wedged as busy
+            in_progress.store(false, Ordering::SeqCst);
         });
     }
 

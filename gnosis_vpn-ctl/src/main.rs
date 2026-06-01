@@ -8,7 +8,6 @@ use std::path::Path;
 use std::process;
 
 use gnosis_vpn_lib::balance;
-use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::check_update::Channel;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
@@ -102,14 +101,26 @@ async fn run_check_update(format: OutputFormat, socket_path: &Path, channel: Cha
             command::CheckUpdateResponse::NoReleaseForChannel(ch) => {
                 eprintln!("No release on channel {ch}");
             }
+            command::CheckUpdateResponse::VpnNotConnected => {
+                return emit_check_update_error(
+                    OutputFormat::Plain,
+                    CheckUpdateErrorKind::VpnNotConnected,
+                    "checking for updates without an active VPN connection is insecure",
+                );
+            }
+            command::CheckUpdateResponse::IntegrityError(msg) => {
+                return emit_check_update_error(OutputFormat::Plain, CheckUpdateErrorKind::IntegrityError, msg);
+            }
             command::CheckUpdateResponse::Error(msg) => {
-                return emit_check_update_error(OutputFormat::Plain, CheckUpdateErrorKind::Unavailable, msg);
+                return emit_check_update_error(OutputFormat::Plain, CheckUpdateErrorKind::Internal, msg);
             }
         },
     }
     match result {
         command::CheckUpdateResponse::UpToDate { .. } | command::CheckUpdateResponse::Available { .. } => exitcode::OK,
         command::CheckUpdateResponse::NoReleaseForChannel(_) => exitcode::UNAVAILABLE,
+        command::CheckUpdateResponse::VpnNotConnected => CheckUpdateErrorKind::VpnNotConnected.exit_code(),
+        command::CheckUpdateResponse::IntegrityError(_) => CheckUpdateErrorKind::IntegrityError.exit_code(),
         command::CheckUpdateResponse::Error(_) => exitcode::SOFTWARE,
     }
 }
@@ -138,11 +149,10 @@ async fn run_install_update(
         }
     }
 
-    let mut stream =
-        match gnosis_vpn_lib::update::install_stream(socket_path, channel, allow_downgrade, force).await {
-            Ok(s) => Box::pin(s),
-            Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
-        };
+    let mut stream = match gnosis_vpn_lib::update::install_stream(socket_path, channel, allow_downgrade, force).await {
+        Ok(s) => Box::pin(s),
+        Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
+    };
 
     let render = matches!(format, OutputFormat::Plain) && io::stderr().is_terminal();
     let mut bar: Option<ProgressBar> = None;
@@ -233,7 +243,6 @@ fn render_status(status: &UpdateStatus, bar: &mut Option<ProgressBar>) {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // VpnNotConnected is kept for future re-routing through IPC
 enum CheckUpdateErrorKind {
     Unavailable,
     IntegrityError,
@@ -503,6 +512,15 @@ fn pretty_print(resp: &Response) {
         Response::CheckUpdate(command::CheckUpdateResponse::NoReleaseForChannel(ch)) => {
             eprintln!("No release on channel {ch}");
         }
+        Response::CheckUpdate(command::CheckUpdateResponse::VpnNotConnected) => {
+            eprintln!(
+                "{}: checking for updates without an active VPN connection is insecure",
+                CheckUpdateErrorKind::VpnNotConnected
+            );
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(msg)) => {
+            eprintln!("{}: {msg}", CheckUpdateErrorKind::IntegrityError);
+        }
         Response::CheckUpdate(command::CheckUpdateResponse::Error(msg)) => {
             eprintln!("Update check error: {msg}");
         }
@@ -588,6 +606,12 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::CheckUpdate(command::CheckUpdateResponse::UpToDate { .. })
         | Response::CheckUpdate(command::CheckUpdateResponse::Available { .. }) => exitcode::OK,
         Response::CheckUpdate(command::CheckUpdateResponse::NoReleaseForChannel(_)) => exitcode::UNAVAILABLE,
+        Response::CheckUpdate(command::CheckUpdateResponse::VpnNotConnected) => {
+            CheckUpdateErrorKind::VpnNotConnected.exit_code()
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(_)) => {
+            CheckUpdateErrorKind::IntegrityError.exit_code()
+        }
         Response::CheckUpdate(command::CheckUpdateResponse::Error(_)) => exitcode::SOFTWARE,
         Response::StartUpdateRejected(_) => exitcode::UNAVAILABLE,
         Response::UpdateStatus(_) => exitcode::OK,

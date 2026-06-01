@@ -32,11 +32,7 @@ fn channel_suite_component(c: Channel) -> (&'static str, &'static str) {
 
 /// `skip_vpn_check = true` mirrors the macOS `force` flag: it bypasses the
 /// VPN-connected gate (insecure — apt traffic will not traverse the tunnel).
-pub fn install_engine(
-    channel: Channel,
-    socket_path: PathBuf,
-    skip_vpn_check: bool,
-) -> mpsc::Receiver<UpdateStatus> {
+pub fn install_engine(channel: Channel, socket_path: PathBuf, skip_vpn_check: bool) -> mpsc::Receiver<UpdateStatus> {
     let (tx, rx) = mpsc::channel(32);
     tokio::spawn(async move {
         let last = match drive(channel, &socket_path, skip_vpn_check, &tx).await {
@@ -69,11 +65,9 @@ async fn drive(
 
 async fn ensure_channel(channel: Channel) -> Result<(), String> {
     let (suite, component) = channel_suite_component(channel);
-    let content = tokio::fs::read_to_string(SOURCES_PATH).await.map_err(|e| {
-        format!(
-            "apt sources file {SOURCES_PATH} not found ({e}); re-run the gnosisvpn install script"
-        )
-    })?;
+    let content = tokio::fs::read_to_string(SOURCES_PATH)
+        .await
+        .map_err(|e| format!("apt sources file {SOURCES_PATH} not found ({e}); re-run the gnosisvpn install script"))?;
 
     let cur_suite = field(&content, "Suites");
     let cur_component = field(&content, "Components");
@@ -139,10 +133,7 @@ async fn apt_upgrade() -> Result<(), String> {
 
 async fn run_apt(cmd: &mut Command) -> Result<(), String> {
     cmd.env("DEBIAN_FRONTEND", "noninteractive");
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("spawn {cmd:?}: {e}"))?;
+    let output = cmd.output().await.map_err(|e| format!("spawn {cmd:?}: {e}"))?;
     if output.status.success() {
         if !output.stderr.is_empty() {
             tracing::info!(stderr = %String::from_utf8_lossy(&output.stderr), cmd = ?cmd, "apt finished");
@@ -204,7 +195,12 @@ Signed-By: /etc/apt/keyrings/gnosisvpn-archive-keyring.gpg\n";
 
     #[test]
     fn rewrite_appends_missing_field() {
-        let stripped = SAMPLE.lines().filter(|l| !l.starts_with("Components:")).collect::<Vec<_>>().join("\n") + "\n";
+        let stripped = SAMPLE
+            .lines()
+            .filter(|l| !l.starts_with("Components:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
         let next = rewrite_field(&stripped, "Components", "snapshot");
         assert_eq!(field(&next, "Components").as_deref(), Some("snapshot"));
     }
