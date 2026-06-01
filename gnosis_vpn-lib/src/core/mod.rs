@@ -106,6 +106,7 @@ pub struct Core {
     /// IPs are retained in the killswitch allowlist for PEER_IP_HYSTERESIS_SECS after
     /// they last appeared — avoids flapping during brief libp2p churn.
     peer_ip_last_seen: HashMap<net::Ipv4Addr, Instant>,
+    last_sent_peer_ips: Vec<net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +220,7 @@ impl Core {
             cached_resolved_blokli_ips,
             cached_session_pseudonym: HashMap::new(),
             peer_ip_last_seen: HashMap::new(),
+            last_sent_peer_ips: Vec::new(),
         };
         Ok((core, incoming_sender))
     }
@@ -794,7 +796,8 @@ impl Core {
                         alive.sort_unstable();
                         if alive.is_empty() {
                             tracing::debug!("peer allowlist refresh skipped: live peer IP set is empty");
-                        } else {
+                        } else if alive != self.last_sent_peer_ips {
+                            self.last_sent_peer_ips = alive.clone();
                             let request = RequestToRoot::UpdatePeerIps { peer_ips: alive };
                             let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                         }

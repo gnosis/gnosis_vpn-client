@@ -250,14 +250,17 @@ pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resu
 
 pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting connected peers runner");
-    let connected = hopr.connected_peers().await.map_err(Error::from);
-    let announced_ips = hopr
-        .announced_peers()
-        .await
-        .unwrap_or_default()
-        .into_values()
-        .flat_map(|p| p.ipv4_addrs)
-        .collect();
+    let (connected, announced_ips) = tokio::join!(
+        async { hopr.connected_peers().await.map_err(Error::from) },
+        async {
+            hopr.announced_peers()
+                .await
+                .unwrap_or_default()
+                .into_values()
+                .flat_map(|p| p.ipv4_addrs)
+                .collect::<Vec<_>>()
+        }
+    );
     let _ = results_sender
         .send(Results::ConnectedPeers {
             connected,
