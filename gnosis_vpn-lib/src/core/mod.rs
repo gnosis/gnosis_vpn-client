@@ -289,6 +289,7 @@ impl Core {
                                     tracing::warn!("responder channel closed for killswitch lockdown response");
                                 });
                             }
+                            self.responders_unit.invalidate(&request_id);
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -304,6 +305,7 @@ impl Core {
                                     tracing::warn!("responder channel closed for dynamic wg routing response");
                                 });
                             }
+                            self.responders_string.invalidate(&request_id);
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -319,6 +321,7 @@ impl Core {
                                     tracing::warn!("responder channel closed for static wg routing response");
                                 });
                             }
+                            self.responders_string.invalidate(&request_id);
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -334,6 +337,7 @@ impl Core {
                                     tracing::warn!("responder channel closed for ping response");
                                 });
                             }
+                            self.responders_duration.invalidate(&request_id);
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -753,7 +757,7 @@ impl Core {
                             && let Some(rh) = self.route_healths.get_mut(&id)
                             && let Some(hopr) = self.hopr.clone()
                         {
-                            let stagger = Duration::from_millis((idx as u64) * 500);
+                            let stagger = Duration::from_millis((idx as u64).saturating_mul(500));
                             rh.peers(
                                 &all_peers,
                                 &hopr,
