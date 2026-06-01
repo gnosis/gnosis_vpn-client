@@ -746,10 +746,13 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::ConnectedPeers { res } => match res {
+            Results::ConnectedPeers {
+                connected,
+                announced_ips,
+            } => match connected {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
-                    let all_peers = HashSet::from_iter(peers.keys().cloned());
+                    let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let mut dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                     dest_ids.sort();
                     let channels_already_available = self
@@ -782,19 +785,15 @@ impl Core {
                     // Refresh the killswitch / routing-bypass allowlist while connected.
                     if matches!(self.phase, Phase::Connected(_)) {
                         let now = Instant::now();
-                        // Update last-seen timestamps for all currently-connected peer IPs.
-                        for peer in peers.values() {
-                            for ip in &peer.ipv4_addrs {
-                                self.peer_ip_last_seen.insert(*ip, now);
-                            }
+                        for ip in &announced_ips {
+                            self.peer_ip_last_seen.insert(*ip, now);
                         }
-                        // Prune IPs that haven't been seen within the hysteresis window.
                         self.peer_ip_last_seen
                             .retain(|_, t| now.duration_since(*t) < Duration::from_secs(PEER_IP_HYSTERESIS_SECS));
                         let mut alive: Vec<net::Ipv4Addr> = self.peer_ip_last_seen.keys().copied().collect();
                         alive.sort_unstable();
                         if alive.is_empty() {
-                            tracing::warn!("peer allowlist refresh skipped: live peer IP set is empty");
+                            tracing::debug!("peer allowlist refresh skipped: live peer IP set is empty");
                         } else {
                             let request = RequestToRoot::UpdatePeerIps { peer_ips: alive };
                             let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;

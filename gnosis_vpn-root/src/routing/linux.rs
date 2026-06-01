@@ -906,7 +906,14 @@ impl<R: RouteOps + Clone + 'static, W: WgOps + 'static> Routing for FallbackRout
 
     async fn update_peer_bypass(&mut self, peer_ips: &[Ipv4Addr]) -> Result<(), Error> {
         if let Some(bypass) = self.bypass_manager.as_mut() {
-            bypass.update_peer_routes(peer_ips).await?;
+            // Exclude IPs already managed by wg-quick PostUp/PreDown hooks so we don't
+            // double-add on refresh or double-delete on teardown.
+            let dynamic: Vec<Ipv4Addr> = peer_ips
+                .iter()
+                .filter(|ip| !self.peer_ips.contains(ip))
+                .copied()
+                .collect();
+            bypass.update_peer_routes(&dynamic).await?;
         }
         Ok(())
     }
