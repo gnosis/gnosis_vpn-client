@@ -107,7 +107,10 @@ impl Display for ChannelBalance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ChannelBalance::Unknown => write!(f, "unknown balance"),
-            ChannelBalance::Completed { amount } => write!(f, "{}", balance::human_wxhopr(*amount)),
+            ChannelBalance::Completed { amount } => match balance::wxhopr_scientific(*amount) {
+                Some(sci) => write!(f, "{amount} ({sci})"),
+                None => write!(f, "{amount}"),
+            },
         }
     }
 }

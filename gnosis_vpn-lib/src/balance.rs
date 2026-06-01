@@ -1,24 +1,22 @@
 pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-pub fn human_wxhopr(b: Balance<WxHOPR>) -> String {
-    // amount_in_base_units() already converts from wei to wxHOPR (divides by 10^18)
-    let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
-    match v {
-        v if v >= 1.0 => format!("{:.1} wxHOPR", v),
-        v if v >= 1e-3 => format!("{:.1} MilliwxHOPR", v / 1e-3),
-        v if v >= 1e-6 => format!("{:.1} MicrowxHOPR", v / 1e-6),
-        v if v >= 1e-9 => format!("{:.1} GwxHopli", v / 1e-9),
-        v if v >= 1e-12 => format!("{:.1} MwxHopli", v / 1e-12),
-        v if v >= 1e-15 => format!("{:.1} KwxHopli", v / 1e-15),
-        _ => format!("{:.0} wxHopli", v * 1e18),
-    }
-}
-
 use crate::serde_utils;
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
+
+/// wxHOPR amounts (in base units) below this are awkward to read in plain decimal,
+/// so we additionally surface them in scientific notation.
+const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
+
+/// Scientific-notation form of a wxHOPR balance (e.g. `7e-10`), but only for values
+/// small enough that the decimal form is hard to read. Returns `None` for zero and for
+/// amounts at or above [`WXHOPR_SCI_THRESHOLD`], where the decimal form is already legible.
+pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
+    let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
+    (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| format!("{v:e}"))
+}
 
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

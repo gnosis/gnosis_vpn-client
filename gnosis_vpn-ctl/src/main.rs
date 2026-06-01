@@ -267,10 +267,12 @@ fn pretty_print(resp: &Response) {
                 info.safe_address.to_checksum()
             ));
             if let Some(rec) = ideal_balance {
+                let sci = balance::wxhopr_scientific(rec.wxhopr)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
                 str_resp.push_str(&format!(
-                    "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}\n",
-                    rec.xdai,
-                    balance::human_wxhopr(rec.wxhopr)
+                    "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}{}\n",
+                    rec.xdai, rec.wxhopr, sci
                 ));
             }
             str_resp.push_str(&format!("---\nNode: {node}\n"));
@@ -291,16 +293,23 @@ fn pretty_print(resp: &Response) {
                             }
                         }
                     };
+                    let sci = balance::wxhopr_scientific(e.capacity.stake)
+                        .map(|s| format!("{s}, "))
+                        .unwrap_or_default();
                     str_resp.push_str(&format!(
-                        "{}: {} ({} msgs, {})\n",
+                        "{}: {} ({}{} msgs, {})\n",
                         label,
-                        balance::human_wxhopr(e.capacity.stake),
+                        e.capacity.stake,
+                        sci,
                         human_msgs(e.capacity.expected_messages),
                         human_bytes(e.capacity.byte_capacity)
                     ));
                 }
             } else {
-                str_resp.push_str(&format!("Safe: {}\n", balance::human_wxhopr(*safe)));
+                let sci = balance::wxhopr_scientific(*safe)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
+                str_resp.push_str(&format!("Safe: {safe}{sci}\n"));
                 for ch in channels_out {
                     str_resp.push_str(&format!("{ch}\n"));
                 }
@@ -444,11 +453,17 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
 
 fn print_ticket_stats_status(status: &command::TicketStatsStatus) {
     match status {
-        command::TicketStatsStatus::Available(ts) => println!(
-            "Ticket Price: {}\nWinning Probability: {}",
-            balance::human_wxhopr(ts.ticket_price),
-            format_probability(ts.winning_probability)
-        ),
+        command::TicketStatsStatus::Available(ts) => {
+            let sci = balance::wxhopr_scientific(ts.ticket_price)
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            println!(
+                "Ticket Price: {}{}\nWinning Probability: {}",
+                ts.ticket_price,
+                sci,
+                format_probability(ts.winning_probability)
+            )
+        }
         command::TicketStatsStatus::Waiting => {
             println!("waiting for incentive operations to become available")
         }
