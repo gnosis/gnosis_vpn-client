@@ -172,7 +172,7 @@ mod tests {
         let amount = Balance::<WxHOPR>::from(1u64);
         let rendered = ChannelBalance::Completed { amount }.to_string();
         // bare decimal followed by the scientific form in parentheses
-        assert_eq!(rendered, format!("{amount} (1.00e-18)"));
+        assert_eq!(rendered, format!("{amount} (1e-18)"));
     }
 
     #[test]

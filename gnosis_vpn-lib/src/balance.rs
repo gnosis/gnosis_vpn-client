@@ -12,13 +12,25 @@ use std::fmt::{self, Display};
 /// notation. `1e-3` here means 0.001 wxHOPR, not wei.
 const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
 
-/// Scientific-notation form of a wxHOPR balance (e.g. `7.00e-10`), but only for values
+/// Scientific-notation form of a wxHOPR balance (e.g. `7.5e-10`), but only for values
 /// small enough that the decimal form is hard to read. Returns `None` for zero and for
 /// amounts at or above `1e-3` wxHOPR (the token value, already converted from wei),
 /// where the decimal form is already legible.
 pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     let v: f64 = b.amount_in_base_units().parse().ok()?;
-    (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| format!("{v:.2e}"))
+    (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| {
+        // round to 2 decimal places, then drop trailing zeros (and a bare
+        // trailing `.`) from the mantissa for readability: `1.00e-18` -> `1e-18`,
+        // `7.50e-10` -> `7.5e-10`. Only the mantissa is trimmed, never the exponent.
+        let s = format!("{v:.2e}");
+        match s.split_once('e') {
+            Some((mantissa, exp)) => {
+                let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+                format!("{mantissa}e{exp}")
+            }
+            None => s,
+        }
+    })
 }
 
 // in order of priority
@@ -349,7 +361,7 @@ mod tests {
         // smallest possible non-zero balance: 1 wei = 1e-18 token
         assert_eq!(
             wxhopr_scientific(Balance::<WxHOPR>::from(1u64)),
-            Some("1.00e-18".to_string())
+            Some("1e-18".to_string())
         );
     }
 
@@ -358,7 +370,16 @@ mod tests {
         // 1e-4 token, well under the 1e-3 cutoff
         assert_eq!(
             wxhopr_scientific(Balance::<WxHOPR>::from(100_000_000_000_000u64)),
-            Some("1.00e-4".to_string())
+            Some("1e-4".to_string())
+        );
+    }
+
+    #[test]
+    fn wxhopr_scientific_keeps_significant_decimals() {
+        // 1.5e-4 token -> "1.50e-4" rounded, trimmed to "1.5e-4"
+        assert_eq!(
+            wxhopr_scientific(Balance::<WxHOPR>::from(150_000_000_000_000u64)),
+            Some("1.5e-4".to_string())
         );
     }
 
