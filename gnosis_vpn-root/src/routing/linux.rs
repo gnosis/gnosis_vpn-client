@@ -1737,6 +1737,7 @@ mod tests {
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
             wg,
+            bypass_manager: None,
         }
     }
 
