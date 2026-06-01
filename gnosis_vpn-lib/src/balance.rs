@@ -14,7 +14,7 @@ const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
 /// small enough that the decimal form is hard to read. Returns `None` for zero and for
 /// amounts at or above [`WXHOPR_SCI_THRESHOLD`], where the decimal form is already legible.
 pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
-    let v: f64 = b.amount_in_base_units().parse().unwrap_or(0.0);
+    let v: f64 = b.amount_in_base_units().parse().ok()?;
     (v > 0.0 && v < WXHOPR_SCI_THRESHOLD).then(|| format!("{v:e}"))
 }
 
@@ -328,5 +328,50 @@ mod tests {
             Balance::<XDai>::from(2_000_000_000_000_000_u64),
         );
         assert!(issues.is_empty());
+    }
+
+    // `Balance::<WxHOPR>::from(n)` takes wei (10^-18 token). The scientific
+    // threshold is 1e-3 *tokens* = 1_000_000_000_000_000 wei, and the cutoff is
+    // strict (`< threshold`), so a balance exactly at the threshold is legible
+    // in decimal and returns `None`.
+    const SCI_THRESHOLD_WEI: u64 = 1_000_000_000_000_000;
+
+    #[test]
+    fn wxhopr_scientific_zero_is_none() {
+        assert_eq!(wxhopr_scientific(Balance::<WxHOPR>::zero()), None);
+    }
+
+    #[test]
+    fn wxhopr_scientific_tiny_nonzero_is_formatted() {
+        // smallest possible non-zero balance: 1 wei = 1e-18 token
+        assert_eq!(
+            wxhopr_scientific(Balance::<WxHOPR>::from(1u64)),
+            Some("1e-18".to_string())
+        );
+    }
+
+    #[test]
+    fn wxhopr_scientific_below_threshold_is_formatted() {
+        // 1e-4 token, well under the 1e-3 cutoff
+        assert_eq!(
+            wxhopr_scientific(Balance::<WxHOPR>::from(100_000_000_000_000u64)),
+            Some("1e-4".to_string())
+        );
+    }
+
+    #[test]
+    fn wxhopr_scientific_just_below_threshold_is_some() {
+        assert!(wxhopr_scientific(Balance::<WxHOPR>::from(SCI_THRESHOLD_WEI - 1)).is_some());
+    }
+
+    #[test]
+    fn wxhopr_scientific_at_threshold_is_none() {
+        // exactly 1e-3 token — decimal form is legible, so no scientific string
+        assert_eq!(wxhopr_scientific(Balance::<WxHOPR>::from(SCI_THRESHOLD_WEI)), None);
+    }
+
+    #[test]
+    fn wxhopr_scientific_above_threshold_is_none() {
+        assert_eq!(wxhopr_scientific(Balance::<WxHOPR>::from(SCI_THRESHOLD_WEI + 1)), None);
     }
 }
