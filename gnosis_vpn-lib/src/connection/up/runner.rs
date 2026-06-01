@@ -318,7 +318,9 @@ async fn open_bridge_session(
         forward_path: destination.routing,
         return_path: destination.routing,
         always_max_out_surbs: false,
-        surb_management: Some(SurbBalancerConfig::default()),
+        // only send 1 SURB alongside our HTTP requests
+        // health responses always fit into one packet
+        surb_management: None,
         ..Default::default()
     };
     (|| async {
