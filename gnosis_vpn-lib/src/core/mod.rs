@@ -33,6 +33,12 @@ pub mod runner;
 
 use runner::Results;
 
+enum Responder {
+    Unit(oneshot::Sender<Result<(), String>>),
+    Str(oneshot::Sender<Result<String, String>>),
+    Duration(oneshot::Sender<Result<Duration, String>>),
+}
+
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Error)]
@@ -86,9 +92,13 @@ pub struct Core {
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
-    responder_unit: Option<oneshot::Sender<Result<(), String>>>,
-    responder_string: Option<oneshot::Sender<Result<String, String>>>,
-    responder_duration: Option<oneshot::Sender<Result<Duration, String>>>,
+    next_request_id: u64,
+    // Maps a request_id to the oneshot sender waiting for root's response.
+    // request_id is needed even though at most one request is in-flight at a time:
+    // root runs pings in a JoinSet, so a stale ping from a cancelled connection
+    // can arrive after a new responder has been stored — the id mismatch discards it.
+    // Cleared in disconnect_from_connection so stale entries don't outlive their connection.
+    responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
@@ -188,14 +198,19 @@ impl Core {
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
             route_healths,
-            responder_unit: None,
-            responder_string: None,
-            responder_duration: None,
+            next_request_id: 0,
+            responders: HashMap::new(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
             cached_session_pseudonym: HashMap::new(),
         };
         Ok((core, incoming_sender))
+    }
+
+    fn next_request_id(&mut self) -> u64 {
+        let id = self.next_request_id;
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        id
     }
 
     pub async fn start(mut self) {
@@ -259,40 +274,56 @@ impl Core {
             WorkerToCore::ResponseFromRoot(resp) => {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
-                    ResponseFromRoot::KillswitchLockdown { res } => {
-                        if let Some(responder) = self.responder_unit.take() {
-                            let _ = responder.send(res).map_err(|_| {
+                    ResponseFromRoot::KillswitchLockdown { request_id, res } => {
+                        if let Some(Responder::Unit(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for killswitch lockdown response");
                             });
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for killswitch lockdown response (evicted or duplicate)"
+                            );
                         }
                     }
-                    ResponseFromRoot::DynamicWgRouting { res } => {
-                        if let Some(responder) = self.responder_string.take() {
-                            let _ = responder.send(res).map_err(|_| {
+                    ResponseFromRoot::DynamicWgRouting { request_id, res } => {
+                        if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for dynamic wg routing response");
                             });
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for dynamic wg routing response (evicted or duplicate)"
+                            );
                         }
                     }
-                    ResponseFromRoot::StaticWgRouting { res } => {
-                        if let Some(responder) = self.responder_string.take() {
-                            let _ = responder.send(res).map_err(|_| {
+                    ResponseFromRoot::StaticWgRouting { request_id, res } => {
+                        if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for static wg routing response");
                             });
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for static wg routing response (evicted or duplicate)"
+                            );
                         }
                     }
-                    ResponseFromRoot::Ping { res } => {
-                        if let Some(responder) = self.responder_duration.take() {
-                            let _ = responder.send(res).map_err(|_| {
+                    ResponseFromRoot::Ping { request_id, res } => {
+                        if let Some(Responder::Duration(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for ping response");
                             });
                         } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
+                            tracing::debug!(
+                                request_id,
+                                ?res,
+                                "no responder for ping response (evicted or duplicate)"
+                            );
                         }
                     }
                 };
@@ -700,12 +731,20 @@ impl Core {
                         .capacity_allocations
                         .as_ref()
                         .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
-                    for id in dest_ids {
+                    for (idx, id) in dest_ids.into_iter().enumerate() {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
                             && let Some(hopr) = self.hopr.clone()
                         {
-                            rh.peers(&all_peers, &hopr, &dest, &self.config.connection, results_sender);
+                            let stagger = Duration::from_millis((idx as u64).saturating_mul(500));
+                            rh.peers(
+                                &all_peers,
+                                &hopr,
+                                &dest,
+                                &self.config.connection,
+                                results_sender,
+                                stagger,
+                            );
                             // If peers just moved this route into NeedsChannel and capacity
                             // allocations already show open channels, complete the transition
                             // immediately rather than waiting for the next capacity tick.
@@ -851,14 +890,20 @@ impl Core {
                     interface,
                     resp,
                 } => {
-                    self.responder_unit = Some(resp);
-                    let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
+                    let request_id = self.next_request_id();
+                    self.responders.insert(request_id, Responder::Unit(resp));
+                    let request = RequestToRoot::KillswitchLockdown {
+                        request_id,
+                        peer_ips,
+                        interface,
+                    };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
                 RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
-                    self.responder_string = Some(resp);
-                    let request = RequestToRoot::DynamicWgRouting { wg_data };
+                    let request_id = self.next_request_id();
+                    self.responders.insert(request_id, Responder::Str(resp));
+                    let request = RequestToRoot::DynamicWgRouting { request_id, wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
@@ -867,14 +912,20 @@ impl Core {
                     peer_ips,
                     resp,
                 } => {
-                    self.responder_string = Some(resp);
-                    let request = RequestToRoot::StaticWgRouting { wg_data, peer_ips };
+                    let request_id = self.next_request_id();
+                    self.responders.insert(request_id, Responder::Str(resp));
+                    let request = RequestToRoot::StaticWgRouting {
+                        request_id,
+                        wg_data,
+                        peer_ips,
+                    };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
                 RunnerToRoot::Ping { options, resp } => {
-                    self.responder_duration = Some(resp);
-                    let request = RequestToRoot::Ping { options };
+                    let request_id = self.next_request_id();
+                    self.responders.insert(request_id, Responder::Duration(resp));
+                    let request = RequestToRoot::Ping { request_id, options };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
@@ -1584,6 +1635,7 @@ impl Core {
         }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
+        self.responders.clear();
         self.phase = Phase::HoprRunning;
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)

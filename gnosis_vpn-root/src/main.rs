@@ -62,7 +62,7 @@ struct DaemonState {
     // status code channel for when the worker process exits
     worker_exit_channel: (mpsc::Sender<process::ExitStatus>, mpsc::Receiver<process::ExitStatus>),
     // keep track of longer running root tasks
-    ping_tasks: JoinSet<Result<Duration, String>>,
+    ping_tasks: JoinSet<(u64, Result<Duration, String>)>,
     // External socket commands need an internal mapping:
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
@@ -689,7 +689,7 @@ impl DaemonState {
                 Some(cmd) = socket_listener.recv() => self.incoming_socket_command(cmd).await?,
                 Some(_) = config_receiver.recv() => self.incoming_config_change().await?,
                 Some(res) = self.ping_tasks.join_next() =>  match res {
-                        Ok(res) => self.outgoing_response_from_root(ResponseFromRoot::Ping { res }).await?,
+                        Ok((request_id, res)) => self.outgoing_response_from_root(ResponseFromRoot::Ping { request_id, res }).await?,
                         Err(err) => tracing::error!(error = ?err, "ping task join error"),
                 },
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
@@ -1017,40 +1017,48 @@ impl DaemonState {
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
-            RequestToRoot::KillswitchLockdown { peer_ips, interface } => {
+            RequestToRoot::KillswitchLockdown {
+                request_id,
+                peer_ips,
+                interface,
+            } => {
                 let ips = peer_ips.into_iter().map(IpAddr::V4).collect();
                 let res = self.apply_killswitch(interface, ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
                     send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { res }),
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { request_id, res }),
                         &mut child.socket_writer,
                     )
                     .await?;
                 }
                 Ok(())
             }
-            RequestToRoot::DynamicWgRouting { wg_data } => {
+            RequestToRoot::DynamicWgRouting { request_id, wg_data } => {
                 let res = self.setup_dynamic_routing(wg_data).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
                     send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { request_id, res }),
                         &mut child.socket_writer,
                     )
                     .await?;
                 }
                 Ok(())
             }
-            RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
+            RequestToRoot::StaticWgRouting {
+                request_id,
+                wg_data,
+                peer_ips,
+            } => {
                 let res = self.setup_static_routing(wg_data, peer_ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
                     send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { res }),
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { request_id, res }),
                         &mut child.socket_writer,
                     )
                     .await?;
@@ -1061,8 +1069,9 @@ impl DaemonState {
                 self.teardown_any_routing().await;
                 Ok(())
             }
-            RequestToRoot::Ping { options } => {
-                self.ping_tasks.spawn(async move { spawn_ping(options).await });
+            RequestToRoot::Ping { request_id, options } => {
+                self.ping_tasks
+                    .spawn(async move { (request_id, spawn_ping(options).await) });
                 Ok(())
             }
             RequestToRoot::CacheBlokliIps { ips } => {

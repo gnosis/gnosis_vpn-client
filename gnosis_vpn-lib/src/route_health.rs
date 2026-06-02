@@ -357,6 +357,7 @@ impl RouteHealth {
         dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
+        initial_delay: Duration,
     ) {
         let is_peered = match &self.static_need {
             // 0-hop: destination must be a direct transport peer.
@@ -376,7 +377,7 @@ impl RouteHealth {
                 let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *has_channel;
                 if skip_channel_wait {
                     self.state = RouteHealthState::Routable;
-                    self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+                    self.spawn_health_check(initial_delay, hopr, dest, options, sender);
                 } else {
                     self.state = RouteHealthState::NeedsChannel;
                 }
@@ -653,7 +654,7 @@ impl RouteHealth {
     /// `delay`. The check scope (which fields to fetch) is decided here from `check_cycle` and
     /// whether we are in `Connecting`. Called both by internal transitions
     /// and externally when a cycle completes.
-    pub fn spawn_health_check(
+    fn spawn_health_check(
         &mut self,
         delay: Duration,
         hopr: &Arc<Hopr>,
@@ -920,6 +921,7 @@ impl Drop for HealthSession {
         if self.closed {
             return;
         }
+        tracing::debug!("health session dropped without explicit close, spawning detached close task");
         // Explicit `close()` never ran — detach a close task so the exit
         // port is not leaked. Fire and forget; errors are logged inside
         // `close_health_session`.
