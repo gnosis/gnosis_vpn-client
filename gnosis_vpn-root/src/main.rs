@@ -1017,7 +1017,11 @@ impl DaemonState {
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
-            RequestToRoot::KillswitchLockdown { request_id, peer_ips, interface } => {
+            RequestToRoot::KillswitchLockdown {
+                request_id,
+                peer_ips,
+                interface,
+            } => {
                 let ips = peer_ips.into_iter().map(IpAddr::V4).collect();
                 let res = self.apply_killswitch(interface, ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
@@ -1044,7 +1048,11 @@ impl DaemonState {
                 }
                 Ok(())
             }
-            RequestToRoot::StaticWgRouting { request_id, wg_data, peer_ips } => {
+            RequestToRoot::StaticWgRouting {
+                request_id,
+                wg_data,
+                peer_ips,
+            } => {
                 let res = self.setup_static_routing(wg_data, peer_ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
@@ -1062,7 +1070,8 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::Ping { request_id, options } => {
-                self.ping_tasks.spawn(async move { (request_id, spawn_ping(options).await) });
+                self.ping_tasks
+                    .spawn(async move { (request_id, spawn_ping(options).await) });
                 Ok(())
             }
             RequestToRoot::CacheBlokliIps { ips } => {
