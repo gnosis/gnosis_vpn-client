@@ -726,8 +726,7 @@ impl Core {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
-                    let mut dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    dest_ids.sort();
+                    let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                     let channels_already_available = self
                         .capacity_allocations
                         .as_ref()
