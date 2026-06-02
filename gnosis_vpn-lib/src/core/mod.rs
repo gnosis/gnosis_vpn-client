@@ -35,9 +35,11 @@ pub mod runner;
 
 use runner::Results;
 
-type ResponderUnit = Cache<u64, Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>>;
-type ResponderString = Cache<u64, Arc<Mutex<Option<oneshot::Sender<Result<String, String>>>>>>;
-type ResponderDuration = Cache<u64, Arc<Mutex<Option<oneshot::Sender<Result<Duration, String>>>>>>;
+enum Responder {
+    Unit(oneshot::Sender<Result<(), String>>),
+    Str(oneshot::Sender<Result<String, String>>),
+    Duration(oneshot::Sender<Result<Duration, String>>),
+}
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
 /// How long a peer IP remains in the killswitch allowlist after it was last seen in an
@@ -96,9 +98,12 @@ pub struct Core {
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
     next_request_id: u64,
-    responders_unit: ResponderUnit,
-    responders_string: ResponderString,
-    responders_duration: ResponderDuration,
+    // Maps a request_id to the oneshot sender waiting for root's response.
+    // request_id is needed even though at most one request is in-flight at a time:
+    // root runs pings in a JoinSet, so a stale ping from a cancelled connection
+    // can arrive after a new responder has been stored — the id mismatch discards it.
+    // Cleared in disconnect_from_connection so stale entries don't outlive their connection.
+    responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
@@ -204,18 +209,7 @@ impl Core {
             ongoing_disconnections: Vec::new(),
             route_healths,
             next_request_id: 0,
-            responders_unit: Cache::builder()
-                .max_capacity(256)
-                .time_to_live(Duration::from_secs(120))
-                .build(),
-            responders_string: Cache::builder()
-                .max_capacity(256)
-                .time_to_live(Duration::from_secs(120))
-                .build(),
-            responders_duration: Cache::builder()
-                .max_capacity(256)
-                .time_to_live(Duration::from_secs(120))
-                .build(),
+            responders: HashMap::new(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
             cached_session_pseudonym: HashMap::new(),
@@ -293,13 +287,10 @@ impl Core {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
                     ResponseFromRoot::KillswitchLockdown { request_id, res } => {
-                        if let Some(entry) = self.responders_unit.get(&request_id) {
-                            if let Some(tx) = entry.lock().take() {
-                                let _ = tx.send(res).map_err(|_| {
-                                    tracing::warn!("responder channel closed for killswitch lockdown response");
-                                });
-                            }
-                            self.responders_unit.invalidate(&request_id);
+                        if let Some(Responder::Unit(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for killswitch lockdown response");
+                            });
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -309,13 +300,10 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::DynamicWgRouting { request_id, res } => {
-                        if let Some(entry) = self.responders_string.get(&request_id) {
-                            if let Some(tx) = entry.lock().take() {
-                                let _ = tx.send(res).map_err(|_| {
-                                    tracing::warn!("responder channel closed for dynamic wg routing response");
-                                });
-                            }
-                            self.responders_string.invalidate(&request_id);
+                        if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for dynamic wg routing response");
+                            });
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -325,13 +313,10 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::StaticWgRouting { request_id, res } => {
-                        if let Some(entry) = self.responders_string.get(&request_id) {
-                            if let Some(tx) = entry.lock().take() {
-                                let _ = tx.send(res).map_err(|_| {
-                                    tracing::warn!("responder channel closed for static wg routing response");
-                                });
-                            }
-                            self.responders_string.invalidate(&request_id);
+                        if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for static wg routing response");
+                            });
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -341,13 +326,10 @@ impl Core {
                         }
                     }
                     ResponseFromRoot::Ping { request_id, res } => {
-                        if let Some(entry) = self.responders_duration.get(&request_id) {
-                            if let Some(tx) = entry.lock().take() {
-                                let _ = tx.send(res).map_err(|_| {
-                                    tracing::warn!("responder channel closed for ping response");
-                                });
-                            }
-                            self.responders_duration.invalidate(&request_id);
+                        if let Some(Responder::Duration(tx)) = self.responders.remove(&request_id) {
+                            let _ = tx.send(res).map_err(|_| {
+                                tracing::warn!("responder channel closed for ping response");
+                            });
                         } else {
                             tracing::debug!(
                                 request_id,
@@ -946,8 +928,7 @@ impl Core {
                     resp,
                 } => {
                     let request_id = self.next_request_id();
-                    self.responders_unit
-                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    self.responders.insert(request_id, Responder::Unit(resp));
                     let request = RequestToRoot::KillswitchLockdown {
                         request_id,
                         peer_ips,
@@ -958,8 +939,7 @@ impl Core {
 
                 RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
                     let request_id = self.next_request_id();
-                    self.responders_string
-                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    self.responders.insert(request_id, Responder::Str(resp));
                     let request = RequestToRoot::DynamicWgRouting { request_id, wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -970,8 +950,7 @@ impl Core {
                     resp,
                 } => {
                     let request_id = self.next_request_id();
-                    self.responders_string
-                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    self.responders.insert(request_id, Responder::Str(resp));
                     let request = RequestToRoot::StaticWgRouting {
                         request_id,
                         wg_data,
@@ -982,8 +961,7 @@ impl Core {
 
                 RunnerToRoot::Ping { options, resp } => {
                     let request_id = self.next_request_id();
-                    self.responders_duration
-                        .insert(request_id, Arc::new(Mutex::new(Some(resp))));
+                    self.responders.insert(request_id, Responder::Duration(resp));
                     let request = RequestToRoot::Ping { request_id, options };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -1699,6 +1677,7 @@ impl Core {
         }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
+        self.responders.clear();
         self.phase = Phase::HoprRunning;
         // Clear hysteresis state so stale IPs from this session don't pollute the next.
         self.peer_ip_last_seen.clear();

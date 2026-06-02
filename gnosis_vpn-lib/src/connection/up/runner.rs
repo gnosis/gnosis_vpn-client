@@ -323,6 +323,11 @@ async fn open_bridge_session(
         surb_management: None,
         ..Default::default()
     };
+    // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,
+    // where initiation_timeout_base defaults to 500 ms. hopr-lib retries 3× with 2 s delays before giving up:
+    //   1-hop: ~2 s/attempt, ~15 s total
+    //   2-hop: ~3 s/attempt, ~19 s total
+    //   3-hop: ~4 s/attempt, ~23 s total
     (|| async {
         tracing::debug!(%destination, "attempting to open bridge session");
         hopr.open_session(

@@ -654,7 +654,7 @@ impl RouteHealth {
     /// `delay`. The check scope (which fields to fetch) is decided here from `check_cycle` and
     /// whether we are in `Connecting`. Called both by internal transitions
     /// and externally when a cycle completes.
-    pub fn spawn_health_check(
+    fn spawn_health_check(
         &mut self,
         delay: Duration,
         hopr: &Arc<Hopr>,
