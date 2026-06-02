@@ -250,18 +250,15 @@ pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resu
 
 pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting connected peers runner");
-    let (connected, announced_ips) = tokio::join!(
-        async { hopr.connected_peers().await.map_err(Error::from) },
-        async {
-            match hopr.announced_peers().await {
-                Ok(peers) => peers.into_values().flat_map(|p| p.ipv4_addrs).collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(error = %e, "announced_peers() failed; skipping allowlist refresh");
-                    Vec::new()
-                }
+    let (connected, announced_ips) = tokio::join!(async { hopr.connected_peers().await.map_err(Error::from) }, async {
+        match hopr.announced_peers().await {
+            Ok(peers) => peers.into_values().flat_map(|p| p.ipv4_addrs).collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(error = %e, "announced_peers() failed; skipping allowlist refresh");
+                Vec::new()
             }
         }
-    );
+    });
     let _ = results_sender
         .send(Results::ConnectedPeers {
             connected,
