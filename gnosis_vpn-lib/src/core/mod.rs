@@ -5,8 +5,6 @@ use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
-use moka::sync::Cache;
-use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
@@ -741,8 +739,7 @@ impl Core {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
-                    let mut dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    dest_ids.sort();
+                    let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                     let channels_already_available = self
                         .capacity_allocations
                         .as_ref()
