@@ -447,16 +447,11 @@ impl Display for RunMode {
                 balance_recommendation,
             } => {
                 let mut msg = format!(
-                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {}",
+                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
                     node_address.to_checksum(),
-                    balance::human_wxhopr(*node_wxhopr)
                 );
                 if let Some(rec) = balance_recommendation {
-                    msg = format!(
-                        "{msg}, recommended: wxHOPR >= {}, xDAI >= {}",
-                        balance::human_wxhopr(rec.wxhopr),
-                        rec.xdai
-                    );
+                    msg = format!("{msg}, recommended: wxHOPR >= {}, xDAI >= {}", rec.wxhopr, rec.xdai);
                 }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
