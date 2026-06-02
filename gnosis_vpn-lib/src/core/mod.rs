@@ -1,7 +1,5 @@
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
-use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
-use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
@@ -21,7 +19,8 @@ use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
-use crate::connection::destination::Destination;
+use crate::connection::destination::{Address, Destination};
+use crate::connection::pseudonym_cache::PseudonymCache;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
@@ -104,7 +103,7 @@ pub struct Core {
     responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
-    cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
+    pseudonym_cache: PseudonymCache,
     /// Last time each peer IP was seen in an `announced_peers` snapshot.
     /// IPs are retained in the killswitch allowlist for PEER_IP_HYSTERESIS_SECS after
     /// they last appeared — avoids flapping during brief libp2p churn.
@@ -176,6 +175,7 @@ impl Core {
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
+        let pseudonym_cache = PseudonymCache::new(config.connection.session_pseudonym_ttl);
         let core = Core {
             // config data
             config,
@@ -210,7 +210,7 @@ impl Core {
             responders: HashMap::new(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
-            cached_session_pseudonym: HashMap::new(),
+            pseudonym_cache,
             peer_ip_last_seen: HashMap::new(),
             last_sent_peer_ips: Vec::new(),
         };
@@ -852,7 +852,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.cached_session_pseudonym.remove(&conn.destination.address);
+                    self.pseudonym_cache.remove(&conn.destination);
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -1524,17 +1524,8 @@ impl Core {
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let hopr = hopr.clone();
-            // Evict expired entries on each connect to prevent the cache from accumulating
-            // stale pseudonyms as destinations change over time.
-            let ttl = self.config.connection.session_pseudonym_ttl;
-            self.cached_session_pseudonym
-                .retain(|_, (_, cached_at)| cached_at.elapsed() < ttl);
-            // Peek without consuming — the entry stays available for retries within the TTL
-            // window. It is removed only once the connection is confirmed established.
-            let cached_pseudonym = self
-                .cached_session_pseudonym
-                .get(&destination.address)
-                .map(|(pseudonym, _)| *pseudonym);
+            // Entry is kept until connection is confirmed so retries within the TTL can reuse it.
+            let cached_pseudonym = self.pseudonym_cache.get(&destination);
             if let Some(pseudonym) = &cached_pseudonym {
                 tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
             }
@@ -1663,14 +1654,12 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // Cache the session pseudonym so reconnection while it remains valid under the configured
-        // `session_pseudonym_ttl` can reuse exit node SURBs.
+        // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
         if let Some(session) = &conn.session
             && let Some(client_id) = session.active_clients.first()
             && let Ok(session_id) = SessionId::from_str(client_id)
         {
-            self.cached_session_pseudonym
-                .insert(session.destination, (*session_id.pseudonym(), Instant::now()));
+            self.pseudonym_cache.insert(&conn.destination, *session_id.pseudonym());
         }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
