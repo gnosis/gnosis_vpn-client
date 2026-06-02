@@ -40,6 +40,9 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+/// How long a peer IP remains in the killswitch allowlist after it was last seen in an
+/// `announced_peers` snapshot. Prevents churn during brief libp2p reconnects.
+const PEER_IP_HYSTERESIS_SECS: u64 = 300;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -102,6 +105,11 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     cached_session_pseudonym: HashMap<Address, (HoprPseudonym, Instant)>,
+    /// Last time each peer IP was seen in an `announced_peers` snapshot.
+    /// IPs are retained in the killswitch allowlist for PEER_IP_HYSTERESIS_SECS after
+    /// they last appeared — avoids flapping during brief libp2p churn.
+    peer_ip_last_seen: HashMap<net::Ipv4Addr, Instant>,
+    last_sent_peer_ips: Vec<net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +211,8 @@ impl Core {
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
             cached_session_pseudonym: HashMap::new(),
+            peer_ip_last_seen: HashMap::new(),
+            last_sent_peer_ips: Vec::new(),
         };
         Ok((core, incoming_sender))
     }
@@ -722,7 +732,10 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::ConnectedPeers { res } => match res {
+            Results::ConnectedPeers {
+                connected,
+                announced_ips,
+            } => match connected {
                 Ok(peers) => {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
@@ -754,7 +767,28 @@ impl Core {
                         }
                     }
 
-                    let delay = if route_health::any_needs_peers(self.route_healths.values()) {
+                    // Refresh the killswitch / routing-bypass allowlist while connected.
+                    if matches!(self.phase, Phase::Connected(_)) {
+                        let now = Instant::now();
+                        for ip in &announced_ips {
+                            self.peer_ip_last_seen.insert(*ip, now);
+                        }
+                        self.peer_ip_last_seen
+                            .retain(|_, t| now.duration_since(*t) < Duration::from_secs(PEER_IP_HYSTERESIS_SECS));
+                        let mut alive: Vec<net::Ipv4Addr> = self.peer_ip_last_seen.keys().copied().collect();
+                        alive.sort_unstable();
+                        if alive.is_empty() {
+                            tracing::debug!("peer allowlist refresh skipped: live peer IP set is empty");
+                        } else if alive != self.last_sent_peer_ips {
+                            self.last_sent_peer_ips = alive.clone();
+                            let request = RequestToRoot::UpdatePeerIps { peer_ips: alive };
+                            let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                        }
+                    }
+
+                    let delay = if matches!(self.phase, Phase::Connected(_))
+                        || route_health::any_needs_peers(self.route_healths.values())
+                    {
                         Duration::from_secs(10)
                     } else {
                         Duration::from_secs(90)
@@ -931,6 +965,11 @@ impl Core {
 
                 RunnerToRoot::TearDownWg => {
                     let request = RequestToRoot::TearDownWg;
+                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
+                }
+
+                RunnerToRoot::UpdatePeerIps { peer_ips } => {
+                    let request = RequestToRoot::UpdatePeerIps { peer_ips };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
             },
@@ -1637,6 +1676,8 @@ impl Core {
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         self.responders.clear();
         self.phase = Phase::HoprRunning;
+        // Clear hysteresis state so stale IPs from this session don't pollute the next.
+        self.peer_ip_last_seen.clear();
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
         {
