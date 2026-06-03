@@ -155,19 +155,15 @@ pub fn convert_destinations(
 
     let mut result = HashMap::new();
     for (address, dest) in config_dests.iter() {
-        let path = match dest.path.clone() {
-            Some(v5::DestinationPath::Intermediates(p)) => {
-                let hop_count = p.len().min(3_usize);
-                tracing::warn!(address = %address.to_checksum(), hop_count, "intermediates routing is deprecated; treating as hop count");
-                HopRouting::try_from(hop_count)?
-            }
-            Some(v5::DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
+        let routing = match dest.path.clone() {
+            Some(v5::DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs),
+            Some(v5::DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(h as usize)?),
+            None => RoutingMode::HopBased(HopRouting::try_from(1)?),
         };
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(address.to_string(), *address, RoutingMode::HopBased(path), meta);
+        let dest = ConnDestination::new(address.to_string(), *address, routing, meta);
         result.insert(address.to_string(), dest);
     }
     Ok(result)
@@ -176,6 +172,7 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{Config, convert_destinations};
+    use crate::connection::destination::RoutingMode;
     use edgli::hopr_lib::HopRouting;
 
     fn parse(toml: &str) -> Config {
@@ -194,11 +191,11 @@ path = { hops = 2 }
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+        assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(2).unwrap()));
     }
 
     #[test]
-    fn convert_destinations_intermediates_treated_as_hop_count() {
+    fn convert_destinations_intermediates_preserved_as_explicit_path() {
         let cfg = parse(
             r#####"
 version = 4
@@ -209,22 +206,10 @@ path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
-    }
-
-    #[test]
-    fn convert_destinations_intermediates_clamped_to_max_hops() {
-        let cfg = parse(
-            r#####"
-version = 4
-
-[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
-path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A", "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254", "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"] }
-"#####,
-        );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(3).unwrap());
+        let RoutingMode::ExplicitPath(addrs) = &d.routing else {
+            panic!("expected ExplicitPath, got {:?}", d.routing);
+        };
+        assert_eq!(addrs.len(), 2);
     }
 
     #[test]
@@ -238,7 +223,7 @@ version = 4
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
+        assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(1).unwrap()));
     }
 
     #[test]

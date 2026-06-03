@@ -25,7 +25,7 @@ use crate::ping;
 pub(super) use super::v6::{
     BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
 };
-use super::v6::{MAX_HOPS, validate_hops};
+use super::v6::validate_hops;
 
 // v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
 // can carry the `bridge` field that existed in v5 configs but is absent from v6.
@@ -393,23 +393,15 @@ pub fn convert_destinations(
 
     let mut result = HashMap::new();
     for (id, dest) in config_dests.iter() {
-        let path = match dest.path.clone() {
-            Some(DestinationPath::Intermediates(p)) => {
-                let hop_count = p.len().min(MAX_HOPS as usize);
-                tracing::warn!(
-                    id,
-                    hop_count,
-                    "intermediates routing is deprecated; treating as hop count"
-                );
-                HopRouting::try_from(hop_count)?
-            }
-            Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
+        let routing = match dest.path.clone() {
+            Some(DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs),
+            Some(DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(h as usize)?),
+            None => RoutingMode::HopBased(HopRouting::try_from(1)?),
         };
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(id.to_string(), dest.address, RoutingMode::HopBased(path), meta);
+        let dest = ConnDestination::new(id.to_string(), dest.address, routing, meta);
         result.insert(id.to_string(), dest);
     }
     Ok(result)
@@ -418,6 +410,7 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{Config, convert_destinations};
+    use crate::connection::destination::RoutingMode;
     use edgli::hopr_lib::HopRouting;
 
     fn parse(toml: &str) -> Config {
@@ -437,7 +430,7 @@ path = { hops = 2 }
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+        assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(2).unwrap()));
     }
 
     #[test]
@@ -452,7 +445,26 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
+        assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(1).unwrap()));
+    }
+
+    #[test]
+    fn convert_destinations_intermediates_preserved_as_explicit_path() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A"] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        let RoutingMode::ExplicitPath(addrs) = &d.routing else {
+            panic!("expected ExplicitPath, got {:?}", d.routing);
+        };
+        assert_eq!(addrs.len(), 2);
     }
 
     #[test]

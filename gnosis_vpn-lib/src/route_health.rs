@@ -1096,6 +1096,7 @@ impl Display for ExitHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgli::hopr_lib::HopRouting;
 
     fn addr(byte: u8) -> Address {
         Address::from([byte; 20])

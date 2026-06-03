@@ -118,7 +118,7 @@ impl Display for ChannelBalance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::{Destination, HopRouting};
+    use crate::connection::destination::{Destination, HopRouting, RoutingMode};
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -128,7 +128,7 @@ mod tests {
         Destination::new(
             id.to_string(),
             addr,
-            HopRouting::try_from(1).expect("conversion cannot fail"),
+            RoutingMode::HopBased(HopRouting::try_from(1).expect("conversion cannot fail")),
             HashMap::new(),
         )
     }
