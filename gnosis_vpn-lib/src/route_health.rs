@@ -266,15 +266,16 @@ fn derive_static_need(routing: &RoutingMode, dest_address: Address) -> StaticNee
     }
 }
 
-/// Pick the starting state purely from routing config. 0-hop or empty explicit
-/// path without `allow_insecure` short-circuits to `Unrecoverable`; empty
-/// explicit path is always invalid regardless of `allow_insecure`; everything
-/// else starts at `NeedsPeering` and waits for Core to feed in the peer set.
+/// Pick the starting state purely from routing config. 0-hop without
+/// `allow_insecure` short-circuits to `Unrecoverable`; everything else starts
+/// at `NeedsPeering` and waits for Core to feed in the peer set.
 fn derive_initial_state(routing: &RoutingMode, allow_insecure: bool) -> RouteHealthState {
     match routing {
         RoutingMode::HopBased(h) if h.hop_count() == 0 && !allow_insecure => RouteHealthState::Unrecoverable {
             reason: UnrecoverableReason::NotAllowed,
         },
+        // Empty explicit paths are rejected at config parse time; this arm is a
+        // dead fallback so the match stays exhaustive.
         RoutingMode::ExplicitPath(nodes) if nodes.is_empty() => RouteHealthState::Unrecoverable {
             reason: UnrecoverableReason::InvalidPath,
         },
