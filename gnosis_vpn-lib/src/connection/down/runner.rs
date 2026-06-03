@@ -8,6 +8,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 
 use crate::connection;
+use crate::connection::destination::RoutingMode;
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::gvpn_client;
@@ -84,24 +85,42 @@ async fn open_bridge_session(
     down: &connection::down::Down,
     options: &Options,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = HoprSessionClientConfig {
+    let base_cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path: down.destination.routing,
-        return_path: down.destination.routing,
         // only send 1 SURB alongside our HTTP requests
         // health responses always fit into one packet
         always_max_out_surbs: false,
         surb_management: None,
         ..Default::default()
     };
-    hopr.open_session(
-        down.destination.address,
-        options.sessions.bridge.target.clone(),
-        Some(1),
-        Some(1),
-        cfg.clone(),
-    )
-    .await
+    match &down.destination.routing {
+        RoutingMode::HopBased(hop_routing) => {
+            let cfg = HoprSessionClientConfig {
+                forward_path: (*hop_routing),
+                return_path: (*hop_routing),
+                ..base_cfg
+            };
+            hopr.open_session(
+                down.destination.address,
+                options.sessions.bridge.target.clone(),
+                Some(1),
+                Some(1),
+                cfg,
+            )
+            .await
+        }
+        RoutingMode::ExplicitPath(nodes) => {
+            hopr.open_session_explicit_path(
+                down.destination.address,
+                options.sessions.bridge.target.clone(),
+                nodes.clone(),
+                Some(1),
+                Some(1),
+                base_cfg,
+            )
+            .await
+        }
+    }
 }
 
 async fn unregister(

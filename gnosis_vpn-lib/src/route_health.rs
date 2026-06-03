@@ -32,7 +32,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::connection::destination::{Address, Destination, HopRouting, RoutingMode};
+use crate::connection::destination::{Address, Destination, RoutingMode};
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
@@ -903,8 +903,8 @@ impl HealthSession {
         let meta = match &destination.routing {
             RoutingMode::HopBased(hop_routing) => {
                 let cfg = HoprSessionClientConfig {
-                    forward_path: (*hop_routing).into(),
-                    return_path: (*hop_routing).into(),
+                    forward_path: (*hop_routing),
+                    return_path: (*hop_routing),
                     ..base_cfg
                 };
                 hopr.open_session(destination.address, options.sessions.bridge.target.clone(), None, None, cfg)

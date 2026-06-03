@@ -563,32 +563,19 @@ fn print_connected_stats(stats: &command::ConnStats) {
 }
 
 fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
-    let mut str_resp = String::new();
-    match stats.destination.routing.hop_count() {
-        0 => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
-                node_addr = stats.node_address.to_checksum(),
-                addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
-            ));
-        }
-        1 => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
-                node_addr = stats.node_address.to_checksum(),
-                addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
-            ));
-        }
-        nr => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
-                node_addr = stats.node_address.to_checksum(),
-                addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
-            ));
+    use gnosis_vpn_lib::connection::destination::RoutingMode;
+    let node_addr = stats.node_address.to_checksum();
+    let addr = stats.destination.address.to_checksum();
+    let exit = &stats.destination.id;
+    match &stats.destination.routing {
+        RoutingMode::HopBased(hop_routing) => match hop_routing.hop_count() {
+            0 => format!("{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n"),
+            1 => format!("{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n"),
+            nr => format!("{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n"),
+        },
+        RoutingMode::ExplicitPath(nodes) => {
+            let nr = nodes.len();
+            format!("{node_addr}(me) -{title}-VIA--{nr}EXPLICIT-NODES--> {addr}({exit})\n")
         }
     }
-    str_resp
 }

@@ -249,7 +249,7 @@ impl Hopr {
                     .edgli
                     .chain_api()
                     .chain_key_to_packet_key(addr)
-                    .map_err(HoprError::HoprLib)?
+                    .map_err(|e| HoprError::Construction(e.to_string()))?
                     .ok_or_else(|| {
                         HoprError::Construction(format!("intermediate path node not found: {addr}"))
                     })?;

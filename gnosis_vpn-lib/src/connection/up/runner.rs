@@ -326,8 +326,8 @@ async fn open_bridge_session(
         match &destination.routing {
             RoutingMode::HopBased(hop_routing) => {
                 let cfg = HoprSessionClientConfig {
-                    forward_path: (*hop_routing).into(),
-                    return_path: (*hop_routing).into(),
+                    forward_path: (*hop_routing),
+                    return_path: (*hop_routing),
                     ..base_cfg.clone()
                 };
                 hopr.open_session(destination.address, options.sessions.bridge.target.clone(), Some(1), Some(1), cfg)
@@ -419,8 +419,8 @@ async fn open_ping_session(
         match &destination.routing {
             RoutingMode::HopBased(hop_routing) => {
                 let cfg = HoprSessionClientConfig {
-                    forward_path: (*hop_routing).into(),
-                    return_path: (*hop_routing).into(),
+                    forward_path: (*hop_routing),
+                    return_path: (*hop_routing),
                     ..base_cfg.clone()
                 };
                 hopr.open_session(destination.address, options.sessions.wg.target.clone(), None, None, cfg)
