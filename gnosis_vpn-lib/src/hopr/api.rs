@@ -312,17 +312,26 @@ impl Hopr {
             .map_err(|e| HoprError::Construction(format!("failed to create UDP client binding: {e}")))?,
         };
 
-        // Use hop count as an approximation for display in the returned metadata.
-        // The accurate routing is stored in the listener entry and reflected by list_sessions.
-        let hop_routing = HopRouting::try_from(intermediates.len()).unwrap_or_default();
+        // Read the routing back from the listener so the returned metadata
+        // matches what list_sessions() reports exactly (session monitoring
+        // compares forward_path/return_path via PartialEq).
+        let (forward_path, return_path) = open_listeners
+            .as_ref()
+            .0
+            .get(&ListenerId(protocol, bound_host))
+            .map(|entry| (entry.forward_path.clone(), entry.return_path.clone()))
+            .unwrap_or_else(|| {
+                let hop_routing = HopRouting::try_from(intermediates.len()).unwrap_or_default();
+                (hop_routing.into(), hop_routing.into())
+            });
 
         Ok(SessionClientMetadata {
             protocol,
             bound_host,
             target: session_target_spec.to_string(),
             destination,
-            forward_path: hop_routing.into(),
-            return_path: hop_routing.into(),
+            forward_path,
+            return_path,
             hopr_mtu: SESSION_MTU,
             surb_len: SURB_SIZE,
             active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),
