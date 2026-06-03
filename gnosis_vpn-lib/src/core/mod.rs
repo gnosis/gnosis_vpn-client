@@ -19,7 +19,7 @@ use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
-use crate::connection::destination::{Address, Destination};
+use crate::connection::destination::{Address, Destination, RoutingMode};
 use crate::connection::pseudonym_cache::PseudonymCache;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::types::SessionClientMetadata;
@@ -1746,7 +1746,11 @@ impl Core {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
-        match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
+
+        let mut incentive_cfg: edgli::strategy::IncentiveConfiguration = self.config.strategy.clone().into();
+        incentive_cfg.channel_allowlist = self.derive_channel_allowlist();
+
+        match edgli.start_telemetry_reactor(incentive_cfg).await {
             Ok(strategy_process) => {
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(strategy_process);
@@ -1755,6 +1759,38 @@ impl Core {
                 tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
                 self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
             }
+        }
+    }
+
+    /// Collect the first relayer address from every explicit-path destination.
+    ///
+    /// Returns `Some(set)` when at least one destination uses explicit path routing,
+    /// causing the channel lifecycle strategy to open channels **only** to those relayers.
+    /// Returns `None` when all destinations use hop-based routing, leaving the strategy
+    /// free to select peers by quality score.
+    fn derive_channel_allowlist(&self) -> Option<HashSet<Address>> {
+        let first_relayers: HashSet<Address> = self
+            .config
+            .destinations
+            .values()
+            .filter_map(|dest| match &dest.routing {
+                RoutingMode::ExplicitPath(intermediates) => intermediates.first().copied(),
+                RoutingMode::HopBased(_) => None,
+            })
+            .collect();
+
+        if first_relayers.is_empty() {
+            None
+        } else {
+            tracing::warn!(
+                relayers = ?first_relayers
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>(),
+                "channel strategy restricted to explicit-path relayers; \
+                 channels will only be opened to these addresses"
+            );
+            Some(first_relayers)
         }
     }
 

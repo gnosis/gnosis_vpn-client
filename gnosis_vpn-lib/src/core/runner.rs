@@ -394,6 +394,7 @@ async fn run_minimum_balance_recommendation(
     tracing::debug!("starting minimum balance recommendation runner");
     (|| {
         let ops = incentive_operations.clone();
+        let cfg = cfg.clone();
         async move {
             let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
                 .await

@@ -37,6 +37,8 @@ impl From<StrategyConfig> for edgli::strategy::IncentiveConfiguration {
             desired_message_count: c.desired_message_count,
             min_open_channels: c.min_open_channels,
             target_open_channels: c.target_open_channels,
+            // Derived at runtime from destination routing modes in core, not a TOML knob.
+            channel_allowlist: None,
         }
     }
 }
