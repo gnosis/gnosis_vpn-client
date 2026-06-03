@@ -12,7 +12,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::connection::destination::{Destination, RoutingMode};
+use crate::connection::destination::Destination;
 use crate::connection::options::Options;
 use crate::core::runner::{self, Results};
 use crate::event::{self, RunnerToRoot};
@@ -323,34 +323,15 @@ async fn open_bridge_session(
     //   3-hop: ~4 s/attempt, ~23 s total
     (|| async {
         tracing::debug!(%destination, "attempting to open bridge session");
-        match &destination.routing {
-            RoutingMode::HopBased(hop_routing) => {
-                let cfg = HoprSessionClientConfig {
-                    forward_path: (*hop_routing),
-                    return_path: (*hop_routing),
-                    ..base_cfg.clone()
-                };
-                hopr.open_session(
-                    destination.address,
-                    options.sessions.bridge.target.clone(),
-                    Some(1),
-                    Some(1),
-                    cfg,
-                )
-                .await
-            }
-            RoutingMode::ExplicitPath(nodes) => {
-                hopr.open_session_explicit_path(
-                    destination.address,
-                    options.sessions.bridge.target.clone(),
-                    nodes.clone(),
-                    Some(1),
-                    Some(1),
-                    base_cfg.clone(),
-                )
-                .await
-            }
-        }
+        hopr.open_session_with_routing(
+            destination.address,
+            options.sessions.bridge.target.clone(),
+            &destination.routing,
+            Some(1),
+            Some(1),
+            base_cfg.clone(),
+        )
+        .await
     })
     .retry(remote_data::backoff_expo_short_delay_bridge())
     .notify(|err: &HoprError, dur: Duration| {
@@ -422,28 +403,15 @@ async fn open_ping_session(
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open ping session");
-        match &destination.routing {
-            RoutingMode::HopBased(hop_routing) => {
-                let cfg = HoprSessionClientConfig {
-                    forward_path: (*hop_routing),
-                    return_path: (*hop_routing),
-                    ..base_cfg.clone()
-                };
-                hopr.open_session(destination.address, options.sessions.wg.target.clone(), None, None, cfg)
-                    .await
-            }
-            RoutingMode::ExplicitPath(nodes) => {
-                hopr.open_session_explicit_path(
-                    destination.address,
-                    options.sessions.wg.target.clone(),
-                    nodes.clone(),
-                    None,
-                    None,
-                    base_cfg.clone(),
-                )
-                .await
-            }
-        }
+        hopr.open_session_with_routing(
+            destination.address,
+            options.sessions.wg.target.clone(),
+            &destination.routing,
+            None,
+            None,
+            base_cfg.clone(),
+        )
+        .await
     })
     .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {

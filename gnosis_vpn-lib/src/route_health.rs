@@ -898,34 +898,16 @@ impl HealthSession {
             ..Default::default()
         };
         tracing::debug!(%destination, "opening TCP session for health check");
-        let meta = match &destination.routing {
-            RoutingMode::HopBased(hop_routing) => {
-                let cfg = HoprSessionClientConfig {
-                    forward_path: (*hop_routing),
-                    return_path: (*hop_routing),
-                    ..base_cfg
-                };
-                hopr.open_session(
-                    destination.address,
-                    options.sessions.bridge.target.clone(),
-                    None,
-                    None,
-                    cfg,
-                )
-                .await?
-            }
-            RoutingMode::ExplicitPath(nodes) => {
-                hopr.open_session_explicit_path(
-                    destination.address,
-                    options.sessions.bridge.target.clone(),
-                    nodes.clone(),
-                    None,
-                    None,
-                    base_cfg,
-                )
-                .await?
-            }
-        };
+        let meta = hopr
+            .open_session_with_routing(
+                destination.address,
+                options.sessions.bridge.target.clone(),
+                &destination.routing,
+                None,
+                None,
+                base_cfg,
+            )
+            .await?;
         Ok(Self {
             hopr,
             meta,

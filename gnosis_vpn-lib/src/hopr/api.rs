@@ -34,6 +34,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::connection::destination::RoutingMode;
 use crate::peer::Peer;
 use crate::{
     balance::{self, Balances},
@@ -77,7 +78,7 @@ impl Hopr {
 
     /// Open a local port and return the configuration
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn open_session(
+    async fn open_session(
         &self,
         destination: Address,
         target: SessionTarget,
@@ -195,7 +196,7 @@ impl Hopr {
     /// return paths.
     #[allow(deprecated)]
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn open_session_explicit_path(
+    async fn open_session_explicit_path(
         &self,
         destination: Address,
         target: SessionTarget,
@@ -328,6 +329,40 @@ impl Hopr {
             response_buffer,
             session_pool,
         })
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn open_session_with_routing(
+        &self,
+        destination: Address,
+        target: SessionTarget,
+        routing: &RoutingMode,
+        session_pool: Option<usize>,
+        max_client_sessions: Option<usize>,
+        base_cfg: HoprSessionClientConfig,
+    ) -> Result<SessionClientMetadata, HoprError> {
+        match routing {
+            RoutingMode::HopBased(hop_routing) => {
+                let cfg = HoprSessionClientConfig {
+                    forward_path: *hop_routing,
+                    return_path: *hop_routing,
+                    ..base_cfg
+                };
+                self.open_session(destination, target, session_pool, max_client_sessions, cfg)
+                    .await
+            }
+            RoutingMode::ExplicitPath(nodes) => {
+                self.open_session_explicit_path(
+                    destination,
+                    target,
+                    nodes.clone(),
+                    session_pool,
+                    max_client_sessions,
+                    base_cfg,
+                )
+                .await
+            }
+        }
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
