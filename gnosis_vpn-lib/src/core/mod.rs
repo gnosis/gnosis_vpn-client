@@ -1003,14 +1003,26 @@ impl Core {
                 resp,
             } => match &self.phase {
                 Phase::Connecting(conn) => {
-                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    let mut conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    conn_stats.known_destinations = self
+                        .config
+                        .destinations
+                        .iter()
+                        .map(|(id, dest)| (dest.address, id.clone()))
+                        .collect();
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
                         ticket_stats_status,
                         conn_stats,
                     )));
                 }
                 Phase::Connected(conn) => {
-                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    let mut conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    conn_stats.known_destinations = self
+                        .config
+                        .destinations
+                        .iter()
+                        .map(|(id, dest)| (dest.address, id.clone()))
+                        .collect();
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
                         ticket_stats_status,
                         conn_stats,

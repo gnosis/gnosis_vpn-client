@@ -3,6 +3,7 @@ use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -267,6 +268,7 @@ pub struct ConnStats {
     pub wg_ip: Option<String>,
     pub session_bound_host: Option<SocketAddr>,
     pub session_id: Option<String>,
+    pub known_destinations: HashMap<Address, String>,
 }
 
 impl ConnStats {
@@ -283,6 +285,7 @@ impl ConnStats {
                 .as_ref()
                 .and_then(|s| s.active_clients.first())
                 .map(|id| id.to_string()),
+            known_destinations: HashMap::new(),
         }
     }
 }

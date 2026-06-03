@@ -574,8 +574,18 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
             nr => format!("{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n"),
         },
         RoutingMode::ExplicitPath(nodes) => {
-            let nr = nodes.len();
-            format!("{node_addr}(me) -{title}-VIA--{nr}EXPLICIT-NODES--> {addr}({exit})\n")
+            let intermediates: Vec<String> = nodes
+                .iter()
+                .map(|n| {
+                    let checksum = n.to_checksum();
+                    match stats.known_destinations.get(n) {
+                        Some(id) => format!("{checksum}({id})"),
+                        None => checksum,
+                    }
+                })
+                .collect();
+            let via = intermediates.join(" --VIA--> ");
+            format!("{node_addr}(me) -{title}--> {via} --VIA--> {addr}({exit})\n")
         }
     }
 }
