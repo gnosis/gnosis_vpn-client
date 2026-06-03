@@ -265,7 +265,6 @@ impl Hopr {
             surb_management: base_cfg.surb_management,
             pseudonym: base_cfg.pseudonym,
             always_max_out_surbs: base_cfg.always_max_out_surbs,
-            ..Default::default()
         };
 
         let listener_id = ListenerId(protocol, bind_host);
