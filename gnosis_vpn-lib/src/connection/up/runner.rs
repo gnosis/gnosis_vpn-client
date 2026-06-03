@@ -94,13 +94,8 @@ impl Runner {
 
         // 4. open ping session
         let _ = results_sender.send(progress(Progress::OpenPing)).await;
-        // TODO: The ping session must currently use the same buffer/surb settings as the main
-        // session. Using dedicated ping settings causes connections to fail — the edge client
-        // requires matching SURB balancer config across both phases. Once the underlying
-        // edge-client issue is resolved, replace `.main` with `.ping` here so each phase gets
-        // its own tuned config.
         let ping_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main)?;
+            runner::to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping)?;
         let session = open_ping_session(
             &self.hopr,
             &self.destination,

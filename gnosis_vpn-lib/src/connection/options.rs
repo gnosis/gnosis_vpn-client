@@ -99,9 +99,7 @@ impl Default for BufferSizes {
         Self {
             ping: ByteSize::mb(1),
             // maximum allowed buffer size is 10 MB
-            // lowered to 5 MB as a compromise: the ping session currently inherits this value
-            // due to a bug workaround (see TODO in connection/up/runner.rs)
-            main: ByteSize::mb(5),
+            main: ByteSize::mb(10),
         }
     }
 }
