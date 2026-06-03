@@ -22,10 +22,10 @@ use crate::ping;
 // Types from v6 that are schema-identical in v5 are re-used directly.
 // Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below
 // because v5 includes a `bridge` field that v6 does not have.
+use super::v6::validate_hops;
 pub(super) use super::v6::{
     BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
 };
-use super::v6::validate_hops;
 
 // v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
 // can carry the `bridge` field that existed in v5 configs but is absent from v6.
