@@ -52,7 +52,8 @@ path    = { hops = 1 }
 
 # session_pseudonym_ttl - how long to keep a closed session's pseudonym cached for reuse
 # on reconnect. Exit nodes retain session SURBs for ~30s, so reconnecting within this
-# window avoids a cold-start SURB exchange. Defaults to 30s.
+# window avoids a cold-start SURB exchange. Currently defaults to 1s (effectively
+# disabled) until hopr-lib supports PIX; set to "30s" once that lands.
 # session_pseudonym_ttl = "30s"
 
 # determine specific connection parameters for ephemeral bridge connection
@@ -90,7 +91,7 @@ path    = { hops = 1 }
 #
 # [connection.buffer]
 # ping = "1 MB"
-# main = "5 MB"
+# main = "10 MB"
 
 ###
 ## wireguard section - specific VPN-related settings
