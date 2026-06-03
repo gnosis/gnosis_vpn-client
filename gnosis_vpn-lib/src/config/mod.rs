@@ -42,6 +42,8 @@ pub enum Error {
     VersionMismatch(u8),
     #[error("No destinations")]
     NoDestinations,
+    #[error("Explicit path for destination '{0}' must have at least one relayer")]
+    EmptyExplicitPath(String),
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
 }

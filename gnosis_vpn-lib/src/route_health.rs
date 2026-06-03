@@ -9,7 +9,7 @@
 //! * **Network reachability** — do we have the peering/channel relationship
 //!   that the routing option requires? This is driven from outside by Core
 //!   feeding in the current peer set ([`RouteHealth::peers`]) and channel
-//!   funding results ([`RouteHealth::any_channel_available`]).
+//!   funding results ([`RouteHealth::channels_available`]).
 //! * **Exit-node health** — once reachable, can we actually reach the exit
 //!   server behind the destination, and is it reporting healthy? This is
 //!   driven internally by a background task that opens a short-lived TCP
@@ -98,10 +98,13 @@ fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
 /// the lifetime of the `RouteHealth`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StaticNeed {
-    /// Any outgoing channel is sufficient — used for all 1+ hop routes.
+    /// Any outgoing channel is sufficient — used for hop-based 1+ hop routes.
     /// Multi-hop payments flow through relay channels kept open by the
     /// AutoFunding strategy, independently of the destination.
     AnyChannel,
+    /// A channel to this specific relayer is required — the first node of an
+    /// explicit path. Packets must enter the path through that peer.
+    Channel(Address),
     /// Direct peering with the destination — no channel needed (0-hop route).
     Peering(Address),
 }
@@ -247,19 +250,19 @@ impl RouteHealth {
 /// Derive the static need from routing alone.
 ///
 /// For 0-hop routes the destination must be a direct transport peer and no
-/// channel is needed. For 1+ hop routes any connected relay peer is sufficient;
-/// the HOPR AutoFunding strategy keeps this node's outgoing channels (e.g.
-/// edge → relay) topped up, and the route advances once at least one such
-/// outgoing channel appears in the balance state (`AnyChannel`).
+/// channel is needed. For explicit paths a channel to the first relayer is
+/// required. For hop-based 1+ hop routes any connected relay peer is
+/// sufficient; the HOPR AutoFunding strategy keeps outgoing channels topped up.
 fn derive_static_need(routing: &RoutingMode, dest_address: Address) -> StaticNeed {
-    let hop_count = match routing {
-        RoutingMode::HopBased(h) => h.hop_count(),
-        RoutingMode::ExplicitPath(nodes) => nodes.len(),
-    };
-    if hop_count == 0 {
-        StaticNeed::Peering(dest_address)
-    } else {
-        StaticNeed::AnyChannel
+    match routing {
+        RoutingMode::HopBased(h) if h.hop_count() == 0 => StaticNeed::Peering(dest_address),
+        RoutingMode::ExplicitPath(nodes) => match nodes.first() {
+            Some(&first) => StaticNeed::Channel(first),
+            // Empty explicit paths are rejected at config parse time; this
+            // branch is a dead fallback so the type stays exhaustive.
+            None => StaticNeed::Peering(dest_address),
+        },
+        _ => StaticNeed::AnyChannel,
     }
 }
 
@@ -369,8 +372,9 @@ impl RouteHealth {
         let is_peered = match &self.static_need {
             // 0-hop: destination must be a direct transport peer.
             StaticNeed::Peering(addr) => addresses.contains(addr),
-            // 1+ hop: any connected relay can carry packets; the exit node
-            // itself does not need to be a direct transport peer.
+            // explicit path: the first relayer must be a connected transport peer.
+            StaticNeed::Channel(addr) => addresses.contains(addr),
+            // hop-based 1+ hop: any connected relay can carry packets.
             StaticNeed::AnyChannel => !addresses.is_empty(),
         };
 
@@ -407,7 +411,7 @@ impl RouteHealth {
                     // 0-hop routes never go through a channel wait, so has_channel
                     // stays false. 1+ hop routes reached Routable via a channel, so
                     // has_channel: true lets re-peering skip straight back to Routable.
-                    let has_channel = matches!(self.static_need, StaticNeed::AnyChannel);
+                    let has_channel = matches!(self.static_need, StaticNeed::AnyChannel | StaticNeed::Channel(_));
                     self.state = RouteHealthState::NeedsPeering { has_channel };
                 }
             }
@@ -415,12 +419,15 @@ impl RouteHealth {
         }
     }
 
-    /// Notify that at least one outgoing channel exists.
+    /// Notify that outgoing channels exist to the given peers.
     ///
-    /// Routes in `NeedsChannel` become routable and schedule their first
-    /// health check immediately. No-op for routes in any other state.
-    pub fn any_channel_available(
+    /// Routes in `NeedsChannel` advance to `Routable` and schedule their
+    /// first health check immediately when the set satisfies their static need
+    /// (`AnyChannel`: any non-empty set; `Channel(needed)`: set must contain
+    /// `needed`). No-op for routes in any other state.
+    pub fn channels_available(
         &mut self,
+        peers_with_channels: &HashSet<Address>,
         hopr: &Arc<Hopr>,
         dest: &Destination,
         options: &Options,
@@ -429,8 +436,15 @@ impl RouteHealth {
         if !matches!(self.state, RouteHealthState::NeedsChannel) {
             return;
         }
-        self.state = RouteHealthState::Routable;
-        self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+        let satisfied = match &self.static_need {
+            StaticNeed::AnyChannel => !peers_with_channels.is_empty(),
+            StaticNeed::Channel(needed) => peers_with_channels.contains(needed),
+            StaticNeed::Peering(_) => false,
+        };
+        if satisfied {
+            self.state = RouteHealthState::Routable;
+            self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+        }
     }
 
     /// Consume an outcome from a background health-check cycle and schedule
@@ -1089,6 +1103,7 @@ mod tests {
     fn is_peered(need: &StaticNeed, connected: &HashSet<Address>) -> bool {
         match need {
             StaticNeed::Peering(a) => connected.contains(a),
+            StaticNeed::Channel(a) => connected.contains(a),
             StaticNeed::AnyChannel => !connected.is_empty(),
         }
     }
@@ -1110,14 +1125,25 @@ mod tests {
     }
 
     #[test]
-    fn explicit_path_with_nodes_yields_any_channel() {
+    fn explicit_path_with_nodes_yields_channel_to_first_relayer() {
         let dest = addr(3);
-        let routing = RoutingMode::ExplicitPath(vec![addr(10), addr(11)]);
-        assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
+        let first = addr(10);
+        let routing = RoutingMode::ExplicitPath(vec![first, addr(11)]);
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Channel(first));
     }
 
     #[test]
-    fn empty_explicit_path_yields_peering() {
+    fn explicit_path_single_node_yields_channel_to_that_node() {
+        let dest = addr(3);
+        let relayer = addr(10);
+        let routing = RoutingMode::ExplicitPath(vec![relayer]);
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Channel(relayer));
+    }
+
+    #[test]
+    fn empty_explicit_path_yields_peering_fallback() {
+        // Empty explicit paths are rejected at config parse time; this tests
+        // that derive_static_need degrades gracefully rather than panicking.
         let dest = addr(4);
         let routing = RoutingMode::ExplicitPath(vec![]);
         assert_eq!(derive_static_need(&routing, dest), StaticNeed::Peering(dest));
@@ -1139,6 +1165,34 @@ mod tests {
     #[test]
     fn any_channel_is_not_peered_when_no_peers_at_all() {
         assert!(!is_peered(&StaticNeed::AnyChannel, &HashSet::new()));
+    }
+
+    // --- is_peered for Channel (explicit path) routes ---
+
+    #[test]
+    fn channel_route_requires_specific_relayer_to_be_connected() {
+        let relayer = addr(10);
+        let other = addr(20);
+        let need = StaticNeed::Channel(relayer);
+
+        assert!(
+            !is_peered(&need, &HashSet::new()),
+            "empty peer set must not satisfy Channel need"
+        );
+
+        let mut only_other = HashSet::new();
+        only_other.insert(other);
+        assert!(
+            !is_peered(&need, &only_other),
+            "wrong peer must not satisfy Channel need"
+        );
+
+        let mut with_relayer = HashSet::new();
+        with_relayer.insert(relayer);
+        assert!(
+            is_peered(&need, &with_relayer),
+            "correct relayer must satisfy Channel need"
+        );
     }
 
     // --- failure_backoff ---

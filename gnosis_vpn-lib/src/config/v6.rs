@@ -599,6 +599,9 @@ pub fn convert_destinations(
     for (id, dest) in config_dests.iter() {
         let routing = match &dest.path {
             Some(DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(*h as usize)?),
+            Some(DestinationPath::Intermediates(addrs)) if addrs.is_empty() => {
+                return Err(config::Error::EmptyExplicitPath(id.clone()));
+            }
             Some(DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs.clone()),
             None => RoutingMode::HopBased(HopRouting::try_from(1)?),
         };

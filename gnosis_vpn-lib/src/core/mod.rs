@@ -652,17 +652,32 @@ impl Core {
             Results::CapacityAllocations { res } => match res {
                 Ok(allocations) => {
                     tracing::info!(count = allocations.len(), "received capacity allocations");
-                    let has_channels = allocations
+                    let peers_with_channels: HashSet<Address> = allocations
                         .keys()
-                        .any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
+                        .filter_map(|k| {
+                            if let balance::CapacityAllocator::Peer(addr) = k {
+                                Some(*addr)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
                     self.capacity_allocations = Some(allocations);
-                    if has_channels && let Some(hopr) = self.hopr.clone() {
+                    if !peers_with_channels.is_empty()
+                        && let Some(hopr) = self.hopr.clone()
+                    {
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                         for id in &dest_ids {
                             if let (Some(rh), Some(dest)) =
                                 (self.route_healths.get_mut(id), self.config.destinations.get(id))
                             {
-                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
+                                rh.channels_available(
+                                    &peers_with_channels,
+                                    &hopr,
+                                    dest,
+                                    &self.config.connection,
+                                    results_sender,
+                                );
                             }
                         }
                     }
@@ -740,10 +755,21 @@ impl Core {
                     tracing::info!(num_peers = %peers.len(), "fetched connected peers");
                     let all_peers = HashSet::from_iter(peers.iter().cloned());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    let channels_already_available = self
+                    let peers_with_channels: HashSet<Address> = self
                         .capacity_allocations
                         .as_ref()
-                        .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
+                        .map(|map| {
+                            map.keys()
+                                .filter_map(|k| {
+                                    if let balance::CapacityAllocator::Peer(addr) = k {
+                                        Some(*addr)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     for (idx, id) in dest_ids.into_iter().enumerate() {
                         if let Some(dest) = self.config.destinations.get(&id).cloned()
                             && let Some(rh) = self.route_healths.get_mut(&id)
@@ -761,8 +787,14 @@ impl Core {
                             // If peers just moved this route into NeedsChannel and capacity
                             // allocations already show open channels, complete the transition
                             // immediately rather than waiting for the next capacity tick.
-                            if channels_already_available && rh.needs_channel() {
-                                rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
+                            if !peers_with_channels.is_empty() && rh.needs_channel() {
+                                rh.channels_available(
+                                    &peers_with_channels,
+                                    &hopr,
+                                    &dest,
+                                    &self.config.connection,
+                                    results_sender,
+                                );
                             }
                         }
                     }
