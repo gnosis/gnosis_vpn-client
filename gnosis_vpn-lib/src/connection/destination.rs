@@ -41,7 +41,11 @@ impl Destination {
             RoutingMode::HopBased(hop_routing) => {
                 let nr = hop_routing.hop_count();
                 let path = (0..nr).map(|_| "()").collect::<Vec<&str>>().join("->");
-                if nr > 0 { format!("->{path}->") } else { "->".to_string() }
+                if nr > 0 {
+                    format!("->{path}->")
+                } else {
+                    "->".to_string()
+                }
             }
             RoutingMode::ExplicitPath(intermediates) => {
                 let path = intermediates
@@ -49,7 +53,11 @@ impl Destination {
                     .map(|a| format!("({})", log_output::address(a)))
                     .collect::<Vec<_>>()
                     .join("->");
-                if path.is_empty() { "->".to_string() } else { format!("->{path}->") }
+                if path.is_empty() {
+                    "->".to_string()
+                } else {
+                    format!("->{path}->")
+                }
             }
         }
     }

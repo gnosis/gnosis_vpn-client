@@ -250,9 +250,7 @@ impl Hopr {
                     .chain_api()
                     .chain_key_to_packet_key(addr)
                     .map_err(|e| HoprError::Construction(e.to_string()))?
-                    .ok_or_else(|| {
-                        HoprError::Construction(format!("intermediate path node not found: {addr}"))
-                    })?;
+                    .ok_or_else(|| HoprError::Construction(format!("intermediate path node not found: {addr}")))?;
                 Ok(key.into())
             })
             .collect::<Result<_, _>>()?;

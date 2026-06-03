@@ -269,11 +269,9 @@ fn derive_static_need(routing: &RoutingMode, dest_address: Address) -> StaticNee
 /// else starts at `NeedsPeering` and waits for Core to feed in the peer set.
 fn derive_initial_state(routing: &RoutingMode, allow_insecure: bool) -> RouteHealthState {
     match routing {
-        RoutingMode::HopBased(h) if h.hop_count() == 0 && !allow_insecure => {
-            RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::NotAllowed,
-            }
-        }
+        RoutingMode::HopBased(h) if h.hop_count() == 0 && !allow_insecure => RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::NotAllowed,
+        },
         RoutingMode::ExplicitPath(nodes) if nodes.is_empty() => RouteHealthState::Unrecoverable {
             reason: UnrecoverableReason::InvalidPath,
         },
@@ -907,8 +905,14 @@ impl HealthSession {
                     return_path: (*hop_routing),
                     ..base_cfg
                 };
-                hopr.open_session(destination.address, options.sessions.bridge.target.clone(), None, None, cfg)
-                    .await?
+                hopr.open_session(
+                    destination.address,
+                    options.sessions.bridge.target.clone(),
+                    None,
+                    None,
+                    cfg,
+                )
+                .await?
             }
             RoutingMode::ExplicitPath(nodes) => {
                 hopr.open_session_explicit_path(

@@ -330,8 +330,14 @@ async fn open_bridge_session(
                     return_path: (*hop_routing),
                     ..base_cfg.clone()
                 };
-                hopr.open_session(destination.address, options.sessions.bridge.target.clone(), Some(1), Some(1), cfg)
-                    .await
+                hopr.open_session(
+                    destination.address,
+                    options.sessions.bridge.target.clone(),
+                    Some(1),
+                    Some(1),
+                    cfg,
+                )
+                .await
             }
             RoutingMode::ExplicitPath(nodes) => {
                 hopr.open_session_explicit_path(

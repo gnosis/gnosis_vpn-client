@@ -13,7 +13,10 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::{destination::{Destination as ConnDestination, RoutingMode}, options};
+use crate::connection::{
+    destination::{Destination as ConnDestination, RoutingMode},
+    options,
+};
 use crate::ping;
 
 // Types from v6 that are schema-identical in v5 are re-used directly.
