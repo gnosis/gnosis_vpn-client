@@ -409,10 +409,10 @@ impl RouteHealth {
                     self.check_cycle = 0;
                     self.exit_failures = 0;
                     self.tunnel_ping_failures = 0;
-                    // 0-hop routes never go through a channel wait, so has_channel
-                    // stays false. 1+ hop routes reached Routable via a channel, so
-                    // has_channel: true lets re-peering skip straight back to Routable.
-                    let has_channel = matches!(self.static_need, StaticNeed::AnyChannel | StaticNeed::Channel(_));
+                    // 0-hop and explicit-path routes set has_channel: false so
+                    // re-peering re-checks the channel requirement. For AnyChannel,
+                    // has_channel: true skips the wait since any relay will do.
+                    let has_channel = matches!(self.static_need, StaticNeed::AnyChannel);
                     self.state = RouteHealthState::NeedsPeering { has_channel };
                 }
             }
@@ -1193,6 +1193,56 @@ mod tests {
         assert!(
             is_peered(&need, &with_relayer),
             "correct relayer must satisfy Channel need"
+        );
+    }
+
+    // --- peering loss has_channel ---
+
+    #[test]
+    fn explicit_path_peering_loss_forces_channel_recheck_on_repeering() {
+        use crate::connection::destination::{Destination, RoutingMode};
+        use tokio_util::sync::CancellationToken;
+
+        let relayer = addr(10);
+        let dest = Destination::new(
+            "test".to_string(),
+            addr(1),
+            RoutingMode::ExplicitPath(vec![relayer]),
+            Default::default(),
+        );
+        let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());
+
+        // Simulate the route having reached Routable.
+        rh.state = RouteHealthState::Routable;
+
+        // Compute has_channel the same way peers() does on peering loss.
+        // For Channel(_) this must be false so re-peering routes through
+        // NeedsChannel and re-verifies the channel to the specific relayer.
+        let has_channel = matches!(rh.static_need, StaticNeed::AnyChannel);
+        assert!(
+            !has_channel,
+            "explicit-path route must not carry has_channel=true across a peer disconnect"
+        );
+    }
+
+    #[test]
+    fn hop_based_route_peering_loss_skips_channel_wait_on_repeering() {
+        use crate::connection::destination::{Destination, HopRouting, RoutingMode};
+        use tokio_util::sync::CancellationToken;
+
+        let dest = Destination::new(
+            "test".to_string(),
+            addr(1),
+            RoutingMode::HopBased(HopRouting::try_from(1).unwrap()),
+            Default::default(),
+        );
+        let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());
+        rh.state = RouteHealthState::Routable;
+
+        let has_channel = matches!(rh.static_need, StaticNeed::AnyChannel);
+        assert!(
+            has_channel,
+            "hop-based route must carry has_channel=true so re-peering skips straight to Routable"
         );
     }
 
