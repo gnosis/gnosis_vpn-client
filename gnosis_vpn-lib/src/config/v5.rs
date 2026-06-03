@@ -394,6 +394,9 @@ pub fn convert_destinations(
     let mut result = HashMap::new();
     for (id, dest) in config_dests.iter() {
         let routing = match dest.path.clone() {
+            Some(DestinationPath::Intermediates(addrs)) if addrs.is_empty() => {
+                return Err(config::Error::EmptyExplicitPath(id.clone()));
+            }
             Some(DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs),
             Some(DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(h as usize)?),
             None => RoutingMode::HopBased(HopRouting::try_from(1)?),
@@ -465,6 +468,24 @@ path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865
             panic!("expected ExplicitPath, got {:?}", d.routing);
         };
         assert_eq!(addrs.len(), 2);
+    }
+
+    #[test]
+    fn convert_destinations_empty_intermediates_errors() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { intermediates = [] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations);
+        assert!(
+            matches!(result, Err(crate::config::Error::EmptyExplicitPath(_))),
+            "empty intermediates list must be a config error, got: {result:?}"
+        );
     }
 
     #[test]

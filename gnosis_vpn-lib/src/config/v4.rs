@@ -156,6 +156,9 @@ pub fn convert_destinations(
     let mut result = HashMap::new();
     for (address, dest) in config_dests.iter() {
         let routing = match dest.path.clone() {
+            Some(v5::DestinationPath::Intermediates(addrs)) if addrs.is_empty() => {
+                return Err(config::Error::EmptyExplicitPath(address.to_string()));
+            }
             Some(v5::DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs),
             Some(v5::DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(h as usize)?),
             None => RoutingMode::HopBased(HopRouting::try_from(1)?),
@@ -224,6 +227,23 @@ version = 4
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(1).unwrap()));
+    }
+
+    #[test]
+    fn convert_destinations_empty_intermediates_errors() {
+        let cfg = parse(
+            r#####"
+version = 4
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+path = { intermediates = [] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations);
+        assert!(
+            matches!(result, Err(crate::config::Error::EmptyExplicitPath(_))),
+            "empty intermediates list must be a config error, got: {result:?}"
+        );
     }
 
     #[test]

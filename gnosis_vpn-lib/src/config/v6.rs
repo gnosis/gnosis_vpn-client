@@ -655,6 +655,24 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     }
 
     #[test]
+    fn convert_destinations_empty_intermediates_errors() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { intermediates = [] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations);
+        assert!(
+            matches!(result, Err(crate::config::Error::EmptyExplicitPath(_))),
+            "empty intermediates list must be a config error, got: {result:?}"
+        );
+    }
+
+    #[test]
     fn convert_destinations_empty_map_errors() {
         let result = convert_destinations(Some(std::collections::HashMap::new()));
         assert!(result.is_err());
