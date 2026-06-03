@@ -19,8 +19,11 @@ version = 6
 # address = "<exit node address>"
 # additional information about this exit node
 # meta = { location = <location> }
-# session path: number of intermediate hops (0–3)
-# path = { hops = 1 }
+# session path — two forms are supported:
+#   hop-count routing: the HOPR path planner selects relays automatically
+#   path = { hops = 1 }
+#   explicit path: relay nodes are specified by their chain addresses in order
+#   path = { intermediates = ["0x<relay1>", "0x<relay2>"] }
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"

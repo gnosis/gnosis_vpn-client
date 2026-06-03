@@ -1,6 +1,6 @@
-use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::exports::network::types::types::IpProtocol;
+use hopr_utils_session::Routing;
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
@@ -14,9 +14,9 @@ pub struct SessionClientMetadata {
     /// Destination node (exit node) of the Session.
     pub destination: Address,
     /// Forward routing path.
-    pub forward_path: HopRouting,
+    pub forward_path: Routing,
     /// Return routing path.
-    pub return_path: HopRouting,
+    pub return_path: Routing,
     /// IP protocol used by Session's listening socket.
     pub protocol: IpProtocol,
     /// Bound address and port of the session.

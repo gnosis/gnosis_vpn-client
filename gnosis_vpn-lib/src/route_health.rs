@@ -32,7 +32,7 @@ use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::connection::destination::{Address, Destination, HopRouting};
+use crate::connection::destination::{Address, Destination, HopRouting, RoutingMode};
 use crate::connection::options::Options;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
@@ -251,24 +251,33 @@ impl RouteHealth {
 /// the HOPR AutoFunding strategy keeps this node's outgoing channels (e.g.
 /// edge → relay) topped up, and the route advances once at least one such
 /// outgoing channel appears in the balance state (`AnyChannel`).
-fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
-    if routing.hop_count() == 0 {
+fn derive_static_need(routing: &RoutingMode, dest_address: Address) -> StaticNeed {
+    let hop_count = match routing {
+        RoutingMode::HopBased(h) => h.hop_count(),
+        RoutingMode::ExplicitPath(nodes) => nodes.len(),
+    };
+    if hop_count == 0 {
         StaticNeed::Peering(dest_address)
     } else {
         StaticNeed::AnyChannel
     }
 }
 
-/// Pick the starting state purely from routing config. 0-hop routing without
-/// `allow_insecure` short-circuits to `Unrecoverable`; everything else starts
-/// at `NeedsPeering` and waits for Core to feed in the peer set.
-fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHealthState {
-    if routing.hop_count() == 0 && !allow_insecure {
-        RouteHealthState::Unrecoverable {
-            reason: UnrecoverableReason::NotAllowed,
+/// Pick the starting state purely from routing config. 0-hop or empty explicit
+/// path without `allow_insecure` short-circuits to `Unrecoverable`; empty
+/// explicit path is always invalid regardless of `allow_insecure`; everything
+/// else starts at `NeedsPeering` and waits for Core to feed in the peer set.
+fn derive_initial_state(routing: &RoutingMode, allow_insecure: bool) -> RouteHealthState {
+    match routing {
+        RoutingMode::HopBased(h) if h.hop_count() == 0 && !allow_insecure => {
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed,
+            }
         }
-    } else {
-        RouteHealthState::NeedsPeering { has_channel: false }
+        RoutingMode::ExplicitPath(nodes) if nodes.is_empty() => RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::InvalidPath,
+        },
+        _ => RouteHealthState::NeedsPeering { has_channel: false },
     }
 }
 
@@ -882,10 +891,8 @@ impl HealthSession {
     /// Uses the configured bridge capabilities/target but disables SURB
     /// management — the session is short-lived and not used for user traffic.
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
-        let cfg = HoprSessionClientConfig {
+        let base_cfg = HoprSessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
-            forward_path: destination.routing,
-            return_path: destination.routing,
             // only send 1 SURB alongside our HTTP requests
             // health responses always fit into one packet
             always_max_out_surbs: false,
@@ -893,15 +900,28 @@ impl HealthSession {
             ..Default::default()
         };
         tracing::debug!(%destination, "opening TCP session for health check");
-        let meta = hopr
-            .open_session(
-                destination.address,
-                options.sessions.bridge.target.clone(),
-                None,
-                None,
-                cfg,
-            )
-            .await?;
+        let meta = match &destination.routing {
+            RoutingMode::HopBased(hop_routing) => {
+                let cfg = HoprSessionClientConfig {
+                    forward_path: (*hop_routing).into(),
+                    return_path: (*hop_routing).into(),
+                    ..base_cfg
+                };
+                hopr.open_session(destination.address, options.sessions.bridge.target.clone(), None, None, cfg)
+                    .await?
+            }
+            RoutingMode::ExplicitPath(nodes) => {
+                hopr.open_session_explicit_path(
+                    destination.address,
+                    options.sessions.bridge.target.clone(),
+                    nodes.clone(),
+                    None,
+                    None,
+                    base_cfg,
+                )
+                .await?
+            }
+        };
         Ok(Self {
             hopr,
             meta,
@@ -1091,15 +1111,29 @@ mod tests {
     #[test]
     fn zero_hop_routing_yields_peering() {
         let dest = addr(1);
-        let routing = HopRouting::try_from(0).expect("0-hop is valid");
+        let routing = RoutingMode::HopBased(HopRouting::try_from(0).expect("0-hop is valid"));
         assert_eq!(derive_static_need(&routing, dest), StaticNeed::Peering(dest));
     }
 
     #[test]
     fn one_hop_routing_yields_any_channel() {
         let dest = addr(2);
-        let routing = HopRouting::try_from(1).expect("1-hop is valid");
+        let routing = RoutingMode::HopBased(HopRouting::try_from(1).expect("1-hop is valid"));
         assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
+    }
+
+    #[test]
+    fn explicit_path_with_nodes_yields_any_channel() {
+        let dest = addr(3);
+        let routing = RoutingMode::ExplicitPath(vec![addr(10), addr(11)]);
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
+    }
+
+    #[test]
+    fn empty_explicit_path_yields_peering() {
+        let dest = addr(4);
+        let routing = RoutingMode::ExplicitPath(vec![]);
+        assert_eq!(derive_static_need(&routing, dest), StaticNeed::Peering(dest));
     }
 
     // --- is_peered for AnyChannel routes ---
@@ -1123,12 +1157,12 @@ mod tests {
     // --- failure_backoff ---
 
     fn backoff_at(failures: u32) -> Duration {
-        use crate::connection::destination::{Destination, HopRouting};
+        use crate::connection::destination::{Destination, HopRouting, RoutingMode};
         use tokio_util::sync::CancellationToken;
         let dest = Destination::new(
             "test".to_string(),
             addr(1),
-            HopRouting::try_from(1).unwrap(),
+            RoutingMode::HopBased(HopRouting::try_from(1).unwrap()),
             Default::default(),
         );
         let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());

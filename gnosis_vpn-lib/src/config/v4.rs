@@ -9,7 +9,7 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::config::v5;
-use crate::connection::destination::Destination as ConnDestination;
+use crate::connection::destination::{Destination as ConnDestination, RoutingMode};
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,7 +167,7 @@ pub fn convert_destinations(
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(address.to_string(), *address, path, meta);
+        let dest = ConnDestination::new(address.to_string(), *address, RoutingMode::HopBased(path), meta);
         result.insert(address.to_string(), dest);
     }
     Ok(result)

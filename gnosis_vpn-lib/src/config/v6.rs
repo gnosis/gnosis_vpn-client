@@ -1,8 +1,4 @@
-/// Config v6: identical to v5 except `Intermediates` is removed from
-/// `DestinationPath`. Only hop-count based routing is supported.
-///
-/// Existing v4/v5 configs with `intermediates` must be migrated by replacing
-/// `path = { intermediates = [...] }` with `path = { hops = <count> }`.
+/// Config v6: supports both hop-count and explicit intermediate-path routing for destinations.
 use bytesize::ByteSize;
 use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
@@ -19,7 +15,10 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::{destination::Destination as ConnDestination, options};
+use crate::connection::{
+    destination::{Destination as ConnDestination, RoutingMode},
+    options,
+};
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::hopr::strategy_config::StrategyConfig;
 use crate::ping;
@@ -560,15 +559,13 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
-/// Routing path for v6 — only hop-count routing is supported.
-///
-/// `Intermediates` is intentionally absent; configs that previously used
-/// `path = { intermediates = [...] }` must be updated to
-/// `path = { hops = <count> }`.
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) enum DestinationPath {
     #[serde(alias = "hops", deserialize_with = "validate_hops")]
     Hops(u8),
+    #[serde(alias = "intermediates")]
+    Intermediates(#[serde_as(as = "Vec<DisplayFromStr>")] Vec<Address>),
 }
 
 impl TryFrom<Config> for config::Config {
@@ -600,13 +597,14 @@ pub fn convert_destinations(
 
     let mut result = HashMap::new();
     for (id, dest) in config_dests.iter() {
-        let path = match dest.path {
-            Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
+        let routing = match &dest.path {
+            Some(DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(*h as usize)?),
+            Some(DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs.clone()),
+            None => RoutingMode::HopBased(HopRouting::try_from(1)?),
         };
 
         let meta = dest.meta.clone().unwrap_or_default();
-        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
+        let dest = ConnDestination::new(id.to_string(), dest.address, routing, meta);
         result.insert(id.to_string(), dest);
     }
     Ok(result)
@@ -615,7 +613,8 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{Config, convert_destinations};
-    use edgli::hopr_lib::HopRouting;
+    use crate::connection::destination::{HopRouting, RoutingMode};
+    use edgli::hopr_lib::api::types::primitive::prelude::Address;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
@@ -634,7 +633,7 @@ path = { hops = 2 }
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
+        assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(2).unwrap()));
     }
 
     #[test]
@@ -649,7 +648,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
         );
         let result = convert_destinations(cfg.destinations).expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
+        assert_eq!(d.routing, RoutingMode::HopBased(HopRouting::try_from(1).unwrap()));
     }
 
     #[test]
@@ -665,19 +664,21 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     }
 
     #[test]
-    fn intermediates_path_rejected_in_v6() {
-        // v6 does not support the deprecated `intermediates` key — deserialization
-        // must fail when it appears in a destination path.
-        let result = toml::from_str::<Config>(
+    fn convert_destinations_intermediates_path_preserved() {
+        let relay = "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA";
+        let cfg = parse(&format!(
             r#####"
 version = 6
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
-"#####,
-        );
-        assert!(result.is_err(), "v6 must reject intermediates path");
+path = {{ intermediates = ["{relay}"] }}
+"#####
+        ));
+        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let d = result.values().next().unwrap();
+        let expected_addr: Address = relay.parse().unwrap();
+        assert_eq!(d.routing, RoutingMode::ExplicitPath(vec![expected_addr]));
     }
 
     #[test]

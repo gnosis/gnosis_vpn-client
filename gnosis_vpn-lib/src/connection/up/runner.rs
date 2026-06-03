@@ -12,7 +12,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::connection::destination::Destination;
+use crate::connection::destination::{Destination, RoutingMode};
 use crate::connection::options::Options;
 use crate::core::runner::{self, Results};
 use crate::event::{self, RunnerToRoot};
@@ -308,10 +308,8 @@ async fn open_bridge_session(
     options: &Options,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = HoprSessionClientConfig {
+    let base_cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        forward_path: destination.routing,
-        return_path: destination.routing,
         // only send 1 SURB alongside our HTTP requests
         // health responses always fit into one packet
         always_max_out_surbs: false,
@@ -325,14 +323,28 @@ async fn open_bridge_session(
     //   3-hop: ~4 s/attempt, ~23 s total
     (|| async {
         tracing::debug!(%destination, "attempting to open bridge session");
-        hopr.open_session(
-            destination.address,
-            options.sessions.bridge.target.clone(),
-            Some(1),
-            Some(1),
-            cfg.clone(),
-        )
-        .await
+        match &destination.routing {
+            RoutingMode::HopBased(hop_routing) => {
+                let cfg = HoprSessionClientConfig {
+                    forward_path: (*hop_routing).into(),
+                    return_path: (*hop_routing).into(),
+                    ..base_cfg.clone()
+                };
+                hopr.open_session(destination.address, options.sessions.bridge.target.clone(), Some(1), Some(1), cfg)
+                    .await
+            }
+            RoutingMode::ExplicitPath(nodes) => {
+                hopr.open_session_explicit_path(
+                    destination.address,
+                    options.sessions.bridge.target.clone(),
+                    nodes.clone(),
+                    Some(1),
+                    Some(1),
+                    base_cfg.clone(),
+                )
+                .await
+            }
+        }
     })
     .retry(remote_data::backoff_expo_short_delay_bridge())
     .notify(|err: &HoprError, dur: Duration| {
@@ -396,24 +408,36 @@ async fn open_ping_session(
     pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = HoprSessionClientConfig {
+    let base_cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path: destination.routing,
-        return_path: destination.routing,
         surb_management: Some(surb_management),
         pseudonym,
         ..Default::default()
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open ping session");
-        hopr.open_session(
-            destination.address,
-            options.sessions.wg.target.clone(),
-            None,
-            None,
-            cfg.clone(),
-        )
-        .await
+        match &destination.routing {
+            RoutingMode::HopBased(hop_routing) => {
+                let cfg = HoprSessionClientConfig {
+                    forward_path: (*hop_routing).into(),
+                    return_path: (*hop_routing).into(),
+                    ..base_cfg.clone()
+                };
+                hopr.open_session(destination.address, options.sessions.wg.target.clone(), None, None, cfg)
+                    .await
+            }
+            RoutingMode::ExplicitPath(nodes) => {
+                hopr.open_session_explicit_path(
+                    destination.address,
+                    options.sessions.wg.target.clone(),
+                    nodes.clone(),
+                    None,
+                    None,
+                    base_cfg.clone(),
+                )
+                .await
+            }
+        }
     })
     .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {

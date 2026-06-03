@@ -3,7 +3,7 @@ use edgli::{BlockchainConnectorConfig, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
-        HoprSessionClientConfig,
+        HopRouting, HoprSessionClientConfig, HoprSessionClientExplicitPathConfig,
         api::{
             chain::ChainKeyOperations,
             node::{HasChainApi, HasTransportApi},
@@ -17,8 +17,8 @@ use edgli::{
 };
 use futures_util::future::AbortHandle;
 use hopr_utils_session::{
-    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
-    create_udp_client_binding,
+    ExplicitPathSessionFactory, HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec,
+    create_tcp_client_binding, create_udp_client_binding,
 };
 use multiaddr::Protocol;
 use tokio::task::JoinSet;
@@ -176,8 +176,152 @@ impl Hopr {
             bound_host,
             target: session_target_spec.to_string(),
             destination,
-            forward_path: cfg.forward_path,
-            return_path: cfg.return_path,
+            forward_path: cfg.forward_path.into(),
+            return_path: cfg.return_path.into(),
+            hopr_mtu: SESSION_MTU,
+            surb_len: SURB_SIZE,
+            active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),
+            max_client_sessions: max_clients,
+            max_surb_upstream,
+            response_buffer,
+            session_pool,
+        })
+    }
+
+    /// Open a local port using an explicit ordered list of intermediate relayer nodes.
+    ///
+    /// Note: the underlying hopr-lib explicit-path API is deprecated and may be removed
+    /// in a future hoprnet release. The same relay nodes are used for both forward and
+    /// return paths.
+    #[allow(deprecated)]
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn open_session_explicit_path(
+        &self,
+        destination: Address,
+        target: SessionTarget,
+        intermediates: Vec<Address>,
+        session_pool: Option<usize>,
+        max_client_sessions: Option<usize>,
+        base_cfg: HoprSessionClientConfig,
+    ) -> Result<SessionClientMetadata, HoprError> {
+        tracing::debug!("open hopr session with explicit intermediate path");
+        let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into();
+
+        let protocol = match target {
+            SessionTarget::TcpStream(_) => IpProtocol::TCP,
+            SessionTarget::UdpStream(_) => IpProtocol::UDP,
+            SessionTarget::ExitNode(_) => {
+                return Err(HoprError::Construction(
+                    "cannot open session for exit node target".into(),
+                ));
+            }
+        };
+
+        let session_target_spec = match target {
+            SessionTarget::TcpStream(addr) => match addr {
+                edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {
+                    SessionTargetSpec::Plain(ip_or_host.to_string())
+                }
+                edgli::hopr_lib::exports::transport::session::SealedHost::Sealed(items) => {
+                    SessionTargetSpec::Sealed(items.into())
+                }
+            },
+            SessionTarget::UdpStream(addr) => match addr {
+                edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {
+                    SessionTargetSpec::Plain(ip_or_host.to_string())
+                }
+                edgli::hopr_lib::exports::transport::session::SealedHost::Sealed(items) => {
+                    SessionTargetSpec::Sealed(items.into())
+                }
+            },
+            SessionTarget::ExitNode(_) => {
+                return Err(HoprError::Construction(
+                    "cannot open session for exit node target".into(),
+                ));
+            }
+        };
+
+        // Resolve each intermediate chain address to a packet key (NodeId).
+        let node_ids: Vec<_> = intermediates
+            .iter()
+            .map(|addr| -> Result<_, HoprError> {
+                let key = self
+                    .edgli
+                    .chain_api()
+                    .chain_key_to_packet_key(addr)
+                    .map_err(HoprError::HoprLib)?
+                    .ok_or_else(|| {
+                        HoprError::Construction(format!("intermediate path node not found: {addr}"))
+                    })?;
+                Ok(key.into())
+            })
+            .collect::<Result<_, _>>()?;
+
+        let explicit_cfg = HoprSessionClientExplicitPathConfig {
+            forward_path: node_ids.clone(),
+            return_path: node_ids,
+            capabilities: base_cfg.capabilities,
+            surb_management: base_cfg.surb_management,
+            pseudonym: base_cfg.pseudonym,
+            always_max_out_surbs: base_cfg.always_max_out_surbs,
+            ..Default::default()
+        };
+
+        let listener_id = ListenerId(protocol, bind_host);
+        let open_listeners = self.open_listeners.clone();
+        if bind_host.port() > 0 && open_listeners.as_ref().0.contains_key(&listener_id) {
+            return Err(HoprError::Construction("listener already exists".into()));
+        }
+
+        let port_range = std::env::var("GNOSISVPN_CLIENT_SESSION_PORT_RANGE").ok();
+
+        let max_surb_upstream = explicit_cfg.surb_management.as_ref().map(|v| {
+            human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
+                .expect("config value extract that cannot fail")
+        });
+        let response_buffer = explicit_cfg
+            .surb_management
+            .as_ref()
+            .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
+
+        let (bound_host, udp_session_id, max_clients) = match protocol {
+            IpProtocol::TCP => create_tcp_client_binding(
+                bind_host,
+                port_range,
+                ExplicitPathSessionFactory::new(self.edgli.as_hopr()),
+                open_listeners.clone(),
+                destination,
+                session_target_spec.clone(),
+                explicit_cfg,
+                session_pool,
+                max_client_sessions,
+            )
+            .await
+            .map_err(|e| HoprError::Construction(format!("failed to create TCP client binding: {e}")))?,
+            IpProtocol::UDP => create_udp_client_binding(
+                bind_host,
+                port_range,
+                ExplicitPathSessionFactory::new(self.edgli.as_hopr()),
+                open_listeners.clone(),
+                destination,
+                session_target_spec.clone(),
+                explicit_cfg,
+            )
+            .await
+            .map_err(|e| HoprError::Construction(format!("failed to create UDP client binding: {e}")))?,
+        };
+
+        // Use hop count as an approximation for display in the returned metadata.
+        // The accurate routing is stored in the listener entry and reflected by list_sessions.
+        let hop_routing = HopRouting::try_from(intermediates.len()).unwrap_or_default();
+
+        Ok(SessionClientMetadata {
+            protocol,
+            bound_host,
+            target: session_target_spec.to_string(),
+            destination,
+            forward_path: hop_routing.into(),
+            return_path: hop_routing.into(),
             hopr_mtu: SESSION_MTU,
             surb_len: SURB_SIZE,
             active_clients: udp_session_id.into_iter().map(|s| s.to_string()).collect(),
@@ -246,8 +390,8 @@ impl Hopr {
                     protocol,
                     bound_host: key.1,
                     target: entry.target.to_string(),
-                    forward_path: entry.forward_path,
-                    return_path: entry.return_path,
+                    forward_path: entry.forward_path.clone(),
+                    return_path: entry.return_path.clone(),
                     destination: entry.destination,
                     hopr_mtu: SESSION_MTU,
                     surb_len: SURB_SIZE,

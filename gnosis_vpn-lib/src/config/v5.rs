@@ -13,7 +13,7 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::{destination::Destination as ConnDestination, options};
+use crate::connection::{destination::{Destination as ConnDestination, RoutingMode}, options};
 use crate::ping;
 
 // Types from v6 that are schema-identical in v5 are re-used directly.
@@ -406,7 +406,7 @@ pub fn convert_destinations(
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
+        let dest = ConnDestination::new(id.to_string(), dest.address, RoutingMode::HopBased(path), meta);
         result.insert(id.to_string(), dest);
     }
     Ok(result)
