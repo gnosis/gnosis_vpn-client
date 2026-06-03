@@ -59,8 +59,8 @@ impl Display for FundingIssue {
             FundingIssue::ChannelsOutOfFunds => "channels are out of funds - connections will not work",
             FundingIssue::SafeOutOfFunds => "safe is out of funds - connections will stop working",
             FundingIssue::SafeLowOnFunds => "safe is low on funds - connections will soon stop working",
-            FundingIssue::NodeUnderfunded => "node underfunded - cannot open new connection or keep existing ones",
-            FundingIssue::NodeLowOnFunds => "node low on funds - soon cannot open new connection or keep existing ones",
+            FundingIssue::NodeUnderfunded => "node underfunded - cannot open new connections or keep existing ones",
+            FundingIssue::NodeLowOnFunds => "node low on funds - will soon be unable to open new connections or keep existing ones",
         };
         write!(f, "{s}")
     }
