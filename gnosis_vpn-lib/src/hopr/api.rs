@@ -3,7 +3,7 @@ use edgli::{BlockchainConnectorConfig, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
-        HopRouting, HoprSessionClientConfig, HoprSessionClientExplicitPathConfig,
+        HopRouting, HoprSessionClientConfig,
         api::{
             chain::ChainKeyOperations,
             node::{HasChainApi, HasTransportApi},
@@ -256,6 +256,8 @@ impl Hopr {
             })
             .collect::<Result<_, _>>()?;
 
+        #[allow(deprecated)]
+        use edgli::hopr_lib::HoprSessionClientExplicitPathConfig;
         let explicit_cfg = HoprSessionClientExplicitPathConfig {
             forward_path: node_ids.clone(),
             return_path: node_ids,
