@@ -1,0 +1,38 @@
+
+  ---
+  Context: You're implementing ExplicitPath / IntermediatePath routing support in gnosis_vpn-client (Rust). All changes are in   /home/este/tasks-claude/gnosis_vpn-client/. The work is partially done — there are compile errors to fix before the task is
+  complete.
+  What's done:                                                                                                                   - Cargo.toml: hopr-utils-session now has "explicit-path" feature enabled
+  - gnosis_vpn-lib/src/connection/destination.rs: Destination.routing changed from HopRouting to a new RoutingMode enum
+  (HopBased(HopRouting) | ExplicitPath(Vec<Address>)). RoutingMode derives Clone, Debug, PartialEq, Eq, Hash, Serialize,
+  Deserialize with #[serde(tag = "type", content = "data")]                                                                      - gnosis_vpn-lib/src/config/v6.rs: DestinationPath enum extended with Intermediates(Vec<Address>) variant;
+  convert_destinations produces RoutingMode                                                                                      - gnosis_vpn-lib/src/config/v4.rs and v5.rs: Updated to wrap HopRouting in RoutingMode::HopBased(...)
+  - gnosis_vpn-lib/src/hopr/types.rs: SessionClientMetadata.forward_path and .return_path changed from HopRouting to
+  hopr_utils_session::Routing
+  - gnosis_vpn-lib/src/hopr/api.rs: Added open_session_explicit_path method; fixed list_sessions to .clone() forward/return
+  paths
+  - gnosis_vpn-lib/src/connection/pseudonym_cache.rs: Cache key changed from (Address, HopRouting) to (Address, RoutingMode)
+  with .clone() on accesses
+  - gnosis_vpn-lib/src/route_health.rs: derive_static_need and derive_initial_state updated to take &RoutingMode;
+  HealthSession::open branches on RoutingMode; tests updated
+  - gnosis_vpn-lib/src/connection/up/runner.rs: open_bridge_session and open_ping_session branch on RoutingMode (HopBased →
+  open_session, ExplicitPath → open_session_explicit_path)
+  - documented-config.toml: Updated comments to document both hops and intermediates path forms
+
+  Remaining compile errors (run nix develop --command cargo clippy 2>&1 to see them — there were 3 errors and 2 warnings on      last attempt):
+  - warning: unused import: HopRouting — somewhere a file still imports HopRouting but no longer uses it directly (likely v4.rs
+   or v5.rs after our RoutingMode changes)
+  - 2× error[E0308]: mismatched types and 1× error[E0631]: type mismatch in function arguments — locations not yet identified
+
+  Remaining tasks:
+  1. Fix the 3 remaining compile errors (run clippy to locate them)
+  2. Run nix develop --command cargo clippy --fix --allow-dirty to auto-fix what it can
+  3. Run nix develop --command nix fmt if available
+  4. Run nix develop --command cargo nextest run --no-run or cargo check to verify
+  5. Commit with: feat: re-expose explicit intermediates path routing for destinations
+
+  Key types to know:
+  - hopr_utils_session::Routing = HopRouting (without explicit-path feature) or RoutingOptions (with it — our case)
+  - HoprSessionClientConfig.forward_path / .return_path are of type Routing                                                      - open_session_explicit_path signature: (destination: Address, target: SessionTarget, intermediates: Vec<Address>,             session_pool: Option<usize>, max_client_sessions: Option<usize>, base_cfg: HoprSessionClientConfig) ->
+  Result<SessionClientMetadata, HoprError>
+  - Always use nix develop --command <cargo cmd> — cargo is not on PATH directly
