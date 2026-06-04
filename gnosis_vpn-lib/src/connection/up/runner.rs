@@ -81,6 +81,9 @@ impl Runner {
         // 1. open bridge session
         let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
         let bridge_session = open_bridge_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+        let _ = results_sender
+            .send(progress(Progress::BridgeOpened(bridge_session.clone())))
+            .await;
 
         // 2. register wg public key
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
