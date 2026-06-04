@@ -329,7 +329,7 @@ async fn open_bridge_session(
 ) -> Result<SessionClientMetadata, HoprError> {
     let base_cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        // only send 1 SURB alongside our HTTP requests even if 2 would fit
+        // when the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit
         always_max_out_surbs: surb_management.is_some(),
         surb_management,
         ..Default::default()
