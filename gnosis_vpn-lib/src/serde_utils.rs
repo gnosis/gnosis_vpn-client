@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, Currency};
@@ -13,6 +14,34 @@ pub mod address {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error> {
         let hex = String::deserialize(d)?;
         hex.parse::<Address>().map_err(serde::de::Error::custom)
+    }
+}
+
+/// Serialize/deserialize `HashMap<Address, V>` with checksummed string keys,
+/// consistent with how `serde_utils::address` handles individual Address fields.
+pub mod address_map {
+    use super::*;
+    use serde::ser::SerializeMap;
+
+    pub fn serialize<V: serde::Serialize, S: Serializer>(map: &HashMap<Address, V>, s: S) -> Result<S::Ok, S::Error> {
+        let mut ser = s.serialize_map(Some(map.len()))?;
+        for (addr, val) in map {
+            ser.serialize_entry(&addr.to_checksum(), val)?;
+        }
+        ser.end()
+    }
+
+    pub fn deserialize<'de, V: serde::Deserialize<'de>, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<HashMap<Address, V>, D::Error> {
+        let raw = HashMap::<String, V>::deserialize(d)?;
+        raw.into_iter()
+            .map(|(k, v)| {
+                k.parse::<Address>()
+                    .map(|addr| (addr, v))
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect()
     }
 }
 

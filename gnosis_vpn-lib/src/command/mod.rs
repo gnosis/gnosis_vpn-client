@@ -268,6 +268,7 @@ pub struct ConnStats {
     pub wg_ip: Option<String>,
     pub session_bound_host: Option<SocketAddr>,
     pub session_id: Option<String>,
+    #[serde(with = "serde_utils::address_map")]
     pub known_destinations: HashMap<Address, String>,
 }
 
