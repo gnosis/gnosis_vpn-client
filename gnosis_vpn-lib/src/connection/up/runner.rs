@@ -331,9 +331,8 @@ async fn open_bridge_session(
         capabilities: options.sessions.bridge.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        // only send 1 SURB alongside our HTTP requests
-        // health responses always fit into one packet
-        always_max_out_surbs: false,
+        // only send 1 SURB alongside our HTTP requests even if 2 would fit
+        always_max_out_surbs: surb_management.is_some(),
         surb_management,
         ..Default::default()
     };
