@@ -18,6 +18,7 @@ mod v6;
 
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
+pub const MAX_INTERMEDIATES: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -44,6 +45,8 @@ pub enum Error {
     NoDestinations,
     #[error("Explicit path for destination '{0}' must have at least one relayer")]
     EmptyExplicitPath(String),
+    #[error("Explicit path for destination '{0}' must have between 1 and 3 relayers")]
+    TooManyIntermediates(String),
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
 }

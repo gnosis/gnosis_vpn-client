@@ -22,8 +22,8 @@ version = 6
 # session path — two forms are supported:
 #   hop-count routing: the HOPR path planner selects relays automatically
 #   path = { hops = 1 }
-#   explicit path: relay nodes are specified by their chain addresses in order
-#   path = { intermediates = ["0x<relay1>", "0x<relay2>"] }
+#   explicit path: specify between 1 and 3 relay nodes by their chain addresses in order
+#   path = { intermediates = ["0x<relay1>", "0x<relay2>", "0x<relay3>"] }
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"

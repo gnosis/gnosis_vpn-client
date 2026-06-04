@@ -159,6 +159,9 @@ pub fn convert_destinations(
             Some(v5::DestinationPath::Intermediates(addrs)) if addrs.is_empty() => {
                 return Err(config::Error::EmptyExplicitPath(address.to_string()));
             }
+            Some(v5::DestinationPath::Intermediates(addrs)) if addrs.len() > config::MAX_INTERMEDIATES => {
+                return Err(config::Error::TooManyIntermediates(address.to_string()));
+            }
             Some(v5::DestinationPath::Intermediates(addrs)) => RoutingMode::ExplicitPath(addrs),
             Some(v5::DestinationPath::Hops(h)) => RoutingMode::HopBased(HopRouting::try_from(h as usize)?),
             None => RoutingMode::HopBased(HopRouting::try_from(1)?),
@@ -243,6 +246,28 @@ path = { intermediates = [] }
         assert!(
             matches!(result, Err(crate::config::Error::EmptyExplicitPath(_))),
             "empty intermediates list must be a config error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn convert_destinations_too_many_intermediates_errors() {
+        let cfg = parse(
+            r#####"
+version = 4
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+path = { intermediates = [
+    "0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA",
+    "0x25865191AdDe377fd85E91566241178070F4797A",
+    "0x2Cf9E5951C9e60e01b579f654dF447087468fc04",
+    "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
+] }
+"#####,
+        );
+        let result = convert_destinations(cfg.destinations);
+        assert!(
+            matches!(result, Err(crate::config::Error::TooManyIntermediates(_))),
+            "4 intermediates must be a config error, got: {result:?}"
         );
     }
 
