@@ -319,10 +319,7 @@ impl Hopr {
             .0
             .get(&ListenerId(protocol, bound_host))
             .map(|entry| (entry.forward_path.clone(), entry.return_path.clone()))
-            .unwrap_or_else(|| {
-                let hop_routing = HopRouting::try_from(intermediates.len()).unwrap_or_default();
-                (hop_routing.into(), hop_routing.into())
-            });
+            .ok_or_else(|| HoprError::Construction("session listener not found after binding".into()))?;
 
         Ok(SessionClientMetadata {
             protocol,
