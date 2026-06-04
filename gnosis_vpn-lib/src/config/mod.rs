@@ -45,7 +45,7 @@ pub enum Error {
     NoDestinations,
     #[error("Explicit path for destination '{0}' must have at least one relayer")]
     EmptyExplicitPath(String),
-    #[error("Explicit path for destination '{0}' must have between 1 and 3 relayers")]
+    #[error("Explicit path for destination '{0}' must have between 1 and {max} relayers", max = MAX_INTERMEDIATES)]
     TooManyIntermediates(String),
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
