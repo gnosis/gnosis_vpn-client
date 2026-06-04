@@ -1,7 +1,7 @@
 //! The runner module for `core::connection::down` struct.
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
-use edgli::hopr_lib::HoprSessionClientConfig;
+use edgli::hopr_lib::{HoprSessionClientConfig, exports::transport::SurbBalancerConfig};
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::connection;
 use crate::connection::options::Options;
+use crate::connection::up::runner::surb_config_for;
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -47,7 +48,8 @@ impl Runner {
                 evt: Event::OpenBridge,
             })
             .await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options).await?;
+        let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?;
 
         // 2. unregister wg public key
         let _ = results_sender
@@ -83,15 +85,15 @@ async fn open_bridge_session(
     hopr: &Hopr,
     down: &connection::down::Down,
     options: &Options,
+    surb_management: Option<SurbBalancerConfig>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path: down.destination.routing,
         return_path: down.destination.routing,
-        // only send 1 SURB alongside our HTTP requests
-        // health responses always fit into one packet
-        always_max_out_surbs: false,
-        surb_management: None,
+        // when the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit
+        always_max_out_surbs: surb_management.is_some(),
+        surb_management,
         ..Default::default()
     };
     hopr.open_session(
