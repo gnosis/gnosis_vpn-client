@@ -303,7 +303,7 @@ impl Display for Runner {
     }
 }
 
-fn surb_config_for(opts: &SessionSurbOptions) -> Result<Option<SurbBalancerConfig>, SurbConfigError> {
+pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<Option<SurbBalancerConfig>, SurbConfigError> {
     if opts.enabled {
         runner::to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)
     } else {

@@ -100,6 +100,7 @@ pub(super) struct SurbBalancingConfig {
     ping: Option<SessionSurbConfig>,
     main: Option<SessionSurbConfig>,
     bridge: Option<SessionSurbConfig>,
+    health_check: Option<SessionSurbConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -275,6 +276,7 @@ impl From<Option<Connection>> for options::Options {
             ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
         };
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
@@ -427,7 +429,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "surb_balancing" {
                         if let Some(surb) = v.as_table() {
                             for (k2, v2) in surb.iter() {
-                                if k2 == "ping" || k2 == "main" || k2 == "bridge" {
+                                if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "health_check" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled" || k3 == "buffer" || k3 == "max_surb_upstream" {
