@@ -123,12 +123,7 @@ impl Hopr {
             }
         };
 
-        let listener_id = ListenerId(protocol, bind_host);
-
         let open_listeners = self.open_listeners.clone();
-        if bind_host.port() > 0 && open_listeners.as_ref().0.contains_key(&listener_id) {
-            return Err(HoprError::Construction("listener already exists".into()));
-        }
 
         let port_range = std::env::var("GNOSISVPN_CLIENT_SESSION_PORT_RANGE").ok();
         tracing::debug!(
@@ -267,11 +262,7 @@ impl Hopr {
             always_max_out_surbs: base_cfg.always_max_out_surbs,
         };
 
-        let listener_id = ListenerId(protocol, bind_host);
         let open_listeners = self.open_listeners.clone();
-        if bind_host.port() > 0 && open_listeners.as_ref().0.contains_key(&listener_id) {
-            return Err(HoprError::Construction("listener already exists".into()));
-        }
 
         let port_range = std::env::var("GNOSISVPN_CLIENT_SESSION_PORT_RANGE").ok();
 
