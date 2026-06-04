@@ -87,14 +87,24 @@ path    = { hops = 1 }
 # consecutive tunnel ping failures before triggering reconnect
 # tunnel_ping_max_failures = 3
 
-# adjust session internal options
-# [connection.max_surb_upstream]
-# ping = "512 Kb/s"
-# main = "16 Mb/s"
+# adjust SURB balancing per session type
+# each section enables balancing for that session; omit to use the defaults below
+# bridge defaults to disabled; ping and main default to enabled
 #
-# [connection.buffer]
-# ping = "1 MB"
-# main = "10 MB"
+# [connection.surb_balancing.ping]
+# enabled = true
+# buffer = "1 MB"
+# max_surb_upstream = "512 Kb/s"
+#
+# [connection.surb_balancing.main]
+# enabled = true
+# buffer = "10 MB"
+# max_surb_upstream = "16 Mb/s"
+#
+# [connection.surb_balancing.bridge]
+# enabled = false
+# buffer = "512 KB"
+# max_surb_upstream = "256 Kb/s"
 
 ###
 ## wireguard section - specific VPN-related settings

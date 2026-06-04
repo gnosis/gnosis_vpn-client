@@ -12,8 +12,7 @@ pub struct Options {
     pub timeouts: Timeouts,
     pub sessions: Sessions,
     pub ping_options: ping::Options,
-    pub buffer_sizes: BufferSizes,
-    pub max_surb_upstream: MaxSurbUpstream,
+    pub surb_balancing: SurbBalancing,
     pub health_check_intervals: HealthCheckIntervals,
     pub lan_lockdown: bool,
     /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
@@ -56,15 +55,17 @@ pub struct SessionParameters {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct BufferSizes {
-    pub ping: ByteSize,
-    pub main: ByteSize,
+pub struct SessionSurbOptions {
+    pub enabled: bool,
+    pub buffer: ByteSize,
+    pub max_surb_upstream: Bandwidth,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MaxSurbUpstream {
-    pub ping: Bandwidth,
-    pub main: Bandwidth,
+pub struct SurbBalancing {
+    pub ping: SessionSurbOptions,
+    pub main: SessionSurbOptions,
+    pub bridge: SessionSurbOptions,
 }
 
 impl SessionParameters {
@@ -85,21 +86,25 @@ impl Default for HealthCheckIntervals {
     }
 }
 
-impl Default for MaxSurbUpstream {
+impl Default for SurbBalancing {
     fn default() -> Self {
         Self {
-            ping: Bandwidth::from_kbps(512),
-            main: Bandwidth::from_mbps(16),
-        }
-    }
-}
-
-impl Default for BufferSizes {
-    fn default() -> Self {
-        Self {
-            ping: ByteSize::mb(1),
-            // maximum allowed buffer size is 10 MB
-            main: ByteSize::mb(10),
+            ping: SessionSurbOptions {
+                enabled: true,
+                buffer: ByteSize::mb(1),
+                max_surb_upstream: Bandwidth::from_kbps(512),
+            },
+            main: SessionSurbOptions {
+                enabled: true,
+                // maximum allowed buffer size is 10 MB
+                buffer: ByteSize::mb(10),
+                max_surb_upstream: Bandwidth::from_mbps(16),
+            },
+            bridge: SessionSurbOptions {
+                enabled: false,
+                buffer: ByteSize::kb(512),
+                max_surb_upstream: Bandwidth::from_kbps(256),
+            },
         }
     }
 }

@@ -20,15 +20,15 @@ use crate::connection::{
 use crate::ping;
 
 // Types from v6 that are schema-identical in v5 are re-used directly.
-// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below
-// because v5 includes a `bridge` field that v6 does not have.
+// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below because
+// v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`.
 use super::v6::validate_hops;
 pub(super) use super::v6::{
     BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
 };
 
-// v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
-// can carry the `bridge` field that existed in v5 configs but is absent from v6.
+// v5 defines its own Connection to carry the separate `buffer` and `max_surb_upstream`
+// sections which v6 replaced with the unified `surb_balancing` section.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
@@ -42,8 +42,6 @@ pub(super) struct Connection {
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
 
-// v5 buffer config includes `bridge`; it is accepted but dropped when converting
-// to runtime options because the v6 BufferSizes type has no bridge slot.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct BufferOptions {
     bridge: Option<ByteSize>,
@@ -51,7 +49,6 @@ pub(super) struct BufferOptions {
     main: Option<ByteSize>,
 }
 
-// v5 max_surb_upstream config includes `bridge`; same drop-on-conversion rule.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct MaxSurbUpstreamOptions {
     #[serde(default, with = "human_bandwidth::serde")]
@@ -90,25 +87,34 @@ impl Connection {
     }
 }
 
-impl From<BufferOptions> for options::BufferSizes {
-    fn from(buf: BufferOptions) -> Self {
-        let def = options::BufferSizes::default();
-        // bridge is v5-only and is not forwarded to runtime options
-        options::BufferSizes {
-            ping: buf.ping.unwrap_or(def.ping),
-            main: buf.main.unwrap_or(def.main),
-        }
-    }
-}
-
-impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
-    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
-        let def = options::MaxSurbUpstream::default();
-        // bridge is v5-only and is not forwarded to runtime options
-        options::MaxSurbUpstream {
-            ping: surbs.ping.unwrap_or(def.ping),
-            main: surbs.main.unwrap_or(def.main),
-        }
+fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> options::SurbBalancing {
+    let def = options::SurbBalancing::default();
+    let buf = buf.unwrap_or(BufferOptions {
+        bridge: None,
+        ping: None,
+        main: None,
+    });
+    let surbs = surbs.unwrap_or(MaxSurbUpstreamOptions {
+        bridge: None,
+        ping: None,
+        main: None,
+    });
+    options::SurbBalancing {
+        ping: options::SessionSurbOptions {
+            enabled: true,
+            buffer: buf.ping.unwrap_or(def.ping.buffer),
+            max_surb_upstream: surbs.ping.unwrap_or(def.ping.max_surb_upstream),
+        },
+        main: options::SessionSurbOptions {
+            enabled: true,
+            buffer: buf.main.unwrap_or(def.main.buffer),
+            max_surb_upstream: surbs.main.unwrap_or(def.main.max_surb_upstream),
+        },
+        bridge: options::SessionSurbOptions {
+            enabled: false,
+            buffer: buf.bridge.unwrap_or(def.bridge.buffer),
+            max_surb_upstream: surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
+        },
     }
 }
 
@@ -153,14 +159,10 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_opts);
 
-        let buffer_sizes = connection
-            .and_then(|c| c.buffer.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let max_surb_upstream = connection
-            .and_then(|c| c.max_surb_upstream.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
+        let surb_balancing = build_surb_balancing(
+            connection.and_then(|c| c.buffer.clone()),
+            connection.and_then(|c| c.max_surb_upstream.clone()),
+        );
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -184,8 +186,7 @@ impl From<Option<Connection>> for options::Options {
         options::Options {
             sessions,
             ping_options: ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
+            surb_balancing,
             timeouts,
             health_check_intervals,
             lan_lockdown: false,

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::connection::destination::Destination;
-use crate::connection::options::Options;
-use crate::core::runner::{self, Results};
+use crate::connection::options::{Options, SessionSurbOptions};
+use crate::core::runner::{self, Results, SurbConfigError};
 use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
@@ -80,7 +80,15 @@ impl Runner {
 
         // 1. open bridge session
         let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.destination, &self.options, &results_sender).await?;
+        let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
+        let bridge_session = open_bridge_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            bridge_surb,
+            &results_sender,
+        )
+        .await?;
         let _ = results_sender
             .send(progress(Progress::BridgeOpened(bridge_session.clone())))
             .await;
@@ -97,13 +105,12 @@ impl Runner {
 
         // 4. open ping session
         let _ = results_sender.send(progress(Progress::OpenPing)).await;
-        let ping_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping)?;
+        let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
         let session = open_ping_session(
             &self.hopr,
             &self.destination,
             &self.options,
-            ping_config,
+            ping_surb,
             self.cached_pseudonym,
             &results_sender,
         )
@@ -193,13 +200,12 @@ impl Runner {
         }
 
         // open a new ping session
-        let ping_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.ping, self.options.max_surb_upstream.ping)?;
+        let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
         let session = open_ping_session(
             &self.hopr,
             &self.destination,
             &self.options,
-            ping_config,
+            ping_surb,
             self.cached_pseudonym,
             results_sender,
         )
@@ -275,16 +281,17 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
-        let main_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.main, self.options.max_surb_upstream.main)?;
+        let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
 
-        let active_client = match session.active_clients.as_slice() {
-            [] => return Err(HoprError::SessionNotFound.into()),
-            [client] => client.clone(),
-            _ => return Err(HoprError::SessionAmbiguousClient.into()),
-        };
-        tracing::debug!(bound_host = ?session.bound_host, "adjusting to main session");
-        self.hopr.adjust_session(main_config, active_client).await?;
+        if let Some(main_config) = main_surb {
+            let active_client = match session.active_clients.as_slice() {
+                [] => return Err(HoprError::SessionNotFound.into()),
+                [client] => client.clone(),
+                _ => return Err(HoprError::SessionAmbiguousClient.into()),
+            };
+            tracing::debug!(bound_host = ?session.bound_host, "adjusting to main session");
+            self.hopr.adjust_session(main_config, active_client).await?;
+        }
 
         Ok(session.clone())
     }
@@ -293,6 +300,14 @@ impl Runner {
 impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConnectionRunner pre WireGuard {{ {} }}", self.destination)
+    }
+}
+
+fn surb_config_for(opts: &SessionSurbOptions) -> Result<Option<SurbBalancerConfig>, SurbConfigError> {
+    if opts.enabled {
+        runner::to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)
+    } else {
+        Ok(None)
     }
 }
 
@@ -309,14 +324,13 @@ async fn open_bridge_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
+    surb_management: Option<SurbBalancerConfig>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let base_cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
-        // only send 1 SURB alongside our HTTP requests
-        // health responses always fit into one packet
         always_max_out_surbs: false,
-        surb_management: None,
+        surb_management,
         ..Default::default()
     };
     // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,
@@ -394,13 +408,13 @@ async fn open_ping_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
-    surb_management: SurbBalancerConfig,
+    surb_management: Option<SurbBalancerConfig>,
     pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let base_cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        surb_management: Some(surb_management),
+        surb_management,
         pseudonym,
         ..Default::default()
     };
