@@ -1699,7 +1699,7 @@ impl Core {
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
-        if let Some(session) = &conn.session
+        if let Some((_, session)) = &conn.active_session
             && let Some(client_id) = session.active_clients.first()
             && let Ok(session_id) = SessionId::from_str(client_id)
         {

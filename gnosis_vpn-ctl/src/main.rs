@@ -507,26 +507,10 @@ fn print_connecting_stats(stats: &command::ConnStats) {
         )
         .as_str(),
     );
-    str_resp.push_str(
-        format!(
-            "Session entry: {}\n",
-            stats
-                .session_bound_host
-                .map(|h| h.to_string())
-                .unwrap_or("--pending session creation--".to_string())
-        )
-        .as_str(),
-    );
-    str_resp.push_str(
-        format!(
-            "Session ID: {}\n",
-            stats
-                .session_id
-                .clone()
-                .unwrap_or("--pending session creation--".to_string())
-        )
-        .as_str(),
-    );
+    str_resp.push_str(&print_active_session(
+        &stats.active_session,
+        "--pending session creation--",
+    ));
     str_resp.push_str(
         format!(
             "---\nExit WireGuard Public Key: {}\n",
@@ -549,17 +533,29 @@ fn print_connected_stats(stats: &command::ConnStats) {
     if let Some(ref ip) = stats.wg_ip {
         str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
     }
-    if let Some(bound_host) = stats.session_bound_host {
-        str_resp.push_str(format!("Session entry: {bound_host}\n").as_str());
+    if stats.active_session.is_some() {
+        str_resp.push_str(&print_active_session(&stats.active_session, "--none--"));
     }
-    if let Some(ref id) = stats.session_id {
-        str_resp.push_str(format!("Session ID: {id}\n").as_str());
-    }
-
     if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     println!("{str_resp}");
+}
+
+fn print_active_session(session: &Option<command::ActiveSession>, pending: &str) -> String {
+    use command::ActiveSession;
+    match session {
+        Some(ActiveSession::Bridge { bound_host, id }) => {
+            format!("Bridge Session entry: {bound_host}\nBridge Session ID: {id}\n")
+        }
+        Some(ActiveSession::Ping { bound_host, id }) => {
+            format!("Ping Session entry: {bound_host}\nPing Session ID: {id}\n")
+        }
+        Some(ActiveSession::Main { bound_host, id }) => {
+            format!("Main Session entry: {bound_host}\nMain Session ID: {id}\n")
+        }
+        None => format!("Session entry: {pending}\nSession ID: {pending}\n"),
+    }
 }
 
 fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
