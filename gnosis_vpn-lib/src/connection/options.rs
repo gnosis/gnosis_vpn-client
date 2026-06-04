@@ -66,6 +66,7 @@ pub struct SurbBalancing {
     pub ping: SessionSurbOptions,
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
+    pub health_check: SessionSurbOptions,
 }
 
 impl SessionParameters {
@@ -101,6 +102,11 @@ impl Default for SurbBalancing {
                 max_surb_upstream: Bandwidth::from_mbps(16),
             },
             bridge: SessionSurbOptions {
+                enabled: false,
+                buffer: ByteSize::kb(512),
+                max_surb_upstream: Bandwidth::from_kbps(256),
+            },
+            health_check: SessionSurbOptions {
                 enabled: false,
                 buffer: ByteSize::kb(512),
                 max_surb_upstream: Bandwidth::from_kbps(256),

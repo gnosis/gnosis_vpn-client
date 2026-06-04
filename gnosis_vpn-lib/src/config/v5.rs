@@ -115,6 +115,7 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
             buffer: buf.bridge.unwrap_or(def.bridge.buffer),
             max_surb_upstream: surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
         },
+        health_check: def.health_check,
     }
 }
 
