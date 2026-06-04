@@ -533,9 +533,7 @@ fn print_connected_stats(stats: &command::ConnStats) {
     if let Some(ref ip) = stats.wg_ip {
         str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
     }
-    if stats.active_session.is_some() {
-        str_resp.push_str(&print_active_session(&stats.active_session, "--none--"));
-    }
+    str_resp.push_str(&print_active_session(&stats.active_session, "--none--"));
     if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
