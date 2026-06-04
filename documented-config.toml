@@ -91,6 +91,11 @@ path    = { hops = 1 }
 # each section enables balancing for that session; omit to use the defaults below
 # bridge defaults to disabled; ping and main default to enabled
 #
+# [connection.surb_balancing.bridge]
+# enabled = false
+# buffer = "512 KB"
+# max_surb_upstream = "256 Kb/s"
+#
 # [connection.surb_balancing.ping]
 # enabled = true
 # buffer = "1 MB"
@@ -100,11 +105,6 @@ path    = { hops = 1 }
 # enabled = true
 # buffer = "10 MB"
 # max_surb_upstream = "16 Mb/s"
-#
-# [connection.surb_balancing.bridge]
-# enabled = false
-# buffer = "512 KB"
-# max_surb_upstream = "256 Kb/s"
 
 ###
 ## wireguard section - specific VPN-related settings
