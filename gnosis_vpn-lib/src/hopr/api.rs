@@ -3,7 +3,7 @@ use edgli::{BlockchainConnectorConfig, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
-        HopRouting, HoprSessionClientConfig,
+        HoprSessionClientConfig,
         api::{
             chain::ChainKeyOperations,
             node::{HasChainApi, HasTransportApi},

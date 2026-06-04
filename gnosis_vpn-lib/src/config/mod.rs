@@ -18,7 +18,7 @@ mod v6;
 
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
-pub const MAX_INTERMEDIATES: usize = 3;
+pub const MAX_INTERMEDIATES: usize = edgli::hopr_lib::HopRouting::MAX_HOPS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
