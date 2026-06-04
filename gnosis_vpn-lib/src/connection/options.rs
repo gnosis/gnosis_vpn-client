@@ -103,13 +103,13 @@ impl Default for SurbBalancing {
             },
             bridge: SessionSurbOptions {
                 enabled: false,
-                buffer: ByteSize::kb(512),
-                max_surb_upstream: Bandwidth::from_kbps(256),
+                buffer: ByteSize::kb(16),
+                max_surb_upstream: Bandwidth::from_kbps(128),
             },
             health_check: SessionSurbOptions {
                 enabled: false,
-                buffer: ByteSize::kb(512),
-                max_surb_upstream: Bandwidth::from_kbps(256),
+                buffer: ByteSize::kb(16),
+                max_surb_upstream: Bandwidth::from_kbps(128),
             },
         }
     }
