@@ -6,7 +6,7 @@ use std::net;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
-use crate::core::runner::SurbConfigError;
+use crate::connection::options::SurbConfigError;
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;

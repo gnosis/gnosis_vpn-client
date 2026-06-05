@@ -34,7 +34,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Address, Destination, HopRouting};
 use crate::connection::options::Options;
-use crate::connection::up::runner::surb_config_for;
+use crate::connection::options::surb_config_for;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};

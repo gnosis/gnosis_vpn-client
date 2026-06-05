@@ -5,7 +5,7 @@ use std::fmt::{self, Display};
 use std::time::SystemTime;
 
 use crate::connection::destination::Destination;
-use crate::core::runner::SurbConfigError;
+use crate::connection::options::SurbConfigError;
 use crate::hopr::HoprError;
 use crate::{connection, gvpn_client, log_output, ping};
 
