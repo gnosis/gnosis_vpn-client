@@ -351,7 +351,7 @@ impl RouteHealth {
     /// to `Routable`. When the route first becomes routable we spawn the
     /// initial health check.
     ///
-    pub fn peers(
+    pub(crate) fn peers(
         &mut self,
         addresses: &HashSet<Address>,
         hopr: &Arc<Hopr>,
@@ -413,7 +413,7 @@ impl RouteHealth {
     ///
     /// Routes in `NeedsChannel` become routable and schedule their first
     /// health check immediately. No-op for routes in any other state.
-    pub fn any_channel_available(
+    pub(crate) fn any_channel_available(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
@@ -445,7 +445,7 @@ impl RouteHealth {
     /// Outcomes that arrive when the state is no longer `Routable` /
     /// `ReadyToConnect` / `Connecting` (e.g. because peering was lost)
     /// are dropped.
-    pub fn health_check_result(
+    pub(crate) fn health_check_result(
         &mut self,
         outcome: HealthCheckOutcome,
         hopr: &Arc<Hopr>,
@@ -552,7 +552,7 @@ impl RouteHealth {
     /// check cadence: only an exit-health query runs in each cycle, on top
     /// of the tunnel-level ping Core performs. Other states are left
     /// unchanged so this is safe to call speculatively.
-    pub fn connecting(
+    pub(crate) fn connecting(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
@@ -579,7 +579,7 @@ impl RouteHealth {
     /// healthy: no recent failures → `ReadyToConnect` with the last known
     /// `ExitHealth`; otherwise fall back to `Routable` and rebuild from the
     /// next check. A fresh cycle is scheduled immediately.
-    pub fn disconnecting(
+    pub(crate) fn disconnecting(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,

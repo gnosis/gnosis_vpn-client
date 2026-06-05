@@ -32,7 +32,7 @@ pub enum Phase {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     Hopr(#[from] HoprError),
     #[error(transparent)]

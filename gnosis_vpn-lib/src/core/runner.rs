@@ -32,7 +32,7 @@ use crate::{balance, connection, event, ping, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
-pub enum Results {
+pub(crate) enum Results {
     NodeBalance {
         res: Result<balance::PreSafe, Error>,
     },
@@ -112,7 +112,7 @@ pub enum Results {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     WorkerParams(#[from] worker_params::Error),
     #[error("chain error: {0}")]
@@ -136,7 +136,7 @@ struct UnauthorizedError {
     error: String,
 }
 
-pub async fn minimum_balance_recommendation(
+pub(crate) async fn minimum_balance_recommendation(
     incentive_operations: Arc<dyn IncentiveOperations>,
     cfg: edgli::strategy::IncentiveConfiguration,
     results_sender: mpsc::Sender<Results>,
@@ -145,7 +145,7 @@ pub async fn minimum_balance_recommendation(
     let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
 }
 
-pub async fn ideal_balance_recommendation(
+pub(crate) async fn ideal_balance_recommendation(
     hopr: Arc<Hopr>,
     cfg: edgli::strategy::IncentiveConfiguration,
     results_sender: mpsc::Sender<Results>,
@@ -157,7 +157,7 @@ pub async fn ideal_balance_recommendation(
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
 }
 
-pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     let res = hopr
         .capacity_allocations()
         .await
@@ -165,28 +165,28 @@ pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<
     let _ = results_sender.send(Results::CapacityAllocations { res }).await;
 }
 
-pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting balances runner");
     let res = hopr.balances().await.map_err(Error::from);
     let _ = results_sender.send(Results::Balances { res }).await;
 }
 
-pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
     let res = run_node_balance(incentive_operations).await;
     let _ = results_sender.send(Results::NodeBalance { res }).await;
 }
 
-pub async fn query_safe(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn query_safe(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
     let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
-pub async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
     let res = run_funding_tool(worker_params, code).await;
     let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
-pub async fn safe_deployment(
+pub(crate) async fn safe_deployment(
     incentive_operations: Arc<dyn IncentiveOperations>,
     presafe: balance::PreSafe,
     results_sender: mpsc::Sender<Results>,
@@ -195,7 +195,7 @@ pub async fn safe_deployment(
     let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
-pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
     let res = hopr_config::store_safe(state_home, &safe_module).await;
     let _ = results_sender
@@ -206,7 +206,7 @@ pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_
         .await;
 }
 
-pub async fn hopr(
+pub(crate) async fn hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     safe_module: &SafeModule,
@@ -221,7 +221,7 @@ pub async fn hopr(
         .await;
 }
 
-pub async fn node_wxhopr_withdraw(
+pub(crate) async fn node_wxhopr_withdraw(
     incentive_operations: Arc<dyn IncentiveOperations>,
     safe_address: Address,
     results_sender: mpsc::Sender<Results>,
@@ -230,14 +230,14 @@ pub async fn node_wxhopr_withdraw(
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
 }
 
-pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     while hopr.status() != HoprState::Running {
         time::sleep(Duration::from_secs(1)).await;
     }
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting connected peers runner");
     let (connected, announced_ips) = tokio::join!(async { hopr.connected_peers().await.map_err(Error::from) }, async {
         match hopr.announced_peers().await {
@@ -256,12 +256,12 @@ pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
         .await;
 }
 
-pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
     run_monitor_session(hopr, session).await;
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
+pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
     let ping_opts = ping::Options {
         seq_count: 1,
         ..Default::default()
@@ -295,7 +295,7 @@ pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>)
     }
 }
 
-pub async fn create_incentive_operations(
+pub(crate) async fn create_incentive_operations(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
     results_sender: mpsc::Sender<Results>,

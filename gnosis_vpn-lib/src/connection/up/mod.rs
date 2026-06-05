@@ -54,7 +54,7 @@ pub enum Setback {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("Hopr error: {0}")]
     Hopr(#[from] HoprError),
     #[error("Gvpn client error: {0}")]

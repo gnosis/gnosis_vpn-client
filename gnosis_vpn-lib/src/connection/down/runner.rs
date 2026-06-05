@@ -28,7 +28,7 @@ impl Runner {
         Self { down, hopr, options }
     }
 
-    pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
+    pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender
             .send(Results::DisconnectionResult {

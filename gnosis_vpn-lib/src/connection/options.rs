@@ -114,7 +114,7 @@ impl Default for SurbBalancing {
 }
 
 #[derive(Debug, Error)]
-pub enum SurbConfigError {
+pub(crate) enum SurbConfigError {
     #[error("Response buffer byte size too small")]
     ResponseBufferTooSmall,
     #[error("Max SURB upstream bandwidth cannot be zero")]
@@ -122,12 +122,12 @@ pub enum SurbConfigError {
 }
 
 #[derive(Debug)]
-pub struct SurbParams {
-    pub management: Option<SurbBalancerConfig>,
-    pub always_max_out_surbs: bool,
+pub(crate) struct SurbParams {
+    pub(crate) management: Option<SurbBalancerConfig>,
+    pub(crate) always_max_out_surbs: bool,
 }
 
-pub fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
+pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
     let management = if opts.enabled {
         to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)?
     } else {
@@ -139,7 +139,7 @@ pub fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConf
     })
 }
 
-pub fn to_surb_balancer_config(
+pub(crate) fn to_surb_balancer_config(
     response_buffer: ByteSize,
     max_surb_upstream: Bandwidth,
 ) -> Result<SurbBalancerConfig, SurbConfigError> {
