@@ -633,17 +633,25 @@ seq_count = 1
 enabled = false
 buffer = "32 kB"
 max_surb_upstream = "512 Kb/s"
+always_max_out_surbs = false
 
 [connection.surb_balancing.ping]
 enabled = true
-buffer = "32 kB"
-max_surb_upstream = "1 Mb/s"
+buffer = "1 MB"
+max_surb_upstream = "512 Kb/s"
 always_max_out_surbs = true
 
 [connection.surb_balancing.main]
 enabled = true
-buffer = "2 MB"
+buffer = "10 MB"
 max_surb_upstream = "16 Mb/s"
+always_max_out_surbs = true
+
+[connection.surb_balancing.health_check]
+enabled = false
+buffer = "16 kB"
+max_surb_upstream = "128 Kb/s"
+always_max_out_surbs = false
 
 [wireguard]
 listen_port = 51820
