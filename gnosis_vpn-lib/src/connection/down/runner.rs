@@ -2,7 +2,6 @@
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use edgli::hopr_lib::SessionClientConfig;
-use edgli::hopr_lib::SurbBalancerConfig;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
