@@ -79,16 +79,33 @@ path    = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 # consecutive tunnel ping failures before triggering reconnect
 # tunnel_ping_max_failures = 3
 
-# adjust session internal options
-# [connection.max_surb_upstream]
-# bridge = "512 Kb/s"
-# ping = "1 Mb/s"
-# main = "16 Mb/s"
+# adjust SURB balancing per session type
+# each section enables balancing for that session; omit to use the defaults below
+# bridge and health_check default to disabled; ping and main default to enabled
 #
-# [connection.buffer]
-# bridge = "32 kB"
-# ping = "32 kB"
-# main = "10 MB"
+# [connection.surb_balancing.bridge]
+# enabled = false
+# buffer = "16 KB"
+# max_surb_upstream = "128 Kb/s"
+# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
+#
+# [connection.surb_balancing.ping]
+# enabled = true
+# buffer = "1 MB"
+# max_surb_upstream = "512 Kb/s"
+# always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+#
+# [connection.surb_balancing.main]
+# enabled = true
+# buffer = "10 MB"
+# max_surb_upstream = "16 Mb/s"
+# always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+#
+# [connection.surb_balancing.health_check]
+# enabled = false
+# buffer = "16 KB"
+# max_surb_upstream = "128 Kb/s"
+# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
 
 ###
 ## wireguard section - specific VPN-related settings

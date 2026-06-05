@@ -35,6 +35,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Address, Destination, NodeId, RoutingOptions};
 use crate::connection::options::Options;
+use crate::connection::up::runner::surb_config_for;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
@@ -910,14 +911,17 @@ struct HealthSession {
 impl HealthSession {
     /// Open a TCP bridge session to the exit dedicated to health checks.
     ///
-    /// Uses the configured bridge capabilities/target but disables SURB
-    /// management — the session is short-lived and not used for user traffic.
+    /// Uses the configured bridge capabilities/target and applies the health-check SURB settings —
+    /// the session is short-lived and not used for user traffic.
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
+        let health_surb =
+            surb_config_for(&options.surb_balancing.health_check).map_err(|e| HoprError::Session(e.to_string()))?;
         let cfg = SessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
             forward_path_options: destination.routing.clone(),
             return_path_options: destination.routing.clone(),
-            surb_management: None,
+            always_max_out_surbs: health_surb.always_max_out_surbs,
+            surb_management: health_surb.management,
             ..Default::default()
         };
         tracing::debug!(%destination, "opening TCP session for health check");

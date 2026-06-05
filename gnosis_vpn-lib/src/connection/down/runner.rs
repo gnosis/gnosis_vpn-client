@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use crate::connection;
 use crate::connection::options::Options;
-use crate::core::runner::{self, Results};
+use crate::connection::up::runner::{SurbParams, surb_config_for};
+use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
@@ -48,9 +49,8 @@ impl Runner {
                 evt: Event::OpenBridge,
             })
             .await;
-        let bridge_config =
-            runner::to_surb_balancer_config(self.options.buffer_sizes.bridge, self.options.max_surb_upstream.bridge)?;
-        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_config).await?;
+        let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?;
 
         // 2. unregister wg public key
         let _ = results_sender
@@ -86,13 +86,14 @@ async fn open_bridge_session(
     hopr: &Hopr,
     down: &connection::down::Down,
     options: &Options,
-    surb_management: SurbBalancerConfig,
+    surb: SurbParams,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = SessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path_options: down.destination.routing.clone(),
         return_path_options: down.destination.routing.clone(),
-        surb_management: Some(surb_management),
+        always_max_out_surbs: surb.always_max_out_surbs,
+        surb_management: surb.management,
         ..Default::default()
     };
     hopr.open_session(

@@ -258,6 +258,14 @@ pub enum NerdStatsResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ActiveSession {
+    Bridge { bound_host: SocketAddr, id: String },
+    Ping { bound_host: SocketAddr, id: String },
+    Main { bound_host: SocketAddr, id: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnStats {
     #[serde(with = "serde_utils::address")]
     pub node_address: Address,
@@ -265,24 +273,27 @@ pub struct ConnStats {
     pub wg_pubkey: Option<String>,
     pub wg_server_pubkey: Option<String>,
     pub wg_ip: Option<String>,
-    pub session_bound_host: Option<SocketAddr>,
-    pub session_id: Option<String>,
+    pub active_session: Option<ActiveSession>,
 }
 
 impl ConnStats {
     pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
+        use connection::up::SessionKind;
         ConnStats {
             node_address,
             destination: conn.destination.clone(),
             wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
             wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
-            session_bound_host: conn.session.as_ref().map(|s| s.bound_host),
-            session_id: conn
-                .session
-                .as_ref()
-                .and_then(|s| s.active_clients.first())
-                .map(|id| id.to_string()),
+            active_session: conn.active_session.as_ref().and_then(|(kind, meta)| {
+                let id = meta.active_clients.first()?.to_string();
+                let bound_host = meta.bound_host;
+                Some(match kind {
+                    SessionKind::Bridge => ActiveSession::Bridge { bound_host, id },
+                    SessionKind::Ping => ActiveSession::Ping { bound_host, id },
+                    SessionKind::Main => ActiveSession::Main { bound_host, id },
+                })
+            }),
         }
     }
 }

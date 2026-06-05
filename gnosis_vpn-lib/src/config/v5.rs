@@ -372,25 +372,35 @@ impl Connection {
     }
 }
 
-impl From<BufferOptions> for options::BufferSizes {
-    fn from(buffer: BufferOptions) -> Self {
-        let def = options::BufferSizes::default();
-        options::BufferSizes {
-            bridge: buffer.bridge.unwrap_or(def.bridge),
-            ping: buffer.ping.unwrap_or(def.ping),
-            main: buffer.main.unwrap_or(def.main),
-        }
-    }
-}
-
-impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
-    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
-        let def = options::MaxSurbUpstream::default();
-        options::MaxSurbUpstream {
-            bridge: surbs.bridge.unwrap_or(def.bridge),
-            ping: surbs.ping.unwrap_or(def.ping),
-            main: surbs.main.unwrap_or(def.main),
-        }
+fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> options::SurbBalancing {
+    let def = options::SurbBalancing::default();
+    let buf = buf.unwrap_or(BufferOptions {
+        bridge: None,
+        ping: None,
+        main: None,
+    });
+    let surbs = surbs.unwrap_or(MaxSurbUpstreamOptions {
+        bridge: None,
+        ping: None,
+        main: None,
+    });
+    options::SurbBalancing {
+        ping: options::SessionSurbOptions::new(
+            true,
+            buf.ping.unwrap_or(def.ping.buffer),
+            surbs.ping.unwrap_or(def.ping.max_surb_upstream),
+        ),
+        main: options::SessionSurbOptions::new(
+            true,
+            buf.main.unwrap_or(def.main.buffer),
+            surbs.main.unwrap_or(def.main.max_surb_upstream),
+        ),
+        bridge: options::SessionSurbOptions::new(
+            false,
+            buf.bridge.unwrap_or(def.bridge.buffer),
+            surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
+        ),
+        health_check: def.health_check,
     }
 }
 
@@ -435,14 +445,10 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_opts);
 
-        let buffer_sizes = connection
-            .and_then(|c| c.buffer.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let max_surb_upstream = connection
-            .and_then(|c| c.max_surb_upstream.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
+        let surb_balancing = build_surb_balancing(
+            connection.and_then(|c| c.buffer.clone()),
+            connection.and_then(|c| c.max_surb_upstream.clone()),
+        );
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -470,12 +476,12 @@ impl From<Option<Connection>> for options::Options {
         options::Options {
             sessions,
             ping_options: ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
+            surb_balancing,
             timeouts,
             announced_peer_minimum_score,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+            session_pseudonym_ttl: Duration::from_secs(1),
         }
     }
 }
