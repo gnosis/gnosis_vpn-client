@@ -54,8 +54,7 @@ pub(super) struct Connection {
     bridge: Option<ConnectionProtocol>,
     wg: Option<ConnectionProtocol>,
     ping: Option<PingOptions>,
-    buffer: Option<BufferOptions>,
-    max_surb_upstream: Option<MaxSurbUpstreamOptions>,
+    surb_balancing: Option<SurbBalancingOptions>,
     announced_peer_minimum_score: Option<f64>,
     health_check_intervals: Option<HealthCheckIntervalOptions>,
     lan_lockdown: Option<bool>,
@@ -105,20 +104,20 @@ struct HealthCheckIntervalOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct BufferOptions {
-    bridge: Option<ByteSize>,
-    ping: Option<ByteSize>,
-    main: Option<ByteSize>,
+struct SessionSurbConfig {
+    enabled: Option<bool>,
+    buffer: Option<ByteSize>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    max_surb_upstream: Option<Bandwidth>,
+    always_max_out_surbs: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct MaxSurbUpstreamOptions {
-    #[serde(default, with = "human_bandwidth::serde")]
-    bridge: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    ping: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    main: Option<Bandwidth>,
+struct SurbBalancingOptions {
+    bridge: Option<SessionSurbConfig>,
+    ping: Option<SessionSurbConfig>,
+    main: Option<SessionSurbConfig>,
+    health_check: Option<SessionSurbConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -215,24 +214,26 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "buffer" {
-                        if let Some(buffer) = v.as_table() {
-                            for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                    if k == "surb_balancing" {
+                        if let Some(sb) = v.as_table() {
+                            for (session_key, session_val) in sb.iter() {
+                                let is_valid_session =
+                                    matches!(session_key.as_str(), "bridge" | "ping" | "main" | "health_check");
+                                if !is_valid_session {
+                                    wrong_keys.push(format!("connection.surb_balancing.{session_key}"));
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.buffer.{k}"));
-                            }
-                        }
-                        continue;
-                    }
-                    if k == "max_surb_upstream" {
-                        if let Some(surbs) = v.as_table() {
-                            for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
-                                    continue;
+                                if let Some(session) = session_val.as_table() {
+                                    for (k2, _v) in session.iter() {
+                                        let is_valid_field = matches!(
+                                            k2.as_str(),
+                                            "enabled" | "buffer" | "max_surb_upstream" | "always_max_out_surbs"
+                                        );
+                                        if !is_valid_field {
+                                            wrong_keys.push(format!("connection.surb_balancing.{session_key}.{k2}"));
+                                        }
+                                    }
                                 }
-                                wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
                         continue;
@@ -372,35 +373,32 @@ impl Connection {
     }
 }
 
-fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> options::SurbBalancing {
+fn build_surb_balancing(config: Option<SurbBalancingOptions>) -> options::SurbBalancing {
     let def = options::SurbBalancing::default();
-    let buf = buf.unwrap_or(BufferOptions {
+    let apply =
+        |session: Option<SessionSurbConfig>, default: options::SessionSurbOptions| -> options::SessionSurbOptions {
+            let Some(cfg) = session else {
+                return default;
+            };
+            let enabled = cfg.enabled.unwrap_or(default.enabled);
+            options::SessionSurbOptions {
+                enabled,
+                buffer: cfg.buffer.unwrap_or(default.buffer),
+                max_surb_upstream: cfg.max_surb_upstream.unwrap_or(default.max_surb_upstream),
+                always_max_out_surbs: cfg.always_max_out_surbs.unwrap_or(enabled),
+            }
+        };
+    let config = config.unwrap_or(SurbBalancingOptions {
         bridge: None,
         ping: None,
         main: None,
-    });
-    let surbs = surbs.unwrap_or(MaxSurbUpstreamOptions {
-        bridge: None,
-        ping: None,
-        main: None,
+        health_check: None,
     });
     options::SurbBalancing {
-        ping: options::SessionSurbOptions::new(
-            true,
-            buf.ping.unwrap_or(def.ping.buffer),
-            surbs.ping.unwrap_or(def.ping.max_surb_upstream),
-        ),
-        main: options::SessionSurbOptions::new(
-            true,
-            buf.main.unwrap_or(def.main.buffer),
-            surbs.main.unwrap_or(def.main.max_surb_upstream),
-        ),
-        bridge: options::SessionSurbOptions::new(
-            false,
-            buf.bridge.unwrap_or(def.bridge.buffer),
-            surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
-        ),
-        health_check: def.health_check,
+        ping: apply(config.ping, def.ping),
+        main: apply(config.main, def.main),
+        bridge: apply(config.bridge, def.bridge),
+        health_check: apply(config.health_check, def.health_check),
     }
 }
 
@@ -445,10 +443,7 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_opts);
 
-        let surb_balancing = build_surb_balancing(
-            connection.and_then(|c| c.buffer.clone()),
-            connection.and_then(|c| c.max_surb_upstream.clone()),
-        );
+        let surb_balancing = build_surb_balancing(connection.and_then(|c| c.surb_balancing.clone()));
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -634,15 +629,21 @@ timeout = "7s"
 ttl = 6
 seq_count = 1
 
-[connection.max_surb_upstream]
-bridge = "512 Kb/s"
-ping = "1 Mb/s"
-main = "16 Mb/s"
+[connection.surb_balancing.bridge]
+enabled = false
+buffer = "32 kB"
+max_surb_upstream = "512 Kb/s"
 
-[connection.buffer]
-bridge = "32 kB"
-ping = "32 kB"
-main = "2 MB"
+[connection.surb_balancing.ping]
+enabled = true
+buffer = "32 kB"
+max_surb_upstream = "1 Mb/s"
+always_max_out_surbs = true
+
+[connection.surb_balancing.main]
+enabled = true
+buffer = "2 MB"
+max_surb_upstream = "16 Mb/s"
 
 [wireguard]
 listen_port = 51820
