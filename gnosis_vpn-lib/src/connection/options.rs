@@ -59,6 +59,8 @@ pub struct SessionSurbOptions {
     pub enabled: bool,
     pub buffer: ByteSize,
     pub max_surb_upstream: Bandwidth,
+    /// When the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit.
+    pub always_max_out_surbs: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,6 +74,17 @@ pub struct SurbBalancing {
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
+    }
+}
+
+impl SessionSurbOptions {
+    pub fn new(enabled: bool, buffer: ByteSize, max_surb_upstream: Bandwidth) -> Self {
+        Self {
+            enabled,
+            buffer,
+            max_surb_upstream,
+            always_max_out_surbs: enabled,
+        }
     }
 }
 
@@ -90,27 +103,11 @@ impl Default for HealthCheckIntervals {
 impl Default for SurbBalancing {
     fn default() -> Self {
         Self {
-            ping: SessionSurbOptions {
-                enabled: true,
-                buffer: ByteSize::mb(1),
-                max_surb_upstream: Bandwidth::from_kbps(512),
-            },
-            main: SessionSurbOptions {
-                enabled: true,
-                // maximum allowed buffer size is 10 MB
-                buffer: ByteSize::mb(10),
-                max_surb_upstream: Bandwidth::from_mbps(16),
-            },
-            bridge: SessionSurbOptions {
-                enabled: false,
-                buffer: ByteSize::kb(16),
-                max_surb_upstream: Bandwidth::from_kbps(128),
-            },
-            health_check: SessionSurbOptions {
-                enabled: false,
-                buffer: ByteSize::kb(16),
-                max_surb_upstream: Bandwidth::from_kbps(128),
-            },
+            ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
+            // maximum allowed buffer size is 10 MB
+            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
+            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
     }
 }

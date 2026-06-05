@@ -97,21 +97,21 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
         main: None,
     });
     options::SurbBalancing {
-        ping: options::SessionSurbOptions {
-            enabled: true,
-            buffer: buf.ping.unwrap_or(def.ping.buffer),
-            max_surb_upstream: surbs.ping.unwrap_or(def.ping.max_surb_upstream),
-        },
-        main: options::SessionSurbOptions {
-            enabled: true,
-            buffer: buf.main.unwrap_or(def.main.buffer),
-            max_surb_upstream: surbs.main.unwrap_or(def.main.max_surb_upstream),
-        },
-        bridge: options::SessionSurbOptions {
-            enabled: false,
-            buffer: buf.bridge.unwrap_or(def.bridge.buffer),
-            max_surb_upstream: surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
-        },
+        ping: options::SessionSurbOptions::new(
+            true,
+            buf.ping.unwrap_or(def.ping.buffer),
+            surbs.ping.unwrap_or(def.ping.max_surb_upstream),
+        ),
+        main: options::SessionSurbOptions::new(
+            true,
+            buf.main.unwrap_or(def.main.buffer),
+            surbs.main.unwrap_or(def.main.max_surb_upstream),
+        ),
+        bridge: options::SessionSurbOptions::new(
+            false,
+            buf.bridge.unwrap_or(def.bridge.buffer),
+            surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
+        ),
         health_check: def.health_check,
     }
 }

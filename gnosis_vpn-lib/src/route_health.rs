@@ -889,9 +889,8 @@ impl HealthSession {
             capabilities: options.sessions.bridge.capabilities,
             forward_path: destination.routing,
             return_path: destination.routing,
-            // when the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit
-            always_max_out_surbs: health_surb.is_some(),
-            surb_management: health_surb,
+            always_max_out_surbs: health_surb.always_max_out_surbs,
+            surb_management: health_surb.management,
             ..Default::default()
         };
         tracing::debug!(%destination, "opening TCP session for health check");

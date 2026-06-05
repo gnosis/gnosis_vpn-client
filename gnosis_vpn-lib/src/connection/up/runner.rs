@@ -110,7 +110,7 @@ impl Runner {
             &self.hopr,
             &self.destination,
             &self.options,
-            ping_surb,
+            ping_surb.management,
             self.cached_pseudonym,
             &results_sender,
         )
@@ -205,7 +205,7 @@ impl Runner {
             &self.hopr,
             &self.destination,
             &self.options,
-            ping_surb,
+            ping_surb.management,
             self.cached_pseudonym,
             results_sender,
         )
@@ -283,7 +283,7 @@ impl Runner {
             .await;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
 
-        if let Some(main_config) = main_surb {
+        if let Some(main_config) = main_surb.management {
             let active_client = match session.active_clients.as_slice() {
                 [] => return Err(HoprError::SessionNotFound.into()),
                 [client] => client.clone(),
@@ -303,12 +303,22 @@ impl Display for Runner {
     }
 }
 
-pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<Option<SurbBalancerConfig>, SurbConfigError> {
-    if opts.enabled {
-        runner::to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)
+#[derive(Debug)]
+pub(crate) struct SurbParams {
+    pub management: Option<SurbBalancerConfig>,
+    pub always_max_out_surbs: bool,
+}
+
+pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
+    let management = if opts.enabled {
+        runner::to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)?
     } else {
-        Ok(None)
-    }
+        None
+    };
+    Ok(SurbParams {
+        management,
+        always_max_out_surbs: opts.always_max_out_surbs,
+    })
 }
 
 #[tracing::instrument(
@@ -324,16 +334,15 @@ async fn open_bridge_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
-    surb_management: Option<SurbBalancerConfig>,
+    surb: SurbParams,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        // when the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit
-        always_max_out_surbs: surb_management.is_some(),
-        surb_management,
+        always_max_out_surbs: surb.always_max_out_surbs,
+        surb_management: surb.management,
         ..Default::default()
     };
     // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,

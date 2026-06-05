@@ -93,6 +93,7 @@ pub(super) struct SessionSurbConfig {
     buffer: Option<ByteSize>,
     #[serde(default, with = "human_bandwidth::serde")]
     max_surb_upstream: Option<Bandwidth>,
+    always_max_out_surbs: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -221,11 +222,15 @@ impl Connection {
 fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbOptions) -> options::SessionSurbOptions {
     match cfg {
         None => def,
-        Some(c) => options::SessionSurbOptions {
-            enabled: c.enabled.unwrap_or(def.enabled),
-            buffer: c.buffer.unwrap_or(def.buffer),
-            max_surb_upstream: c.max_surb_upstream.unwrap_or(def.max_surb_upstream),
-        },
+        Some(c) => {
+            let enabled = c.enabled.unwrap_or(def.enabled);
+            options::SessionSurbOptions {
+                enabled,
+                buffer: c.buffer.unwrap_or(def.buffer),
+                max_surb_upstream: c.max_surb_upstream.unwrap_or(def.max_surb_upstream),
+                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
+            }
+        }
     }
 }
 
@@ -432,7 +437,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                 if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "health_check" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
-                                            if k3 == "enabled" || k3 == "buffer" || k3 == "max_surb_upstream" {
+                                            if k3 == "enabled"
+                                                || k3 == "buffer"
+                                                || k3 == "max_surb_upstream"
+                                                || k3 == "always_max_out_surbs"
+                                            {
                                                 continue;
                                             }
                                             wrong.push(format!("connection.surb_balancing.{k2}.{k3}"));
