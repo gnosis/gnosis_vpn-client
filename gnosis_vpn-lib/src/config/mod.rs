@@ -42,6 +42,8 @@ pub enum Error {
     VersionMismatch(u8),
     #[error("No destinations")]
     NoDestinations,
+    #[error("ping and main sessions must both have surb_balancing enabled or both disabled")]
+    SurbBalancingMismatch,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
 }

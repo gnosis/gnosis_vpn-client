@@ -570,7 +570,10 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
+        let connection: options::Options = value.connection.into();
+        if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
+            return Err(config::Error::SurbBalancingMismatch);
+        }
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
