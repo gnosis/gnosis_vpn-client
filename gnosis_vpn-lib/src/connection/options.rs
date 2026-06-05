@@ -151,7 +151,8 @@ pub(crate) fn to_surb_balancer_config(
     }
     let config = SurbBalancerConfig {
         target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
-        max_surbs_per_sec: (max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128)) as u64,
+        max_surbs_per_sec: (max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128))
+            as u64,
         ..Default::default()
     };
     Ok(config)

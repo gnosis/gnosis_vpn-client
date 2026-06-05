@@ -171,12 +171,18 @@ pub(crate) async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Resul
     let _ = results_sender.send(Results::Balances { res }).await;
 }
 
-pub(crate) async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn node_balance(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    results_sender: mpsc::Sender<Results>,
+) {
     let res = run_node_balance(incentive_operations).await;
     let _ = results_sender.send(Results::NodeBalance { res }).await;
 }
 
-pub(crate) async fn query_safe(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn query_safe(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    results_sender: mpsc::Sender<Results>,
+) {
     let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
@@ -256,7 +262,11 @@ pub(crate) async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sende
         .await;
 }
 
-pub(crate) async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn monitor_session(
+    hopr: Arc<Hopr>,
+    session: &SessionClientMetadata,
+    results_sender: mpsc::Sender<Results>,
+) {
     run_monitor_session(hopr, session).await;
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
@@ -652,4 +662,3 @@ impl Display for Results {
         }
     }
 }
-
