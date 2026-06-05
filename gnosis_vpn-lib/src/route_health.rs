@@ -880,8 +880,8 @@ struct HealthSession {
 impl HealthSession {
     /// Open a TCP bridge session to the exit dedicated to health checks.
     ///
-    /// Uses the configured bridge capabilities/target but disables SURB
-    /// management — the session is short-lived and not used for user traffic.
+    /// Uses the configured bridge capabilities/target and applies the health-check SURB settings —
+    /// the session is short-lived and not used for user traffic.
     async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
         let health_surb =
             surb_config_for(&options.surb_balancing.health_check).map_err(|e| HoprError::Session(e.to_string()))?;
