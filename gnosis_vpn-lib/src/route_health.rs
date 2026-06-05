@@ -8,8 +8,8 @@
 //!
 //! * **Network reachability** — do we have the peering/channel relationship
 //!   that the routing option requires? This is driven from outside by Core
-//!   feeding in the current peer set ([`RouteHealth::peers`]) and channel
-//!   funding results ([`RouteHealth::any_channel_available`]).
+//!   feeding in the current peer set (`RouteHealth::peers`) and channel
+//!   funding results (`RouteHealth::any_channel_available`).
 //! * **Exit-node health** — once reachable, can we actually reach the exit
 //!   server behind the destination, and is it reporting healthy? This is
 //!   driven internally by a background task that opens a short-lived TCP
@@ -170,7 +170,7 @@ pub enum RouteHealthState {
 }
 
 /// Message a health-check runner task sends back to the main loop, consumed
-/// by [`RouteHealth::health_check_result`].
+/// by `RouteHealth::health_check_result`.
 ///
 /// `versions` and `health` are optional because a given cycle may skip
 /// fetching them (skipped based on the ping cycle interval settings); the main thread fills in the skipped
