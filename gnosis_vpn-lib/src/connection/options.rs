@@ -1,7 +1,8 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::{SessionCapabilities, SessionTarget};
+use edgli::hopr_lib::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use std::time::Duration;
 
@@ -107,4 +108,48 @@ impl Default for SurbBalancing {
             health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum SurbConfigError {
+    #[error("Response buffer byte size too small")]
+    ResponseBufferTooSmall,
+    #[error("Max SURB upstream bandwidth cannot be zero")]
+    MaxSurbUpstreamCannotBeZero,
+}
+
+#[derive(Debug)]
+pub struct SurbParams {
+    pub management: Option<SurbBalancerConfig>,
+    pub always_max_out_surbs: bool,
+}
+
+pub fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
+    let management = if opts.enabled {
+        to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)?
+    } else {
+        None
+    };
+    Ok(SurbParams {
+        management,
+        always_max_out_surbs: opts.always_max_out_surbs,
+    })
+}
+
+pub fn to_surb_balancer_config(
+    response_buffer: ByteSize,
+    max_surb_upstream: Bandwidth,
+) -> Result<SurbBalancerConfig, SurbConfigError> {
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
+        return Err(SurbConfigError::ResponseBufferTooSmall);
+    }
+    if max_surb_upstream.is_zero() {
+        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
+    }
+    let config = SurbBalancerConfig {
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
+        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
+        ..Default::default()
+    };
+    Ok(config)
 }

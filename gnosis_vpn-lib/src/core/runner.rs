@@ -2,14 +2,12 @@
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
 use backon::{ExponentialBuilder, Retryable};
-use bytesize::ByteSize;
 use edgli::blokli::SafelessInteractor;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
-use edgli::hopr_lib::{IpProtocol, SurbBalancerConfig};
+use edgli::hopr_lib::IpProtocol;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
-use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
@@ -125,14 +123,6 @@ pub enum Error {
     FundingTool(String),
     #[error("Safeless interactor creation error: {0}")]
     SafelessInteractorCreation(String),
-}
-
-#[derive(Debug, Error)]
-pub enum SurbConfigError {
-    #[error("Response buffer byte size too small")]
-    ResponseBufferTooSmall,
-    #[error("Max SURB upstream bandwidth cannot be zero")]
-    MaxSurbUpstreamCannotBeZero,
 }
 
 #[derive(Debug, Deserialize)]
@@ -626,21 +616,3 @@ impl Display for Results {
     }
 }
 
-pub fn to_surb_balancer_config(
-    response_buffer: ByteSize,
-    max_surb_upstream: Bandwidth,
-) -> Result<SurbBalancerConfig, SurbConfigError> {
-    // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() < 2 * edgli::hopr_lib::SESSION_MTU as u64 {
-        return Err(SurbConfigError::ResponseBufferTooSmall);
-    }
-    if max_surb_upstream.is_zero() {
-        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
-    }
-    let config = SurbBalancerConfig {
-        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::SESSION_MTU as u64,
-        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::SURB_SIZE)) as u64,
-        ..Default::default()
-    };
-    Ok(config)
-}

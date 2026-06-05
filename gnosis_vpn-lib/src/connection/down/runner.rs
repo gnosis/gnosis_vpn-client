@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::connection;
 use crate::connection::options::Options;
-use crate::connection::up::runner::{SurbParams, surb_config_for};
+use crate::connection::options::{SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
