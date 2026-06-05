@@ -12,8 +12,7 @@ pub struct Options {
     pub timeouts: Timeouts,
     pub sessions: Sessions,
     pub ping_options: ping::Options,
-    pub buffer_sizes: BufferSizes,
-    pub max_surb_upstream: MaxSurbUpstream,
+    pub surb_balancing: SurbBalancing,
     pub health_check_intervals: HealthCheckIntervals,
     pub lan_lockdown: bool,
     /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
@@ -56,20 +55,36 @@ pub struct SessionParameters {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct BufferSizes {
-    pub ping: ByteSize,
-    pub main: ByteSize,
+pub struct SessionSurbOptions {
+    pub enabled: bool,
+    pub buffer: ByteSize,
+    pub max_surb_upstream: Bandwidth,
+    /// When the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit.
+    pub always_max_out_surbs: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MaxSurbUpstream {
-    pub ping: Bandwidth,
-    pub main: Bandwidth,
+pub struct SurbBalancing {
+    pub ping: SessionSurbOptions,
+    pub main: SessionSurbOptions,
+    pub bridge: SessionSurbOptions,
+    pub health_check: SessionSurbOptions,
 }
 
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
+    }
+}
+
+impl SessionSurbOptions {
+    pub fn new(enabled: bool, buffer: ByteSize, max_surb_upstream: Bandwidth) -> Self {
+        Self {
+            enabled,
+            buffer,
+            max_surb_upstream,
+            always_max_out_surbs: enabled,
+        }
     }
 }
 
@@ -85,21 +100,14 @@ impl Default for HealthCheckIntervals {
     }
 }
 
-impl Default for MaxSurbUpstream {
+impl Default for SurbBalancing {
     fn default() -> Self {
         Self {
-            ping: Bandwidth::from_kbps(512),
-            main: Bandwidth::from_mbps(16),
-        }
-    }
-}
-
-impl Default for BufferSizes {
-    fn default() -> Self {
-        Self {
-            ping: ByteSize::mb(1),
+            ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
             // maximum allowed buffer size is 10 MB
-            main: ByteSize::mb(10),
+            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
+            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
     }
 }
