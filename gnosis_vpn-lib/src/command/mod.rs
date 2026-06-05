@@ -466,13 +466,19 @@ impl Display for RunMode {
                 error,
                 ticket_stats,
             } => {
+                let wxhopr_sci = balance::wxhopr_scientific(*node_wxhopr)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
                 let mut msg = format!(
-                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
+                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}{wxhopr_sci}",
                     node_address.to_checksum()
                 );
                 if let Some(ts) = ticket_stats {
+                    let price_sci = balance::wxhopr_scientific(ts.ticket_price)
+                        .map(|s| format!(" ({s})"))
+                        .unwrap_or_default();
                     msg = format!(
-                        "{msg}, ticket price: {}, winning probability: {:.4}",
+                        "{msg}, ticket price: {}{price_sci}, winning probability: {:.4}",
                         ts.ticket_price, ts.winning_probability
                     );
                 }

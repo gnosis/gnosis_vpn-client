@@ -4,6 +4,7 @@ use std::fmt;
 use std::process;
 use std::time::Duration;
 
+use gnosis_vpn_lib::balance;
 use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::connection::destination::{NodeId, RoutingOptions};
@@ -262,8 +263,14 @@ fn pretty_print(resp: &Response) {
                 info.node_peer_id,
                 info.safe_address.to_checksum()
             ));
+            let safe_sci = balance::wxhopr_scientific(*safe)
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            let price_sci = balance::wxhopr_scientific(*ticket_price)
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
             str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}\nTicket Price: {ticket_price}\nWinning Probability: {winning_probability:.4}\n"
+                "---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\nTicket Price: {ticket_price}{price_sci}\nWinning Probability: {winning_probability:.4}\n"
             ));
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
