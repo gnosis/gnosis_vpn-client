@@ -3,10 +3,10 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use edgli::blokli::SafelessInteractor;
+use edgli::hopr_lib::IpProtocol;
 use edgli::hopr_lib::exports::crypto::types::prelude::Keypair;
 use edgli::hopr_lib::state::HoprState;
 use edgli::hopr_lib::{Address, Balance, WxHOPR};
-use edgli::hopr_lib::IpProtocol;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use rand::prelude::*;
 use serde::Deserialize;
@@ -615,4 +615,3 @@ impl Display for Results {
         }
     }
 }
-

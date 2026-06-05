@@ -101,14 +101,8 @@ impl Runner {
         // 4. open ping session
         let _ = results_sender.send(progress(Progress::OpenPing)).await;
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session = open_ping_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            ping_surb,
-            &results_sender,
-        )
-        .await?;
+        let session =
+            open_ping_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
 
         // dynamic routing might block all outgoing communication
         // this leads to loosing peers and thus falling back to static routing might break because of that
@@ -196,14 +190,8 @@ impl Runner {
 
         // open a new ping session
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session = open_ping_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            ping_surb,
-            results_sender,
-        )
-        .await?;
+        let session =
+            open_ping_session(&self.hopr, &self.destination, &self.options, ping_surb, results_sender).await?;
 
         // 6b. dismantle dynamic routing and request static wg tunnel from root
         let _ = results_sender
