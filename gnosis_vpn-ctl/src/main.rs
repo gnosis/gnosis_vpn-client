@@ -270,7 +270,8 @@ fn pretty_print(resp: &Response) {
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
             str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\nTicket Price: {ticket_price}{price_sci}\nWinning Probability: {winning_probability:.4}\n"
+                "---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\nTicket Price: {ticket_price}{price_sci}\nWinning Probability: {}\n",
+                format_probability(*winning_probability)
             ));
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
@@ -345,6 +346,12 @@ fn pretty_print(resp: &Response) {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
     }
+}
+
+fn format_probability(p: f64) -> String {
+    let s = format!("{:.8}", p);
+    let trimmed = s.trim_end_matches('0');
+    trimmed.trim_end_matches('.').to_string()
 }
 
 fn determine_exitcode(resp: &Response) -> ExitCode {
