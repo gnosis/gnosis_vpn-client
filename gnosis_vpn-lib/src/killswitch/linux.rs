@@ -319,6 +319,12 @@ impl<'a> PolicyBatch<'a> {
             rule.add_expr(&Verdict::Accept);
             self.batch.add(&rule, MsgType::Add);
         }
+        for &net in &LAN_MULTICAST_NETS {
+            let mut rule = Rule::new(&self.in_chain);
+            check_net(&mut rule, End::Src, net);
+            rule.add_expr(&Verdict::Accept);
+            self.batch.add(&rule, MsgType::Add);
+        }
     }
 
     fn add_allowed_ip_rules(&mut self, ip: IpAddr) {
