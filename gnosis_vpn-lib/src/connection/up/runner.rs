@@ -110,7 +110,7 @@ impl Runner {
             &self.hopr,
             &self.destination,
             &self.options,
-            ping_surb.management,
+            ping_surb,
             self.cached_pseudonym,
             &results_sender,
         )
@@ -205,7 +205,7 @@ impl Runner {
             &self.hopr,
             &self.destination,
             &self.options,
-            ping_surb.management,
+            ping_surb,
             self.cached_pseudonym,
             results_sender,
         )
@@ -419,7 +419,7 @@ async fn open_ping_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
-    surb_management: Option<SurbBalancerConfig>,
+    surb: SurbParams,
     pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
@@ -427,9 +427,9 @@ async fn open_ping_session(
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        surb_management,
+        always_max_out_surbs: surb.always_max_out_surbs,
+        surb_management: surb.management,
         pseudonym,
-        ..Default::default()
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open ping session");
