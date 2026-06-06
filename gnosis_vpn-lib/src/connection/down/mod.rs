@@ -9,7 +9,7 @@ use crate::connection::options::SurbConfigError;
 use crate::hopr::HoprError;
 use crate::{connection, gvpn_client, log_output, ping};
 
-pub mod runner;
+pub(crate) mod runner;
 
 /// Contains stateful data of dismantling a VPN connection from a destination.
 /// The state transition runner for this struct is in `core::connection::down::runner`.

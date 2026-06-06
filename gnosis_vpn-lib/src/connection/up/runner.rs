@@ -23,7 +23,7 @@ use crate::{ping, remote_data};
 
 use super::{Error, Event, Progress, Setback};
 
-pub struct Runner {
+pub(crate) struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
     options: Options,
@@ -34,7 +34,7 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(
+    pub(crate) fn new(
         destination: Destination,
         options: Options,
         wg_config: wireguard::Config,

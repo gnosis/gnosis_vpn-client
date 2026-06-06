@@ -17,14 +17,14 @@ use crate::hopr::{Hopr, HoprError};
 
 use super::{Error, Event};
 
-pub struct Runner {
+pub(crate) struct Runner {
     down: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
 }
 
 impl Runner {
-    pub fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
+    pub(crate) fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
         Self { down, hopr, options }
     }
 

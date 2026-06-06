@@ -28,7 +28,7 @@ use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, ticket_stats, wireguard};
 
-pub mod runner;
+pub(crate) mod runner;
 
 use runner::Results;
 
