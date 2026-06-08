@@ -203,7 +203,6 @@ pub(crate) enum HealthCheckOutcome {
 /// Constructed once per destination and lives as long as the destination
 /// is configured.
 pub(crate) struct RouteHealth {
-    #[allow(dead_code)]
     id: String,
     static_need: StaticNeed,
     state: RouteHealthState,
