@@ -1,5 +1,5 @@
 pub mod destination;
-pub mod down;
-pub mod options;
-pub mod pseudonym_cache;
-pub mod up;
+pub(crate) mod down;
+pub(crate) mod options;
+pub(crate) mod pseudonym_cache;
+pub(crate) mod up;
