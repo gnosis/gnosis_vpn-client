@@ -16,10 +16,10 @@
 //!   session to the exit and performs version, health, and ping checks.
 //!
 //! [`RouteHealthState`] captures the combined state. State changes flow
-//! outward through [`HealthCheckOutcome`] messages posted back on the runner channel.
+//! outward through `HealthCheckOutcome` messages posted back on the runner channel.
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
-//! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
+//! aggregate view (via `any_needs_peers`) to decide when to poll peers.
 use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
