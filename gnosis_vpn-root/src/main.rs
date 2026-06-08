@@ -944,6 +944,7 @@ impl DaemonState {
                     self.shutdown_ongoing = Shutdown::Worker;
                     send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
                     self.cleanup_worker_resources().await;
+                    self.disable_killswitch().await;
                     self.target_dest_id = None;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
@@ -956,6 +957,7 @@ impl DaemonState {
                     // cancel worker restart and keep it stopped
                     tracing::debug!("received stop client command during worker restart - cancelling restart");
                     self.shutdown_ongoing = Shutdown::Worker;
+                    self.disable_killswitch().await;
                     self.target_dest_id = None;
                     Ok(Response::StopClient(command::StopClientResponse::Stopped))
                 }
