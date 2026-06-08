@@ -203,6 +203,8 @@ pub(crate) enum HealthCheckOutcome {
 /// Constructed once per destination and lives as long as the destination
 /// is configured.
 pub(crate) struct RouteHealth {
+    #[allow(dead_code)]
+    id: String,
     static_need: StaticNeed,
     state: RouteHealthState,
     health_check_cancel: CancellationToken,
@@ -229,6 +231,7 @@ impl RouteHealth {
         let state = derive_initial_state(&dest.routing, allow_insecure);
         let health_check_cancel = cancel_on_shutdown.child_token();
         Self {
+            id: dest.id.clone(),
             static_need,
             state,
             health_check_cancel,
@@ -356,14 +359,17 @@ impl RouteHealth {
                 // NeedsChannel if one already existed (transient peer flap).
                 let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *has_channel;
                 if skip_channel_wait {
+                    tracing::debug!(destination = %self.id, "peers available → Routable");
                     self.state = RouteHealthState::Routable;
                     self.spawn_health_check(initial_delay, hopr, dest, options, sender);
                 } else {
+                    tracing::debug!(destination = %self.id, "peers available → NeedsChannel");
                     self.state = RouteHealthState::NeedsChannel;
                 }
             }
             RouteHealthState::NeedsChannel => {
                 if !is_peered {
+                    tracing::debug!(destination = %self.id, "peers lost → NeedsPeering");
                     // No channel was ever seen, so has_channel stays false.
                     self.state = RouteHealthState::NeedsPeering { has_channel: false };
                 }
@@ -372,6 +378,7 @@ impl RouteHealth {
             | RouteHealthState::ReadyToConnect { .. }
             | RouteHealthState::Connecting { .. } => {
                 if !is_peered {
+                    tracing::debug!(destination = %self.id, state = ?self.state, "peers lost → NeedsPeering");
                     self.cancel_health_check();
                     self.checking_since = None;
                     self.check_cycle = 0;
@@ -402,6 +409,7 @@ impl RouteHealth {
         if !matches!(self.state, RouteHealthState::NeedsChannel) {
             return;
         }
+        tracing::debug!(destination = %self.id, "channel available → Routable");
         self.state = RouteHealthState::Routable;
         self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
     }
@@ -437,10 +445,12 @@ impl RouteHealth {
                 self.checking_since = Some(since);
             }
             HealthCheckOutcome::Unrecoverable { reason } => {
+                tracing::debug!(destination = %self.id, ?reason, "health check → Unrecoverable");
                 self.checking_since = None;
                 self.state = RouteHealthState::Unrecoverable { reason };
             }
             HealthCheckOutcome::Failed { checked_at, error } => {
+                tracing::debug!(destination = %self.id, %error, failures = self.exit_failures + 1, "health check failed");
                 self.checking_since = None;
                 self.exit_failures += 1;
                 self.exit_last_error = Some(error);
@@ -495,16 +505,19 @@ impl RouteHealth {
                         },
                     },
                     _ => match (versions, ping_rtt, health) {
-                        (Some(versions), Some(ping_rtt), Some(health)) => RouteHealthState::ReadyToConnect {
-                            exit: ExitHealth {
-                                checked_at,
-                                versions,
-                                ping_rtt,
-                                health,
-                            },
-                        },
+                        (Some(versions), Some(ping_rtt), Some(health)) => {
+                            tracing::debug!(destination = %self.id, "health check completed → ReadyToConnect");
+                            RouteHealthState::ReadyToConnect {
+                                exit: ExitHealth {
+                                    checked_at,
+                                    versions,
+                                    ping_rtt,
+                                    health,
+                                },
+                            }
+                        }
                         _ => {
-                            tracing::warn!(%dest, state = ?self.state, "received unexpected outcome - setting to routable");
+                            tracing::warn!(destination = %self.id, state = ?self.state, "received unexpected outcome - setting to routable");
                             RouteHealthState::Routable
                         }
                     },
@@ -544,6 +557,7 @@ impl RouteHealth {
         self.exit_last_error = None;
         self.tunnel_ping_failures = 0;
         self.tunnel_ping_last_error = None;
+        tracing::debug!(destination = %self.id, "→ Connecting");
         self.state = RouteHealthState::Connecting {
             exit,
             tunnel_ping_rtt: None,
@@ -568,8 +582,10 @@ impl RouteHealth {
         if let RouteHealthState::Connecting { exit, .. } = &self.state {
             let exit = exit.clone();
             if self.exit_failures == 0 {
+                tracing::debug!(destination = %self.id, "disconnecting → ReadyToConnect");
                 self.state = RouteHealthState::ReadyToConnect { exit };
             } else {
+                tracing::debug!(destination = %self.id, failures = self.exit_failures, "disconnecting → Routable");
                 self.check_cycle = 0;
                 self.state = RouteHealthState::Routable;
             }
