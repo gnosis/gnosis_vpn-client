@@ -119,6 +119,8 @@ pub(crate) enum SurbConfigError {
     ResponseBufferTooSmall,
     #[error("Max SURB upstream bandwidth cannot be zero")]
     MaxSurbUpstreamCannotBeZero,
+    #[error("Max SURB upstream bandwidth is too large to represent as a u64 SURB/s rate")]
+    MaxSurbsPerSecOverflow,
 }
 
 #[derive(Debug)]
@@ -149,10 +151,13 @@ pub(crate) fn to_surb_balancer_config(
     if max_surb_upstream.is_zero() {
         return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
     }
+    let max_surbs_per_sec_u128 =
+        max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128);
+    let max_surbs_per_sec =
+        u64::try_from(max_surbs_per_sec_u128).map_err(|_| SurbConfigError::MaxSurbsPerSecOverflow)?;
     let config = SurbBalancerConfig {
         target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
-        max_surbs_per_sec: (max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128))
-            as u64,
+        max_surbs_per_sec,
         ..Default::default()
     };
     Ok(config)

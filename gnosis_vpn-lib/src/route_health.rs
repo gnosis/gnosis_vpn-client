@@ -1,6 +1,6 @@
 //! Per-destination route health tracking.
 //!
-//! Each [`RouteHealth`] models the progression of a single destination route
+//! Each `RouteHealth` models the progression of a single destination route
 //! from "just configured" to "usable for a tunnel", and it owns the background
 //! health-check task that keeps that assessment current.
 //!
