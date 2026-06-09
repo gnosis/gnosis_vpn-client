@@ -9,3 +9,11 @@ root = ".cargo"
 CFLAGS   = "-O3 -ffunction-sections -fdata-sections -fPIC"
 CPPFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"
 LDFLAGS  = "-O3 -ffunction-sections -fdata-sections -fPIC"
+
+# Enable hardware AES intrinsics on Apple Silicon — selects aes::armv8 backend
+# at compile time instead of aes::soft::fixslice. The aes crate v0.8 requires
+# --cfg aes_armv8 (not just target-feature=+aes) to activate the armv8 module.
+# Restricted to aarch64-apple-darwin: Apple Silicon always has the AES crypto
+# extension; aarch64-unknown-linux-* cannot make that guarantee.
+[target.aarch64-apple-darwin]
+rustflags = ["--cfg=aes_armv8", "-Ctarget-feature=+aes,+neon"]

@@ -487,16 +487,14 @@ impl Display for RunMode {
                 hopr_init_status,
                 hopr_status,
                 last_error,
-            } => {
-                match (hopr_init_status, hopr_status, last_error) {
-                    (None, None, None) => write!(f, "Warmup"),
-                    (None, None, Some(err)) => write!(f, "Warmup (last error: {err})"),
-                    (_, Some(status), None) => write!(f, "Warmup ({status})"),
-                    (_, Some(status), Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
-                    (Some(status), _, None) => write!(f, "Warmup ({status})"),
-                    (Some(status), _, Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
-                }
-            }
+            } => match (hopr_init_status, hopr_status, last_error) {
+                (None, None, None) => write!(f, "Warmup"),
+                (None, None, Some(err)) => write!(f, "Warmup (last error: {err})"),
+                (_, Some(status), None) => write!(f, "Warmup ({status})"),
+                (_, Some(status), Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
+                (Some(status), _, None) => write!(f, "Warmup ({status})"),
+                (Some(status), _, Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
+            },
             RunMode::Running {
                 hopr_status,
                 funding_issues,
