@@ -488,15 +488,14 @@ impl Display for RunMode {
                 hopr_status,
                 last_error,
             } => {
-                match (hopr_init_status, hopr_status) {
-                    (None, None) => write!(f, "Warmup")?,
-                    (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})")?,
-                    (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})")?,
+                match (hopr_init_status, hopr_status, last_error) {
+                    (None, None, None) => write!(f, "Warmup"),
+                    (None, None, Some(err)) => write!(f, "Warmup (last error: {err})"),
+                    (_, Some(status), None) => write!(f, "Warmup ({status})"),
+                    (_, Some(status), Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
+                    (Some(status), _, None) => write!(f, "Warmup ({status})"),
+                    (Some(status), _, Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
                 }
-                if let Some(err) = last_error {
-                    write!(f, " (last error: {err})")?;
-                }
-                Ok(())
             }
             RunMode::Running {
                 hopr_status,
