@@ -5,11 +5,11 @@ use std::fmt::{self, Display};
 use std::time::SystemTime;
 
 use crate::connection::destination::Destination;
-use crate::core::runner::SurbConfigError;
+use crate::connection::options::SurbConfigError;
 use crate::hopr::HoprError;
 use crate::{connection, gvpn_client, log_output, ping};
 
-pub mod runner;
+pub(crate) mod runner;
 
 /// Contains stateful data of dismantling a VPN connection from a destination.
 /// The state transition runner for this struct is in `core::connection::down::runner`.
@@ -25,14 +25,13 @@ pub struct Down {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Disconnecting,
-    DisconnectingWg,
     OpeningBridge,
     UnregisterWg,
     ClosingBridge,
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     Hopr(#[from] HoprError),
     #[error(transparent)]
@@ -45,7 +44,6 @@ pub enum Error {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
-    DisconnectWg,
     OpenBridge,
     UnregisterWg,
     CloseBridge,
@@ -74,7 +72,6 @@ impl Down {
     pub fn disconnect_evt(&mut self, evt: Event) {
         let now = SystemTime::now();
         match evt {
-            Event::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
             Event::OpenBridge => self.phase = (now, Phase::OpeningBridge),
             Event::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
             Event::CloseBridge => self.phase = (now, Phase::ClosingBridge),
@@ -98,7 +95,6 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase_str = match self {
             Phase::Disconnecting => "Disconnecting",
-            Phase::DisconnectingWg => "Disconnecting WireGuard tunnel",
             Phase::OpeningBridge => "Opening bridge connection",
             Phase::UnregisterWg => "Unregistering WireGuard public key",
             Phase::ClosingBridge => "Closing bridge connection",

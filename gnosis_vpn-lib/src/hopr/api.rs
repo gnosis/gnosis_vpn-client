@@ -25,10 +25,7 @@ use tokio::task::JoinSet;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap};
-use std::{
-    fmt::{self, Display},
-    str::FromStr,
-};
+use std::str::FromStr;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -426,20 +423,5 @@ impl Hopr {
             tracing::info!("shutting down session listener: {:?}", process.key());
             process.value().abort_handle.abort();
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct HoprTelemetry {
-    pub sync_percentage: f32,
-}
-
-impl Display for HoprTelemetry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "HoprTelemetry(sync_percentage: {:.2}%)",
-            self.sync_percentage * 100.0
-        )
     }
 }

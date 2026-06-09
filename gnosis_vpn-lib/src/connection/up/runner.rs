@@ -2,9 +2,7 @@
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
-use edgli::hopr_lib::{
-    HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym, exports::transport::SurbBalancerConfig,
-};
+use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym};
 use tokio::sync::{mpsc, oneshot};
 
 use std::fmt::{self, Display};
@@ -13,8 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::connection::destination::Destination;
-use crate::connection::options::{Options, SessionSurbOptions};
-use crate::core::runner::{self, Results, SurbConfigError};
+use crate::connection::options::{Options, SurbParams, surb_config_for};
+use crate::core::runner::Results;
 use crate::event::{self, RunnerToRoot};
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
@@ -25,7 +23,7 @@ use crate::{ping, remote_data};
 
 use super::{Error, Event, Progress, Setback};
 
-pub struct Runner {
+pub(crate) struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
     options: Options,
@@ -36,7 +34,7 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(
+    pub(crate) fn new(
         destination: Destination,
         options: Options,
         wg_config: wireguard::Config,
@@ -56,7 +54,7 @@ impl Runner {
         }
     }
 
-    pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
+    pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender.send(Results::ConnectionResult { res }).await;
     }
@@ -303,24 +301,6 @@ impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConnectionRunner pre WireGuard {{ {} }}", self.destination)
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct SurbParams {
-    pub management: Option<SurbBalancerConfig>,
-    pub always_max_out_surbs: bool,
-}
-
-pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
-    let management = if opts.enabled {
-        runner::to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)?
-    } else {
-        None
-    };
-    Ok(SurbParams {
-        management,
-        always_max_out_surbs: opts.always_max_out_surbs,
-    })
 }
 
 #[tracing::instrument(

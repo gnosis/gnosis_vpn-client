@@ -1,6 +1,6 @@
 //! Per-destination route health tracking.
 //!
-//! Each [`RouteHealth`] models the progression of a single destination route
+//! Each `RouteHealth` models the progression of a single destination route
 //! from "just configured" to "usable for a tunnel", and it owns the background
 //! health-check task that keeps that assessment current.
 //!
@@ -8,18 +8,18 @@
 //!
 //! * **Network reachability** — do we have the peering/channel relationship
 //!   that the routing option requires? This is driven from outside by Core
-//!   feeding in the current peer set ([`RouteHealth::peers`]) and channel
-//!   funding results ([`RouteHealth::any_channel_available`]).
+//!   feeding in the current peer set (`RouteHealth::peers`) and channel
+//!   funding results (`RouteHealth::any_channel_available`).
 //! * **Exit-node health** — once reachable, can we actually reach the exit
 //!   server behind the destination, and is it reporting healthy? This is
 //!   driven internally by a background task that opens a short-lived TCP
 //!   session to the exit and performs version, health, and ping checks.
 //!
 //! [`RouteHealthState`] captures the combined state. State changes flow
-//! outward through [`HealthCheckOutcome`] messages posted back on the runner channel.
+//! outward through `HealthCheckOutcome` messages posted back on the runner channel.
 //!
 //! Core owns one `RouteHealth` per configured destination and uses the
-//! aggregate view (via [`any_needs_peers`]) to decide when to poll peers.
+//! aggregate view (via `any_needs_peers`) to decide when to poll peers.
 use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Address, Destination, HopRouting};
 use crate::connection::options::Options;
-use crate::connection::up::runner::surb_config_for;
+use crate::connection::options::surb_config_for;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
@@ -170,14 +170,14 @@ pub enum RouteHealthState {
 }
 
 /// Message a health-check runner task sends back to the main loop, consumed
-/// by [`RouteHealth::health_check_result`].
+/// by `RouteHealth::health_check_result`.
 ///
 /// `versions` and `health` are optional because a given cycle may skip
 /// fetching them (skipped based on the ping cycle interval settings); the main thread fills in the skipped
 /// fields from the previously stored [`ExitHealth`] before constructing the
 /// final snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum HealthCheckOutcome {
+pub(crate) enum HealthCheckOutcome {
     Started {
         since: SystemTime,
     },
@@ -202,7 +202,7 @@ pub enum HealthCheckOutcome {
 /// task's cancellation token, and failure bookkeeping used for backoff.
 /// Constructed once per destination and lives as long as the destination
 /// is configured.
-pub struct RouteHealth {
+pub(crate) struct RouteHealth {
     id: String,
     static_need: StaticNeed,
     state: RouteHealthState,
@@ -225,7 +225,7 @@ impl RouteHealth {
     /// by every background task this tracker spawns so that they all stop
     /// when the core shuts down. `allow_insecure` gates whether a 0-hop route
     /// is accepted or immediately marked unrecoverable.
-    pub fn new(dest: &Destination, allow_insecure: bool, cancel_on_shutdown: CancellationToken) -> Self {
+    pub(crate) fn new(dest: &Destination, allow_insecure: bool, cancel_on_shutdown: CancellationToken) -> Self {
         let static_need = derive_static_need(&dest.routing, dest.address);
         let state = derive_initial_state(&dest.routing, allow_insecure);
         let health_check_cancel = cancel_on_shutdown.child_token();
@@ -278,61 +278,42 @@ fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHeal
 // ---------------------------------------------------------------------------
 
 impl RouteHealth {
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn state(&self) -> &RouteHealthState {
+    pub(crate) fn state(&self) -> &RouteHealthState {
         &self.state
     }
 
-    pub fn last_error(&self) -> Option<&str> {
+    pub(crate) fn last_error(&self) -> Option<&str> {
         self.exit_last_error.as_deref()
     }
 
-    pub fn checking_since(&self) -> Option<SystemTime> {
+    pub(crate) fn checking_since(&self) -> Option<SystemTime> {
         self.checking_since
     }
 
-    pub fn consecutive_failures(&self) -> u32 {
+    pub(crate) fn consecutive_failures(&self) -> u32 {
         self.exit_failures
     }
 
-    pub fn tunnel_ping_failures(&self) -> u32 {
-        self.tunnel_ping_failures
-    }
-
-    pub fn tunnel_ping_last_error(&self) -> Option<&str> {
-        self.tunnel_ping_last_error.as_deref()
-    }
-
-    pub fn needs_peer(&self) -> bool {
+    pub(crate) fn needs_peer(&self) -> bool {
         matches!(self.state, RouteHealthState::NeedsPeering { .. })
     }
 
-    pub fn needs_channel(&self) -> bool {
+    pub(crate) fn needs_channel(&self) -> bool {
         matches!(self.state, RouteHealthState::NeedsChannel)
     }
 
-    pub fn is_routable(&self) -> bool {
-        matches!(
-            self.state,
-            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
-        )
-    }
-
-    pub fn ready_to_connect(&self) -> Option<ExitHealth> {
+    pub(crate) fn ready_to_connect(&self) -> Option<ExitHealth> {
         match &self.state {
             RouteHealthState::ReadyToConnect { exit } => Some(exit.clone()),
             _ => None,
         }
     }
 
-    pub fn is_ready_to_connect(&self) -> bool {
+    pub(crate) fn is_ready_to_connect(&self) -> bool {
         matches!(self.state, RouteHealthState::ReadyToConnect { .. })
     }
 
-    pub fn is_unrecoverable(&self) -> bool {
+    pub(crate) fn is_unrecoverable(&self) -> bool {
         matches!(self.state, RouteHealthState::Unrecoverable { .. })
     }
 }
@@ -351,7 +332,7 @@ impl RouteHealth {
     /// to `Routable`. When the route first becomes routable we spawn the
     /// initial health check.
     ///
-    pub fn peers(
+    pub(crate) fn peers(
         &mut self,
         addresses: &HashSet<Address>,
         hopr: &Arc<Hopr>,
@@ -377,14 +358,17 @@ impl RouteHealth {
                 // NeedsChannel if one already existed (transient peer flap).
                 let skip_channel_wait = matches!(self.static_need, StaticNeed::Peering(_)) || *has_channel;
                 if skip_channel_wait {
+                    tracing::debug!(destination = %self.id, "peers available → Routable");
                     self.state = RouteHealthState::Routable;
                     self.spawn_health_check(initial_delay, hopr, dest, options, sender);
                 } else {
+                    tracing::debug!(destination = %self.id, "peers available → NeedsChannel");
                     self.state = RouteHealthState::NeedsChannel;
                 }
             }
             RouteHealthState::NeedsChannel => {
                 if !is_peered {
+                    tracing::debug!(destination = %self.id, "peers lost → NeedsPeering");
                     // No channel was ever seen, so has_channel stays false.
                     self.state = RouteHealthState::NeedsPeering { has_channel: false };
                 }
@@ -393,6 +377,7 @@ impl RouteHealth {
             | RouteHealthState::ReadyToConnect { .. }
             | RouteHealthState::Connecting { .. } => {
                 if !is_peered {
+                    tracing::debug!(destination = %self.id, state = ?self.state, "peers lost → NeedsPeering");
                     self.cancel_health_check();
                     self.checking_since = None;
                     self.check_cycle = 0;
@@ -413,7 +398,7 @@ impl RouteHealth {
     ///
     /// Routes in `NeedsChannel` become routable and schedule their first
     /// health check immediately. No-op for routes in any other state.
-    pub fn any_channel_available(
+    pub(crate) fn any_channel_available(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
@@ -423,6 +408,7 @@ impl RouteHealth {
         if !matches!(self.state, RouteHealthState::NeedsChannel) {
             return;
         }
+        tracing::debug!(destination = %self.id, "channel available → Routable");
         self.state = RouteHealthState::Routable;
         self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
     }
@@ -445,7 +431,7 @@ impl RouteHealth {
     /// Outcomes that arrive when the state is no longer `Routable` /
     /// `ReadyToConnect` / `Connecting` (e.g. because peering was lost)
     /// are dropped.
-    pub fn health_check_result(
+    pub(crate) fn health_check_result(
         &mut self,
         outcome: HealthCheckOutcome,
         hopr: &Arc<Hopr>,
@@ -458,10 +444,12 @@ impl RouteHealth {
                 self.checking_since = Some(since);
             }
             HealthCheckOutcome::Unrecoverable { reason } => {
+                tracing::debug!(destination = %self.id, ?reason, "health check → Unrecoverable");
                 self.checking_since = None;
                 self.state = RouteHealthState::Unrecoverable { reason };
             }
             HealthCheckOutcome::Failed { checked_at, error } => {
+                tracing::debug!(destination = %self.id, %error, failures = self.exit_failures + 1, "health check failed");
                 self.checking_since = None;
                 self.exit_failures += 1;
                 self.exit_last_error = Some(error);
@@ -516,16 +504,19 @@ impl RouteHealth {
                         },
                     },
                     _ => match (versions, ping_rtt, health) {
-                        (Some(versions), Some(ping_rtt), Some(health)) => RouteHealthState::ReadyToConnect {
-                            exit: ExitHealth {
-                                checked_at,
-                                versions,
-                                ping_rtt,
-                                health,
-                            },
-                        },
+                        (Some(versions), Some(ping_rtt), Some(health)) => {
+                            tracing::debug!(destination = %self.id, "health check completed → ReadyToConnect");
+                            RouteHealthState::ReadyToConnect {
+                                exit: ExitHealth {
+                                    checked_at,
+                                    versions,
+                                    ping_rtt,
+                                    health,
+                                },
+                            }
+                        }
                         _ => {
-                            tracing::warn!(%dest, state = ?self.state, "received unexpected outcome - setting to routable");
+                            tracing::warn!(destination = %self.id, state = ?self.state, "received unexpected outcome - setting to routable");
                             RouteHealthState::Routable
                         }
                     },
@@ -552,7 +543,7 @@ impl RouteHealth {
     /// check cadence: only an exit-health query runs in each cycle, on top
     /// of the tunnel-level ping Core performs. Other states are left
     /// unchanged so this is safe to call speculatively.
-    pub fn connecting(
+    pub(crate) fn connecting(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
@@ -565,6 +556,7 @@ impl RouteHealth {
         self.exit_last_error = None;
         self.tunnel_ping_failures = 0;
         self.tunnel_ping_last_error = None;
+        tracing::debug!(destination = %self.id, "→ Connecting");
         self.state = RouteHealthState::Connecting {
             exit,
             tunnel_ping_rtt: None,
@@ -579,7 +571,7 @@ impl RouteHealth {
     /// healthy: no recent failures → `ReadyToConnect` with the last known
     /// `ExitHealth`; otherwise fall back to `Routable` and rebuild from the
     /// next check. A fresh cycle is scheduled immediately.
-    pub fn disconnecting(
+    pub(crate) fn disconnecting(
         &mut self,
         hopr: &Arc<Hopr>,
         dest: &Destination,
@@ -589,8 +581,10 @@ impl RouteHealth {
         if let RouteHealthState::Connecting { exit, .. } = &self.state {
             let exit = exit.clone();
             if self.exit_failures == 0 {
+                tracing::debug!(destination = %self.id, "disconnecting → ReadyToConnect");
                 self.state = RouteHealthState::ReadyToConnect { exit };
             } else {
+                tracing::debug!(destination = %self.id, failures = self.exit_failures, "disconnecting → Routable");
                 self.check_cycle = 0;
                 self.state = RouteHealthState::Routable;
             }
@@ -602,7 +596,7 @@ impl RouteHealth {
     /// failure count after applying this result. On success the `ping_rtt` is
     /// refreshed with the new measurement. On failure the exit data is
     /// preserved and `tunnel_ping_failures` is incremented.
-    pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
+    pub(crate) fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
         if let RouteHealthState::Connecting { tunnel_ping_rtt, .. } = &mut self.state {
             match rtt {
                 Ok(rtt) => {
@@ -627,7 +621,7 @@ impl RouteHealth {
     /// Used to surface transient failures (e.g. from Core-side operations
     /// like channel funding) in the CLI output. Ignored in `Unrecoverable`
     /// states to preserve the original failure reason.
-    pub fn with_error(&mut self, err: String) {
+    pub(crate) fn with_error(&mut self, err: String) {
         if matches!(self.state, RouteHealthState::Unrecoverable { .. }) {
             return;
         }
@@ -702,7 +696,7 @@ impl RouteHealth {
     /// Cancel the running health-check task, if any, and replace the
     /// cancellation token so future spawns are independent. Safe to call
     /// when no check is running.
-    pub fn cancel_health_check(&mut self) {
+    fn cancel_health_check(&mut self) {
         self.health_check_cancel.cancel();
         self.health_check_cancel = self.cancel_on_shutdown.child_token();
     }
@@ -979,13 +973,13 @@ impl RouteHealth {
 /// True iff at least one route is still waiting on peering. Core uses this
 /// to pick a tighter polling interval for the connected-peers query while
 /// any route is not yet routable.
-pub fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
+pub(crate) fn any_needs_peers<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
     healths.into_iter().any(|rh| rh.needs_peer())
 }
 
 /// True iff at least one route is in `NeedsChannel`. Core uses this to pick
 /// a tighter balances polling interval until a channel appears.
-pub fn any_needs_channel<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
+pub(crate) fn any_needs_channel<'a>(healths: impl Iterator<Item = &'a RouteHealth>) -> bool {
     healths.into_iter().any(|rh| rh.needs_channel())
 }
 

@@ -64,7 +64,7 @@ pub enum WorkerToRoot {
 
 /// Runner requesting root command and usually waiting for response
 #[derive(Debug)]
-pub enum RunnerToRoot {
+pub(crate) enum RunnerToRoot {
     KillswitchLockdown {
         peer_ips: Vec<Ipv4Addr>,
         interface: String,
@@ -83,11 +83,6 @@ pub enum RunnerToRoot {
     Ping {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
-    },
-    /// Fire-and-forget: refresh the peer-IP allowlist used by the killswitch and routing
-    /// bypass. Sent periodically from Core while in Phase::Connected. No response required.
-    UpdatePeerIps {
-        peer_ips: Vec<Ipv4Addr>,
     },
 }
 

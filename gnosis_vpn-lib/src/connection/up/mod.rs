@@ -6,14 +6,14 @@ use std::net;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
-use crate::core::runner::SurbConfigError;
+use crate::connection::options::SurbConfigError;
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, remote_data, wireguard};
 
-pub mod runner;
+pub(crate) mod runner;
 
 #[derive(Debug)]
 pub enum Event {
@@ -54,7 +54,7 @@ pub enum Setback {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("Hopr error: {0}")]
     Hopr(#[from] HoprError),
     #[error("Gvpn client error: {0}")]

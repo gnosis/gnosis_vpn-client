@@ -1,7 +1,8 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget};
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use std::time::Duration;
 
@@ -110,4 +111,54 @@ impl Default for SurbBalancing {
             health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum SurbConfigError {
+    #[error("Response buffer byte size too small")]
+    ResponseBufferTooSmall,
+    #[error("Max SURB upstream bandwidth cannot be zero")]
+    MaxSurbUpstreamCannotBeZero,
+    #[error("Max SURB upstream bandwidth is too large to represent as a u64 SURB/s rate")]
+    MaxSurbsPerSecOverflow,
+}
+
+#[derive(Debug)]
+pub(crate) struct SurbParams {
+    pub(crate) management: Option<SurbBalancerConfig>,
+    pub(crate) always_max_out_surbs: bool,
+}
+
+pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
+    let management = if opts.enabled {
+        to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)?
+    } else {
+        None
+    };
+    Ok(SurbParams {
+        management,
+        always_max_out_surbs: opts.always_max_out_surbs,
+    })
+}
+
+pub(crate) fn to_surb_balancer_config(
+    response_buffer: ByteSize,
+    max_surb_upstream: Bandwidth,
+) -> Result<SurbBalancerConfig, SurbConfigError> {
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::exports::transport::SESSION_MTU as u64 {
+        return Err(SurbConfigError::ResponseBufferTooSmall);
+    }
+    if max_surb_upstream.is_zero() {
+        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
+    }
+    let max_surbs_per_sec_u128 =
+        max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128);
+    let max_surbs_per_sec =
+        u64::try_from(max_surbs_per_sec_u128).map_err(|_| SurbConfigError::MaxSurbsPerSecOverflow)?;
+    let config = SurbBalancerConfig {
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
+        max_surbs_per_sec,
+        ..Default::default()
+    };
+    Ok(config)
 }

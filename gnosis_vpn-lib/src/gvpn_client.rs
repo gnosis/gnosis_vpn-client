@@ -36,8 +36,6 @@ pub enum Error {
     SocketConnect(reqwest::Error),
     #[error("Connection reset by peer: {0:?}")]
     ConnectionReset(reqwest::Error),
-    #[error("Invalid port")]
-    InvalidPort,
     #[error("Registration not found")]
     RegistrationNotFound,
 }

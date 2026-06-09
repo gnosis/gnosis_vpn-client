@@ -28,7 +28,7 @@ use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, ticket_stats, wireguard};
 
-pub mod runner;
+pub(crate) mod runner;
 
 use runner::Results;
 
@@ -974,11 +974,6 @@ impl Core {
 
                 RunnerToRoot::TearDownWg => {
                     let request = RequestToRoot::TearDownWg;
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
-
-                RunnerToRoot::UpdatePeerIps { peer_ips } => {
-                    let request = RequestToRoot::UpdatePeerIps { peer_ips };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
             },

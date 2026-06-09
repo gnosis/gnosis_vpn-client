@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::connection;
 use crate::connection::options::Options;
-use crate::connection::up::runner::{SurbParams, surb_config_for};
+use crate::connection::options::{SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -17,18 +17,18 @@ use crate::hopr::{Hopr, HoprError};
 
 use super::{Error, Event};
 
-pub struct Runner {
+pub(crate) struct Runner {
     down: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
 }
 
 impl Runner {
-    pub fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
+    pub(crate) fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
         Self { down, hopr, options }
     }
 
-    pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
+    pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender
             .send(Results::DisconnectionResult {
@@ -138,7 +138,6 @@ impl Display for Runner {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Event::DisconnectWg => write!(f, "DisconnectWg"),
             Event::OpenBridge => write!(f, "OpenBridge"),
             Event::UnregisterWg => write!(f, "UnregisterWg"),
             Event::CloseBridge => write!(f, "CloseBridge"),
