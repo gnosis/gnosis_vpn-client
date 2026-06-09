@@ -141,6 +141,7 @@ pub enum RunMode {
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
         hopr_status: Option<HoprStatus>,
+        last_error: Option<String>,
     },
     /// Normal operation where connections can be made
     Running {
@@ -320,10 +321,15 @@ impl RunMode {
         RunMode::DeployingSafe { node_address }
     }
 
-    pub fn warmup(edgli_init_state: Option<EdgliInitState>, hopr_state: Option<HoprState>) -> Self {
+    pub fn warmup(
+        edgli_init_state: Option<EdgliInitState>,
+        hopr_state: Option<HoprState>,
+        last_error: Option<String>,
+    ) -> Self {
         RunMode::Warmup {
             hopr_init_status: edgli_init_state.map(|s| s.into()),
             hopr_status: hopr_state.map(|s| s.into()),
+            last_error,
         }
     }
 
@@ -480,11 +486,18 @@ impl Display for RunMode {
             RunMode::Warmup {
                 hopr_init_status,
                 hopr_status,
-            } => match (hopr_init_status, hopr_status) {
-                (None, None) => write!(f, "Warmup"),
-                (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
-                (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
-            },
+                last_error,
+            } => {
+                match (hopr_init_status, hopr_status) {
+                    (None, None) => write!(f, "Warmup")?,
+                    (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})")?,
+                    (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})")?,
+                }
+                if let Some(err) = last_error {
+                    write!(f, " (last error: {err})")?;
+                }
+                Ok(())
+            }
             RunMode::Running {
                 hopr_status,
                 funding_issues,
@@ -736,6 +749,47 @@ mod tests {
         })
         .unwrap();
         assert_eq!(with_error, r#"{"Init":{"last_error":"connection refused"}}"#);
+    }
+
+    #[test]
+    fn runmode_warmup_serializes_to_expected_json_shape() {
+        let no_error = serde_json::to_string(&RunMode::Warmup {
+            hopr_init_status: None,
+            hopr_status: None,
+            last_error: None,
+        })
+        .unwrap();
+        assert_eq!(
+            no_error,
+            r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":null}}"#
+        );
+
+        let with_error = serde_json::to_string(&RunMode::Warmup {
+            hopr_init_status: None,
+            hopr_status: None,
+            last_error: Some("safe 0xabc does not exist".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            with_error,
+            r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":"safe 0xabc does not exist"}}"#
+        );
+    }
+
+    #[test]
+    fn runmode_warmup_deserializes_from_json_fixture() {
+        let no_error: RunMode =
+            serde_json::from_str(r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":null}}"#)
+                .unwrap();
+        assert!(matches!(no_error, RunMode::Warmup { last_error: None, .. }));
+
+        let with_error: RunMode = serde_json::from_str(
+            r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":"safe 0xabc does not exist"}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(with_error, RunMode::Warmup { last_error: Some(ref e), .. } if e == "safe 0xabc does not exist")
+        );
     }
 
     #[test]
