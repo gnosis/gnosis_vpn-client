@@ -131,7 +131,10 @@ enum Phase {
         query_safe: Querying<Option<SafeModule>>,
     },
     /// construct edge client
-    Starting(Option<EdgliInitState>),
+    Starting {
+        edgli_init_state: Option<EdgliInitState>,
+        last_error: Option<String>,
+    },
     /// start edge client
     HoprSyncing,
     /// edge client running normally
@@ -416,8 +419,11 @@ impl Core {
                                 node_balance: _,
                                 query_safe: _,
                             } => RunMode::deploying_safe(self.node_address),
-                            Phase::Starting(edgli_init_state) => RunMode::warmup(edgli_init_state, None),
-                            Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status())),
+                            Phase::Starting {
+                                edgli_init_state,
+                                last_error,
+                            } => RunMode::warmup(edgli_init_state, None, last_error),
+                            Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                                 let funding_issues = match (
                                     &self.ideal_balance_recommendation,
@@ -622,8 +628,11 @@ impl Core {
                 }
             }
             Results::HoprConstruction(edgli_state) => {
-                if matches!(self.phase, Phase::Starting(_)) {
-                    self.phase = Phase::Starting(Some(edgli_state));
+                if matches!(self.phase, Phase::Starting { .. }) {
+                    self.phase = Phase::Starting {
+                        edgli_init_state: Some(edgli_state),
+                        last_error: None,
+                    };
                 } else {
                     tracing::warn!(?self.phase, "hopr construction result received in unexpected phase");
                 }
@@ -716,7 +725,7 @@ impl Core {
                 }
                 Err(err) => {
                     tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
+                    self.retry_hopr_runner(err.to_string(), safe_module, results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -1111,7 +1120,7 @@ impl Core {
                 self.cancel_presafe_queries.cancel();
                 self.cancel_presafe_queries = self.cancel_on_shutdown.child_token();
                 // start edge client with queried safe module
-                self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
+                self.start_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
                 self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
             }
@@ -1168,7 +1177,7 @@ impl Core {
             (Ok(safe_module), Phase::DeployingSafe { .. }) => {
                 tracing::info!(?safe_module, "deployed safe module");
                 // start edge client with new safe module
-                self.spawn_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
+                self.start_hopr_runner(safe_module.clone(), results_sender, Duration::ZERO);
                 // try persisting safe module to disk - might fail but we consider this non critical
                 self.spawn_store_safe(safe_module, results_sender, Duration::ZERO);
             }
@@ -1295,7 +1304,7 @@ impl Core {
             Ok(safe_module) => {
                 tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
                 // start edge client with existing safe module
-                self.spawn_hopr_runner(safe_module, results_sender, Duration::ZERO);
+                self.start_hopr_runner(safe_module, results_sender, Duration::ZERO);
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
@@ -1389,7 +1398,6 @@ impl Core {
     }
 
     fn spawn_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        self.phase = Phase::Starting(None);
         let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
@@ -1402,6 +1410,28 @@ impl Core {
                 })
                 .await
         });
+    }
+
+    fn start_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        self.phase = Phase::Starting {
+            edgli_init_state: None,
+            last_error: None,
+        };
+        self.spawn_hopr_runner(safe_module, results_sender, delay);
+    }
+
+    fn retry_hopr_runner(
+        &mut self,
+        error: String,
+        safe_module: SafeModule,
+        results_sender: &mpsc::Sender<Results>,
+        delay: Duration,
+    ) {
+        self.phase = Phase::Starting {
+            edgli_init_state: None,
+            last_error: Some(error),
+        };
+        self.spawn_hopr_runner(safe_module, results_sender, delay);
     }
 
     fn spawn_minimum_balance_recommendation_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
