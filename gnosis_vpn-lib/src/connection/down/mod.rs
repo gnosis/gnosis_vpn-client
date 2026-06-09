@@ -25,7 +25,6 @@ pub struct Down {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Disconnecting,
-    DisconnectingWg,
     OpeningBridge,
     UnregisterWg,
     ClosingBridge,
@@ -45,7 +44,6 @@ pub(crate) enum Error {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
-    DisconnectWg,
     OpenBridge,
     UnregisterWg,
     CloseBridge,
@@ -74,7 +72,6 @@ impl Down {
     pub fn disconnect_evt(&mut self, evt: Event) {
         let now = SystemTime::now();
         match evt {
-            Event::DisconnectWg => self.phase = (now, Phase::DisconnectingWg),
             Event::OpenBridge => self.phase = (now, Phase::OpeningBridge),
             Event::UnregisterWg => self.phase = (now, Phase::UnregisterWg),
             Event::CloseBridge => self.phase = (now, Phase::ClosingBridge),
@@ -98,7 +95,6 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase_str = match self {
             Phase::Disconnecting => "Disconnecting",
-            Phase::DisconnectingWg => "Disconnecting WireGuard tunnel",
             Phase::OpeningBridge => "Opening bridge connection",
             Phase::UnregisterWg => "Unregistering WireGuard public key",
             Phase::ClosingBridge => "Closing bridge connection",

@@ -138,7 +138,6 @@ impl Display for Runner {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Event::DisconnectWg => write!(f, "DisconnectWg"),
             Event::OpenBridge => write!(f, "OpenBridge"),
             Event::UnregisterWg => write!(f, "UnregisterWg"),
             Event::CloseBridge => write!(f, "CloseBridge"),
