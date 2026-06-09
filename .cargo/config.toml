@@ -16,4 +16,4 @@ LDFLAGS  = "-O3 -ffunction-sections -fdata-sections -fPIC"
 # Restricted to aarch64-apple-darwin: Apple Silicon always has the AES crypto
 # extension; aarch64-unknown-linux-* cannot make that guarantee.
 [target.aarch64-apple-darwin]
-rustflags = ["--cfg", "aes_armv8", "-C", "target-feature=+aes,+neon"]
+rustflags = ["--cfg=aes_armv8", "-Ctarget-feature=+aes,+neon"]
