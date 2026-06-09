@@ -2522,8 +2522,8 @@ dependencies = [
 
 [[package]]
 name = "edgli"
-version = "3.2.4"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=7e0df7581427ba2ea8597160b0d1b14b4acf8603#7e0df7581427ba2ea8597160b0d1b14b4acf8603"
+version = "3.3.1"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=0750b64fb991443a3f571bc9b06bbf2eba36bcf2#0750b64fb991443a3f571bc9b06bbf2eba36bcf2"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3603,7 +3603,7 @@ dependencies = [
 [[package]]
 name = "hopr-chain-connector"
 version = "0.20.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3632,7 +3632,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-packet"
 version = "1.3.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "bimap",
  "curve25519-dalek",
@@ -3655,7 +3655,7 @@ dependencies = [
 [[package]]
 name = "hopr-ct-full-network"
 version = "0.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -3672,7 +3672,7 @@ dependencies = [
 [[package]]
 name = "hopr-lib"
 version = "4.0.2-rc.4"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -3702,7 +3702,7 @@ dependencies = [
 [[package]]
 name = "hopr-network-graph"
 version = "0.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "bimap",
@@ -3719,7 +3719,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.0.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "hopr-crypto-packet",
  "hopr-types",
@@ -3732,7 +3732,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-hopr"
 version = "4.6.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3762,7 +3762,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "1.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -3793,7 +3793,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "1.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "aquamarine",
  "flagset",
@@ -3808,7 +3808,7 @@ dependencies = [
 [[package]]
 name = "hopr-reference"
 version = "4.2.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "futures",
@@ -3827,7 +3827,7 @@ dependencies = [
 [[package]]
 name = "hopr-strategy"
 version = "0.19.2"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3852,7 +3852,7 @@ dependencies = [
 [[package]]
 name = "hopr-ticket-manager"
 version = "0.4.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3873,8 +3873,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport"
-version = "0.28.4"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+version = "0.28.5"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3915,13 +3915,15 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "0.4.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "futures",
  "futures-timer",
  "hopr-types",
+ "humantime-serde",
  "lazy_static",
  "parking_lot",
+ "serde",
  "smart-default",
  "thiserror 2.0.18",
  "tracing",
@@ -3930,7 +3932,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-p2p"
 version = "0.9.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -3949,7 +3951,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.6.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3974,7 +3976,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-session"
 version = "0.22.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -4007,7 +4009,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -4074,7 +4076,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils"
 version = "0.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "arrayvec",
  "auto_impl",
@@ -4104,7 +4106,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-session"
 version = "1.2.1"
-source = "git+https://github.com/hoprnet/hoprnet?rev=e143b5c7014f85056ee300e0811b4ca211d3c524#e143b5c7014f85056ee300e0811b4ca211d3c524"
+source = "git+https://github.com/hoprnet/hoprnet?rev=46b7a890999bcdcb9442d3b92faeb2d2f5fef019#46b7a890999bcdcb9442d3b92faeb2d2f5fef019"
 dependencies = [
  "anyhow",
  "async-trait",

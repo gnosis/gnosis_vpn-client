@@ -37,6 +37,7 @@ impl From<StrategyConfig> for edgli::strategy::IncentiveConfiguration {
             desired_message_count: c.desired_message_count,
             min_open_channels: c.min_open_channels,
             target_open_channels: c.target_open_channels,
+            channel_allowlist: None,
         }
     }
 }
