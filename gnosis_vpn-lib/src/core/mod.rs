@@ -967,11 +967,6 @@ impl Core {
                     let request = RequestToRoot::TearDownWg;
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
-
-                RunnerToRoot::UpdatePeerIps { peer_ips } => {
-                    let request = RequestToRoot::UpdatePeerIps { peer_ips };
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
             },
 
             Results::HealthCheck { id, outcome } => {
