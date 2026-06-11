@@ -12,18 +12,14 @@
 //!
 //! ## [`FallbackRouter`] (Static)
 //! Simpler implementation using route operations via netlink:
-//! 1. Adds bypass routes for peer IPs BEFORE bringing up WireGuard (avoids race condition)
-//! 2. Adds RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
-//! 3. Runs `wg-quick up` with `Table = off` to prevent automatic routing
-//! 4. Adds VPN subnet route (10.128.0.0/9) programmatically after wg-quick up
-//! 5. On teardown, removes VPN subnet route, brings down WireGuard, then cleans up bypass routes
-//!
-//! Both implementations use a phased approach to avoid race conditions during VPN setup.
+//! 1. Adds bypass routes for peer IPs and RFC1918 networks via WAN (before wg-quick up)
+//! 2. Runs `wg-quick up` with `Table = off` (no automatic routing)
+//! 3. Adds VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) and VPN subnet (`10.128.0.0/9`) via wg0
+//! 4. On teardown: removes VPN routes, brings down WireGuard, removes bypass routes
 //!
 //! ## Route Precedence
-//! The VPN subnet (10.128.0.0/9) is more specific than the RFC1918 bypass (10.0.0.0/8),
-//! so VPN server traffic (e.g. to 10.128.0.1) routes through the tunnel while other
-//! RFC1918 Class A traffic bypasses to the WAN for LAN access.
+//! Route specificity handles all traffic without ip rules or extra routing tables:
+//! `/32` (peer) > `/12`–`/16` (RFC1918) > `/9` (VPN subnet) > `/8` (RFC1918) > `/1` (VPN default) > `/0` (WAN)
 
 use async_trait::async_trait;
 
@@ -103,6 +99,7 @@ pub fn static_fallback_router(
         route_ops,
         wg,
         wan_info: None,
+        active_bypass_routes: Vec::new(),
     })
 }
 
@@ -417,8 +414,10 @@ pub struct Router<N: NetlinkOps, W: WgOps> {
 
 /// Static fallback router using route operations via netlink.
 ///
-/// Used when dynamic routing (rtnetlink + firewall rules) is not available or not desired.
-/// Simpler than [`Router`] but provides the same phased setup to avoid race conditions.
+/// Uses `Table = off` so wg-quick only creates the WireGuard interface.
+/// All routing is owned explicitly by this struct via `RouteOps`:
+/// - bypass routes (peer IPs + RFC1918) via WAN — updated on WAN change
+/// - VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) + VPN subnet via wg0 — static after setup
 pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
@@ -428,6 +427,9 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     /// WAN interface captured at setup time; used in refresh() to detect real WAN changes
     /// and avoid feedback loops from our own wg-quick events.
     wan_info: Option<(String, Option<String>)>,
+    /// Bypass routes currently installed: (dest_cidr, wan_device).
+    /// Tracked for explicit cleanup since the wg-quick config has no PreDown scripts.
+    active_bypass_routes: Vec<(String, String)>,
 }
 
 // ============================================================================
@@ -454,6 +456,10 @@ const TABLE_ID: u32 = 108;
 /// before most other policy rules while still allowing local table (priority 0)
 /// to handle loopback traffic.
 const RULE_PRIORITY: u32 = 1;
+
+/// VPN split routes: two /1 halves cover all IPv4 space.
+/// More specific than the WAN /0 default, routing all non-bypass internet traffic into the tunnel.
+const VPN_SPLIT_ROUTES: &[(&str, u8)] = &[("0.0.0.0", 1), ("128.0.0.0", 1)];
 
 // ============================================================================
 // Network Info Helpers
@@ -979,76 +985,126 @@ pub(crate) async fn refresh_fwmark_infrastructure_with<N: NetlinkOps, F: NfTable
     tracing::info!("fwmark infrastructure refreshed after network change");
 }
 
+// ============================================================================
+// FallbackRouter helpers
+// ============================================================================
+
+impl<R: RouteOps, W: WgOps> FallbackRouter<R, W> {
+    async fn setup_vpn_routes(&self) -> Result<(), Error> {
+        for (net, prefix) in VPN_SPLIT_ROUTES {
+            let cidr = format!("{}/{}", net, prefix);
+            let _ = self.route_ops.route_del(&cidr, wireguard::WG_INTERFACE).await;
+            self.route_ops.route_add(&cidr, None, wireguard::WG_INTERFACE).await?;
+        }
+        let (net, prefix) = VPN_TUNNEL_SUBNET;
+        let cidr = format!("{}/{}", net, prefix);
+        let _ = self.route_ops.route_del(&cidr, wireguard::WG_INTERFACE).await;
+        self.route_ops.route_add(&cidr, None, wireguard::WG_INTERFACE).await
+    }
+
+    async fn remove_vpn_routes(&self) {
+        let vpn_routes = [("0.0.0.0", 1u8), ("128.0.0.0", 1u8), VPN_TUNNEL_SUBNET];
+        for (net, prefix) in &vpn_routes {
+            let cidr = format!("{}/{}", net, prefix);
+            if let Err(e) = self.route_ops.route_del(&cidr, wireguard::WG_INTERFACE).await {
+                tracing::warn!(%e, cidr = %cidr, "failed to remove VPN route");
+            }
+        }
+    }
+
+    async fn rollback_bypass_routes(&mut self) {
+        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+            if let Err(e) = self.route_ops.route_del(&dest, &device).await {
+                tracing::warn!(%e, dest = %dest, "failed to remove bypass route during rollback");
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W> {
-    /// Install split-tunnel routing for FallbackRouter.
+    /// Install split-tunnel routing.
     ///
-    /// Uses a phased approach to avoid a race condition where HOPR p2p connections
-    /// could briefly drop when the WireGuard interface comes up.
+    /// Phase 1 (before wg-quick up): add bypass routes via WAN
+    ///   - Peer IP /32 routes (hard-fail: rollback all on error)
+    ///   - RFC1918 bypass routes (soft-fail: warn and continue)
     ///
-    /// Phase 1 (before wg-quick up):
-    ///   1. Get WAN interface info
-    ///   2. Add bypass routes for all peer IPs directly via WAN
-    ///   3. Add RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
+    /// Phase 2: wg-quick up with Table = off (no automatic routing)
+    ///   - On failure: rollback Phase 1 bypass routes
     ///
-    /// Phase 2:
-    ///   4. Run wg-quick up with Table = off (no automatic routing)
-    ///
-    /// Phase 3 (after wg-quick up):
-    ///   5. Add VPN subnet route (10.128.0.0/9) programmatically
-    ///      The VPN subnet route overrides the 10.0.0.0/8 bypass for VPN server traffic
-    ///
+    /// Phase 3 (after wg-quick up): add VPN routes via wg0
+    ///   - `0.0.0.0/1` and `128.0.0.0/1` override the WAN default for all internet traffic
+    ///   - `10.128.0.0/9` overrides the `10.0.0.0/8` RFC1918 bypass for VPN server traffic
+    ///   - On failure: remove partial VPN routes, wg-quick down, rollback bypass routes
     async fn setup(&mut self) -> Result<String, Error> {
-        // Phase 1: Add bypass routes to wg-quick up
         let (device, gateway) = self.route_ops.get_default_interface().await?;
-        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
-        let mut extra = vec![];
+        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface for bypass routes");
 
-        // exclude static peer IPs from tunnel
-        for ip in &self.peer_ips {
-            extra.extend(post_up_routing(ip.to_string(), device.clone(), gateway.clone()));
+        // Phase 1: bypass routes before wg-quick up (avoids race with HOPR p2p connections)
+        for ip in &self.peer_ips.clone() {
+            let dest = ip.to_string();
+            let _ = self.route_ops.route_del(&dest, &device).await;
+            if let Err(e) = self.route_ops.route_add(&dest, gateway.as_deref(), &device).await {
+                self.rollback_bypass_routes().await;
+                return Err(e);
+            }
+            self.active_bypass_routes.push((dest, device.clone()));
         }
-        // restore on down
-        for ip in &self.peer_ips {
-            extra.push(pre_down_routing(ip.to_string(), device.clone(), gateway.clone()));
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            let _ = self.route_ops.route_del(&cidr, &device).await;
+            match self.route_ops.route_add(&cidr, gateway.as_deref(), &device).await {
+                Ok(_) => self.active_bypass_routes.push((cidr, device.clone())),
+                Err(e) => tracing::warn!(%e, cidr = %cidr, "RFC1918 bypass route failed, continuing"),
+            }
         }
 
-        // Phase 2: wg-quick up
-        let wg_quick_content =
-            self.wg_data
-                .wg
-                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
-
-        let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
+        // Phase 2: wg-quick up with Table = off
+        let wg_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            vec!["Table = off".to_string()],
+        );
+        let interface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_content).await {
+            Ok(n) => n,
+            Err(e) => {
+                self.rollback_bypass_routes().await;
+                return Err(e);
+            }
+        };
         tracing::debug!(%interface_name, "wg-quick up");
+
+        // Phase 3: VPN routes via wg0 (split defaults + VPN subnet override)
+        if let Err(e) = self.setup_vpn_routes().await {
+            self.remove_vpn_routes().await;
+            let _ = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await;
+            self.rollback_bypass_routes().await;
+            return Err(e);
+        }
+
         self.wan_info = Some((device, gateway));
+        tracing::info!("fallback routing is ready");
         Ok(interface_name)
     }
 
-    /// Teardown split-tunnel routing for FallbackRouter.
+    /// Teardown split-tunnel routing.
     ///
-    /// Teardown order:
-    /// 1. Explicitly remove peer IP routes (wan_info tracks current WAN, which may differ
-    ///    from the config file's embedded WAN after a refresh())
-    /// 2. wg-quick down (its PreDown scripts may silently fail if routes are already gone)
-    ///
+    /// 1. Remove VPN routes (wg0) — warn on error, continue
+    /// 2. wg-quick down
+    /// 3. Remove bypass routes (WAN) — warn on error, continue
     async fn teardown(&mut self, logs: Logs) {
-        // Explicitly remove peer routes before wg-quick down.
-        // After refresh(), the config file's PreDown still references the original WAN,
-        // so we must clean up the current routes ourselves.
-        if let Some((device, _gateway)) = &self.wan_info.clone() {
-            for ip in &self.peer_ips {
-                if let Err(e) = self.route_ops.route_del(&ip.to_string(), device).await {
-                    tracing::warn!(%e, peer_ip = %ip, "failed to delete peer route during teardown");
-                }
-            }
-        }
+        self.remove_vpn_routes().await;
         match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
-            Err(error) => {
-                tracing::error!(?error, "wg-quick down failed during teardown");
+            Err(error) => tracing::warn!(?error, "wg-quick down failed during teardown"),
+        }
+        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+            if let Err(e) = self.route_ops.route_del(&dest, &device).await {
+                tracing::warn!(%e, dest = %dest, device = %device, "failed to remove bypass route");
             }
         }
+        self.wan_info = None;
+        tracing::info!("fallback routing teardown complete");
     }
 
     async fn refresh(&mut self) -> Result<(), Error> {
@@ -1061,72 +1117,38 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         tracing::info!(
             old_if = %old_wan.0,
             new_if = %new_device,
-            "fallback router: WAN changed, updating peer routes in-place"
+            "fallback router: WAN changed, updating bypass routes"
         );
-        // Remove peer routes via old WAN
-        for ip in &self.peer_ips {
-            let _ = self.route_ops.route_del(&ip.to_string(), &old_wan.0).await;
+        // Remove all bypass routes via old WAN; VPN routes via wg0 are untouched
+        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+            if let Err(e) = self.route_ops.route_del(&dest, &device).await {
+                tracing::warn!(%e, dest = %dest, "failed to remove old bypass route");
+            }
         }
-        // Add peer routes via new WAN (delete-then-add for idempotency)
+        // Re-add peer IP routes via new WAN (hard-fail)
         for ip in &self.peer_ips.clone() {
-            let _ = self.route_ops.route_del(&ip.to_string(), &new_device).await;
+            let dest = ip.to_string();
+            let _ = self.route_ops.route_del(&dest, &new_device).await;
             self.route_ops
-                .route_add(&ip.to_string(), new_gateway.as_deref(), &new_device)
+                .route_add(&dest, new_gateway.as_deref(), &new_device)
                 .await?;
+            self.active_bypass_routes.push((dest, new_device.clone()));
+        }
+        // Re-add RFC1918 bypass routes via new WAN (soft-fail)
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            let _ = self.route_ops.route_del(&cidr, &new_device).await;
+            match self
+                .route_ops
+                .route_add(&cidr, new_gateway.as_deref(), &new_device)
+                .await
+            {
+                Ok(_) => self.active_bypass_routes.push((cidr, new_device.clone())),
+                Err(e) => tracing::warn!(%e, cidr = %cidr, "RFC1918 bypass route failed during refresh"),
+            }
         }
         self.wan_info = Some((new_device, new_gateway));
         Ok(())
-    }
-}
-
-fn post_up_routing(route_addr: String, device: String, gateway: Option<String>) -> Vec<String> {
-    match gateway {
-        Some(gw) => vec![
-            // make routing idempotent by deleting routes before adding them ignoring errors
-            format!(
-                "PostUp = ip route del {route_addr} via {gateway} dev {device} || true",
-                route_addr = route_addr,
-                gateway = gw,
-                device = device
-            ),
-            format!(
-                "PostUp = ip route add {route_addr} via {gateway} dev {device}",
-                route_addr = route_addr,
-                gateway = gw,
-                device = device
-            ),
-        ],
-        None => vec![
-            // make routing idempotent by deleting routes before adding them ignoring errors
-            format!(
-                "PostUp = ip route del {route_addr} dev {device} || true",
-                route_addr = route_addr,
-                device = device
-            ),
-            format!(
-                "PostUp = ip route add {route_addr} dev {device}",
-                route_addr = route_addr,
-                device = device
-            ),
-        ],
-    }
-}
-
-fn pre_down_routing(route_addr: String, device: String, gateway: Option<String>) -> String {
-    match gateway {
-        Some(gw) => format!(
-            // wg-quick stops execution on error, ignore errors to hit all commands
-            "PreDown = ip route del {route_addr} via {gateway} dev {device} || true",
-            route_addr = route_addr,
-            gateway = gw,
-            device = device,
-        ),
-        None => format!(
-            // wg-quick stops execution on error, ignore errors to hit all commands
-            "PreDown = ip route del {route_addr} dev {device} || true",
-            route_addr = route_addr,
-            device = device,
-        ),
     }
 }
 
@@ -1885,7 +1907,160 @@ mod tests {
             route_ops,
             wg,
             wan_info: None,
+            active_bypass_routes: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn fallback_setup_adds_all_routes() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg);
+        router.setup().await?;
+
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        // 2 peer + 4 RFC1918 bypass + 2 VPN split + 1 VPN subnet = 9
+        assert_eq!(state.added_routes.len(), 9);
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "1.2.3.4" && gw.as_deref() == Some("192.168.1.1") && dev == "eth0")
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "5.6.7.8" && gw.as_deref() == Some("192.168.1.1") && dev == "eth0")
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, _, dev)| d == "10.0.0.0/8" && dev == "eth0")
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, _, dev)| d == "172.16.0.0/12" && dev == "eth0")
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, _, dev)| d == "192.168.0.0/16" && dev == "eth0")
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, _, dev)| d == "169.254.0.0/16" && dev == "eth0")
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "0.0.0.0/1" && gw.is_none() && dev == wireguard::WG_INTERFACE)
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "128.0.0.0/1" && gw.is_none() && dev == wireguard::WG_INTERFACE)
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "10.128.0.0/9" && gw.is_none() && dev == wireguard::WG_INTERFACE)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_setup_config_has_table_off() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops, wg.clone());
+        router.setup().await?;
+
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        let config = wg_state
+            .last_wg_config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Expected wg config"))?;
+        assert!(config.contains("Table = off"), "wg config must contain Table = off");
+        assert!(!config.contains("PostUp"), "wg config must not contain PostUp hooks");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_teardown_removes_vpn_routes() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg);
+        router.setup().await?;
+        router.teardown(Logs::Suppress).await;
+
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(
+            state.added_routes.is_empty(),
+            "all routes must be removed after teardown"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_refresh_after_wan_change_leaves_vpn_routes_intact() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
+        router.setup().await?;
+
+        {
+            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
+        }
+        router.refresh().await?;
+
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "0.0.0.0/1" && gw.is_none() && dev == wireguard::WG_INTERFACE),
+            "0.0.0.0/1 VPN split route must survive WAN change"
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "128.0.0.0/1" && gw.is_none() && dev == wireguard::WG_INTERFACE),
+            "128.0.0.0/1 VPN split route must survive WAN change"
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "10.128.0.0/9" && gw.is_none() && dev == wireguard::WG_INTERFACE),
+            "10.128.0.0/9 VPN subnet route must survive WAN change"
+        );
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(wg_state.wg_up, "wg must stay up during refresh");
+        Ok(())
     }
 
     //     #[tokio::test]
@@ -2173,9 +2348,9 @@ mod tests {
         // WG must NOT have been cycled
         let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         assert!(wg_state.wg_up, "wg should still be up after no-op refresh");
-        // No extra route ops expected
+        // Routes from setup must be untouched: 2 peer + 4 RFC1918 bypass + 3 VPN = 9
         let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(state.added_routes.is_empty()); // wg-quick PostUp added routes, not route_ops
+        assert_eq!(state.added_routes.len(), 9, "no-op refresh must not modify routes");
         Ok(())
     }
 
