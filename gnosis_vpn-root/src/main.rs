@@ -698,6 +698,8 @@ async fn main() {
 
 const KILLSWITCH_DEBOUNCE_SETTLE: Duration = Duration::from_millis(250);
 const KILLSWITCH_DEBOUNCE_MAX: Duration = Duration::from_secs(1);
+const REFRESH_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+const REFRESH_MAX_RETRIES: u32 = 3;
 
 impl DaemonState {
     async fn daemon_loop(
@@ -713,6 +715,10 @@ impl DaemonState {
         tokio::pin!(network_debounce);
         let mut network_change_pending = false;
         let mut network_burst_started: Option<time::Instant> = None;
+        let refresh_retry = time::sleep(Duration::MAX);
+        tokio::pin!(refresh_retry);
+        let mut refresh_retry_pending = false;
+        let mut refresh_retry_attempt: u32 = 0;
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
@@ -736,7 +742,36 @@ impl DaemonState {
                 _ = network_debounce.as_mut(), if network_change_pending => {
                     network_change_pending = false;
                     network_burst_started = None;
-                    self.react_to_network_change().await;
+                    refresh_retry_pending = false;
+                    refresh_retry_attempt = 0;
+                    let needs_retry = self.react_to_network_change().await;
+                    if needs_retry {
+                        refresh_retry.as_mut().reset(time::Instant::now() + REFRESH_RETRY_BASE_DELAY);
+                        refresh_retry_pending = true;
+                        refresh_retry_attempt = 1;
+                    }
+                }
+                _ = refresh_retry.as_mut(), if refresh_retry_pending => {
+                    refresh_retry_pending = false;
+                    if let Some(router) = &mut self.router {
+                        match router.refresh().await {
+                            Ok(()) => {
+                                tracing::info!(attempt = refresh_retry_attempt, "routing refresh succeeded on retry");
+                                refresh_retry_attempt = 0;
+                            }
+                            Err(error) if refresh_retry_attempt < REFRESH_MAX_RETRIES => {
+                                let delay = REFRESH_RETRY_BASE_DELAY * (1 << refresh_retry_attempt);
+                                refresh_retry_attempt += 1;
+                                refresh_retry.as_mut().reset(time::Instant::now() + delay);
+                                refresh_retry_pending = true;
+                                tracing::warn!(?error, attempt = refresh_retry_attempt, "routing refresh retry failed, will retry");
+                            }
+                            Err(error) => {
+                                tracing::warn!(?error, attempt = refresh_retry_attempt, "routing refresh failed after all retries");
+                                refresh_retry_attempt = 0;
+                            }
+                        }
+                    }
                 }
                 else => {
                     tracing::error!("unexpected channel closure");
@@ -746,7 +781,8 @@ impl DaemonState {
         }
     }
 
-    async fn react_to_network_change(&mut self) {
+    /// Returns true if routing refresh failed and a retry should be scheduled.
+    async fn react_to_network_change(&mut self) -> bool {
         if let Some(params) = &self.killswitch_params {
             let interface = params.interface.clone();
             let ips = params.ips.clone();
@@ -759,8 +795,10 @@ impl DaemonState {
             tracing::info!("refreshing routing after network change");
             if let Err(error) = router.refresh().await {
                 tracing::warn!(?error, "routing refresh failed after network change");
+                return true;
             }
         }
+        false
     }
 
     fn incoming_network_event(&self, event: device_monitor::NetworkEvent) {
