@@ -736,7 +736,7 @@ impl DaemonState {
                 _ = network_debounce.as_mut(), if network_change_pending => {
                     network_change_pending = false;
                     network_burst_started = None;
-                    self.reapply_killswitch_if_active().await;
+                    self.react_to_network_change().await;
                 }
                 else => {
                     tracing::error!("unexpected channel closure");
@@ -746,13 +746,18 @@ impl DaemonState {
         }
     }
 
-    async fn reapply_killswitch_if_active(&mut self) {
-        let Some(params) = &self.killswitch_params else { return };
-        let interface = params.interface.clone();
-        let ips = params.ips.clone();
-        tracing::info!("re-applying killswitch after network change");
-        if let Err(error) = self.apply_killswitch(interface, ips).await {
-            tracing::warn!(?error, "failed to re-apply killswitch after network change");
+    async fn react_to_network_change(&mut self) {
+        if let Some(params) = &self.killswitch_params {
+            let interface = params.interface.clone();
+            let ips = params.ips.clone();
+            tracing::info!("re-applying killswitch after network change");
+            if let Err(error) = self.apply_killswitch(interface, ips).await {
+                tracing::warn!(?error, "failed to re-apply killswitch after network change");
+            }
+        }
+        if let Some(router) = &mut self.router {
+            tracing::info!("refreshing routing after network change");
+            router.refresh().await;
         }
     }
 

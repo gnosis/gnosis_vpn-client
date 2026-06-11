@@ -100,4 +100,6 @@ pub trait Routing {
     /// Set up the VPN tunnel. Returns the resolved WireGuard interface name on success.
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
+    /// Re-apply routing state after a network change.
+    async fn refresh(&mut self);
 }

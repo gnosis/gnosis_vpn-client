@@ -178,6 +178,39 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         Ok(iface.to_string())
     }
 
+    async fn refresh(&mut self) {
+        let Some(old_mgr) = self.bypass_manager.take() else {
+            return;
+        };
+        old_mgr.rollback().await;
+
+        let (device, gateway) = match self.route_ops.get_default_interface().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(?e, "routing refresh: cannot detect WAN interface");
+                return;
+            }
+        };
+
+        let mut new_mgr = bypass::BypassRouteManager::new(
+            bypass::WanInterface { device, gateway },
+            self.peer_ips.clone(),
+            self.route_ops.clone(),
+        );
+
+        let res = new_mgr
+            .setup_peer_routes()
+            .await
+            .and(new_mgr.setup_rfc1918_routes().await);
+        if let Err(e) = res {
+            tracing::warn!(?e, "routing refresh: failed to re-add bypass routes");
+            return;
+        }
+
+        self.bypass_manager = Some(new_mgr);
+        tracing::info!("bypass routes refreshed after network change");
+    }
+
     /// Teardown split-tunnel routing for macOS StaticRouter.
     ///
     /// Teardown order:
@@ -216,6 +249,8 @@ impl Routing for DynamicRouter {
     }
 
     async fn teardown(&mut self, _logs: Logs) {}
+
+    async fn refresh(&mut self) {}
 }
 
 /// Try whatever teardown we can on startup to clean up from any previous unclean shutdowns.

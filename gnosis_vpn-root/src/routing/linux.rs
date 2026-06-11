@@ -79,6 +79,7 @@ pub async fn dynamic_router(
         infra,
         network_device_info: None,
         added_routes: Vec::new(),
+        worker_uid: worker.uid,
     })
 }
 
@@ -410,6 +411,7 @@ pub struct Router<N: NetlinkOps, W: WgOps> {
     infra: FwmarkInfrastructure<N>,
     network_device_info: Option<NetworkDeviceInfo>,
     added_routes: Vec<RouteSpec>,
+    worker_uid: u32,
 }
 
 /// Static fallback router using route operations via netlink.
@@ -837,6 +839,139 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
         tracing::info!("VPN routing teardown complete");
     }
+
+    async fn refresh(&mut self) {
+        let nft = RealNfTablesOps {};
+        refresh_fwmark_infrastructure_with(
+            &mut self.infra,
+            &self.netlink,
+            &nft,
+            self.worker_uid,
+            &mut self.added_routes,
+        )
+        .await;
+    }
+}
+
+/// Refreshes the fwmark infrastructure after a WAN change without tearing down the VPN tunnel.
+///
+/// Replaces the nftables SNAT rules, TABLE_ID default route, and RFC1918 bypass routes
+/// with fresh values based on the current default WAN interface. No-op if WAN is unchanged.
+pub(crate) async fn refresh_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesOps>(
+    infra: &mut FwmarkInfrastructure<N>,
+    netlink: &N,
+    nft: &F,
+    worker_uid: u32,
+    added_routes: &mut Vec<RouteSpec>,
+) {
+    let new_wan = match get_wan_info(netlink).await {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!(?e, "routing refresh: cannot detect WAN interface");
+            return;
+        }
+    };
+
+    let old_wan = &infra.wan_info;
+    if new_wan.if_index == old_wan.if_index && new_wan.ip_addr == old_wan.ip_addr {
+        return;
+    }
+
+    tracing::info!(
+        old_if = %old_wan.if_name, new_if = %new_wan.if_name,
+        old_ip = %old_wan.ip_addr, new_ip = %new_wan.ip_addr,
+        "WAN changed, refreshing fwmark infrastructure"
+    );
+
+    // Remove stale nftables rules
+    if let Err(e) = nft.teardown_rules(&old_wan.if_name, FW_MARK, old_wan.ip_addr) {
+        tracing::warn!(?e, "routing refresh: failed to remove old nftables rules");
+    }
+
+    // Remove stale TABLE_ID default route
+    let old_table_route = RouteSpec {
+        destination: Ipv4Addr::UNSPECIFIED,
+        prefix_len: 0,
+        gateway: Some(old_wan.gateway),
+        if_index: old_wan.if_index,
+        table_id: Some(TABLE_ID),
+        metric: None,
+    };
+    if let Err(e) = netlink.route_del(&old_table_route).await {
+        tracing::warn!(?e, "routing refresh: failed to remove old TABLE_ID default route");
+    }
+
+    // Remove stale fwmark rule
+    if let Ok(rules) = netlink.rule_list_v4().await {
+        for rule in rules.iter().filter(|r| r.fw_mark == FW_MARK && r.table_id == TABLE_ID) {
+            if let Err(e) = netlink.rule_del(rule).await {
+                tracing::warn!(?e, "routing refresh: failed to remove old fwmark rule");
+            }
+        }
+    }
+
+    // Remove stale RFC1918 bypass routes
+    for route in added_routes.drain(..) {
+        if let Err(e) = netlink.route_del(&route).await {
+            tracing::warn!(?e, route = %format!("{}/{}", route.destination, route.prefix_len), "routing refresh: failed to remove old RFC1918 bypass route");
+        }
+    }
+
+    // Set up fresh nftables rules
+    if let Err(e) = nft.setup_fwmark_rules(worker_uid, &new_wan.if_name, FW_MARK, new_wan.ip_addr) {
+        tracing::warn!(?e, "routing refresh: failed to set up new nftables rules");
+        infra.wan_info = new_wan;
+        return;
+    }
+
+    // Add fresh TABLE_ID default route
+    let new_table_route = RouteSpec {
+        destination: Ipv4Addr::UNSPECIFIED,
+        prefix_len: 0,
+        gateway: Some(new_wan.gateway),
+        if_index: new_wan.if_index,
+        table_id: Some(TABLE_ID),
+        metric: None,
+    };
+    if let Err(e) = netlink.route_add(&new_table_route).await {
+        tracing::warn!(?e, "routing refresh: failed to add new TABLE_ID default route");
+        infra.wan_info = new_wan;
+        return;
+    }
+
+    // Add fresh fwmark rule
+    let fwmark_rule = RuleSpec {
+        fw_mark: FW_MARK,
+        table_id: TABLE_ID,
+        priority: RULE_PRIORITY,
+    };
+    if let Err(e) = netlink.rule_add(&fwmark_rule).await {
+        tracing::warn!(?e, "routing refresh: failed to add new fwmark rule");
+        infra.wan_info = new_wan;
+        return;
+    }
+
+    // Re-add RFC1918 bypass routes via new WAN
+    for (net, prefix) in RFC1918_BYPASS_NETS {
+        if let Ok(destination) = net.parse::<Ipv4Addr>() {
+            let route = RouteSpec {
+                destination,
+                prefix_len: *prefix,
+                gateway: Some(new_wan.gateway),
+                if_index: new_wan.if_index,
+                table_id: None,
+                metric: None,
+            };
+            if let Err(e) = netlink.route_add(&route).await {
+                tracing::warn!(?e, net = %net, "routing refresh: failed to re-add RFC1918 bypass route");
+            } else {
+                added_routes.push(route);
+            }
+        }
+    }
+
+    infra.wan_info = new_wan;
+    tracing::info!("fwmark infrastructure refreshed after network change");
 }
 
 #[async_trait]
@@ -900,6 +1035,10 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
             }
         }
     }
+
+    // Bypass routes are embedded in wg-quick config via PostUp/PreDown — can't update without
+    // bringing WireGuard down, so refresh is a no-op for the fallback router.
+    async fn refresh(&mut self) {}
 }
 
 fn post_up_routing(route_addr: String, device: String, gateway: Option<String>) -> Vec<String> {
@@ -1473,6 +1612,7 @@ mod tests {
             netlink,
             wg,
             infra,
+            worker_uid: worker.uid,
             network_device_info: None,
             added_routes: Vec::new(),
         };
