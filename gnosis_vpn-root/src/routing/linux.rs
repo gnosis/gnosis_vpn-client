@@ -1028,12 +1028,21 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     /// Teardown split-tunnel routing for FallbackRouter.
     ///
     /// Teardown order:
-    /// 1. Remove VPN subnet route (best-effort)
-    /// 2. wg-quick down
-    /// 3. Remove bypass routes
+    /// 1. Explicitly remove peer IP routes (wan_info tracks current WAN, which may differ
+    ///    from the config file's embedded WAN after a refresh())
+    /// 2. wg-quick down (its PreDown scripts may silently fail if routes are already gone)
     ///
     async fn teardown(&mut self, logs: Logs) {
-        // wg-quick down
+        // Explicitly remove peer routes before wg-quick down.
+        // After refresh(), the config file's PreDown still references the original WAN,
+        // so we must clean up the current routes ourselves.
+        if let Some((device, _gateway)) = &self.wan_info.clone() {
+            for ip in &self.peer_ips {
+                if let Err(e) = self.route_ops.route_del(&ip.to_string(), device).await {
+                    tracing::warn!(%e, peer_ip = %ip, "failed to delete peer route during teardown");
+                }
+            }
+        }
         match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
             Err(error) => {
@@ -1043,13 +1052,29 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     }
 
     async fn refresh(&mut self) -> Result<(), Error> {
-        let (device, gateway) = self.route_ops.get_default_interface().await?;
-        if self.wan_info.as_ref() == Some(&(device.clone(), gateway.clone())) {
-            return Ok(());
+        let (new_device, new_gateway) = self.route_ops.get_default_interface().await?;
+        let old_wan = match self.wan_info.clone() {
+            Some(w) if w == (new_device.clone(), new_gateway.clone()) => return Ok(()),
+            Some(w) => w,
+            None => return Ok(()),
+        };
+        tracing::info!(
+            old_if = %old_wan.0,
+            new_if = %new_device,
+            "fallback router: WAN changed, updating peer routes in-place"
+        );
+        // Remove peer routes via old WAN
+        for ip in &self.peer_ips {
+            let _ = self.route_ops.route_del(&ip.to_string(), &old_wan.0).await;
         }
-        tracing::info!("fallback router refresh: WAN changed, cycling wg-quick");
-        self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await?;
-        self.setup().await?;
+        // Add peer routes via new WAN (delete-then-add for idempotency)
+        for ip in &self.peer_ips.clone() {
+            let _ = self.route_ops.route_del(&ip.to_string(), &new_device).await;
+            self.route_ops
+                .route_add(&ip.to_string(), new_gateway.as_deref(), &new_device)
+                .await?;
+        }
+        self.wan_info = Some((new_device, new_gateway));
         Ok(())
     }
 }
@@ -2126,6 +2151,105 @@ mod tests {
             .collect();
         assert!(table_vpn.is_empty(), "VPN TABLE_ID route should be cleaned up");
 
+        Ok(())
+    }
+
+    // ====================================================================
+    // FallbackRouter::refresh() tests
+    // ====================================================================
+
+    #[tokio::test]
+    async fn fallback_refresh_noop_when_wan_unchanged() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
+        router.setup().await?;
+
+        router.refresh().await?;
+
+        // WG must NOT have been cycled
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(wg_state.wg_up, "wg should still be up after no-op refresh");
+        // No extra route ops expected
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(state.added_routes.is_empty()); // wg-quick PostUp added routes, not route_ops
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_refresh_updates_routes_without_cycling_wg() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
+        router.setup().await?;
+
+        // Simulate WAN change
+        {
+            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
+        }
+
+        router.refresh().await?;
+
+        // WG must NOT have been cycled — this is the critical correctness property:
+        // cycling wg-quick resets the WireGuard source port, breaking the HOPR session.
+        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(
+            wg_state.wg_up,
+            "wg must stay up during refresh — cycling resets WG source port"
+        );
+
+        // New peer routes must be present via the new WAN
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "1.2.3.4" && gw.as_deref() == Some("10.0.0.1") && dev == "wlan0"),
+            "peer 1.2.3.4 must be routed via new WAN"
+        );
+        assert!(
+            state
+                .added_routes
+                .iter()
+                .any(|(d, gw, dev)| d == "5.6.7.8" && gw.as_deref() == Some("10.0.0.1") && dev == "wlan0"),
+            "peer 5.6.7.8 must be routed via new WAN"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_teardown_after_refresh_removes_current_routes() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
+        router.setup().await?;
+
+        // Simulate WAN change + refresh
+        {
+            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
+        }
+        router.refresh().await?;
+
+        // After refresh, teardown should remove the NEW routes (via wlan0)
+        router.teardown(Logs::Suppress).await;
+
+        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+        assert!(
+            state.added_routes.is_empty(),
+            "all peer routes must be cleaned up after teardown, got: {:?}",
+            state.added_routes
+        );
         Ok(())
     }
 }
