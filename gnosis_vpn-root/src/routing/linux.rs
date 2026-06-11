@@ -1036,9 +1036,18 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         }
     }
 
-    // Bypass routes are embedded in wg-quick config via PostUp/PreDown — can't update without
-    // bringing WireGuard down, so refresh is a no-op for the fallback router.
-    async fn refresh(&mut self) {}
+    async fn refresh(&mut self) {
+        tracing::info!("fallback router refresh: cycling wg-quick to update bypass routes");
+
+        if let Err(error) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
+            tracing::warn!(?error, "fallback router refresh: wg-quick down failed, skipping re-setup");
+            return;
+        }
+
+        if let Err(error) = self.setup().await {
+            tracing::warn!(?error, "fallback router refresh: wg-quick up failed after network change");
+        }
+    }
 }
 
 fn post_up_routing(route_addr: String, device: String, gateway: Option<String>) -> Vec<String> {
