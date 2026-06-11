@@ -757,7 +757,9 @@ impl DaemonState {
         }
         if let Some(router) = &mut self.router {
             tracing::info!("refreshing routing after network change");
-            router.refresh().await;
+            if let Err(error) = router.refresh().await {
+                tracing::warn!(?error, "routing refresh failed after network change");
+            }
         }
     }
 

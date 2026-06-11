@@ -101,5 +101,5 @@ pub trait Routing {
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
     /// Re-apply routing state after a network change.
-    async fn refresh(&mut self);
+    async fn refresh(&mut self) -> Result<(), Error>;
 }

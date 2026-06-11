@@ -840,7 +840,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         tracing::info!("VPN routing teardown complete");
     }
 
-    async fn refresh(&mut self) {
+    async fn refresh(&mut self) -> Result<(), Error> {
         let nft = RealNfTablesOps {};
         refresh_fwmark_infrastructure_with(
             &mut self.infra,
@@ -850,6 +850,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             &mut self.added_routes,
         )
         .await;
+        Ok(())
     }
 }
 
@@ -1036,17 +1037,11 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         }
     }
 
-    async fn refresh(&mut self) {
+    async fn refresh(&mut self) -> Result<(), Error> {
         tracing::info!("fallback router refresh: cycling wg-quick to update bypass routes");
-
-        if let Err(error) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
-            tracing::warn!(?error, "fallback router refresh: wg-quick down failed, skipping re-setup");
-            return;
-        }
-
-        if let Err(error) = self.setup().await {
-            tracing::warn!(?error, "fallback router refresh: wg-quick up failed after network change");
-        }
+        self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await?;
+        self.setup().await?;
+        Ok(())
     }
 }
 
