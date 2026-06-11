@@ -1,3 +1,6 @@
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
+
 use futures::StreamExt;
 use rtnetlink::{
     MulticastGroup,
@@ -9,9 +12,68 @@ use rtnetlink::{
         route::{RouteAddress, RouteAttribute},
     },
 };
+use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
 
-pub fn start() -> std::io::Result<(CancellationToken, tokio::task::JoinHandle<()>)> {
+// A link-local address on loopback that is safe to add/remove transiently.
+const PROBE_ADDR: Ipv4Addr = Ipv4Addr::new(169, 254, 200, 200);
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+pub async fn start() -> std::io::Result<(CancellationToken, tokio::task::JoinHandle<()>)> {
+    if probe_rtnetlink_multicast().await {
+        tracing::info!("device monitor: using rtnetlink");
+        start_rtnetlink()
+    } else {
+        tracing::warn!("device monitor: rtnetlink multicast not working, falling back to ip monitor subprocess");
+        Ok(start_subprocess())
+    }
+}
+
+/// Verifies that rtnetlink multicast delivery actually works on this system.
+///
+/// Adds a temporary address to loopback (which the kernel broadcasts as a
+/// NewAddress multicast event), then checks whether the event arrives on the
+/// subscription channel within the probe timeout.  Cleans up the address
+/// unconditionally before returning.
+async fn probe_rtnetlink_multicast() -> bool {
+    let (conn, handle, mut messages) = match rtnetlink::new_multicast_connection(&[MulticastGroup::Ipv4Ifaddr]) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(error = ?e, "device monitor probe: failed to create netlink connection");
+            return false;
+        }
+    };
+    let conn_task = tokio::spawn(conn);
+
+    let lo_index = 1u32;
+    let added = handle
+        .address()
+        .add(lo_index, IpAddr::V4(PROBE_ADDR), 32)
+        .execute()
+        .await
+        .is_ok();
+
+    if !added {
+        tracing::debug!("device monitor probe: failed to add probe address to loopback");
+        conn_task.abort();
+        return false;
+    }
+
+    let received = tokio::time::timeout(PROBE_TIMEOUT, messages.next())
+        .await
+        .is_ok_and(|msg| msg.is_some());
+
+    // Remove the probe address. Use the ip CLI since that's already a known-good path.
+    let _ = tokio::process::Command::new("ip")
+        .args(["addr", "del", "169.254.200.200/32", "dev", "lo"])
+        .output()
+        .await;
+
+    conn_task.abort();
+    received
+}
+
+fn start_rtnetlink() -> std::io::Result<(CancellationToken, tokio::task::JoinHandle<()>)> {
     let (conn, _handle, messages) = rtnetlink::new_multicast_connection(&[
         MulticastGroup::Link,
         MulticastGroup::Ipv4Ifaddr,
@@ -20,11 +82,18 @@ pub fn start() -> std::io::Result<(CancellationToken, tokio::task::JoinHandle<()
     tokio::spawn(conn);
     let cancel = CancellationToken::new();
     let owned_cancel = cancel.clone();
-    let handle = tokio::spawn(run(messages, owned_cancel));
+    let handle = tokio::spawn(run_rtnetlink(messages, owned_cancel));
     Ok((cancel, handle))
 }
 
-async fn run(
+fn start_subprocess() -> (CancellationToken, tokio::task::JoinHandle<()>) {
+    let cancel = CancellationToken::new();
+    let owned_cancel = cancel.clone();
+    let handle = tokio::spawn(run_subprocess(owned_cancel));
+    (cancel, handle)
+}
+
+async fn run_rtnetlink(
     mut messages: futures::channel::mpsc::UnboundedReceiver<(
         rtnetlink::packet_core::NetlinkMessage<RouteNetlinkMessage>,
         rtnetlink::sys::SocketAddr,
@@ -46,6 +115,51 @@ async fn run(
                 Some((msg, _)) => {
                     if let NetlinkPayload::InnerMessage(inner) = msg.payload {
                         log_event(inner);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn run_subprocess(cancel: CancellationToken) {
+    tracing::debug!("device monitor started (subprocess fallback)");
+    let child = tokio::process::Command::new("ip")
+        .args(["monitor", "link", "address", "route"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = ?e, "device monitor: failed to spawn ip monitor subprocess");
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                let _ = child.kill().await;
+                return;
+            }
+            line = lines.next_line() => match line {
+                Err(e) => {
+                    tracing::error!(error = ?e, "device monitor: error reading ip monitor output");
+                    return;
+                }
+                Ok(None) => {
+                    tracing::warn!("device monitor: ip monitor subprocess exited unexpectedly");
+                    return;
+                }
+                Ok(Some(line)) => {
+                    // Skip blank lines and continuation lines (hardware address, etc.)
+                    if !line.is_empty() && !line.starts_with(char::is_whitespace) {
+                        tracing::info!(event = line, "network change detected");
                     }
                 }
             }
