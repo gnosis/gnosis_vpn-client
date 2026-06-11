@@ -29,7 +29,6 @@ use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
 mod cli;
-#[cfg(target_os = "linux")]
 mod device_monitor;
 mod network_info;
 mod routing;
@@ -509,7 +508,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::UNAVAILABLE
         })?;
 
-    #[cfg(target_os = "linux")]
     let (cancel_device_monitor, device_monitor_handle) = device_monitor::start().await.map_err(|error| {
         tracing::error!(?error, "failed to start device monitor");
         exitcode::UNAVAILABLE
@@ -553,10 +551,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
     cancel_keep_alive_timer.cancel();
-    #[cfg(target_os = "linux")]
     cancel_device_monitor.cancel();
     let _ = routing_actor_handle.await;
-    #[cfg(target_os = "linux")]
     let _ = device_monitor_handle.await;
 
     // remove socket file
