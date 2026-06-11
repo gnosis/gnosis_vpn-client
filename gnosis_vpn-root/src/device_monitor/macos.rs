@@ -1,16 +1,19 @@
 use std::os::unix::io::{FromRawFd, OwnedFd};
 
 use tokio::io::unix::AsyncFd;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub fn start_pf_route() -> (CancellationToken, tokio::task::JoinHandle<()>) {
+use super::NetworkEvent;
+
+pub fn start_pf_route(tx: mpsc::Sender<NetworkEvent>) -> (CancellationToken, tokio::task::JoinHandle<()>) {
     let cancel = CancellationToken::new();
     let owned_cancel = cancel.clone();
-    let handle = tokio::spawn(run(owned_cancel));
+    let handle = tokio::spawn(run(tx, owned_cancel));
     (cancel, handle)
 }
 
-async fn run(cancel: CancellationToken) {
+async fn run(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToken) {
     let fd = unsafe { libc::socket(libc::AF_ROUTE, libc::SOCK_RAW, 0) };
     if fd < 0 {
         tracing::error!(
@@ -61,7 +64,11 @@ async fn run(cancel: CancellationToken) {
                             Ok(n as usize)
                         }
                     }) {
-                        Ok(Ok(n)) => log_event(&buf[..n]),
+                        Ok(Ok(n)) => {
+                            if let Some(event) = to_network_event(&buf[..n]) {
+                                let _ = tx.try_send(event);
+                            }
+                        }
                         Ok(Err(e)) => {
                             tracing::error!(error = ?e, "device monitor: PF_ROUTE read error");
                             return;
@@ -74,58 +81,43 @@ async fn run(cancel: CancellationToken) {
     }
 }
 
-fn log_event(buf: &[u8]) {
+fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
     if buf.len() < std::mem::size_of::<libc::rt_msghdr>() {
-        return;
+        return None;
     }
     let rtm_type = buf[3] as libc::c_int;
     match rtm_type {
         libc::RTM_IFINFO => {
             if buf.len() < std::mem::size_of::<libc::if_msghdr>() {
-                return;
+                return None;
             }
             let ifm = unsafe { &*(buf.as_ptr() as *const libc::if_msghdr) };
             let name = if_name(ifm.ifm_index as u32);
-            let index = ifm.ifm_index;
-            tracing::info!(index, name, "network link changed");
+            let index = ifm.ifm_index as u32;
+            Some(NetworkEvent::LinkChanged { index, name })
         }
         libc::RTM_NEWADDR => {
             if buf.len() < std::mem::size_of::<libc::ifa_msghdr>() {
-                return;
+                return None;
             }
             let ifam = unsafe { &*(buf.as_ptr() as *const libc::ifa_msghdr) };
             let name = if_name(ifam.ifam_index as u32);
-            let index = ifam.ifam_index;
-            tracing::info!(index, name, "network address added");
+            let index = ifam.ifam_index as u32;
+            Some(NetworkEvent::AddressAdded { index, name })
         }
         libc::RTM_DELADDR => {
             if buf.len() < std::mem::size_of::<libc::ifa_msghdr>() {
-                return;
+                return None;
             }
             let ifam = unsafe { &*(buf.as_ptr() as *const libc::ifa_msghdr) };
             let name = if_name(ifam.ifam_index as u32);
-            let index = ifam.ifam_index;
-            tracing::info!(index, name, "network address removed");
+            let index = ifam.ifam_index as u32;
+            Some(NetworkEvent::AddressRemoved { index, name })
         }
-        libc::RTM_ADD => {
-            let rtm = unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
-            let name = if_name(rtm.rtm_index as u32);
-            let index = rtm.rtm_index;
-            tracing::info!(index, name, "route added");
-        }
-        libc::RTM_DELETE => {
-            let rtm = unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
-            let name = if_name(rtm.rtm_index as u32);
-            let index = rtm.rtm_index;
-            tracing::info!(index, name, "route removed");
-        }
-        libc::RTM_CHANGE => {
-            let rtm = unsafe { &*(buf.as_ptr() as *const libc::rt_msghdr) };
-            let name = if_name(rtm.rtm_index as u32);
-            let index = rtm.rtm_index;
-            tracing::info!(index, name, "route changed");
-        }
-        _ => {}
+        libc::RTM_ADD => Some(NetworkEvent::RouteAdded),
+        libc::RTM_DELETE => Some(NetworkEvent::RouteRemoved),
+        libc::RTM_CHANGE => Some(NetworkEvent::RouteChanged),
+        _ => None,
     }
 }
 

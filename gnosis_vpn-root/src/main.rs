@@ -508,10 +508,11 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::UNAVAILABLE
         })?;
 
-    let (cancel_device_monitor, device_monitor_handle) = device_monitor::start().await.map_err(|error| {
-        tracing::error!(?error, "failed to start device monitor");
-        exitcode::UNAVAILABLE
-    })?;
+    let (cancel_device_monitor, device_monitor_handle, network_events) =
+        device_monitor::start().await.map_err(|error| {
+            tracing::error!(?error, "failed to start device monitor");
+            exitcode::UNAVAILABLE
+        })?;
 
     let mut state = DaemonState {
         config,
@@ -541,7 +542,13 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             .await;
     }
     let res = state
-        .daemon_loop(signal_receiver, socket_listener, config_receiver, keep_alive_expired)
+        .daemon_loop(
+            signal_receiver,
+            socket_listener,
+            config_receiver,
+            keep_alive_expired,
+            network_events,
+        )
         .await;
 
     // cancel running tasks and run teardown logic
@@ -689,6 +696,7 @@ impl DaemonState {
         mut socket_listener: mpsc::Receiver<SocketCmd>,
         mut config_receiver: mpsc::Receiver<()>,
         mut keep_alive_expired: mpsc::Receiver<Duration>,
+        mut network_events: mpsc::Receiver<device_monitor::NetworkEvent>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
         loop {
@@ -703,11 +711,32 @@ impl DaemonState {
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
+                Some(event) = network_events.recv() => self.incoming_network_event(event),
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
                 }
             }
+        }
+    }
+
+    fn incoming_network_event(&self, event: device_monitor::NetworkEvent) {
+        match event {
+            device_monitor::NetworkEvent::LinkChanged { index, name } => {
+                tracing::info!(index, name, "network link changed");
+            }
+            device_monitor::NetworkEvent::LinkRemoved { index, name } => {
+                tracing::info!(index, name, "network link removed");
+            }
+            device_monitor::NetworkEvent::AddressAdded { index, name } => {
+                tracing::info!(index, name, "network address added");
+            }
+            device_monitor::NetworkEvent::AddressRemoved { index, name } => {
+                tracing::info!(index, name, "network address removed");
+            }
+            device_monitor::NetworkEvent::RouteAdded => tracing::info!("route added"),
+            device_monitor::NetworkEvent::RouteRemoved => tracing::info!("route removed"),
+            device_monitor::NetworkEvent::RouteChanged => tracing::info!("route changed"),
         }
     }
 
