@@ -45,6 +45,11 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
+struct KillswitchParams {
+    interface: String,
+    ips: Vec<IpAddr>,
+}
+
 struct DaemonState {
     worker_user: worker::Worker,
     config: Config,
@@ -72,6 +77,7 @@ struct DaemonState {
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
+    killswitch_params: Option<KillswitchParams>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -532,6 +538,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_user,
         keep_alive_instruction_sender,
         routing_actor_sender,
+        killswitch_params: None,
     };
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
@@ -689,6 +696,9 @@ async fn main() {
     }
 }
 
+const KILLSWITCH_DEBOUNCE_SETTLE: Duration = Duration::from_millis(250);
+const KILLSWITCH_DEBOUNCE_MAX: Duration = Duration::from_secs(1);
+
 impl DaemonState {
     async fn daemon_loop(
         &mut self,
@@ -699,6 +709,10 @@ impl DaemonState {
         mut network_events: mpsc::Receiver<device_monitor::NetworkEvent>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
+        let network_debounce = time::sleep(Duration::MAX);
+        tokio::pin!(network_debounce);
+        let mut network_change_pending = false;
+        let mut network_burst_started: Option<time::Instant> = None;
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
@@ -711,12 +725,34 @@ impl DaemonState {
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
-                Some(event) = network_events.recv() => self.incoming_network_event(event),
+                Some(event) = network_events.recv() => {
+                    self.incoming_network_event(event);
+                    let burst_started = *network_burst_started.get_or_insert_with(time::Instant::now);
+                    let deadline = burst_started + KILLSWITCH_DEBOUNCE_MAX;
+                    let settle = time::Instant::now() + KILLSWITCH_DEBOUNCE_SETTLE;
+                    network_debounce.as_mut().reset(settle.min(deadline));
+                    network_change_pending = true;
+                }
+                _ = network_debounce.as_mut(), if network_change_pending => {
+                    network_change_pending = false;
+                    network_burst_started = None;
+                    self.reapply_killswitch_if_active().await;
+                }
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
                 }
             }
+        }
+    }
+
+    async fn reapply_killswitch_if_active(&mut self) {
+        let Some(params) = &self.killswitch_params else { return };
+        let interface = params.interface.clone();
+        let ips = params.ips.clone();
+        tracing::info!("re-applying killswitch after network change");
+        if let Err(error) = self.apply_killswitch(interface, ips).await {
+            tracing::warn!(?error, "failed to re-apply killswitch after network change");
         }
     }
 
@@ -1041,7 +1077,8 @@ impl DaemonState {
         }
     }
 
-    async fn disable_killswitch(&self) {
+    async fn disable_killswitch(&mut self) {
+        self.killswitch_params = None;
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::DisableKillswitch)
@@ -1052,8 +1089,11 @@ impl DaemonState {
         tracing::debug!(?request, "received worker request to root");
         match request {
             RequestToRoot::KillswitchLockdown { peer_ips, interface } => {
-                let ips = peer_ips.into_iter().map(IpAddr::V4).collect();
-                let res = self.apply_killswitch(interface, ips).await;
+                let ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
+                let res = self.apply_killswitch(interface.clone(), ips.clone()).await;
+                if res.is_ok() {
+                    self.killswitch_params = Some(KillswitchParams { interface, ips });
+                }
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
