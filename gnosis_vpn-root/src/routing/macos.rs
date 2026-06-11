@@ -179,12 +179,18 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     }
 
     async fn refresh(&mut self) -> Result<(), Error> {
-        let Some(old_mgr) = self.bypass_manager.take() else {
-            return Ok(());
-        };
-        old_mgr.rollback().await;
-
         let (device, gateway) = self.route_ops.get_default_interface().await?;
+        let wan_unchanged = self.bypass_manager.as_ref().is_some_and(|m| {
+            let w = m.wan_interface();
+            w.device == device && w.gateway == gateway
+        });
+        if wan_unchanged {
+            return Ok(());
+        }
+
+        if let Some(mut old_mgr) = self.bypass_manager.take() {
+            old_mgr.rollback().await;
+        }
         let mut new_mgr = bypass::BypassRouteManager::new(
             bypass::WanInterface { device, gateway },
             self.peer_ips.clone(),

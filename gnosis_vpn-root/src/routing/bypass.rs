@@ -41,6 +41,10 @@ pub struct BypassRouteManager<R: RouteOps> {
 
 #[allow(dead_code)]
 impl<R: RouteOps> BypassRouteManager<R> {
+    pub fn wan_interface(&self) -> &WanInterface {
+        &self.wan
+    }
+
     /// Creates a new bypass route manager.
     ///
     /// The manager starts with no routes added. Call `setup_peer_routes()`

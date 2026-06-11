@@ -102,6 +102,7 @@ pub fn static_fallback_router(
         peer_ips,
         route_ops,
         wg,
+        wan_info: None,
     })
 }
 
@@ -424,6 +425,9 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
+    /// WAN interface captured at setup time; used in refresh() to detect real WAN changes
+    /// and avoid feedback loops from our own wg-quick events.
+    wan_info: Option<(String, Option<String>)>,
 }
 
 // ============================================================================
@@ -1017,6 +1021,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
 
         let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
         tracing::debug!(%interface_name, "wg-quick up");
+        self.wan_info = Some((device, gateway));
         Ok(interface_name)
     }
 
@@ -1038,7 +1043,11 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
     }
 
     async fn refresh(&mut self) -> Result<(), Error> {
-        tracing::info!("fallback router refresh: cycling wg-quick to update bypass routes");
+        let (device, gateway) = self.route_ops.get_default_interface().await?;
+        if self.wan_info.as_ref() == Some(&(device.clone(), gateway.clone())) {
+            return Ok(());
+        }
+        tracing::info!("fallback router refresh: WAN changed, cycling wg-quick");
         self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await?;
         self.setup().await?;
         Ok(())
@@ -1850,6 +1859,7 @@ mod tests {
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
             wg,
+            wan_info: None,
         }
     }
 
