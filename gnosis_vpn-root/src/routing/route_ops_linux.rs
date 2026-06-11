@@ -75,10 +75,13 @@ impl RouteOps for NetlinkRouteOps {
             .try_collect()
             .await?;
 
-        // Find the default route (prefix_len == 0)
+        // Find the default route (prefix_len == 0) in the main routing table only.
+        // wg-quick creates its own routing table with a 0/0 route at metric 0; including
+        // other tables here would cause it to shadow the real WAN default route.
         let default_route = routes
             .iter()
             .filter(|r| r.header.destination_prefix_length == 0)
+            .filter(|r| r.header.table == 254)
             .min_by_key(|r| {
                 // Prefer routes with lower metric
                 r.attributes
