@@ -146,8 +146,12 @@ async fn run_subprocess(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToke
                     return;
                 }
                 Ok(Some(line)) => {
+                    tracing::debug!(line, "device monitor: ip monitor line");
                     if !line.is_empty() && !line.starts_with(char::is_whitespace) {
-                        let _ = tx.try_send(parse_ip_monitor_line(&line));
+                        let event = parse_ip_monitor_line(&line);
+                        if tx.try_send(event).is_err() {
+                            tracing::warn!(line, "device monitor: event dropped (channel full)");
+                        }
                     }
                 }
             }
@@ -173,6 +177,7 @@ fn parse_ip_monitor_line(line: &str) -> NetworkEvent {
     {
         // Interface names never contain whitespace
         if !name.contains(char::is_whitespace) {
+            tracing::debug!(deleted, index, name, "device monitor: parsed as link event");
             return if deleted {
                 NetworkEvent::LinkRemoved {
                     index,
@@ -187,6 +192,7 @@ fn parse_ip_monitor_line(line: &str) -> NetworkEvent {
         }
     }
 
+    tracing::debug!(line, "device monitor: parsed as route/addr event");
     NetworkEvent::RouteChanged
 }
 
