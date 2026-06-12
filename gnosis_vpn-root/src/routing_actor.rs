@@ -184,7 +184,7 @@ impl Actor {
         tracing::info!("re-applying killswitch after network change");
         if let Err(error) = self
             .firewall
-            .apply_policy(&policy.interface, &policy.ips, policy.lan_lockdown)
+            .reapply_policy(&policy.interface, &policy.ips, policy.lan_lockdown)
         {
             tracing::warn!(?error, "failed to re-apply killswitch after network change");
         }
