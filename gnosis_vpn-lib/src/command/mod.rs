@@ -279,27 +279,34 @@ pub struct ConnStats {
     pub wg_pubkey: Option<String>,
     pub wg_server_pubkey: Option<String>,
     pub wg_ip: Option<String>,
-    pub active_session: Option<ActiveSession>,
+    pub bridge_session: Option<ActiveSession>,
+    pub main_session: Option<ActiveSession>,
 }
 
 impl ConnStats {
     pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
         use connection::up::SessionKind;
+        let bridge_session = conn.bridge_session.as_ref().and_then(|meta| {
+            let id = meta.active_clients.first()?.to_string();
+            let bound_host = meta.bound_host;
+            Some(ActiveSession::Bridge { bound_host, id })
+        });
+        let main_session = conn.ping_session.as_ref().and_then(|(kind, meta)| {
+            let id = meta.active_clients.first()?.to_string();
+            let bound_host = meta.bound_host;
+            Some(match kind {
+                SessionKind::Ping => ActiveSession::Ping { bound_host, id },
+                SessionKind::Main => ActiveSession::Main { bound_host, id },
+            })
+        });
         ConnStats {
             node_address,
             destination: conn.destination.clone(),
             wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
             wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
-            active_session: conn.active_session.as_ref().and_then(|(kind, meta)| {
-                let id = meta.active_clients.first()?.to_string();
-                let bound_host = meta.bound_host;
-                Some(match kind {
-                    SessionKind::Bridge => ActiveSession::Bridge { bound_host, id },
-                    SessionKind::Ping => ActiveSession::Ping { bound_host, id },
-                    SessionKind::Main => ActiveSession::Main { bound_host, id },
-                })
-            }),
+            bridge_session,
+            main_session,
         }
     }
 }

@@ -537,7 +537,7 @@ impl Core {
                         };
                         if let Some(conn) = active_conn {
                             tracing::info!(%conn, "force reconnect triggered by WAN change");
-                            self.disconnect_from_connection(&conn, results_sender);
+                            self.force_reconnect(conn, results_sender).await;
                         } else {
                             tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
                         }
@@ -1402,6 +1402,7 @@ impl Core {
         &mut self,
         destination: Destination,
         exit: route_health::ExitHealth,
+        prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         if let Some(hopr) = self.hopr.clone() {
@@ -1417,6 +1418,7 @@ impl Core {
                 hopr,
                 self.worker_params.clone(),
                 self.cached_resolved_blokli_ips.clone(),
+                prev_public_key,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1498,7 +1500,7 @@ impl Core {
                 if let Some(rh) = self.route_healths.get(&dest.id) {
                     if let Some(exit) = rh.ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), exit, results_sender);
+                        self.spawn_connection_runner(dest.clone(), exit, None, results_sender);
                     } else if rh.is_unrecoverable() {
                         tracing::error!(destination = %dest,route_health = ?rh.state(),  "refusing connection because of route health");
                     } else {
@@ -1551,6 +1553,48 @@ impl Core {
             self.spawn_disconnection_runner(&disconn, results_sender);
         } else {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
+            self.act_on_target(results_sender);
+        }
+    }
+
+    /// Reconnect without a full disconnect cycle — used for ForceReconnect (WAN change).
+    ///
+    /// Cancels the running connection, tears down the WireGuard tunnel, then immediately
+    /// spawns a new connection runner that carries the old public key so the new runner's
+    /// background bridge-cleanup task can unregister it.
+    async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        let destination = conn.destination.clone();
+        let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
+        let exit_health = self
+            .route_healths
+            .get(&destination.id)
+            .and_then(|rh| rh.current_exit_health());
+
+        self.cancel_connection.cancel();
+        self.cancel_connection = self.cancel_on_shutdown.child_token();
+
+        let _ = self
+            .outgoing_sender
+            .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+            .await;
+
+        self.phase = Phase::HoprRunning;
+
+        if let Some(exit) = exit_health {
+            self.spawn_connection_runner(destination, exit, prev_public_key, results_sender);
+        } else {
+            // No cached exit health — route health has not yet confirmed the exit is healthy.
+            // Fall back to the normal health-check-gated connect path.
+            if let Some(dest) = self.config.destinations.get(&destination.id).cloned()
+                && let Some(rh) = self.route_healths.get_mut(&destination.id)
+            {
+                rh.disconnecting(
+                    self.hopr.as_ref().unwrap(),
+                    &dest,
+                    &self.config.connection,
+                    results_sender,
+                );
+            }
             self.act_on_target(results_sender);
         }
     }

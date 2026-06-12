@@ -30,6 +30,8 @@ pub struct Runner {
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
     cached_blokli_ips: Vec<Ipv4Addr>,
+    /// WireGuard public key from a previous connection to unregister during background bridge cleanup.
+    prev_public_key: Option<String>,
 }
 
 impl Runner {
@@ -40,6 +42,7 @@ impl Runner {
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
         cached_blokli_ips: Vec<Ipv4Addr>,
+        prev_public_key: Option<String>,
     ) -> Self {
         Self {
             destination,
@@ -48,6 +51,7 @@ impl Runner {
             wg_config,
             worker_params,
             cached_blokli_ips,
+            prev_public_key,
         }
     }
 
@@ -92,14 +96,19 @@ impl Runner {
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &bridge_session, public_key, &results_sender).await?;
 
-        // 5. close bridge session
+        // 5. signal ping phase (carries registration) and close bridge in background
         let _ = results_sender
-            .send(progress(Progress::CloseBridge(registration.clone())))
+            .send(progress(Progress::OpenPing(registration.clone())))
             .await;
-        close_bridge_session(&self.hopr, &bridge_session).await?;
+        spawn_background_bridge_cleanup(
+            self.hopr.clone(),
+            bridge_session,
+            self.options.clone(),
+            self.prev_public_key.clone(),
+            results_sender.clone(),
+        );
 
         // 6. open ping session
-        let _ = results_sender.send(progress(Progress::OpenPing)).await;
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
         let session =
             open_ping_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
@@ -390,6 +399,34 @@ async fn request_ping(
         });
     })
     .await
+}
+
+fn spawn_background_bridge_cleanup(
+    hopr: Arc<Hopr>,
+    bridge_session: SessionClientMetadata,
+    options: Options,
+    prev_public_key: Option<String>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    tokio::spawn(async move {
+        if let Some(old_key) = prev_public_key {
+            let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
+            let client = reqwest::Client::new();
+            match gvpn_client::unregister(&client, &input).await {
+                Ok(()) => tracing::debug!("unregistered old wg public key"),
+                Err(gvpn_client::Error::RegistrationNotFound) => {
+                    tracing::warn!("old wg key not found during unregister, possibly already removed");
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "failed to unregister old wg public key");
+                }
+            }
+        }
+        if let Err(err) = close_bridge_session(&hopr, &bridge_session).await {
+            tracing::warn!(%err, "failed to close bridge session in background");
+        }
+        let _ = results_sender.send(progress(Progress::BridgeClosed)).await;
+    });
 }
 
 fn setback(setback: Setback) -> Results {
