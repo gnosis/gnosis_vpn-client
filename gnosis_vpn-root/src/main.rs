@@ -755,9 +755,12 @@ impl DaemonState {
                     refresh_retry_pending = false;
                     if let Some(router) = &mut self.router {
                         match router.refresh().await {
-                            Ok(()) => {
+                            Ok(wan_changed) => {
                                 tracing::info!(attempt = refresh_retry_attempt, "routing refresh succeeded on retry");
                                 refresh_retry_attempt = 0;
+                                if wan_changed {
+                                    self.force_reconnect_after_wan_change().await;
+                                }
                             }
                             Err(error) if refresh_retry_attempt < REFRESH_MAX_RETRIES => {
                                 let delay = REFRESH_RETRY_BASE_DELAY * (1 << refresh_retry_attempt);
@@ -793,12 +796,36 @@ impl DaemonState {
         }
         if let Some(router) = &mut self.router {
             tracing::info!("refreshing routing after network change");
-            if let Err(error) = router.refresh().await {
-                tracing::warn!(?error, "routing refresh failed after network change");
-                return true;
+            match router.refresh().await {
+                Ok(wan_changed) => {
+                    if wan_changed {
+                        self.force_reconnect_after_wan_change().await;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(?error, "routing refresh failed after network change");
+                    return true;
+                }
             }
         }
         false
+    }
+
+    /// Sends ForceReconnect to the worker so the HOPR session restarts via the new WAN interface.
+    /// Fire-and-forget: we don't wait for or track the acknowledgment.
+    async fn force_reconnect_after_wan_change(&mut self) {
+        tracing::info!("WAN interface changed — triggering HOPR session reconnect");
+        if matches!(self.shutdown_ongoing, Shutdown::None)
+            && let Some(ref mut child) = self.worker_child
+        {
+            let msg = RootToWorker::WorkerCommand {
+                cmd: WorkerCommand::ForceReconnect,
+                id: 0,
+            };
+            if let Err(e) = send_to_worker(msg, &mut child.socket_writer).await {
+                tracing::warn!(?e, "failed to send ForceReconnect to worker");
+            }
+        }
     }
 
     fn incoming_network_event(&self, event: device_monitor::NetworkEvent) {
@@ -1095,6 +1122,10 @@ impl DaemonState {
 
     async fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?resp, "received worker response");
+        // ForceReconnect is fire-and-forget (id=0), no pending response entry
+        if matches!(resp, Response::ForceReconnectAcknowledged) {
+            return Ok(());
+        }
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
             if resp_sender.send(resp).is_err() {
                 tracing::error!(id, "unexpected channel closure");

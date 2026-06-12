@@ -538,6 +538,16 @@ impl Core {
                         let _ = resp.send(Response::RefreshNodeTriggered);
                     }
 
+                    WorkerCommand::ForceReconnect => {
+                        if let Phase::Connected(conn) = self.phase.clone() {
+                            tracing::info!(%conn, "force reconnect triggered by WAN change");
+                            self.disconnect_from_connection(&conn, results_sender);
+                        } else {
+                            tracing::debug!(?self.phase, "force reconnect requested but not connected");
+                        }
+                        let _ = resp.send(Response::ForceReconnectAcknowledged);
+                    }
+
                     WorkerCommand::FundingTool(secret) => match self.phase.clone() {
                         Phase::CheckingSafe {
                             node_balance,

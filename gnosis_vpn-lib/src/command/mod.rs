@@ -59,6 +59,9 @@ pub enum WorkerCommand {
     FundingTool(String),
     Telemetry,
     RefreshNode,
+    /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
+    /// Used by the root process when a WAN interface change is detected.
+    ForceReconnect,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,6 +74,7 @@ pub enum Response {
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
     RefreshNodeTriggered,
+    ForceReconnectAcknowledged,
     Pong,
     Info(InfoResponse),
     StartClient(StartClientResponse),

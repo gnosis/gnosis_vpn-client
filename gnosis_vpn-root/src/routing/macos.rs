@@ -178,14 +178,14 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         Ok(iface.to_string())
     }
 
-    async fn refresh(&mut self) -> Result<(), Error> {
+    async fn refresh(&mut self) -> Result<bool, Error> {
         let (device, gateway) = self.route_ops.get_default_interface().await?;
         let wan_unchanged = self.bypass_manager.as_ref().is_some_and(|m| {
             let w = m.wan_interface();
             w.device == device && w.gateway == gateway
         });
         if wan_unchanged {
-            return Ok(());
+            return Ok(false);
         }
 
         if let Some(mut old_mgr) = self.bypass_manager.take() {
@@ -201,7 +201,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
 
         self.bypass_manager = Some(new_mgr);
         tracing::info!("bypass routes refreshed after network change");
-        Ok(())
+        Ok(true)
     }
 
     /// Teardown split-tunnel routing for macOS StaticRouter.
@@ -243,8 +243,8 @@ impl Routing for DynamicRouter {
 
     async fn teardown(&mut self, _logs: Logs) {}
 
-    async fn refresh(&mut self) -> Result<(), Error> {
-        Ok(())
+    async fn refresh(&mut self) -> Result<bool, Error> {
+        Ok(false)
     }
 }
 

@@ -850,7 +850,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         tracing::info!("VPN routing teardown complete");
     }
 
-    async fn refresh(&mut self) -> Result<(), Error> {
+    async fn refresh(&mut self) -> Result<bool, Error> {
         let nft = RealNfTablesOps {};
         refresh_fwmark_infrastructure_with(
             &mut self.infra,
@@ -860,7 +860,7 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
             &mut self.added_routes,
         )
         .await;
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -1107,12 +1107,12 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         tracing::info!("fallback routing teardown complete");
     }
 
-    async fn refresh(&mut self) -> Result<(), Error> {
+    async fn refresh(&mut self) -> Result<bool, Error> {
         let (new_device, new_gateway) = self.route_ops.get_default_interface().await?;
         let old_wan = match self.wan_info.clone() {
-            Some(w) if w == (new_device.clone(), new_gateway.clone()) => return Ok(()),
+            Some(w) if w == (new_device.clone(), new_gateway.clone()) => return Ok(false),
             Some(w) => w,
-            None => return Ok(()),
+            None => return Ok(false),
         };
         tracing::info!(
             old_if = %old_wan.0,
@@ -1148,7 +1148,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
             }
         }
         self.wan_info = Some((new_device, new_gateway));
-        Ok(())
+        Ok(true)
     }
 }
 
