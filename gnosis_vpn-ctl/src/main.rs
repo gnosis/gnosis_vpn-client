@@ -345,6 +345,7 @@ fn pretty_print(resp: &Response) {
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
+        Response::ForceReconnectAcknowledged => {}
     }
 }
 
@@ -382,6 +383,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
+        Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
     }
 }
 
