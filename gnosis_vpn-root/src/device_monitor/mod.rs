@@ -25,13 +25,7 @@ pub async fn start() -> std::io::Result<(
 
     #[cfg(target_os = "linux")]
     {
-        if linux::probe_rtnetlink_multicast().await {
-            tracing::info!("device monitor: using rtnetlink");
-            let (cancel, handle) = linux::start_rtnetlink(tx)?;
-            return Ok((cancel, handle, rx));
-        }
-        tracing::warn!("device monitor: rtnetlink multicast not working, falling back to ip monitor subprocess");
-        let (cancel, handle) = linux::start_subprocess(tx);
+        let (cancel, handle) = linux::start(tx).await?;
         Ok((cancel, handle, rx))
     }
 
