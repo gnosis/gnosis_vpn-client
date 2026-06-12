@@ -5,11 +5,7 @@ use futures::StreamExt;
 use rtnetlink::{
     MulticastGroup,
     packet_core::NetlinkPayload,
-    packet_route::{
-        RouteNetlinkMessage,
-        address::AddressAttribute,
-        link::LinkAttribute,
-    },
+    packet_route::{RouteNetlinkMessage, address::AddressAttribute, link::LinkAttribute},
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -136,7 +132,11 @@ fn link_name(attrs: &[LinkAttribute]) -> &str {
     attrs
         .iter()
         .find_map(|attr| {
-            if let LinkAttribute::IfName(n) = attr { Some(n.as_str()) } else { None }
+            if let LinkAttribute::IfName(n) = attr {
+                Some(n.as_str())
+            } else {
+                None
+            }
         })
         .unwrap_or("unknown")
 }
@@ -145,7 +145,11 @@ fn addr_label(attrs: &[AddressAttribute], index: u32) -> String {
     attrs
         .iter()
         .find_map(|attr| {
-            if let AddressAttribute::Label(n) = attr { Some(n.clone()) } else { None }
+            if let AddressAttribute::Label(n) = attr {
+                Some(n.clone())
+            } else {
+                None
+            }
         })
         .unwrap_or_else(|| format!("if#{index}"))
 }

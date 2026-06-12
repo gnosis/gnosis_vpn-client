@@ -82,9 +82,15 @@ fn parse_event(line: &str) -> NetworkEvent {
             && !name.contains(char::is_whitespace)
         {
             return if deleted {
-                NetworkEvent::LinkRemoved { index, name: name.to_owned() }
+                NetworkEvent::LinkRemoved {
+                    index,
+                    name: name.to_owned(),
+                }
             } else {
-                NetworkEvent::LinkChanged { index, name: name.to_owned() }
+                NetworkEvent::LinkChanged {
+                    index,
+                    name: name.to_owned(),
+                }
             };
         }
 
@@ -94,9 +100,15 @@ fn parse_event(line: &str) -> NetworkEvent {
             && !name.is_empty()
         {
             return if deleted {
-                NetworkEvent::AddressRemoved { index, name: name.to_owned() }
+                NetworkEvent::AddressRemoved {
+                    index,
+                    name: name.to_owned(),
+                }
             } else {
-                NetworkEvent::AddressAdded { index, name: name.to_owned() }
+                NetworkEvent::AddressAdded {
+                    index,
+                    name: name.to_owned(),
+                }
             };
         }
     }

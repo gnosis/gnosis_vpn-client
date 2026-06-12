@@ -1,4 +1,3 @@
-mod ip_json;
 mod ip_text;
 mod rtnetlink;
 
@@ -14,13 +13,7 @@ pub async fn start(
         tracing::info!("device monitor: using rtnetlink");
         return rtnetlink::start(tx);
     }
-    tracing::warn!("device monitor: rtnetlink multicast unavailable");
-
-    if ip_json::probe().await {
-        tracing::info!("device monitor: using ip -j monitor");
-        return Ok(ip_json::start(tx));
-    }
-    tracing::warn!("device monitor: ip -j unavailable, falling back to ip monitor text");
+    tracing::warn!("device monitor: rtnetlink unavailable, falling back to ip monitor");
 
     Ok(ip_text::start(tx))
 }
