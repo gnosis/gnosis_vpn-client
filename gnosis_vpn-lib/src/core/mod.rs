@@ -1583,18 +1583,9 @@ impl Core {
         if let Some(exit) = exit_health {
             self.spawn_connection_runner(destination, exit, prev_public_key, results_sender);
         } else {
-            // No cached exit health — route health has not yet confirmed the exit is healthy.
-            // Fall back to the normal health-check-gated connect path.
-            if let Some(dest) = self.config.destinations.get(&destination.id).cloned()
-                && let Some(rh) = self.route_healths.get_mut(&destination.id)
-            {
-                rh.disconnecting(
-                    self.hopr.as_ref().unwrap(),
-                    &dest,
-                    &self.config.connection,
-                    results_sender,
-                );
-            }
+            // Invariant violation: force_reconnect is only called from Connecting/Connected
+            // which always sets route health to Connecting. Log and wait for health check.
+            tracing::warn!(?destination, "force reconnect: no cached exit health — waiting for health check");
             self.act_on_target(results_sender);
         }
     }
