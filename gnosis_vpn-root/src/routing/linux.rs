@@ -186,4 +186,13 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         self.wan_info = None;
         tracing::info!("routing teardown complete");
     }
+
+    async fn wan_changed(&mut self) -> Result<bool, Error> {
+        let Some(captured) = &self.wan_info else {
+            // no captured WAN means setup never completed — treat as changed
+            return Ok(true);
+        };
+        let current = self.route_ops.get_wan_default().await?;
+        Ok(current != *captured)
+    }
 }

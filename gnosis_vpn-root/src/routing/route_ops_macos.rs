@@ -49,6 +49,16 @@ impl RouteOps for DarwinRouteOps {
         parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
     }
 
+    async fn get_wan_default(&self) -> Result<(String, Option<String>), Error> {
+        let output = Command::new("netstat")
+            .arg("-rn")
+            .arg("-f")
+            .arg("inet")
+            .run_stdout(Logs::Suppress)
+            .await?;
+        parse_netstat_default(&output)
+    }
+
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
         for arg in route_add_args(dest, gateway, device) {
@@ -114,6 +124,37 @@ pub(crate) fn parse_key_value_output(
     Ok((device, gateway))
 }
 
+/// Parses `netstat -rn -f inet` output, returning device and gateway of the
+/// WAN default route — the entry whose destination is exactly `default`.
+///
+/// Unlike `route get 0.0.0.0` (longest-prefix match), the `/0` entry stays
+/// visible in the routing table while our VPN split routes (`0.0.0.0/1`,
+/// `128.0.0.0/1`) are installed, so this lookup is reliable mid-connection.
+pub(crate) fn parse_netstat_default(output: &str) -> Result<(String, Option<String>), Error> {
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let [dest, gateway, flags, netif, ..] = tokens[..] else {
+            continue;
+        };
+        if dest != "default" {
+            continue;
+        }
+        // 'I' flags an interface-scoped default route, not the primary WAN default
+        if flags.contains('I') {
+            continue;
+        }
+        // a link-level gateway ("link#N") is not an IP gateway
+        let gateway = if gateway.starts_with("link#") {
+            None
+        } else {
+            Some(gateway.to_string())
+        };
+        return Ok((netif.to_string(), gateway));
+    }
+    tracing::error!(%output, "Unable to determine WAN default route from netstat");
+    Err(Error::NoInterface)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +192,62 @@ mod tests {
         assert_eq!(device, "en1");
         assert_eq!(gateway, Some("192.168.178.1".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn netstat_default_plain() -> anyhow::Result<()> {
+        let output = "Routing tables\n\n\
+                      Internet:\n\
+                      Destination        Gateway            Flags           Netif Expire\n\
+                      default            192.168.178.1      UGScg             en0\n\
+                      127                127.0.0.1          UCS               lo0\n";
+        let (device, gateway) = parse_netstat_default(output)?;
+        assert_eq!(device, "en0");
+        assert_eq!(gateway, Some("192.168.178.1".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn netstat_default_link_gateway_maps_to_none() -> anyhow::Result<()> {
+        let output = "Destination        Gateway            Flags           Netif Expire\n\
+                      default            link#28            UCSg            utun8\n";
+        let (device, gateway) = parse_netstat_default(output)?;
+        assert_eq!(device, "utun8");
+        assert_eq!(gateway, None);
+        Ok(())
+    }
+
+    #[test]
+    fn netstat_default_skips_ifscoped_entry() -> anyhow::Result<()> {
+        let output = "Destination        Gateway            Flags           Netif Expire\n\
+                      default            192.168.1.1        UGScIg            en1\n\
+                      default            192.168.178.1      UGScg             en0\n";
+        let (device, gateway) = parse_netstat_default(output)?;
+        assert_eq!(device, "en0");
+        assert_eq!(gateway, Some("192.168.178.1".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn netstat_default_ignores_vpn_split_routes() -> anyhow::Result<()> {
+        // While connected, our split routes (0/1, 128.0/1) and VPN subnet are
+        // present — the /0 "default" entry must still resolve to the WAN.
+        let output = "Destination        Gateway            Flags           Netif Expire\n\
+                      0/1                utun8              USc             utun8\n\
+                      default            192.168.178.1      UGScg             en0\n\
+                      10.128/9           utun8              USc             utun8\n\
+                      128.0/1            utun8              USc             utun8\n";
+        let (device, gateway) = parse_netstat_default(output)?;
+        assert_eq!(device, "en0");
+        assert_eq!(gateway, Some("192.168.178.1".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn netstat_default_no_default_route_errors() {
+        let output = "Destination        Gateway            Flags           Netif Expire\n\
+                      127                127.0.0.1          UCS               lo0\n";
+        assert!(parse_netstat_default(output).is_err());
     }
 
     #[test]

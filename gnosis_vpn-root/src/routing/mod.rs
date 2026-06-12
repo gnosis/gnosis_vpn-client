@@ -76,4 +76,10 @@ pub trait Routing {
     /// Set up the VPN tunnel. Returns the resolved WireGuard interface name on success.
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
+    /// Whether the WAN default route differs from the one captured during setup.
+    ///
+    /// Used to tell real network changes apart from route events caused by our
+    /// own routing setup/teardown (which would otherwise feed back into an
+    /// endless reconnect loop).
+    async fn wan_changed(&mut self) -> Result<bool, Error>;
 }

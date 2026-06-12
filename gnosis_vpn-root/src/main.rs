@@ -736,7 +736,21 @@ impl DaemonState {
             .routing_actor_sender
             .send(routing_actor::Msg::ReapplyKillswitch)
             .await;
-        self.force_reconnect_on_network_change().await;
+        // Our own routing setup/teardown emits route events too — reconnect only
+        // when the WAN default route actually changed, otherwise the reconnect's
+        // own route mutations would re-trigger this handler in an endless loop.
+        // Trailing events of a real WAN change may cause one extra reconnect;
+        // that converges once setup re-captures the new WAN.
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::NetworkChanged { reply: reply_tx })
+            .await;
+        match reply_rx.await {
+            Ok(true) => self.force_reconnect_on_network_change().await,
+            Ok(false) => tracing::debug!("network event burst, WAN unchanged — skipping reconnect"),
+            Err(_) => tracing::warn!("routing actor dropped WAN change reply — skipping reconnect"),
+        }
     }
 
     /// Sends ForceReconnect to the worker so the HOPR session restarts after a network change.

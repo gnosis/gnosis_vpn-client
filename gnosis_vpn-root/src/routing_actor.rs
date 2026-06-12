@@ -28,6 +28,13 @@ pub enum Msg {
     DisableKillswitch,
     /// Re-apply the last successfully applied killswitch policy (e.g. after a network change).
     ReapplyKillswitch,
+    /// Ask whether the WAN default route changed since routing setup.
+    /// Replies `false` when no routing is active (nothing to reconnect) or when
+    /// the WAN is unchanged — i.e. the events were caused by our own route
+    /// mutations or unrelated route churn.
+    NetworkChanged {
+        reply: oneshot::Sender<bool>,
+    },
 }
 
 struct AppliedPolicy {
@@ -89,6 +96,24 @@ impl Actor {
                 }
             }
             Msg::ReapplyKillswitch => self.reapply_policy(),
+            Msg::NetworkChanged { reply } => {
+                let _ = reply.send(self.wan_changed().await);
+            }
+        }
+    }
+
+    async fn wan_changed(&mut self) -> bool {
+        let Some(router) = &mut self.router else {
+            // not connected — a reconnect would be a no-op anyway
+            return false;
+        };
+        match router.wan_changed().await {
+            Ok(changed) => changed,
+            Err(error) => {
+                // a default route we can no longer resolve is a real change
+                tracing::warn!(?error, "failed to query WAN default route, assuming network change");
+                true
+            }
         }
     }
 

@@ -43,6 +43,7 @@ pub fn static_router(
         wg: RealWgOps,
         active_bypass_routes: Vec::new(),
         wg_interface_name: None,
+        wan_info: None,
     })
 }
 
@@ -66,6 +67,8 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     /// Resolved WireGuard interface name (e.g. "utun8"); populated after wg-quick up.
     /// Unlike Linux, the interface name is assigned dynamically by the kernel.
     wg_interface_name: Option<String>,
+    /// WAN interface captured at setup time.
+    wan_info: Option<(String, Option<String>)>,
 }
 
 impl<R: RouteOps, W: WgOps> StaticRouter<R, W> {
@@ -169,6 +172,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             return Err(e);
         }
 
+        self.wan_info = Some((device, gateway));
         tracing::info!("routing is ready (macOS static)");
         Ok(interface_name)
     }
@@ -190,6 +194,16 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             }
         }
         self.wg_interface_name = None;
+        self.wan_info = None;
         tracing::info!("routing teardown complete");
+    }
+
+    async fn wan_changed(&mut self) -> Result<bool, Error> {
+        let Some(captured) = &self.wan_info else {
+            // no captured WAN means setup never completed — treat as changed
+            return Ok(true);
+        };
+        let current = self.route_ops.get_wan_default().await?;
+        Ok(current != *captured)
     }
 }
