@@ -2334,6 +2334,41 @@ mod tests {
     // ====================================================================
 
     #[tokio::test]
+    async fn fallback_refresh_returns_false_when_wan_unchanged() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg);
+        router.setup().await?;
+
+        let wan_changed = router.refresh().await?;
+        assert!(!wan_changed, "refresh() must return false when WAN is unchanged");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fallback_refresh_returns_true_on_wan_change() -> anyhow::Result<()> {
+        let route_ops = MockRouteOps::with_state(RouteOpsState {
+            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
+            ..Default::default()
+        });
+        let wg = MockWgOps::new();
+        let mut router = make_fallback_router(route_ops.clone(), wg);
+        router.setup().await?;
+
+        {
+            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
+            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
+        }
+
+        let wan_changed = router.refresh().await?;
+        assert!(wan_changed, "refresh() must return true when WAN device changes");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn fallback_refresh_noop_when_wan_unchanged() -> anyhow::Result<()> {
         let route_ops = MockRouteOps::with_state(RouteOpsState {
             default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
