@@ -24,7 +24,6 @@ use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerComma
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
-use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
@@ -35,8 +34,6 @@ mod routing;
 mod routing_actor;
 mod wg_tooling;
 
-use routing::Routing;
-
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
 #[cfg(target_os = "linux")]
@@ -45,11 +42,6 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 
-struct KillswitchParams {
-    interface: String,
-    ips: Vec<IpAddr>,
-}
-
 struct DaemonState {
     worker_user: worker::Worker,
     config: Config,
@@ -57,7 +49,6 @@ struct DaemonState {
     log_file: Option<PathBuf>,
     worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
-    router: Option<Box<dyn Routing>>,
     shutdown_ongoing: Shutdown,
     // keep track of the current target for restore/restart/reload logic
     target_dest_id: Option<String>,
@@ -77,7 +68,6 @@ struct DaemonState {
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
-    killswitch_params: Option<KillswitchParams>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -526,7 +516,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         pending_responses: HashMap::new(),
         ping_tasks: JoinSet::new(),
         reload_handle,
-        router: None,
         shutdown_ongoing: Shutdown::None,
         target_dest_id: None,
         worker_child: None,
@@ -535,7 +524,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_user,
         keep_alive_instruction_sender,
         routing_actor_sender,
-        killswitch_params: None,
     };
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
@@ -744,14 +732,10 @@ impl DaemonState {
     }
 
     async fn react_to_network_change(&mut self) {
-        if let Some(params) = &self.killswitch_params {
-            let interface = params.interface.clone();
-            let ips = params.ips.clone();
-            tracing::info!("re-applying killswitch after network change");
-            if let Err(error) = self.apply_killswitch(interface, ips).await {
-                tracing::warn!(?error, "failed to re-apply killswitch after network change");
-            }
-        }
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::ReapplyKillswitch)
+            .await;
         self.force_reconnect_on_network_change().await;
     }
 
@@ -1098,8 +1082,7 @@ impl DaemonState {
         }
     }
 
-    async fn disable_killswitch(&mut self) {
-        self.killswitch_params = None;
+    async fn disable_killswitch(&self) {
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::DisableKillswitch)
@@ -1111,10 +1094,7 @@ impl DaemonState {
         match request {
             RequestToRoot::KillswitchLockdown { peer_ips, interface } => {
                 let ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
-                let res = self.apply_killswitch(interface.clone(), ips.clone()).await;
-                if res.is_ok() {
-                    self.killswitch_params = Some(KillswitchParams { interface, ips });
-                }
+                let res = self.apply_killswitch(interface, ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1313,11 +1293,15 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn teardown_any_routing(&mut self) {
-        if let Some(ref mut router) = self.router {
-            router.teardown(Logs::Print).await;
-        }
-        self.router = None;
+    /// Asks the routing actor to tear down any active routing and waits for completion,
+    /// so callers (disconnect, worker cleanup, shutdown) don't proceed mid-teardown.
+    async fn teardown_any_routing(&self) {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::TeardownRouting { reply: reply_tx })
+            .await;
+        let _ = reply_rx.await;
     }
 
     /// Remove routing and stop ping tasks
@@ -1339,35 +1323,23 @@ impl DaemonState {
     }
 
     async fn setup_static_routing(
-        &mut self,
+        &self,
         wg_data: event::WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
     ) -> Result<String, String> {
-        // ensure clean slate
-        self.teardown_any_routing().await;
-
-        let state_home = self.worker_params.state_home();
-        let res_router = routing::static_router(state_home, wg_data, peer_ips);
-        match res_router {
-            Ok(mut router) => {
-                let res_setup = router.setup().await;
-                self.router = Some(Box::new(router));
-                match res_setup {
-                    Ok(interface_name) => {
-                        tracing::info!("static routing setup successfully");
-                        Ok(interface_name)
-                    }
-                    Err(error) => {
-                        tracing::error!(?error, "static routing setup error");
-                        self.teardown_any_routing().await;
-                        Err(error.to_string())
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to build static router");
-                Err(error.to_string())
-            }
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .routing_actor_sender
+            .send(routing_actor::Msg::SetupRouting {
+                state_home: self.worker_params.state_home(),
+                wg_data: Box::new(wg_data),
+                peer_ips,
+                reply: reply_tx,
+            })
+            .await;
+        match reply_rx.await {
+            Ok(res) => res,
+            Err(_) => Err("routing actor dropped reply channel".to_string()),
         }
     }
 
