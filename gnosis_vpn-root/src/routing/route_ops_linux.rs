@@ -127,6 +127,49 @@ impl RouteOps for NetlinkRouteOps {
         Ok((if_name, gateway))
     }
 
+    async fn has_default_route(&self, device: &str, gateway: Option<&str>) -> Result<bool, Error> {
+        let if_index = match self.resolve_ifindex(device).await {
+            Ok(idx) => idx,
+            Err(_) => return Ok(false),
+        };
+
+        let routes: Vec<_> = self
+            .handle
+            .route()
+            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
+            .execute()
+            .try_collect()
+            .await?;
+
+        for route in &routes {
+            let is_default = route.header.destination_prefix_length == 0;
+            let is_main_table = route.header.table == 254;
+            if !is_default || !is_main_table {
+                continue;
+            }
+
+            let route_ifindex = route
+                .attributes
+                .iter()
+                .find_map(|a| if let RouteAttribute::Oif(idx) = a { Some(*idx) } else { None });
+
+            if route_ifindex != Some(if_index) {
+                continue;
+            }
+
+            let route_gw = route.attributes.iter().find_map(|a| match a {
+                RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+                _ => None,
+            });
+
+            if route_gw.as_deref() == gateway {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let (addr, prefix_len) = Self::parse_dest(dest)?;
         let if_index = self.resolve_ifindex(device).await?;

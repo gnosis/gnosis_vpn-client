@@ -31,6 +31,21 @@ pub trait RouteOps: Send + Sync + Clone {
         self.get_default_interface().await
     }
 
+    /// Check if a default route via `device` with `gateway` still exists in the main routing table.
+    ///
+    /// The default implementation checks the current best-metric default route.
+    /// Linux overrides this to scan all main-table default routes so that adding a
+    /// new interface (e.g. plugging in a cable while WiFi is up) does not falsely
+    /// report the captured WAN as gone just because a new route has a lower metric.
+    async fn has_default_route(&self, device: &str, gateway: Option<&str>) -> Result<bool, Error> {
+        match self.get_wan_default().await {
+            Ok((current_device, current_gateway)) => {
+                Ok(current_device == device && current_gateway.as_deref() == gateway)
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
     /// Add a route: destination via optional gateway through device.
     #[allow(dead_code)]
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error>;

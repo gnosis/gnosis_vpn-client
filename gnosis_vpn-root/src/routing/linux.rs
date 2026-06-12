@@ -188,11 +188,18 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     }
 
     async fn wan_changed(&mut self) -> Result<bool, Error> {
-        let Some(captured) = &self.wan_info else {
+        let Some((captured_device, captured_gateway)) = &self.wan_info else {
             // no captured WAN means setup never completed — treat as changed
             return Ok(true);
         };
-        let current = self.route_ops.get_wan_default().await?;
-        Ok(current != *captured)
+        // Check that the WAN interface used at setup still has a default route.
+        // A new interface appearing with a lower metric (e.g. plugging in a cable
+        // while WiFi is up) changes the "best" default but does not break the
+        // existing bypass routes, which are explicit /32 routes via the old device.
+        let still_viable = self
+            .route_ops
+            .has_default_route(captured_device, captured_gateway.as_deref())
+            .await?;
+        Ok(!still_viable)
     }
 }
