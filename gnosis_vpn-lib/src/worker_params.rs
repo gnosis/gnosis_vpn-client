@@ -34,7 +34,6 @@ pub struct WorkerParams {
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     blokli_url: Option<Url>,
-    force_static_routing: bool,
     state_home: PathBuf,
     cached_blokli_ips: Vec<Ipv4Addr>,
 }
@@ -52,7 +51,6 @@ impl WorkerParams {
         config_mode: ConfigFileMode,
         allow_insecure: bool,
         blokli_url: Option<Url>,
-        force_static_routing: bool,
         state_home: PathBuf,
     ) -> Self {
         Self {
@@ -61,7 +59,6 @@ impl WorkerParams {
             config_mode,
             allow_insecure,
             blokli_url,
-            force_static_routing,
             state_home,
             cached_blokli_ips: Vec::new(),
         }
@@ -151,10 +148,6 @@ impl WorkerParams {
 
     pub fn allow_insecure(&self) -> bool {
         self.allow_insecure
-    }
-
-    pub fn force_static_routing(&self) -> bool {
-        self.force_static_routing
     }
 
     pub fn blokli_url(&self) -> Option<Url> {

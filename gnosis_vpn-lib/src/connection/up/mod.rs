@@ -39,7 +39,6 @@ pub enum Progress {
     OpenPing,
     PeerIps,
     KillswitchLockdown,
-    DynamicWgTunnel(SessionClientMetadata),
     StaticWgTunnel(SessionClientMetadata),
     Ping,
     AdjustToMain(Duration),
@@ -95,10 +94,9 @@ pub enum Phase {
     RegisterWg,
     ClosingBridge,
     OpeningPing,
-    FallbackGatherPeerIps,
+    GatherPeerIps,
     KillswitchLockdown,
-    EstablishDynamicWgTunnel,
-    FallbackToStaticWgTunnel,
+    EstablishWgTunnel,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
@@ -140,14 +138,10 @@ impl Up {
                 self.active_session = None;
             }
             Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::DynamicWgTunnel(session) => {
-                self.phase = (now, Phase::EstablishDynamicWgTunnel);
-                self.active_session = Some((SessionKind::Ping, session));
-            }
-            Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
             Progress::StaticWgTunnel(session) => {
-                self.phase = (now, Phase::FallbackToStaticWgTunnel);
+                self.phase = (now, Phase::EstablishWgTunnel);
                 self.active_session = Some((SessionKind::Ping, session));
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
@@ -185,10 +179,9 @@ impl Display for Phase {
             Phase::RegisterWg => "Registering WireGuard public key",
             Phase::ClosingBridge => "Closing bridge connection",
             Phase::OpeningPing => "Opening main connection",
-            Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
-            Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::GatherPeerIps => "Retrieving peer IPs",
             Phase::KillswitchLockdown => "Activating killswitch",
-            Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
+            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
             Phase::ConnectionEstablished => "Connection established",
@@ -216,7 +209,6 @@ impl Display for Progress {
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
             Progress::OpenPing => write!(f, "Opening main connection"),
-            Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),

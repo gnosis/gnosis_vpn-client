@@ -264,15 +264,6 @@ impl Core {
                             tracing::warn!(?res, "no responder channel available for root response");
                         }
                     }
-                    ResponseFromRoot::DynamicWgRouting { res } => {
-                        if let Some(responder) = self.responder_string.take() {
-                            let _ = responder.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for dynamic wg routing response");
-                            });
-                        } else {
-                            tracing::warn!(?res, "no responder channel available for root response");
-                        }
-                    }
                     ResponseFromRoot::StaticWgRouting { res } => {
                         if let Some(responder) = self.responder_string.take() {
                             let _ = responder.send(res).map_err(|_| {
@@ -882,12 +873,6 @@ impl Core {
                 } => {
                     self.responder_unit = Some(resp);
                     let request = RequestToRoot::KillswitchLockdown { peer_ips, interface };
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
-
-                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
-                    self.responder_string = Some(resp);
-                    let request = RequestToRoot::DynamicWgRouting { wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 

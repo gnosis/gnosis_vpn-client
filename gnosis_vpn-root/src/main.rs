@@ -504,9 +504,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (keep_alive_instruction_sender, keep_alive_instruction_receiver) = mpsc::channel(32);
     let (cancel_keep_alive_timer, keep_alive_expired) = keep_alive_timer(keep_alive_instruction_receiver).await?;
 
-    // Clean up any stale fwmark infrastructure if it exists (Linux only, dynamic routing only)
-    routing::reset_on_startup(worker_params.state_home()).await;
-
     let cancel_routing_actor = CancellationToken::new();
     let (routing_actor_sender, routing_actor_handle) =
         routing_actor::start(cancel_routing_actor.clone()).map_err(|error| {
@@ -1129,19 +1126,6 @@ impl DaemonState {
                 }
                 Ok(())
             }
-            RequestToRoot::DynamicWgRouting { wg_data } => {
-                let res = self.setup_dynamic_routing(wg_data).await;
-                if matches!(self.shutdown_ongoing, Shutdown::None)
-                    && let Some(ref mut child) = self.worker_child
-                {
-                    send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { res }),
-                        &mut child.socket_writer,
-                    )
-                    .await?;
-                }
-                Ok(())
-            }
             RequestToRoot::StaticWgRouting { wg_data, peer_ips } => {
                 let res = self.setup_static_routing(wg_data, peer_ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
@@ -1352,36 +1336,6 @@ impl DaemonState {
             .keep_alive_instruction_sender
             .send(KeepAliveInstruction::Suspend)
             .await;
-    }
-
-    async fn setup_dynamic_routing(&mut self, wg_data: event::WireGuardData) -> Result<String, String> {
-        // ensure clean slate
-        self.teardown_any_routing().await;
-
-        let state_home = self.worker_params.state_home();
-        let worker_user = self.worker_user.clone();
-        let res_router = routing::dynamic_router(state_home, worker_user, wg_data).await;
-        match res_router {
-            Ok(mut router) => {
-                let res_setup = router.setup().await;
-                self.router = Some(Box::new(router));
-                match res_setup {
-                    Ok(interface_name) => {
-                        tracing::info!("dynamic routing setup successfully");
-                        Ok(interface_name)
-                    }
-                    Err(error) => {
-                        tracing::error!(?error, "dynamic routing setup error");
-                        self.teardown_any_routing().await;
-                        Err(error.to_string())
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to build dynamic router");
-                Err(error.to_string())
-            }
-        }
     }
 
     async fn setup_static_routing(

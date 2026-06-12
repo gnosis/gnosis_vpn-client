@@ -87,10 +87,6 @@ pub struct Cli {
                 value_parser = humantime::parse_duration
         )]
     pub client_autostart: Option<Duration>,
-
-    /// Avoid dynamic peer discovery while connected to the VPN
-    #[arg(long, env = worker::ENV_VAR_FORCE_STATIC_ROUTING)]
-    pub force_static_routing: bool,
 }
 
 pub fn parse() -> Cli {
@@ -104,7 +100,6 @@ impl From<&Cli> for WorkerParams {
             None => worker_params::ConfigFileMode::Generated,
         };
         let allow_insecure = cli.allow_insecure;
-        let force_static_routing = cli.force_static_routing;
         let state_home = cli.state_home.clone();
 
         WorkerParams::new(
@@ -113,7 +108,6 @@ impl From<&Cli> for WorkerParams {
             config_mode,
             allow_insecure,
             cli.hopr_blokli_url.clone(),
-            force_static_routing,
             state_home,
         )
     }

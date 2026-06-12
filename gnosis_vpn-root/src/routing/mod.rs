@@ -1,14 +1,5 @@
-//! # Routing Modes
-//!
-//! This module provides split-tunnel VPN routing implementations for different platforms.
-//!
-//! ## Dynamic Routing (Linux only, default)
-//! Uses rtnetlink + firewall rules for policy-based routing with firewall marks.
-//! Most reliable but requires root and nftables availability.
-//!
-//! ## Static Routing (all platforms)
+//! Split-tunnel VPN routing implementations for Linux and macOS.
 //! Uses route operations via platform-native APIs.
-//! Simpler but may have reduced reliability during network changes.
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -22,8 +13,6 @@ pub(crate) mod wg_ops;
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
-        pub(crate) mod netlink_ops;
-        pub(crate) mod nftables_ops;
         pub(crate) mod route_ops_linux;
         mod linux;
     } else if #[cfg(target_os = "macos")] {
@@ -32,17 +21,14 @@ cfg_if::cfg_if! {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod mocks;
-
 // ============================================================================
 // Shared Utilities
 // ============================================================================
 
 #[cfg(target_os = "linux")]
-pub use linux::{dynamic_router, reset_on_startup, static_fallback_router as static_router};
+pub use linux::static_router;
 #[cfg(target_os = "macos")]
-pub use macos::{dynamic_router, reset_on_startup, static_router};
+pub use macos::static_router;
 
 /// RFC1918 + link-local networks that should bypass VPN tunnel.
 /// These are more specific than the VPN default routes (0.0.0.0/1, 128.0.0.0/1)
@@ -78,21 +64,12 @@ pub enum Error {
     #[error("wg-quick error: {0}")]
     WgTooling(#[from] wireguard::Error),
 
-    /// explicitly allowing dead_code here to avoid cumbersome cfg targets everywhere
-    #[error("This functionality is not available on this platform")]
-    #[allow(dead_code)]
-    NotAvailable,
-
     #[error("General error: {0}")]
     General(String),
 
     #[cfg(target_os = "linux")]
     #[error("rtnetlink error: {0} ")]
     Rtnetlink(#[from] rtnetlink::Error),
-
-    #[cfg(target_os = "linux")]
-    #[error("nftables error: {0} ")]
-    NfTables(String),
 }
 
 #[async_trait]
