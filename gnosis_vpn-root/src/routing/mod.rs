@@ -7,7 +7,6 @@ use thiserror::Error;
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use gnosis_vpn_lib::{dirs, wireguard};
 
-mod bypass;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 

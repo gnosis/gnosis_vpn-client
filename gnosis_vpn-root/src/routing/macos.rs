@@ -4,21 +4,13 @@
 //! 1. Adds bypass routes for peer IPs and RFC1918 networks BEFORE bringing up WireGuard
 //!    (avoids race condition for both HOPR traffic and LAN access)
 //! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
-//! 3. Adds VPN-specific routes programmatically after wg-quick up:
-//!    - Default routes (0.0.0.0/1 and 128.0.0.0/1) through VPN
-//!    - VPN subnet route (10.128.0.0/9) through VPN - overrides the 10.0.0.0/8 bypass
-//!      so VPN server traffic (e.g. 10.128.0.1) uses the tunnel
-//! 4. On teardown, removes VPN routes, brings down WireGuard, then cleans up bypass routes
+//! 3. Adds VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) and VPN subnet (`10.128.0.0/9`)
+//!    via the resolved utun interface
+//! 4. On teardown: removes VPN routes, brings down WireGuard, removes bypass routes
 //!
-//! ## Route Precedence (most specific wins)
-//!
-//! - 10.128.0.0/9 → VPN interface (VPN server subnet)
-//! - 10.0.0.0/8 → WAN gateway (other RFC1918 Class A)
-//! - 0.0.0.0/1, 128.0.0.0/1 → VPN interface (catch-all)
-//!
-//! ## Platform Notes
-//!
-//! Dynamic routing (using rtnetlink) is not available on macOS.
+//! ## Route Precedence
+//! Route specificity handles all traffic without extra routing tables:
+//! `/32` (peer) > `/12`–`/16` (RFC1918) > `/9` (VPN subnet) > `/8` (RFC1918) > `/1` (VPN default) > `/0` (WAN)
 
 use async_trait::async_trait;
 
@@ -28,17 +20,14 @@ use gnosis_vpn_lib::{event, wireguard};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use super::bypass;
 use super::route_ops::RouteOps;
 use super::route_ops_macos::DarwinRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
-use super::{Error, Routing, VPN_TUNNEL_SUBNET};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
 
-const DEFAULT_VPN_ROUTES: &[&str] = &["0.0.0.0/1", "128.0.0.0/1"];
-
-fn vpn_subnet_route() -> String {
-    format!("{}/{}", VPN_TUNNEL_SUBNET.0, VPN_TUNNEL_SUBNET.1)
-}
+/// VPN split routes: two /1 halves cover all IPv4 space.
+/// More specific than the WAN /0 default, routing all non-bypass internet traffic into the tunnel.
+const VPN_SPLIT_ROUTES: &[(&str, u8)] = &[("0.0.0.0", 1), ("128.0.0.0", 1)];
 
 /// Builds a static macOS router.
 pub fn static_router(
@@ -52,13 +41,17 @@ pub fn static_router(
         peer_ips,
         route_ops: DarwinRouteOps,
         wg: RealWgOps,
-        bypass_manager: None,
-        vpn_routes_added: Vec::new(),
+        active_bypass_routes: Vec::new(),
         wg_interface_name: None,
     })
 }
 
-/// macOS routing implementation that programs host routes directly before wg-quick up.
+/// macOS static router using route operations via the `route` command.
+///
+/// Uses `Table = off` so wg-quick only creates the WireGuard interface.
+/// All routing is owned explicitly by this struct via `RouteOps`:
+/// - bypass routes (peer IPs + RFC1918) via WAN — added before wg-quick up
+/// - VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) + VPN subnet via utun — static after setup
 ///
 /// Generic over `R: RouteOps` and `W: WgOps` so tests can inject mock implementations.
 pub struct StaticRouter<R: RouteOps, W: WgOps> {
@@ -67,133 +60,136 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
-    bypass_manager: Option<bypass::BypassRouteManager<R>>,
-    /// VPN routes successfully added after wg-quick up (for rollback/teardown).
-    vpn_routes_added: Vec<String>,
-    /// Resolved WireGuard interface name (e.g. "utun8" on macOS, "wg0_gnosisvpn" on Linux).
-    /// Populated after wg_quick_up; None before setup.
+    /// Bypass routes currently installed: (dest_cidr, wan_device).
+    /// Tracked for explicit cleanup since the wg-quick config has no PreDown scripts.
+    active_bypass_routes: Vec<(String, String)>,
+    /// Resolved WireGuard interface name (e.g. "utun8"); populated after wg-quick up.
+    /// Unlike Linux, the interface name is assigned dynamically by the kernel.
     wg_interface_name: Option<String>,
+}
+
+impl<R: RouteOps, W: WgOps> StaticRouter<R, W> {
+    fn vpn_interface(&self) -> String {
+        self.wg_interface_name
+            .clone()
+            .unwrap_or_else(|| wireguard::WG_INTERFACE.to_string())
+    }
+
+    async fn setup_vpn_routes(&self, iface: &str) -> Result<(), Error> {
+        for (net, prefix) in VPN_SPLIT_ROUTES {
+            let cidr = format!("{}/{}", net, prefix);
+            let _ = self.route_ops.route_del(&cidr, iface).await;
+            self.route_ops.route_add(&cidr, None, iface).await?;
+        }
+        let (net, prefix) = VPN_TUNNEL_SUBNET;
+        let cidr = format!("{}/{}", net, prefix);
+        let _ = self.route_ops.route_del(&cidr, iface).await;
+        self.route_ops.route_add(&cidr, None, iface).await
+    }
+
+    async fn remove_vpn_routes(&self) {
+        let iface = self.vpn_interface();
+        let vpn_routes = [("0.0.0.0", 1u8), ("128.0.0.0", 1u8), VPN_TUNNEL_SUBNET];
+        for (net, prefix) in &vpn_routes {
+            let cidr = format!("{}/{}", net, prefix);
+            if let Err(e) = self.route_ops.route_del(&cidr, &iface).await {
+                tracing::warn!(%e, cidr = %cidr, "failed to remove VPN route");
+            }
+        }
+    }
+
+    async fn rollback_bypass_routes(&mut self) {
+        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+            if let Err(e) = self.route_ops.route_del(&dest, &device).await {
+                tracing::warn!(%e, dest = %dest, "failed to remove bypass route during rollback");
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
-    /// Install split-tunnel routing for macOS StaticRouter.
+    /// Install split-tunnel routing.
     ///
-    /// Uses a phased approach to avoid a race condition where HOPR p2p connections
-    /// could briefly drop when the WireGuard interface comes up.
+    /// Phase 1 (before wg-quick up): add bypass routes via WAN
+    ///   - Peer IP /32 routes (hard-fail: rollback all on error)
+    ///   - RFC1918 bypass routes (soft-fail: warn and continue)
     ///
-    /// Phase 1 (before wg-quick up):
-    ///   1. Get WAN interface info
-    ///   2. Add bypass routes for all peer IPs directly via WAN
-    ///   3. Add RFC1918 bypass routes (10.0.0.0/8, etc.) via WAN for LAN access
+    /// Phase 2: wg-quick up with Table = off (no automatic routing)
+    ///   - On failure: rollback Phase 1 bypass routes
     ///
-    /// Phase 2:
-    ///   4. Run wg-quick up with Table = off (no automatic routing)
-    ///
-    /// Phase 3 (after wg-quick up):
-    ///   5. Add VPN routes (default + subnet) programmatically via route_ops
-    ///
+    /// Phase 3 (after wg-quick up): add VPN routes via the resolved utun interface
+    ///   - `0.0.0.0/1` and `128.0.0.0/1` override the WAN default for all internet traffic
+    ///   - `10.128.0.0/9` overrides the `10.0.0.0/8` RFC1918 bypass for VPN server traffic
+    ///   - On failure: remove partial VPN routes, wg-quick down, rollback bypass routes
     async fn setup(&mut self) -> Result<String, Error> {
-        if self.bypass_manager.is_some() {
-            return Err(Error::General("invalid state: already set up".into()));
+        let (device, gateway) = self.route_ops.get_default_interface().await?;
+        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface for bypass routes");
+
+        // Phase 1: bypass routes before wg-quick up (avoids race with HOPR p2p connections)
+        for ip in &self.peer_ips.clone() {
+            let dest = ip.to_string();
+            let _ = self.route_ops.route_del(&dest, &device).await;
+            if let Err(e) = self.route_ops.route_add(&dest, gateway.as_deref(), &device).await {
+                self.rollback_bypass_routes().await;
+                return Err(e);
+            }
+            self.active_bypass_routes.push((dest, device.clone()));
+        }
+        for (net, prefix) in RFC1918_BYPASS_NETS {
+            let cidr = format!("{}/{}", net, prefix);
+            let _ = self.route_ops.route_del(&cidr, &device).await;
+            match self.route_ops.route_add(&cidr, gateway.as_deref(), &device).await {
+                Ok(_) => self.active_bypass_routes.push((cidr, device.clone())),
+                Err(e) => tracing::warn!(%e, cidr = %cidr, "RFC1918 bypass route failed, continuing"),
+            }
         }
 
-        // Phase 1: Add peer IP bypass routes BEFORE wg-quick up
-        let (device, gateway) = self.route_ops.get_default_interface().await?;
-        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface info for bypass routes");
-
-        let mut bypass_manager = bypass::BypassRouteManager::new(
-            bypass::WanInterface {
-                device: device.clone(),
-                gateway: gateway.clone(),
-            },
-            self.peer_ips.clone(),
-            self.route_ops.clone(),
+        // Phase 2: wg-quick up with Table = off
+        let wg_content = self.wg_data.wg.to_file_string(
+            &self.wg_data.interface_info,
+            &self.wg_data.peer_info,
+            vec!["Table = off".to_string()],
         );
-
-        // Add peer IP and RFC1918 bypass routes (auto-rollback on failure)
-        bypass_manager.setup_peer_routes().await?;
-        bypass_manager.setup_rfc1918_routes().await?;
-
-        // Phase 2: wg-quick up with Table = off only (no PostUp hooks)
-        let extra = vec!["Table = off".to_string()];
-
-        let wg_quick_content =
-            self.wg_data
-                .wg
-                .to_file_string(&self.wg_data.interface_info, &self.wg_data.peer_info, extra);
-
-        let iface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await {
-            Ok(name) => name,
+        let interface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_content).await {
+            Ok(n) => n,
             Err(e) => {
-                tracing::warn!("wg-quick up failed, rolling back peer IP bypass routes");
-                bypass_manager.rollback().await;
+                self.rollback_bypass_routes().await;
                 return Err(e);
             }
         };
-        self.wg_interface_name = Some(iface_name);
-        let iface = self.wg_interface_name.as_deref().unwrap_or(wireguard::WG_INTERFACE);
-        tracing::debug!(interface = %iface, "wg-quick up");
+        self.wg_interface_name = Some(interface_name.clone());
+        tracing::debug!(%interface_name, "wg-quick up");
 
-        // Phase 3: Add VPN routes programmatically
-        let vpn_subnet_route = vpn_subnet_route();
-        for route_dest in DEFAULT_VPN_ROUTES
-            .iter()
-            .copied()
-            .chain(std::iter::once(vpn_subnet_route.as_str()))
-        {
-            if let Err(e) = self.route_ops.route_add(route_dest, None, iface).await {
-                tracing::warn!(%e, route = route_dest, "VPN route failed, rolling back");
-                // Rollback VPN routes added so far
-                for added in self.vpn_routes_added.drain(..).rev() {
-                    if let Err(del_err) = self.route_ops.route_del(&added, iface).await {
-                        tracing::warn!(%del_err, route = %added, "failed to rollback VPN route");
-                    }
-                }
-                // Bring down WireGuard
-                if let Err(wg_err) = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await {
-                    tracing::warn!(%wg_err, "rollback failed: could not bring down WireGuard");
-                }
-                // Rollback bypass routes
-                bypass_manager.rollback().await;
-                return Err(e);
-            }
-            self.vpn_routes_added.push((*route_dest).to_string());
+        // Phase 3: VPN routes via utun (split defaults + VPN subnet override)
+        if let Err(e) = self.setup_vpn_routes(&interface_name).await {
+            self.remove_vpn_routes().await;
+            let _ = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await;
+            self.rollback_bypass_routes().await;
+            return Err(e);
         }
-        tracing::debug!(routes = ?self.vpn_routes_added, "VPN routes added");
 
-        self.bypass_manager = Some(bypass_manager);
         tracing::info!("routing is ready (macOS static)");
-        Ok(iface.to_string())
+        Ok(interface_name)
     }
 
-    /// Teardown split-tunnel routing for macOS StaticRouter.
+    /// Teardown split-tunnel routing.
     ///
-    /// Teardown order:
-    /// 1. Remove VPN routes (best-effort)
+    /// 1. Remove VPN routes (utun) — warn on error, continue
     /// 2. wg-quick down
-    /// 3. Remove bypass routes
-    ///
+    /// 3. Remove bypass routes (WAN) — warn on error, continue
     async fn teardown(&mut self, logs: Logs) {
-        let iface = self.wg_interface_name.as_deref().unwrap_or(wireguard::WG_INTERFACE);
-
-        // Remove VPN routes (best-effort, warn on failure)
-        for route in self.vpn_routes_added.drain(..) {
-            if let Err(e) = self.route_ops.route_del(&route, iface).await {
-                tracing::warn!(route = %route, %e, "failed to remove VPN route during teardown");
-            }
-        }
-
-        // wg-quick down
+        self.remove_vpn_routes().await;
         match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
-            Err(error) => tracing::warn!(?error, "wg-quick down failed, continuing with bypass route cleanup"),
+            Err(error) => tracing::warn!(?error, "wg-quick down failed during teardown"),
         }
-
-        // Remove bypass routes (always, even if wg-quick down failed)
-        if let Some(ref mut bypass_manager) = self.bypass_manager {
-            bypass_manager.teardown().await;
+        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+            if let Err(e) = self.route_ops.route_del(&dest, &device).await {
+                tracing::warn!(%e, dest = %dest, device = %device, "failed to remove bypass route");
+            }
         }
-        self.bypass_manager = None;
+        self.wg_interface_name = None;
+        tracing::info!("routing teardown complete");
     }
 }
