@@ -107,7 +107,7 @@ impl Runner {
         // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
+        peer_ips.extend(blokli_ips);
 
         // 8. setup static wg tunnel — returns the resolved WireGuard interface name
         let _ = results_sender
