@@ -57,7 +57,7 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
-        // -1. resolve blokli ips - use cached IPs resolution in case of killswitch active
+        // 1. resolve blokli ips — use cached IPs when killswitch is active (DNS unreachable)
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         let blokli_ips = if self.cached_blokli_ips.is_empty() {
@@ -66,14 +66,14 @@ impl Runner {
             self.cached_blokli_ips.clone()
         };
 
-        // 0. generate wg keys
+        // 2. generate wg keys
         let _ = results_sender
             .send(progress(Progress::GenerateWg(blokli_ips.clone())))
             .await;
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
         let public_key = wg.key_pair.public_key.clone();
 
-        // 1. open bridge session
+        // 3. open bridge session
         let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
         let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
         let bridge_session = open_bridge_session(
@@ -88,82 +88,47 @@ impl Runner {
             .send(progress(Progress::BridgeOpened(bridge_session.clone())))
             .await;
 
-        // 2. register wg public key
+        // 4. register wg public key
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &bridge_session, public_key, &results_sender).await?;
 
-        // 3. close bridge session
+        // 5. close bridge session
         let _ = results_sender
             .send(progress(Progress::CloseBridge(registration.clone())))
             .await;
         close_bridge_session(&self.hopr, &bridge_session).await?;
 
-        // 4. open ping session
+        // 6. open ping session
         let _ = results_sender.send(progress(Progress::OpenPing)).await;
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
         let session =
             open_ping_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
 
-        // 5. gather ips of all announced peers
+        // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr, self.options.announced_peer_minimum_score).await?;
-        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         peer_ips.extend(remote_data::resolve_ips(&blokli_url).await?);
 
-        self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
-            .await
-    }
-
-    async fn run_static_wg_tunnel(
-        &self,
-        wg: &WireGuard,
-        registration: &Registration,
-        session: &SessionClientMetadata,
-        peer_ips: Vec<Ipv4Addr>,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 6b. request static wg tunnel from root
+        // 8. setup static wg tunnel — returns the resolved WireGuard interface name
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
+        let interface =
+            request_static_wg_tunnel(&wg, &registration, &session, peer_ips.clone(), &results_sender).await?;
 
-        // setup static routing — returns the resolved WireGuard interface name
-        let interface = request_static_wg_tunnel(wg, registration, session, peer_ips.clone(), results_sender).await?;
-
-        // 6. activate killswitch now that the interface name is known
+        // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips, interface, results_sender).await?;
+        request_killswitch_lockdown(peer_ips, interface, &results_sender).await?;
 
-        // and verify it works
-        self.run_check_static_routing(session, results_sender).await
-    }
-
-    async fn run_check_static_routing(
-        &self,
-        session: &SessionClientMetadata,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 7b. request ping from root to check if static routing works
+        // 10. verify tunnel with ping — give it some leeway with 5 retries
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        // this is our last chance - give it some leeway with 5 retries
-        let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
-        self.run_after_verified_working(round_trip_time, session, results_sender)
-            .await
-    }
+        let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
 
-    async fn run_after_verified_working(
-        &self,
-        round_trip_time: Duration,
-        session: &SessionClientMetadata,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 8. adjust to main session
+        // 11. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
-
-        // Adjust is only needed when main SURB management is configured.
         if let Some(main_config) = main_surb.management {
             let active_client = match session.active_clients.as_slice() {
                 [] => return Err(HoprError::SessionNotFound.into()),
