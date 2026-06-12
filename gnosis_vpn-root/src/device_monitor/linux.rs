@@ -147,14 +147,47 @@ async fn run_subprocess(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToke
                 }
                 Ok(Some(line)) => {
                     if !line.is_empty() && !line.starts_with(char::is_whitespace) {
-                        // ip monitor output doesn't distinguish event types cleanly,
-                        // so emit a generic RouteChanged as a best-effort signal
-                        let _ = tx.try_send(NetworkEvent::RouteChanged);
+                        let _ = tx.try_send(parse_ip_monitor_line(&line));
                     }
                 }
             }
         }
     }
+}
+
+// Parses a non-indented line from `ip monitor link address route`.
+//
+// Link lines have the form "<index>: <name>: <flags>..." where the name
+// contains no whitespace. Everything else (routes, addresses) becomes
+// RouteChanged, which is sufficient for the WAN-change check.
+fn parse_ip_monitor_line(line: &str) -> NetworkEvent {
+    let (deleted, rest) = match line.strip_prefix("Deleted ") {
+        Some(r) => (true, r),
+        None => (false, line),
+    };
+
+    // Try to parse as a link line: "<index>: <name>: ..."
+    if let Some((idx_str, after_idx)) = rest.split_once(": ")
+        && let Ok(index) = idx_str.parse::<u32>()
+        && let Some((name, _)) = after_idx.split_once(": ")
+    {
+        // Interface names never contain whitespace
+        if !name.contains(char::is_whitespace) {
+            return if deleted {
+                NetworkEvent::LinkRemoved {
+                    index,
+                    name: name.to_owned(),
+                }
+            } else {
+                NetworkEvent::LinkChanged {
+                    index,
+                    name: name.to_owned(),
+                }
+            };
+        }
+    }
+
+    NetworkEvent::RouteChanged
 }
 
 fn to_network_event(msg: RouteNetlinkMessage) -> Option<NetworkEvent> {

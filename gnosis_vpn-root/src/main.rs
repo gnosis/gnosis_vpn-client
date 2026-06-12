@@ -698,6 +698,7 @@ impl DaemonState {
         tokio::pin!(network_debounce);
         let mut network_change_pending = false;
         let mut network_burst_started: Option<time::Instant> = None;
+        let mut removed_link: Option<String> = None;
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
@@ -711,6 +712,9 @@ impl DaemonState {
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
                 Some(event) = network_events.recv() => {
+                    if let device_monitor::NetworkEvent::LinkRemoved { ref name, .. } = event {
+                        removed_link = Some(name.clone());
+                    }
                     self.incoming_network_event(event);
                     let burst_started = *network_burst_started.get_or_insert_with(time::Instant::now);
                     let deadline = burst_started + KILLSWITCH_DEBOUNCE_MAX;
@@ -721,7 +725,7 @@ impl DaemonState {
                 _ = network_debounce.as_mut(), if network_change_pending => {
                     network_change_pending = false;
                     network_burst_started = None;
-                    self.react_to_network_change().await;
+                    self.react_to_network_change(removed_link.take()).await;
                 }
                 else => {
                     tracing::error!("unexpected channel closure");
@@ -731,25 +735,23 @@ impl DaemonState {
         }
     }
 
-    async fn react_to_network_change(&mut self) {
+    async fn react_to_network_change(&mut self, removed_link: Option<String>) {
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::ReapplyKillswitch)
             .await;
-        // Our own routing setup/teardown emits route events too — reconnect only
-        // when the WAN default route actually changed, otherwise the reconnect's
-        // own route mutations would re-trigger this handler in an endless loop.
-        // Trailing events of a real WAN change may cause one extra reconnect;
-        // that converges once setup re-captures the new WAN.
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
-            .send(routing_actor::Msg::NetworkChanged { reply: reply_tx })
+            .send(routing_actor::Msg::NetworkChanged {
+                removed_link,
+                reply: reply_tx,
+            })
             .await;
         match reply_rx.await {
             Ok(true) => self.force_reconnect_on_network_change().await,
-            Ok(false) => tracing::debug!("network event burst, WAN unchanged — skipping reconnect"),
-            Err(_) => tracing::warn!("routing actor dropped WAN change reply — skipping reconnect"),
+            Ok(false) => tracing::debug!("network event burst, no reconnect needed"),
+            Err(_) => tracing::warn!("routing actor dropped NetworkChanged reply — skipping reconnect"),
         }
     }
 

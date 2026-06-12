@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::killswitch::Firewall;
 use gnosis_vpn_lib::shell_command_ext::Logs;
+use gnosis_vpn_lib::wireguard;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -28,11 +29,12 @@ pub enum Msg {
     DisableKillswitch,
     /// Re-apply the last successfully applied killswitch policy (e.g. after a network change).
     ReapplyKillswitch,
-    /// Ask whether the WAN default route changed since routing setup.
+    /// Ask whether a reconnect should be triggered given the latest network event burst.
+    /// `removed_link` is the name of any interface removed during the burst, if any.
     /// Replies `false` when no routing is active (nothing to reconnect) or when
-    /// the WAN is unchanged — i.e. the events were caused by our own route
-    /// mutations or unrelated route churn.
+    /// the events were caused by our own route mutations or unrelated route churn.
     NetworkChanged {
+        removed_link: Option<String>,
         reply: oneshot::Sender<bool>,
     },
 }
@@ -96,21 +98,30 @@ impl Actor {
                 }
             }
             Msg::ReapplyKillswitch => self.reapply_policy(),
-            Msg::NetworkChanged { reply } => {
-                let _ = reply.send(self.wan_changed().await);
+            Msg::NetworkChanged { removed_link, reply } => {
+                let _ = reply.send(self.should_reconnect(removed_link).await);
             }
         }
     }
 
-    async fn wan_changed(&mut self) -> bool {
+    async fn should_reconnect(&mut self, removed_link: Option<String>) -> bool {
         let Some(router) = &mut self.router else {
-            // not connected — a reconnect would be a no-op anyway
             return false;
         };
+
+        // Tunnel gone — reconnect regardless of WAN state.
+        // Planned teardown can't reach here: TeardownRouting is awaited before
+        // NetworkChanged is dispatched, so self.router is None by then.
+        if removed_link.as_deref() == Some(wireguard::WG_INTERFACE) {
+            tracing::info!("WireGuard device removed — reconnect needed");
+            return true;
+        }
+
+        // Only reconnect if the WAN actually changed; our own route mutations
+        // also emit events, so checking WAN breaks the reconnect feedback loop.
         match router.wan_changed().await {
             Ok(changed) => changed,
             Err(error) => {
-                // a default route we can no longer resolve is a real change
                 tracing::warn!(?error, "failed to query WAN default route, assuming network change");
                 true
             }
