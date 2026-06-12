@@ -74,6 +74,8 @@ pub enum Response {
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
     RefreshNodeTriggered,
+    /// Acknowledgment for [`WorkerCommand::ForceReconnect`]. Never sent in response to a ctl
+    /// command — the root process uses id=0 fire-and-forget and discards this response.
     ForceReconnectAcknowledged,
     Pong,
     Info(InfoResponse),

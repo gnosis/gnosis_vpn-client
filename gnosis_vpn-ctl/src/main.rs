@@ -345,6 +345,8 @@ fn pretty_print(resp: &Response) {
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
+        // Internal response sent by the root process to itself when a WAN interface change
+        // triggers a HOPR session reconnect. Never issued in response to a ctl command.
         Response::ForceReconnectAcknowledged => {}
     }
 }
@@ -383,6 +385,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
+        // Internal response — see pretty_print for explanation
         Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
     }
 }
