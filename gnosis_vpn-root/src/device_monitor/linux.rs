@@ -146,7 +146,6 @@ async fn run_subprocess(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToke
                     return;
                 }
                 Ok(Some(line)) => {
-                    tracing::debug!(line, "device monitor: ip monitor line");
                     if !line.is_empty() && !line.starts_with(char::is_whitespace) {
                         let event = parse_ip_monitor_line(&line);
                         if tx.try_send(event).is_err() {
@@ -161,38 +160,42 @@ async fn run_subprocess(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToke
 
 // Parses a non-indented line from `ip monitor link address route`.
 //
-// Link lines have the form "<index>: <name>: <flags>..." where the name
-// contains no whitespace. Everything else (routes, addresses) becomes
-// RouteChanged, which is sufficient for the WAN-change check.
+// Link lines: "<index>: <name>: <flags>..."
+// Address lines: "<index>: <name>   inet <addr>..."
+// Everything else (routes) becomes RouteChanged.
 fn parse_ip_monitor_line(line: &str) -> NetworkEvent {
     let (deleted, rest) = match line.strip_prefix("Deleted ") {
         Some(r) => (true, r),
         None => (false, line),
     };
 
-    // Try to parse as a link line: "<index>: <name>: ..."
+    // Try to parse as a link or address line — both start with "<index>: <name>...".
     if let Some((idx_str, after_idx)) = rest.split_once(": ")
         && let Ok(index) = idx_str.parse::<u32>()
-        && let Some((name, _)) = after_idx.split_once(": ")
     {
-        // Interface names never contain whitespace
-        if !name.contains(char::is_whitespace) {
-            tracing::debug!(deleted, index, name, "device monitor: parsed as link event");
+        // Link lines: "<index>: <name>: <flags>..."  — second ": " required
+        if let Some((name, _)) = after_idx.split_once(": ")
+            && !name.contains(char::is_whitespace)
+        {
             return if deleted {
-                NetworkEvent::LinkRemoved {
-                    index,
-                    name: name.to_owned(),
-                }
+                NetworkEvent::LinkRemoved { index, name: name.to_owned() }
             } else {
-                NetworkEvent::LinkChanged {
-                    index,
-                    name: name.to_owned(),
-                }
+                NetworkEvent::LinkChanged { index, name: name.to_owned() }
+            };
+        }
+
+        // Address lines: "<index>: <name>   inet ..." — whitespace after name
+        if let Some((name, rest)) = after_idx.split_once(char::is_whitespace)
+            && (rest.trim_start().starts_with("inet ") || rest.trim_start().starts_with("inet6 "))
+        {
+            return if deleted {
+                NetworkEvent::AddressRemoved { index, name: name.to_owned() }
+            } else {
+                NetworkEvent::AddressAdded { index, name: name.to_owned() }
             };
         }
     }
 
-    tracing::debug!(line, "device monitor: parsed as route/addr event");
     NetworkEvent::RouteChanged
 }
 

@@ -712,8 +712,12 @@ impl DaemonState {
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
                 Some(event) = network_events.recv() => {
-                    if let device_monitor::NetworkEvent::LinkRemoved { ref name, .. } = event {
-                        removed_link = Some(name.clone());
+                    match &event {
+                        device_monitor::NetworkEvent::LinkRemoved { name, .. }
+                        | device_monitor::NetworkEvent::AddressRemoved { name, .. } => {
+                            removed_link = Some(name.clone());
+                        }
+                        _ => {}
                     }
                     self.incoming_network_event(event);
                     let burst_started = *network_burst_started.get_or_insert_with(time::Instant::now);
