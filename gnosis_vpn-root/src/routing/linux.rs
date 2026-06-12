@@ -75,7 +75,6 @@ pub async fn dynamic_router(
         infra,
         network_device_info: None,
         added_routes: Vec::new(),
-        worker_uid: worker.uid,
     })
 }
 
@@ -409,7 +408,6 @@ pub struct Router<N: NetlinkOps, W: WgOps> {
     infra: FwmarkInfrastructure<N>,
     network_device_info: Option<NetworkDeviceInfo>,
     added_routes: Vec<RouteSpec>,
-    worker_uid: u32,
 }
 
 /// Static fallback router using route operations via netlink.
@@ -849,140 +847,6 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
         tracing::info!("VPN routing teardown complete");
     }
-
-    async fn refresh(&mut self) -> Result<bool, Error> {
-        let nft = RealNfTablesOps {};
-        refresh_fwmark_infrastructure_with(
-            &mut self.infra,
-            &self.netlink,
-            &nft,
-            self.worker_uid,
-            &mut self.added_routes,
-        )
-        .await;
-        Ok(false)
-    }
-}
-
-/// Refreshes the fwmark infrastructure after a WAN change without tearing down the VPN tunnel.
-///
-/// Replaces the nftables SNAT rules, TABLE_ID default route, and RFC1918 bypass routes
-/// with fresh values based on the current default WAN interface. No-op if WAN is unchanged.
-pub(crate) async fn refresh_fwmark_infrastructure_with<N: NetlinkOps, F: NfTablesOps>(
-    infra: &mut FwmarkInfrastructure<N>,
-    netlink: &N,
-    nft: &F,
-    worker_uid: u32,
-    added_routes: &mut Vec<RouteSpec>,
-) {
-    let new_wan = match get_wan_info(netlink).await {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::warn!(?e, "routing refresh: cannot detect WAN interface");
-            return;
-        }
-    };
-
-    let old_wan = &infra.wan_info;
-    if new_wan.if_index == old_wan.if_index && new_wan.ip_addr == old_wan.ip_addr {
-        return;
-    }
-
-    tracing::info!(
-        old_if = %old_wan.if_name, new_if = %new_wan.if_name,
-        old_ip = %old_wan.ip_addr, new_ip = %new_wan.ip_addr,
-        "WAN changed, refreshing fwmark infrastructure"
-    );
-
-    // Remove stale nftables rules
-    if let Err(e) = nft.teardown_rules(&old_wan.if_name, FW_MARK, old_wan.ip_addr) {
-        tracing::warn!(?e, "routing refresh: failed to remove old nftables rules");
-    }
-
-    // Remove stale TABLE_ID default route
-    let old_table_route = RouteSpec {
-        destination: Ipv4Addr::UNSPECIFIED,
-        prefix_len: 0,
-        gateway: Some(old_wan.gateway),
-        if_index: old_wan.if_index,
-        table_id: Some(TABLE_ID),
-        metric: None,
-    };
-    if let Err(e) = netlink.route_del(&old_table_route).await {
-        tracing::warn!(?e, "routing refresh: failed to remove old TABLE_ID default route");
-    }
-
-    // Remove stale fwmark rule
-    if let Ok(rules) = netlink.rule_list_v4().await {
-        for rule in rules.iter().filter(|r| r.fw_mark == FW_MARK && r.table_id == TABLE_ID) {
-            if let Err(e) = netlink.rule_del(rule).await {
-                tracing::warn!(?e, "routing refresh: failed to remove old fwmark rule");
-            }
-        }
-    }
-
-    // Remove stale RFC1918 bypass routes
-    for route in added_routes.drain(..) {
-        if let Err(e) = netlink.route_del(&route).await {
-            tracing::warn!(?e, route = %format!("{}/{}", route.destination, route.prefix_len), "routing refresh: failed to remove old RFC1918 bypass route");
-        }
-    }
-
-    // Set up fresh nftables rules
-    if let Err(e) = nft.setup_fwmark_rules(worker_uid, &new_wan.if_name, FW_MARK, new_wan.ip_addr) {
-        tracing::warn!(?e, "routing refresh: failed to set up new nftables rules");
-        infra.wan_info = new_wan;
-        return;
-    }
-
-    // Add fresh TABLE_ID default route
-    let new_table_route = RouteSpec {
-        destination: Ipv4Addr::UNSPECIFIED,
-        prefix_len: 0,
-        gateway: Some(new_wan.gateway),
-        if_index: new_wan.if_index,
-        table_id: Some(TABLE_ID),
-        metric: None,
-    };
-    if let Err(e) = netlink.route_add(&new_table_route).await {
-        tracing::warn!(?e, "routing refresh: failed to add new TABLE_ID default route");
-        infra.wan_info = new_wan;
-        return;
-    }
-
-    // Add fresh fwmark rule
-    let fwmark_rule = RuleSpec {
-        fw_mark: FW_MARK,
-        table_id: TABLE_ID,
-        priority: RULE_PRIORITY,
-    };
-    if let Err(e) = netlink.rule_add(&fwmark_rule).await {
-        tracing::warn!(?e, "routing refresh: failed to add new fwmark rule");
-        infra.wan_info = new_wan;
-        return;
-    }
-
-    // Re-add RFC1918 bypass routes via new WAN
-    for (net, prefix) in RFC1918_BYPASS_NETS {
-        if let Ok(destination) = net.parse::<Ipv4Addr>() {
-            let route = RouteSpec {
-                destination,
-                prefix_len: *prefix,
-                gateway: Some(new_wan.gateway),
-                if_index: new_wan.if_index,
-                table_id: None,
-                metric: None,
-            };
-            if let Err(e) = netlink.route_add(&route).await {
-                tracing::warn!(?e, net = %net, "routing refresh: failed to re-add RFC1918 bypass route");
-            } else {
-                added_routes.push(route);
-            }
-        }
-    }
-
-    infra.wan_info = new_wan;
-    tracing::info!("fwmark infrastructure refreshed after network change");
 }
 
 // ============================================================================
@@ -1105,50 +969,6 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W>
         }
         self.wan_info = None;
         tracing::info!("fallback routing teardown complete");
-    }
-
-    async fn refresh(&mut self) -> Result<bool, Error> {
-        let (new_device, new_gateway) = self.route_ops.get_default_interface().await?;
-        let old_wan = match self.wan_info.clone() {
-            Some(w) if w == (new_device.clone(), new_gateway.clone()) => return Ok(false),
-            Some(w) => w,
-            None => return Ok(false),
-        };
-        tracing::info!(
-            old_if = %old_wan.0,
-            new_if = %new_device,
-            "fallback router: WAN changed, updating bypass routes"
-        );
-        // Remove all bypass routes via old WAN; VPN routes via wg0 are untouched
-        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
-            if let Err(e) = self.route_ops.route_del(&dest, &device).await {
-                tracing::warn!(%e, dest = %dest, "failed to remove old bypass route");
-            }
-        }
-        // Re-add peer IP routes via new WAN (hard-fail)
-        for ip in &self.peer_ips.clone() {
-            let dest = ip.to_string();
-            let _ = self.route_ops.route_del(&dest, &new_device).await;
-            self.route_ops
-                .route_add(&dest, new_gateway.as_deref(), &new_device)
-                .await?;
-            self.active_bypass_routes.push((dest, new_device.clone()));
-        }
-        // Re-add RFC1918 bypass routes via new WAN (soft-fail)
-        for (net, prefix) in RFC1918_BYPASS_NETS {
-            let cidr = format!("{}/{}", net, prefix);
-            let _ = self.route_ops.route_del(&cidr, &new_device).await;
-            match self
-                .route_ops
-                .route_add(&cidr, new_gateway.as_deref(), &new_device)
-                .await
-            {
-                Ok(_) => self.active_bypass_routes.push((cidr, new_device.clone())),
-                Err(e) => tracing::warn!(%e, cidr = %cidr, "RFC1918 bypass route failed during refresh"),
-            }
-        }
-        self.wan_info = Some((new_device, new_gateway));
-        Ok(true)
     }
 }
 
@@ -1672,7 +1492,6 @@ mod tests {
             netlink,
             wg,
             infra,
-            worker_uid: worker.uid,
             network_device_info: None,
             added_routes: Vec::new(),
         };
@@ -2020,49 +1839,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn fallback_refresh_after_wan_change_leaves_vpn_routes_intact() -> anyhow::Result<()> {
-        let route_ops = MockRouteOps::with_state(RouteOpsState {
-            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
-            ..Default::default()
-        });
-        let wg = MockWgOps::new();
-        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await?;
-
-        {
-            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
-        }
-        router.refresh().await?;
-
-        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(
-            state
-                .added_routes
-                .iter()
-                .any(|(d, gw, dev)| d == "0.0.0.0/1" && gw.is_none() && dev == wireguard::WG_INTERFACE),
-            "0.0.0.0/1 VPN split route must survive WAN change"
-        );
-        assert!(
-            state
-                .added_routes
-                .iter()
-                .any(|(d, gw, dev)| d == "128.0.0.0/1" && gw.is_none() && dev == wireguard::WG_INTERFACE),
-            "128.0.0.0/1 VPN split route must survive WAN change"
-        );
-        assert!(
-            state
-                .added_routes
-                .iter()
-                .any(|(d, gw, dev)| d == "10.128.0.0/9" && gw.is_none() && dev == wireguard::WG_INTERFACE),
-            "10.128.0.0/9 VPN subnet route must survive WAN change"
-        );
-        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(wg_state.wg_up, "wg must stay up during refresh");
-        Ok(())
-    }
-
     //     #[tokio::test]
     //     async fn fallback_setup_adds_bypass_routes_then_wg_up() -> anyhow::Result<()> {
     //         let route_ops = MockRouteOps::with_state(RouteOpsState {
@@ -2326,140 +2102,6 @@ mod tests {
             .collect();
         assert!(table_vpn.is_empty(), "VPN TABLE_ID route should be cleaned up");
 
-        Ok(())
-    }
-
-    // ====================================================================
-    // FallbackRouter::refresh() tests
-    // ====================================================================
-
-    #[tokio::test]
-    async fn fallback_refresh_returns_false_when_wan_unchanged() -> anyhow::Result<()> {
-        let route_ops = MockRouteOps::with_state(RouteOpsState {
-            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
-            ..Default::default()
-        });
-        let wg = MockWgOps::new();
-        let mut router = make_fallback_router(route_ops.clone(), wg);
-        router.setup().await?;
-
-        let wan_changed = router.refresh().await?;
-        assert!(!wan_changed, "refresh() must return false when WAN is unchanged");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn fallback_refresh_returns_true_on_wan_change() -> anyhow::Result<()> {
-        let route_ops = MockRouteOps::with_state(RouteOpsState {
-            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
-            ..Default::default()
-        });
-        let wg = MockWgOps::new();
-        let mut router = make_fallback_router(route_ops.clone(), wg);
-        router.setup().await?;
-
-        {
-            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
-        }
-
-        let wan_changed = router.refresh().await?;
-        assert!(wan_changed, "refresh() must return true when WAN device changes");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn fallback_refresh_noop_when_wan_unchanged() -> anyhow::Result<()> {
-        let route_ops = MockRouteOps::with_state(RouteOpsState {
-            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
-            ..Default::default()
-        });
-        let wg = MockWgOps::new();
-        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await?;
-
-        router.refresh().await?;
-
-        // WG must NOT have been cycled
-        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(wg_state.wg_up, "wg should still be up after no-op refresh");
-        // Routes from setup must be untouched: 2 peer + 4 RFC1918 bypass + 3 VPN = 9
-        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert_eq!(state.added_routes.len(), 9, "no-op refresh must not modify routes");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn fallback_refresh_updates_routes_without_cycling_wg() -> anyhow::Result<()> {
-        let route_ops = MockRouteOps::with_state(RouteOpsState {
-            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
-            ..Default::default()
-        });
-        let wg = MockWgOps::new();
-        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await?;
-
-        // Simulate WAN change
-        {
-            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
-        }
-
-        router.refresh().await?;
-
-        // WG must NOT have been cycled — this is the critical correctness property:
-        // cycling wg-quick resets the WireGuard source port, breaking the HOPR session.
-        let wg_state = wg.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(
-            wg_state.wg_up,
-            "wg must stay up during refresh — cycling resets WG source port"
-        );
-
-        // New peer routes must be present via the new WAN
-        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(
-            state
-                .added_routes
-                .iter()
-                .any(|(d, gw, dev)| d == "1.2.3.4" && gw.as_deref() == Some("10.0.0.1") && dev == "wlan0"),
-            "peer 1.2.3.4 must be routed via new WAN"
-        );
-        assert!(
-            state
-                .added_routes
-                .iter()
-                .any(|(d, gw, dev)| d == "5.6.7.8" && gw.as_deref() == Some("10.0.0.1") && dev == "wlan0"),
-            "peer 5.6.7.8 must be routed via new WAN"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn fallback_teardown_after_refresh_removes_current_routes() -> anyhow::Result<()> {
-        let route_ops = MockRouteOps::with_state(RouteOpsState {
-            default_iface: Some(("eth0".into(), Some("192.168.1.1".into()))),
-            ..Default::default()
-        });
-        let wg = MockWgOps::new();
-        let mut router = make_fallback_router(route_ops.clone(), wg.clone());
-        router.setup().await?;
-
-        // Simulate WAN change + refresh
-        {
-            let mut s = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-            s.default_iface = Some(("wlan0".into(), Some("10.0.0.1".into())));
-        }
-        router.refresh().await?;
-
-        // After refresh, teardown should remove the NEW routes (via wlan0)
-        router.teardown(Logs::Suppress).await;
-
-        let state = route_ops.state.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-        assert!(
-            state.added_routes.is_empty(),
-            "all peer routes must be cleaned up after teardown, got: {:?}",
-            state.added_routes
-        );
         Ok(())
     }
 }

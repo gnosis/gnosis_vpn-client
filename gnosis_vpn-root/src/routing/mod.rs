@@ -100,7 +100,4 @@ pub trait Routing {
     /// Set up the VPN tunnel. Returns the resolved WireGuard interface name on success.
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
-    /// Re-apply routing state after a network change.
-    /// Returns `true` if the WAN interface changed (HOPR sessions need reconnect), `false` if no-op.
-    async fn refresh(&mut self) -> Result<bool, Error>;
 }

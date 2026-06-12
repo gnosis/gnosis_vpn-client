@@ -698,8 +698,6 @@ async fn main() {
 
 const KILLSWITCH_DEBOUNCE_SETTLE: Duration = Duration::from_millis(250);
 const KILLSWITCH_DEBOUNCE_MAX: Duration = Duration::from_secs(1);
-const REFRESH_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
-const REFRESH_MAX_RETRIES: u32 = 3;
 
 impl DaemonState {
     async fn daemon_loop(
@@ -715,10 +713,6 @@ impl DaemonState {
         tokio::pin!(network_debounce);
         let mut network_change_pending = false;
         let mut network_burst_started: Option<time::Instant> = None;
-        let refresh_retry = time::sleep(Duration::MAX);
-        tokio::pin!(refresh_retry);
-        let mut refresh_retry_pending = false;
-        let mut refresh_retry_attempt: u32 = 0;
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
@@ -742,39 +736,7 @@ impl DaemonState {
                 _ = network_debounce.as_mut(), if network_change_pending => {
                     network_change_pending = false;
                     network_burst_started = None;
-                    refresh_retry_pending = false;
-                    refresh_retry_attempt = 0;
-                    let needs_retry = self.react_to_network_change().await;
-                    if needs_retry {
-                        refresh_retry.as_mut().reset(time::Instant::now() + REFRESH_RETRY_BASE_DELAY);
-                        refresh_retry_pending = true;
-                        refresh_retry_attempt = 1;
-                    }
-                }
-                _ = refresh_retry.as_mut(), if refresh_retry_pending => {
-                    refresh_retry_pending = false;
-                    if let Some(router) = &mut self.router {
-                        match router.refresh().await {
-                            Ok(wan_changed) => {
-                                tracing::info!(attempt = refresh_retry_attempt, "routing refresh succeeded on retry");
-                                refresh_retry_attempt = 0;
-                                if wan_changed {
-                                    self.force_reconnect_after_wan_change().await;
-                                }
-                            }
-                            Err(error) if refresh_retry_attempt < REFRESH_MAX_RETRIES => {
-                                let delay = REFRESH_RETRY_BASE_DELAY * (1 << refresh_retry_attempt);
-                                refresh_retry_attempt += 1;
-                                refresh_retry.as_mut().reset(time::Instant::now() + delay);
-                                refresh_retry_pending = true;
-                                tracing::warn!(?error, attempt = refresh_retry_attempt, "routing refresh retry failed, will retry");
-                            }
-                            Err(error) => {
-                                tracing::warn!(?error, attempt = refresh_retry_attempt, "routing refresh failed after all retries");
-                                refresh_retry_attempt = 0;
-                            }
-                        }
-                    }
+                    self.react_to_network_change().await;
                 }
                 else => {
                     tracing::error!("unexpected channel closure");
@@ -784,8 +746,7 @@ impl DaemonState {
         }
     }
 
-    /// Returns true if routing refresh failed and a retry should be scheduled.
-    async fn react_to_network_change(&mut self) -> bool {
+    async fn react_to_network_change(&mut self) {
         if let Some(params) = &self.killswitch_params {
             let interface = params.interface.clone();
             let ips = params.ips.clone();
@@ -794,27 +755,14 @@ impl DaemonState {
                 tracing::warn!(?error, "failed to re-apply killswitch after network change");
             }
         }
-        if let Some(router) = &mut self.router {
-            tracing::info!("refreshing routing after network change");
-            match router.refresh().await {
-                Ok(wan_changed) => {
-                    if wan_changed {
-                        self.force_reconnect_after_wan_change().await;
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(?error, "routing refresh failed after network change");
-                    return true;
-                }
-            }
-        }
-        false
+        self.force_reconnect_on_network_change().await;
     }
 
-    /// Sends ForceReconnect to the worker so the HOPR session restarts via the new WAN interface.
+    /// Sends ForceReconnect to the worker so the HOPR session restarts after a network change.
+    /// The worker tears down and re-establishes routing and the HOPR connection.
     /// Fire-and-forget: we don't wait for or track the acknowledgment.
-    async fn force_reconnect_after_wan_change(&mut self) {
-        tracing::info!("WAN interface changed — triggering HOPR session reconnect");
+    async fn force_reconnect_on_network_change(&mut self) {
+        tracing::info!("network changed — triggering HOPR session reconnect");
         if matches!(self.shutdown_ongoing, Shutdown::None)
             && let Some(ref mut child) = self.worker_child
         {
