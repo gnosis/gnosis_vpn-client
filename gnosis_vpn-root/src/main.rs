@@ -714,6 +714,7 @@ impl DaemonState {
                     match &event {
                         device_monitor::NetworkEvent::LinkRemoved { name, .. }
                         | device_monitor::NetworkEvent::AddressRemoved { name, .. } => {
+                            tracing::debug!(name, "network burst: recording removed link");
                             removed_link = Some(name.clone());
                         }
                         _ => {}
@@ -728,6 +729,7 @@ impl DaemonState {
                 _ = network_debounce.as_mut(), if network_change_pending => {
                     network_change_pending = false;
                     network_burst_started = None;
+                    tracing::debug!(removed_link = ?removed_link, "network burst settled — dispatching NetworkChanged");
                     self.react_to_network_change(removed_link.take()).await;
                 }
                 else => {

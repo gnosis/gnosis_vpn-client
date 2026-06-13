@@ -106,8 +106,11 @@ impl Actor {
 
     async fn should_reconnect(&mut self, removed_link: Option<String>) -> bool {
         let Some(router) = &mut self.router else {
+            tracing::debug!("should_reconnect: no active router, skipping");
             return false;
         };
+
+        tracing::debug!(removed_link = ?removed_link, wg_interface = wireguard::WG_INTERFACE, "should_reconnect: evaluating");
 
         // Tunnel gone — reconnect regardless of WAN state.
         // Planned teardown can't reach here: TeardownRouting is awaited before
@@ -119,7 +122,9 @@ impl Actor {
 
         // Only reconnect if the WAN actually changed; our own route mutations
         // also emit events, so checking WAN breaks the reconnect feedback loop.
-        match router.wan_changed().await {
+        let wan_result = router.wan_changed().await;
+        tracing::debug!(wan_result = ?wan_result, "should_reconnect: WAN changed check result");
+        match wan_result {
             Ok(changed) => changed,
             Err(error) => {
                 tracing::warn!(?error, "failed to query WAN default route, assuming network change");
