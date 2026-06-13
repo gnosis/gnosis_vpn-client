@@ -219,6 +219,64 @@ impl RouteOps for NetlinkRouteOps {
         }))
     }
 
+    async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error> {
+        // If the interface is gone entirely, treat that as no route.
+        let device_idx = match self.resolve_ifindex(device).await {
+            Ok(idx) => idx,
+            Err(_) => return Ok(None),
+        };
+
+        let routes: Vec<_> = self
+            .handle
+            .route()
+            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
+            .execute()
+            .try_collect()
+            .await?;
+
+        let best = routes
+            .iter()
+            .filter(|r| r.header.table == 254)
+            .filter(|r| {
+                r.attributes
+                    .iter()
+                    .any(|a| matches!(a, RouteAttribute::Oif(idx) if *idx == device_idx))
+            })
+            .filter(|r| {
+                let prefix_len = r.header.destination_prefix_length;
+                let prefix_addr = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Destination(RouteAddress::Inet(ip)) => Some(*ip),
+                        _ => None,
+                    })
+                    .unwrap_or(Ipv4Addr::UNSPECIFIED);
+                covers(prefix_addr, prefix_len, dest)
+            })
+            .max_by_key(|r| r.header.destination_prefix_length);
+
+        let Some(route) = best else {
+            return Ok(None);
+        };
+
+        let gateway = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+            _ => None,
+        });
+
+        let src_ip = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::PrefSource(RouteAddress::Inet(ip)) => Some(*ip),
+            _ => None,
+        });
+
+        Ok(Some(WanRoute {
+            device: device.to_owned(),
+            gateway,
+            src_ip,
+        }))
+    }
+
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let (addr, prefix_len) = Self::parse_dest(dest)?;
         let if_index = self.resolve_ifindex(device).await?;

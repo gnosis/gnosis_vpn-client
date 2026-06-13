@@ -70,6 +70,29 @@ impl RouteOps for DarwinRouteOps {
         Ok(())
     }
 
+    async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error> {
+        // `route get -ifscope <dev> <dest>` performs a kernel FIB lookup pinned to
+        // the named interface. It errors if the device has no route for dest.
+        let dest_str = dest.to_string();
+        let output = match Command::new("route")
+            .args(["-n", "get", "-ifscope", device, &dest_str])
+            .run_stdout(Logs::Suppress)
+            .await
+        {
+            Ok(out) => out,
+            Err(_) => return Ok(None), // interface is gone or has no route
+        };
+
+        let (_, gateway) = parse_key_value_output(&output, "interface:", "gateway:", Some(":"))?;
+        let src_ip = get_interface_address(device).await;
+
+        Ok(Some(WanRoute {
+            device: device.to_owned(),
+            gateway,
+            src_ip,
+        }))
+    }
+
     async fn get_wan_route_for(&self, _dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error> {
         let output = Command::new("netstat")
             .arg("-rn")

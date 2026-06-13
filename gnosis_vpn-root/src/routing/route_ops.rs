@@ -42,6 +42,15 @@ pub trait RouteOps: Send + Sync + Clone {
     /// which lets `wan_changed()` detect DHCP reassignments on the same interface.
     async fn get_wan_route_for(&self, dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error>;
 
+    /// Check whether `device` still has a route to `dest` and, if so, return its
+    /// current gateway and preferred source address.
+    ///
+    /// Returns `None` when the interface no longer routes `dest` (interface removed,
+    /// brought down, or its route was deleted). Used by `wan_changed()` to detect
+    /// DHCP reassignments on the original WAN device without triggering a false
+    /// reconnect when a second network interface is added.
+    async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error>;
+
     /// Add a route: destination via optional gateway through device.
     #[allow(dead_code)]
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error>;

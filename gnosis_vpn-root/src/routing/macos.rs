@@ -215,15 +215,17 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         let Some(ref snapshot) = self.wan_info else {
             return Ok(true);
         };
-        // Exclude the VPN tunnel interface so split routes don't shadow the WAN lookup.
-        // Comparing src_ip catches DHCP reassignments on the same interface/gateway.
+        // Pin the check to the captured device so that adding a second network
+        // interface (e.g. plugging in cable while WiFi VPN is up) does not
+        // look like a WAN change. We reconnect only when the original interface
+        // loses its route (gone) or its DHCP-assigned IP / gateway changes.
         let current = self
             .route_ops
-            .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, &self.vpn_interface())
+            .get_route_via_device(PUBLIC_INTERNET_ADDRESS, &snapshot.device)
             .await?;
         match current {
             None => Ok(true),
-            Some(r) => Ok(r != *snapshot),
+            Some(r) => Ok(r.src_ip != snapshot.src_ip || r.gateway != snapshot.gateway),
         }
     }
 }
