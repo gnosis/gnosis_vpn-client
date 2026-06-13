@@ -12,7 +12,7 @@ use tokio_util::task::TaskTracker;
 use std::collections::{HashMap, HashSet};
 use std::net;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
@@ -89,6 +89,7 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     ongoing_channel_fundings: Vec<Address>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
+    reconnecting_since: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +191,7 @@ impl Core {
             responder_duration: None,
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
+            reconnecting_since: None,
         };
         Ok((core, incoming_sender))
     }
@@ -371,13 +373,29 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
-                        let connecting = match &self.phase {
-                            Phase::Connecting(conn) => Some(command::ConnectingInfo {
-                                destination_id: conn.destination.id.clone(),
-                                since: conn.phase.0,
-                                phase: conn.phase.1.clone(),
-                            }),
+                        let active_conn_phase = match &self.phase {
+                            Phase::Connecting(conn) => {
+                                Some((conn.destination.id.clone(), conn.phase.0, conn.phase.1.clone()))
+                            }
                             _ => None,
+                        };
+                        let reconnecting = self.reconnecting_since.and_then(|since| {
+                            active_conn_phase
+                                .as_ref()
+                                .map(|(dest_id, _, phase)| command::ReconnectingInfo {
+                                    destination_id: dest_id.clone(),
+                                    since,
+                                    phase: phase.clone(),
+                                })
+                        });
+                        let connecting = if reconnecting.is_some() {
+                            None
+                        } else {
+                            active_conn_phase.map(|(dest_id, since, phase)| command::ConnectingInfo {
+                                destination_id: dest_id,
+                                since,
+                                phase,
+                            })
                         };
                         let connected = match &self.phase {
                             Phase::Connected(conn) => Some(command::ConnectedInfo {
@@ -422,6 +440,7 @@ impl Core {
                             destinations,
                             target_destination: self.target_destination.as_ref().map(|d| d.id.clone()),
                             connecting,
+                            reconnecting,
                             connected,
                             disconnecting,
                         });
@@ -430,6 +449,7 @@ impl Core {
 
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
+                            self.reconnecting_since = None;
                             let is_already_active = match &self.phase {
                                 Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination == *dest,
                                 _ => false,
@@ -537,6 +557,7 @@ impl Core {
                         };
                         if let Some(conn) = active_conn {
                             tracing::info!(%conn, "force reconnect triggered by WAN change");
+                            self.reconnecting_since = Some(SystemTime::now());
                             self.force_reconnect(conn, results_sender).await;
                         } else {
                             tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
@@ -798,6 +819,7 @@ impl Core {
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
                 (Ok(session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
+                    self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     let route = format!(
@@ -814,6 +836,7 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
+                    self.reconnecting_since = None;
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
                         rh.with_error(err.to_string());
                     }
@@ -1585,7 +1608,10 @@ impl Core {
         } else {
             // Invariant violation: force_reconnect is only called from Connecting/Connected
             // which always sets route health to Connecting. Log and wait for health check.
-            tracing::warn!(?destination, "force reconnect: no cached exit health — waiting for health check");
+            tracing::warn!(
+                ?destination,
+                "force reconnect: no cached exit health — waiting for health check"
+            );
             self.act_on_target(results_sender);
         }
     }

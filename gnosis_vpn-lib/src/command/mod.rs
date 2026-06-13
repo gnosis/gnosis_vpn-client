@@ -90,6 +90,7 @@ pub struct StatusResponse {
     pub destinations: Vec<DestinationState>,
     pub target_destination: Option<String>,
     pub connecting: Option<ConnectingInfo>,
+    pub reconnecting: Option<ReconnectingInfo>,
     pub connected: Option<ConnectedInfo>,
     pub disconnecting: Vec<DisconnectingInfo>,
 }
@@ -97,6 +98,15 @@ pub struct StatusResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
+    pub since: SystemTime,
+    pub phase: connection::up::Phase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReconnectingInfo {
+    pub destination_id: String,
+    /// When the WAN change that triggered the reconnect was detected.
     #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::up::Phase,
@@ -531,6 +541,18 @@ impl Display for ConnectingInfo {
         write!(
             f,
             "Connecting to {} (since {}, phase {})",
+            self.destination_id,
+            log_output::elapsed(&self.since),
+            self.phase
+        )
+    }
+}
+
+impl Display for ReconnectingInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Reconnecting to {} (since {}, phase {})",
             self.destination_id,
             log_output::elapsed(&self.since),
             self.phase

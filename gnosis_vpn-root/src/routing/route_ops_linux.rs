@@ -148,10 +148,13 @@ impl RouteOps for NetlinkRouteOps {
                 continue;
             }
 
-            let route_ifindex = route
-                .attributes
-                .iter()
-                .find_map(|a| if let RouteAttribute::Oif(idx) = a { Some(*idx) } else { None });
+            let route_ifindex = route.attributes.iter().find_map(|a| {
+                if let RouteAttribute::Oif(idx) = a {
+                    Some(*idx)
+                } else {
+                    None
+                }
+            });
 
             if route_ifindex != Some(if_index) {
                 continue;

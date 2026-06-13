@@ -957,6 +957,7 @@ impl DaemonState {
             destinations,
             target_destination: self.target_dest_id.clone(),
             connecting: None,
+            reconnecting: None,
             connected: None,
             disconnecting: vec![],
         })
