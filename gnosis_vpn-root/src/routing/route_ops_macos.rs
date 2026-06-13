@@ -5,12 +5,13 @@
 //! PF_ROUTE sockets directly for CLI-free operation.
 
 use async_trait::async_trait;
+use std::net::Ipv4Addr;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
 use super::Error;
-use super::route_ops::RouteOps;
+use super::route_ops::{RouteOps, WanRoute};
 
 /// Build the argument list for a `route add` invocation.
 ///
@@ -77,6 +78,28 @@ impl RouteOps for DarwinRouteOps {
             .run_stdout(Logs::Suppress)
             .await?;
         Ok(())
+    }
+
+    async fn get_wan_route_for(&self, _dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error> {
+        let output = Command::new("netstat")
+            .arg("-rn")
+            .arg("-f")
+            .arg("inet")
+            .run_stdout(Logs::Suppress)
+            .await?;
+
+        let (device, gateway) = match parse_netstat_default_excluding(&output, exclude_iface) {
+            Ok(pair) => pair,
+            Err(_) => return Ok(None),
+        };
+
+        let src_ip = get_interface_address(&device).await;
+
+        Ok(Some(WanRoute {
+            device,
+            gateway,
+            src_ip,
+        }))
     }
 }
 
@@ -153,6 +176,50 @@ pub(crate) fn parse_netstat_default(output: &str) -> Result<(String, Option<Stri
     }
     tracing::error!(%output, "Unable to determine WAN default route from netstat");
     Err(Error::NoInterface)
+}
+
+/// Like [`parse_netstat_default`] but skips entries whose `netif` matches `exclude_iface`.
+/// Used by `get_wan_route_for` to skip the VPN tunnel interface.
+fn parse_netstat_default_excluding(output: &str, exclude_iface: &str) -> Result<(String, Option<String>), Error> {
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let [dest, gateway, flags, netif, ..] = tokens[..] else {
+            continue;
+        };
+        if dest != "default" {
+            continue;
+        }
+        if flags.contains('I') {
+            continue;
+        }
+        if netif == exclude_iface {
+            continue;
+        }
+        let gateway = if gateway.starts_with("link#") {
+            None
+        } else {
+            Some(gateway.to_string())
+        };
+        return Ok((netif.to_string(), gateway));
+    }
+    tracing::error!(%output, "Unable to determine WAN default route from netstat (excluding {exclude_iface})");
+    Err(Error::NoInterface)
+}
+
+/// Returns the first IPv4 address assigned to `device` via `ifconfig`.
+async fn get_interface_address(device: &str) -> Option<Ipv4Addr> {
+    let output = Command::new("ifconfig")
+        .arg(device)
+        .run_stdout(Logs::Suppress)
+        .await
+        .ok()?;
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.first() == Some(&"inet") {
+            return tokens.get(1).and_then(|s| s.parse().ok());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

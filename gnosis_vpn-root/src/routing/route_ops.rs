@@ -12,8 +12,21 @@
 //! - macOS: type `DarwinRouteOps` in module `routing::route_ops_macos`
 
 use async_trait::async_trait;
+use std::net::Ipv4Addr;
 
 use super::Error;
+
+/// A snapshot of the WAN route used to reach a public destination.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WanRoute {
+    /// Outbound interface name (e.g. "en0", "wlan0").
+    pub device: String,
+    /// Next-hop gateway IP, if any.
+    pub gateway: Option<String>,
+    /// Preferred source address (local IP the kernel would stamp on outbound packets).
+    /// `None` when the platform does not expose this (e.g. macOS with no inet address).
+    pub src_ip: Option<Ipv4Addr>,
+}
 
 /// Abstraction over platform routing table operations.
 #[async_trait]
@@ -21,30 +34,13 @@ pub trait RouteOps: Send + Sync + Clone {
     /// Get the default WAN interface name and optional gateway.
     async fn get_default_interface(&self) -> Result<(String, Option<String>), Error>;
 
-    /// Get the WAN default route (`/0` entry) even while VPN split routes are up.
+    /// Find the best WAN-layer route for `dest`: the most specific match in the
+    /// main routing table that does NOT go through `exclude_iface` (the VPN tunnel).
     ///
-    /// On Linux `get_default_interface` already reads the main-table `/0` route,
-    /// so the default implementation just delegates. macOS overrides this because
-    /// `route get 0.0.0.0` does longest-prefix matching and would return the VPN
-    /// interface while the `0.0.0.0/1` split route is installed.
-    async fn get_wan_default(&self) -> Result<(String, Option<String>), Error> {
-        self.get_default_interface().await
-    }
-
-    /// Check if a default route via `device` with `gateway` still exists in the main routing table.
-    ///
-    /// The default implementation checks the current best-metric default route.
-    /// Linux overrides this to scan all main-table default routes so that adding a
-    /// new interface (e.g. plugging in a cable while WiFi is up) does not falsely
-    /// report the captured WAN as gone just because a new route has a lower metric.
-    async fn has_default_route(&self, device: &str, gateway: Option<&str>) -> Result<bool, Error> {
-        match self.get_wan_default().await {
-            Ok((current_device, current_gateway)) => {
-                Ok(current_device == device && current_gateway.as_deref() == gateway)
-            }
-            Err(_) => Ok(false),
-        }
-    }
+    /// Returns `None` when WAN connectivity is gone entirely.
+    /// The returned [`WanRoute`] includes the preferred source address (local IP),
+    /// which lets `wan_changed()` detect DHCP reassignments on the same interface.
+    async fn get_wan_route_for(&self, dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error>;
 
     /// Add a route: destination via optional gateway through device.
     #[allow(dead_code)]

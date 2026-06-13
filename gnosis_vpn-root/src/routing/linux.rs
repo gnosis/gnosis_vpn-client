@@ -18,10 +18,13 @@ use gnosis_vpn_lib::{event, wireguard};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use super::route_ops::RouteOps;
+use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_linux::NetlinkRouteOps;
 use super::wg_ops::{RealWgOps, WgOps};
 use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
+
+/// Public IP used to identify the WAN route and detect DHCP reassignments.
+const PUBLIC_INTERNET_ADDRESS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
 
 /// VPN split routes: two /1 halves cover all IPv4 space.
 /// More specific than the WAN /0 default, routing all non-bypass internet traffic into the tunnel.
@@ -62,8 +65,9 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
-    /// WAN interface captured at setup time.
-    wan_info: Option<(String, Option<String>)>,
+    /// WAN route snapshot captured at setup time.
+    /// Used by `wan_changed()` to detect interface switches and DHCP reassignments.
+    wan_info: Option<WanRoute>,
     /// Bypass routes currently installed: (dest_cidr, wan_device).
     /// Tracked for explicit cleanup since the wg-quick config has no PreDown scripts.
     active_bypass_routes: Vec<(String, String)>,
@@ -117,8 +121,17 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     ///   - `10.128.0.0/9` overrides the `10.0.0.0/8` RFC1918 bypass for VPN server traffic
     ///   - On failure: remove partial VPN routes, wg-quick down, rollback bypass routes
     async fn setup(&mut self) -> Result<String, Error> {
-        let (device, gateway) = self.route_ops.get_default_interface().await?;
-        tracing::debug!(device = %device, gateway = ?gateway, "WAN interface for bypass routes");
+        // Snapshot the WAN route before any VPN routes are installed.
+        // Including src_ip lets wan_changed() detect DHCP reassignments on the same
+        // interface/gateway (the conference WiFi roaming scenario).
+        let wan_route = self
+            .route_ops
+            .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, wireguard::WG_INTERFACE)
+            .await?
+            .ok_or(Error::NoInterface)?;
+        let device = wan_route.device.clone();
+        let gateway = wan_route.gateway.clone();
+        tracing::debug!(device = %device, gateway = ?gateway, src_ip = ?wan_route.src_ip, "WAN interface for bypass routes");
 
         // Phase 1: bypass routes before wg-quick up (avoids race with HOPR p2p connections)
         for ip in &self.peer_ips.clone() {
@@ -162,7 +175,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             return Err(e);
         }
 
-        self.wan_info = Some((device, gateway));
+        self.wan_info = Some(wan_route);
         tracing::info!("routing is ready (linux static)");
         Ok(interface_name)
     }
@@ -188,18 +201,20 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     }
 
     async fn wan_changed(&mut self) -> Result<bool, Error> {
-        let Some((captured_device, captured_gateway)) = &self.wan_info else {
-            // no captured WAN means setup never completed — treat as changed
+        let Some(ref snapshot) = self.wan_info else {
             return Ok(true);
         };
-        // Check that the WAN interface used at setup still has a default route.
-        // A new interface appearing with a lower metric (e.g. plugging in a cable
-        // while WiFi is up) changes the "best" default but does not break the
-        // existing bypass routes, which are explicit /32 routes via the old device.
-        let still_viable = self
+        // Look up the current WAN route for a public IP, excluding the VPN tunnel so
+        // the split routes (0/1, 128.0/1) don't shadow the real WAN route.
+        // Comparing src_ip catches DHCP reassignments on the same interface/gateway,
+        // which the old has_default_route check missed.
+        let current = self
             .route_ops
-            .has_default_route(captured_device, captured_gateway.as_deref())
+            .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, wireguard::WG_INTERFACE)
             .await?;
-        Ok(!still_viable)
+        match current {
+            None => Ok(true),
+            Some(r) => Ok(r != *snapshot),
+        }
     }
 }

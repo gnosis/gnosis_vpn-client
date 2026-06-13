@@ -10,7 +10,16 @@ use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 use super::Error;
-use super::route_ops::RouteOps;
+use super::route_ops::{RouteOps, WanRoute};
+
+/// Returns true if `prefix/len` covers `dest` (i.e. they share the same leading `len` bits).
+fn covers(prefix: Ipv4Addr, len: u8, dest: Ipv4Addr) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let mask = !0u32 << (32 - len);
+    (u32::from(prefix) & mask) == (u32::from(dest) & mask)
+}
 
 /// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
 ///
@@ -60,6 +69,20 @@ impl NetlinkRouteOps {
             .first()
             .map(|l| l.header.index)
             .ok_or_else(|| Error::General(format!("interface '{device}' not found")))
+    }
+
+    async fn resolve_ifname(&self, index: u32) -> Result<String, Error> {
+        let links: Vec<_> = self.handle.link().get().execute().try_collect().await?;
+        links
+            .iter()
+            .find(|l| l.header.index == index)
+            .and_then(|l| {
+                l.attributes.iter().find_map(|a| match a {
+                    LinkAttribute::IfName(n) => Some(n.clone()),
+                    _ => None,
+                })
+            })
+            .ok_or_else(|| Error::General(format!("interface name not found for index {index}")))
     }
 }
 
@@ -127,11 +150,8 @@ impl RouteOps for NetlinkRouteOps {
         Ok((if_name, gateway))
     }
 
-    async fn has_default_route(&self, device: &str, gateway: Option<&str>) -> Result<bool, Error> {
-        let if_index = match self.resolve_ifindex(device).await {
-            Ok(idx) => idx,
-            Err(_) => return Ok(false),
-        };
+    async fn get_wan_route_for(&self, dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error> {
+        let exclude_idx = self.resolve_ifindex(exclude_iface).await.ok();
 
         let routes: Vec<_> = self
             .handle
@@ -141,36 +161,62 @@ impl RouteOps for NetlinkRouteOps {
             .try_collect()
             .await?;
 
-        for route in &routes {
-            let is_default = route.header.destination_prefix_length == 0;
-            let is_main_table = route.header.table == 254;
-            if !is_default || !is_main_table {
-                continue;
-            }
+        // Among all main-table routes covering `dest` and not via the VPN tunnel,
+        // pick the most specific (highest prefix length).
+        let best = routes
+            .iter()
+            .filter(|r| r.header.table == 254)
+            .filter(|r| {
+                let oif = r.attributes.iter().find_map(|a| match a {
+                    RouteAttribute::Oif(idx) => Some(*idx),
+                    _ => None,
+                });
+                exclude_idx.is_none() || oif != exclude_idx
+            })
+            .filter(|r| {
+                let prefix_len = r.header.destination_prefix_length;
+                let prefix_addr = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Destination(RouteAddress::Inet(ip)) => Some(*ip),
+                        _ => None,
+                    })
+                    .unwrap_or(Ipv4Addr::UNSPECIFIED);
+                covers(prefix_addr, prefix_len, dest)
+            })
+            .max_by_key(|r| r.header.destination_prefix_length);
 
-            let route_ifindex = route.attributes.iter().find_map(|a| {
-                if let RouteAttribute::Oif(idx) = a {
-                    Some(*idx)
-                } else {
-                    None
-                }
-            });
+        let Some(route) = best else {
+            return Ok(None);
+        };
 
-            if route_ifindex != Some(if_index) {
-                continue;
-            }
-
-            let route_gw = route.attributes.iter().find_map(|a| match a {
-                RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+        let oif = route
+            .attributes
+            .iter()
+            .find_map(|a| match a {
+                RouteAttribute::Oif(idx) => Some(*idx),
                 _ => None,
-            });
+            })
+            .ok_or(Error::NoInterface)?;
 
-            if route_gw.as_deref() == gateway {
-                return Ok(true);
-            }
-        }
+        let device = self.resolve_ifname(oif).await?;
 
-        Ok(false)
+        let gateway = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+            _ => None,
+        });
+
+        let src_ip = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::PrefSource(RouteAddress::Inet(ip)) => Some(*ip),
+            _ => None,
+        });
+
+        Ok(Some(WanRoute {
+            device,
+            gateway,
+            src_ip,
+        }))
     }
 
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
