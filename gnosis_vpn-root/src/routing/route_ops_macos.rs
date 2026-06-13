@@ -50,16 +50,6 @@ impl RouteOps for DarwinRouteOps {
         parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
     }
 
-    async fn get_wan_default(&self) -> Result<(String, Option<String>), Error> {
-        let output = Command::new("netstat")
-            .arg("-rn")
-            .arg("-f")
-            .arg("inet")
-            .run_stdout(Logs::Suppress)
-            .await?;
-        parse_netstat_default(&output)
-    }
-
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
         for arg in route_add_args(dest, gateway, device) {
