@@ -501,11 +501,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::UNAVAILABLE
         })?;
 
-    let (cancel_device_monitor, device_monitor_handle, network_events) =
-        device_monitor::start().await.map_err(|error| {
-            tracing::error!(?error, "failed to start device monitor");
-            exitcode::UNAVAILABLE
-        })?;
+    let (cancel_device_monitor, device_monitor_handle, network_events) = device_monitor::start().map_err(|error| {
+        tracing::error!(?error, "failed to start device monitor");
+        exitcode::UNAVAILABLE
+    })?;
 
     let mut state = DaemonState {
         config,

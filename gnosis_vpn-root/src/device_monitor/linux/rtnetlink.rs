@@ -1,68 +1,27 @@
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
-
 use futures::StreamExt;
 use rtnetlink::{
-    MulticastGroup,
+    constants::{RTMGRP_IPV4_IFADDR, RTMGRP_IPV4_ROUTE, RTMGRP_IPV6_ROUTE, RTMGRP_LINK, RTMGRP_NOTIFY},
     packet_core::NetlinkPayload,
     packet_route::{RouteNetlinkMessage, address::AddressAttribute, link::LinkAttribute},
+    sys::{AsyncSocket, SocketAddr},
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::device_monitor::NetworkEvent;
 
-const PROBE_ADDR: Ipv4Addr = Ipv4Addr::new(169, 254, 200, 200);
-const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// Verifies that rtnetlink multicast delivery actually works on this system.
-///
-/// Adds a temporary address to loopback (which the kernel broadcasts as a
-/// NewAddress multicast event), then checks whether the event arrives on the
-/// subscription channel within the probe timeout. Cleans up unconditionally.
-pub async fn probe_multicast() -> bool {
-    let (conn, handle, mut messages) = match rtnetlink::new_multicast_connection(&[MulticastGroup::Ipv4Ifaddr]) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!(error = ?e, "device monitor probe: failed to create netlink connection");
-            return false;
-        }
-    };
-    let conn_task = tokio::spawn(conn);
-
-    let added = handle
-        .address()
-        .add(1u32, IpAddr::V4(PROBE_ADDR), 32)
-        .execute()
-        .await
-        .is_ok();
-
-    if !added {
-        tracing::debug!("device monitor probe: failed to add probe address to loopback");
-        conn_task.abort();
-        return false;
-    }
-
-    let received = tokio::time::timeout(PROBE_TIMEOUT, messages.next())
-        .await
-        .is_ok_and(|msg| msg.is_some());
-
-    let _ = tokio::process::Command::new("ip")
-        .args(["addr", "del", "169.254.200.200/32", "dev", "lo"])
-        .output()
-        .await;
-
-    conn_task.abort();
-    received
-}
-
 pub fn start(tx: mpsc::Sender<NetworkEvent>) -> std::io::Result<(CancellationToken, tokio::task::JoinHandle<()>)> {
-    let (conn, _handle, messages) = rtnetlink::new_multicast_connection(&[
-        MulticastGroup::Link,
-        MulticastGroup::Ipv4Ifaddr,
-        MulticastGroup::Ipv4Route,
-    ])?;
+    let (mut conn, _handle, messages) = rtnetlink::new_connection()?;
+
+    // Match Mullvad's subscription: route + link + notify.
+    // RTMGRP_NOTIFY is required to receive events for routes tagged RTM_F_NOTIFY,
+    // which systemd-networkd (used on NixOS) sets on its routes.
+    let mgroup_flags = RTMGRP_LINK | RTMGRP_NOTIFY | RTMGRP_IPV4_IFADDR | RTMGRP_IPV4_ROUTE | RTMGRP_IPV6_ROUTE;
+    let addr = SocketAddr::new(0, mgroup_flags);
+    conn.socket_mut().socket_mut().bind(&addr)?;
+
     tokio::spawn(conn);
+
     let cancel = CancellationToken::new();
     let handle = tokio::spawn(run(messages, tx, cancel.clone()));
     Ok((cancel, handle))
@@ -89,14 +48,27 @@ async fn run(
                     return;
                 }
                 Some((msg, _)) => {
-                    if let NetlinkPayload::InnerMessage(inner) = msg.payload
-                        && let Some(event) = to_network_event(inner)
-                    {
-                        let _ = tx.try_send(event);
+                    if let NetlinkPayload::InnerMessage(inner) = msg.payload {
+                        tracing::debug!(kind = %msg_kind(&inner), "device monitor: rtnetlink event");
+                        if let Some(event) = to_network_event(inner) {
+                            let _ = tx.try_send(event);
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+fn msg_kind(msg: &RouteNetlinkMessage) -> &'static str {
+    match msg {
+        RouteNetlinkMessage::NewLink(_) => "NewLink",
+        RouteNetlinkMessage::DelLink(_) => "DelLink",
+        RouteNetlinkMessage::NewAddress(_) => "NewAddress",
+        RouteNetlinkMessage::DelAddress(_) => "DelAddress",
+        RouteNetlinkMessage::NewRoute(_) => "NewRoute",
+        RouteNetlinkMessage::DelRoute(_) => "DelRoute",
+        _ => "other",
     }
 }
 

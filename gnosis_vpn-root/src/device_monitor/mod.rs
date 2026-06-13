@@ -16,7 +16,7 @@ pub enum NetworkEvent {
     RouteChanged,
 }
 
-pub async fn start() -> std::io::Result<(
+pub fn start() -> std::io::Result<(
     CancellationToken,
     tokio::task::JoinHandle<()>,
     mpsc::Receiver<NetworkEvent>,
@@ -25,7 +25,7 @@ pub async fn start() -> std::io::Result<(
 
     #[cfg(target_os = "linux")]
     {
-        let (cancel, handle) = linux::start(tx).await?;
+        let (cancel, handle) = linux::start(tx)?;
         Ok((cancel, handle, rx))
     }
 
