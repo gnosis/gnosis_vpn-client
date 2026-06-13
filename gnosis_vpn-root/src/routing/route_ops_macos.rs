@@ -70,20 +70,22 @@ impl RouteOps for DarwinRouteOps {
         Ok(())
     }
 
-    async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error> {
-        // `route get -ifscope <dev> <dest>` performs a kernel FIB lookup pinned to
-        // the named interface. It errors if the device has no route for dest.
-        let dest_str = dest.to_string();
-        let output = match Command::new("route")
-            .args(["-n", "get", "-ifscope", device, &dest_str])
+    async fn get_route_via_device(&self, _dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error> {
+        // Use netstat rather than `route get -ifscope` because the VPN split routes
+        // (0/1, 128/1) shadow the scoped FIB lookup for public destinations while
+        // the tunnel is up, causing the command to error and falsely appear as if
+        // the WAN device has no route. netstat shows the raw routing table entries
+        // (the 0/0 default route via the WAN interface is always present alongside
+        // the more-specific VPN routes) and is unaffected by route shadowing.
+        let output = Command::new("netstat")
+            .args(["-rn", "-f", "inet"])
             .run_stdout(Logs::Suppress)
-            .await
-        {
-            Ok(out) => out,
-            Err(_) => return Ok(None), // interface is gone or has no route
+            .await?;
+
+        let Some(gateway) = parse_netstat_default_for_device(&output, device) else {
+            return Ok(None);
         };
 
-        let (_, gateway) = parse_key_value_output(&output, "interface:", "gateway:", Some(":"))?;
         let src_ip = get_interface_address(device).await;
 
         Ok(Some(WanRoute {
@@ -189,6 +191,28 @@ pub(crate) fn parse_netstat_default(output: &str) -> Result<(String, Option<Stri
     }
     tracing::error!(%output, "Unable to determine WAN default route from netstat");
     Err(Error::NoInterface)
+}
+
+/// Like [`parse_netstat_default`] but returns only the entry whose `netif` matches `device`.
+/// Returns `Some(gateway)` when the device has a default route, `None` when it does not.
+/// Used by `get_route_via_device` to check whether the captured WAN device is still viable.
+fn parse_netstat_default_for_device(output: &str, device: &str) -> Option<Option<String>> {
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let [dest, gateway, flags, netif, ..] = tokens[..] else {
+            continue;
+        };
+        if dest != "default" || flags.contains('I') || netif != device {
+            continue;
+        }
+        let gateway = if gateway.starts_with("link#") {
+            None
+        } else {
+            Some(gateway.to_string())
+        };
+        return Some(gateway);
+    }
+    None
 }
 
 /// Like [`parse_netstat_default`] but skips entries whose `netif` matches `exclude_iface`.
