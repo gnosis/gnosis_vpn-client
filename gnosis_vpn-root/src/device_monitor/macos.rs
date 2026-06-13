@@ -112,17 +112,21 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
                 return None;
             }
             let ifm = unsafe { &*(buf.as_ptr() as *const libc::if_msghdr) };
-            let name = if_name(ifm.ifm_index as u32);
             let index = ifm.ifm_index as u32;
-            Some(NetworkEvent::LinkChanged { index, name })
+            match if_name(index) {
+                // if_indextoname succeeded: interface still exists, flags changed
+                Some(name) => Some(NetworkEvent::LinkChanged { index, name }),
+                // if_indextoname failed: interface is gone, this is a deletion signal
+                None => Some(NetworkEvent::LinkRemoved { index, name: format!("if#{index}") }),
+            }
         }
         libc::RTM_NEWADDR => {
             if buf.len() < std::mem::size_of::<libc::ifa_msghdr>() {
                 return None;
             }
             let ifam = unsafe { &*(buf.as_ptr() as *const libc::ifa_msghdr) };
-            let name = if_name(ifam.ifam_index as u32);
             let index = ifam.ifam_index as u32;
+            let name = if_name(index).unwrap_or_else(|| format!("if#{index}"));
             Some(NetworkEvent::AddressAdded { index, name })
         }
         libc::RTM_DELADDR => {
@@ -130,8 +134,8 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
                 return None;
             }
             let ifam = unsafe { &*(buf.as_ptr() as *const libc::ifa_msghdr) };
-            let name = if_name(ifam.ifam_index as u32);
             let index = ifam.ifam_index as u32;
+            let name = if_name(index).unwrap_or_else(|| format!("if#{index}"));
             Some(NetworkEvent::AddressRemoved { index, name })
         }
         libc::RTM_IFINFO2 => {
@@ -139,9 +143,11 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
                 return None;
             }
             let ifm = unsafe { &*(buf.as_ptr() as *const libc::if_msghdr2) };
-            let name = if_name(ifm.ifm_index as u32);
             let index = ifm.ifm_index as u32;
-            Some(NetworkEvent::LinkChanged { index, name })
+            match if_name(index) {
+                Some(name) => Some(NetworkEvent::LinkChanged { index, name }),
+                None => Some(NetworkEvent::LinkRemoved { index, name: format!("if#{index}") }),
+            }
         }
         RTM_IFANNOUNCE => {
             if buf.len() < IFAN_MIN_LEN {
@@ -168,13 +174,15 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
     }
 }
 
-fn if_name(index: u32) -> String {
+fn if_name(index: u32) -> Option<String> {
     let mut buf = [0i8; libc::IF_NAMESIZE];
     let ptr = unsafe { libc::if_indextoname(index, buf.as_mut_ptr()) };
     if ptr.is_null() {
-        return format!("if#{index}");
+        return None;
     }
-    unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
-        .to_string_lossy()
-        .into_owned()
+    Some(
+        unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }

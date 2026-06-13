@@ -120,6 +120,21 @@ impl Actor {
             return true;
         }
 
+        // On macOS, RTM_IFANNOUNCE is not sent for kernel WireGuard interfaces.
+        // When the WG device is deleted, RTM_IFINFO fires but if_indextoname
+        // already fails, so we emit LinkRemoved with a synthetic "if#N" name.
+        // Check directly whether WG_INTERFACE still exists in that case.
+        #[cfg(target_os = "macos")]
+        if removed_link.as_ref().map_or(false, |n| n.starts_with("if#")) {
+            let wg_gone = std::ffi::CString::new(wireguard::WG_INTERFACE)
+                .map(|name| unsafe { libc::if_nametoindex(name.as_ptr()) } == 0)
+                .unwrap_or(false);
+            if wg_gone {
+                tracing::info!("WireGuard interface gone (confirmed via if_nametoindex) — reconnect needed");
+                return true;
+            }
+        }
+
         // Only reconnect if the WAN actually changed; our own route mutations
         // also emit events, so checking WAN breaks the reconnect feedback loop.
         let wan_result = router.wan_changed().await;
