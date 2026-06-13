@@ -199,12 +199,16 @@ pub(crate) fn parse_netstat_default(output: &str) -> Result<(String, Option<Stri
 fn parse_netstat_default_for_device(output: &str, device: &str) -> Option<Option<String>> {
     for line in output.lines() {
         let tokens: Vec<&str> = line.split_whitespace().collect();
-        let [dest, gateway, flags, netif, ..] = tokens[..] else {
+        let [dest, gateway, _, netif, ..] = tokens[..] else {
             continue;
         };
-        if dest != "default" || flags.contains('I') || netif != device {
+        if dest != "default" || netif != device {
             continue;
         }
+        // Do NOT filter out 'I'-scoped routes here. When a higher-priority interface
+        // is added (e.g. cable while WiFi VPN is up), macOS demotes the original
+        // interface's default route to interface-scoped ('I' flag) but the interface
+        // is still connected and its bypass routes remain valid — we should not reconnect.
         let gateway = if gateway.starts_with("link#") {
             None
         } else {
