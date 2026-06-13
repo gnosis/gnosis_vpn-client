@@ -114,10 +114,22 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             let index = ifam.ifam_index as u32;
             Some(NetworkEvent::AddressRemoved { index, name })
         }
+        libc::RTM_IFINFO2 => {
+            if buf.len() < std::mem::size_of::<libc::if_msghdr2>() {
+                return None;
+            }
+            let ifm = unsafe { &*(buf.as_ptr() as *const libc::if_msghdr2) };
+            let name = if_name(ifm.ifm_index as u32);
+            let index = ifm.ifm_index as u32;
+            Some(NetworkEvent::LinkChanged { index, name })
+        }
         libc::RTM_ADD => Some(NetworkEvent::RouteAdded),
         libc::RTM_DELETE => Some(NetworkEvent::RouteRemoved),
         libc::RTM_CHANGE => Some(NetworkEvent::RouteChanged),
-        _ => None,
+        _ => {
+            tracing::debug!(rtm_type, "device monitor: unhandled RTM type");
+            None
+        }
     }
 }
 
