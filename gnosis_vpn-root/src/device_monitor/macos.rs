@@ -81,6 +81,25 @@ async fn run(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToken) {
     }
 }
 
+// RTM_IFANNOUNCE (0x11) fires when an interface is added or removed.
+// The name is embedded in the message and is intact even during removal,
+// unlike RTM_IFINFO where if_indextoname may fail if the interface is already gone.
+//
+// if_announcemsghdr layout (all fields native-endian):
+//   [0..2]  ifan_msglen  u16
+//   [2]     ifan_version u8
+//   [3]     ifan_type    u8
+//   [4..6]  ifan_index   u16
+//   [6..22] ifan_name    [u8; IF_NAMESIZE=16], null-terminated
+//   [22..24] ifan_what   u16  (0=arrival, 1=departure)
+const RTM_IFANNOUNCE: libc::c_int = 0x11;
+const IFAN_DEPARTURE: u16 = 1;
+const IFAN_INDEX_OFFSET: usize = 4;
+const IFAN_NAME_OFFSET: usize = 6;
+const IFAN_NAME_LEN: usize = 16; // IF_NAMESIZE on macOS
+const IFAN_WHAT_OFFSET: usize = 22;
+const IFAN_MIN_LEN: usize = 24;
+
 fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
     if buf.len() < std::mem::size_of::<libc::rt_msghdr>() {
         return None;
@@ -122,6 +141,21 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             let name = if_name(ifm.ifm_index as u32);
             let index = ifm.ifm_index as u32;
             Some(NetworkEvent::LinkChanged { index, name })
+        }
+        RTM_IFANNOUNCE => {
+            if buf.len() < IFAN_MIN_LEN {
+                return None;
+            }
+            let index = u16::from_ne_bytes([buf[IFAN_INDEX_OFFSET], buf[IFAN_INDEX_OFFSET + 1]]) as u32;
+            let name_bytes = &buf[IFAN_NAME_OFFSET..IFAN_NAME_OFFSET + IFAN_NAME_LEN];
+            let name_end = name_bytes.iter().position(|&b| b == 0).unwrap_or(IFAN_NAME_LEN);
+            let name = String::from_utf8_lossy(&name_bytes[..name_end]).into_owned();
+            let ifan_what = u16::from_ne_bytes([buf[IFAN_WHAT_OFFSET], buf[IFAN_WHAT_OFFSET + 1]]);
+            if ifan_what == IFAN_DEPARTURE {
+                Some(NetworkEvent::LinkRemoved { index, name })
+            } else {
+                None // arrival: RTM_IFINFO already covers this
+            }
         }
         libc::RTM_ADD => Some(NetworkEvent::RouteAdded),
         libc::RTM_DELETE => Some(NetworkEvent::RouteRemoved),
