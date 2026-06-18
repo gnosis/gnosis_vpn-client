@@ -34,6 +34,7 @@ pub struct WorkerParams {
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
+    allow_experimental: bool,
     blokli_url: Option<Url>,
     force_static_routing: bool,
     state_home: PathBuf,
@@ -47,11 +48,14 @@ pub enum ConfigFileMode {
 }
 
 impl WorkerParams {
+    // TODO: remove force_static_routing (upcoming refactor) — that will bring this back to 7 args
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
         allow_insecure: bool,
+        allow_experimental: bool,
         blokli_url: Option<Url>,
         force_static_routing: bool,
         state_home: PathBuf,
@@ -61,6 +65,7 @@ impl WorkerParams {
             identity_pass,
             config_mode,
             allow_insecure,
+            allow_experimental,
             blokli_url,
             force_static_routing,
             state_home,
@@ -156,6 +161,10 @@ impl WorkerParams {
 
     pub fn allow_insecure(&self) -> bool {
         self.allow_insecure
+    }
+
+    pub fn allow_experimental(&self) -> bool {
+        self.allow_experimental
     }
 
     pub fn force_static_routing(&self) -> bool {

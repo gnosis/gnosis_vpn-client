@@ -38,6 +38,14 @@ pub struct SharedArgs {
     /// Allow insecure connections (e.g., self-signed certificates).
     #[arg(long = "allowInsecure", env = "SYSTEM_TEST_ALLOW_INSECURE", default_value_t = false)]
     pub allow_insecure: bool,
+
+    /// Allow experimental multi-hop connections with 2+ hops.
+    #[arg(
+        long = "allowExperimental",
+        env = "SYSTEM_TEST_ALLOW_EXPERIMENTAL",
+        default_value_t = false
+    )]
+    pub allow_experimental: bool,
 }
 
 #[derive(Debug, Clone, Copy, Args)]

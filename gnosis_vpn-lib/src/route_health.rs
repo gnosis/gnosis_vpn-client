@@ -223,11 +223,16 @@ pub(crate) struct RouteHealth {
 impl RouteHealth {
     /// Build an initial tracker for `dest`. `cancel_on_shutdown` is inherited
     /// by every background task this tracker spawns so that they all stop
-    /// when the core shuts down. `allow_insecure` gates whether a 0-hop route
-    /// is accepted or immediately marked unrecoverable.
-    pub(crate) fn new(dest: &Destination, allow_insecure: bool, cancel_on_shutdown: CancellationToken) -> Self {
+    /// when the core shuts down. `allow_insecure` gates 0-hop routes;
+    /// `allow_experimental` gates 2+ hop routes.
+    pub(crate) fn new(
+        dest: &Destination,
+        allow_insecure: bool,
+        allow_experimental: bool,
+        cancel_on_shutdown: CancellationToken,
+    ) -> Self {
         let static_need = derive_static_need(&dest.routing, dest.address);
-        let state = derive_initial_state(&dest.routing, allow_insecure);
+        let state = derive_initial_state(&dest.routing, allow_insecure, allow_experimental);
         let health_check_cancel = cancel_on_shutdown.child_token();
         Self {
             id: dest.id.clone(),
@@ -260,11 +265,14 @@ fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed
     }
 }
 
-/// Pick the starting state purely from routing config. 0-hop routing without
-/// `allow_insecure` short-circuits to `Unrecoverable`; everything else starts
-/// at `NeedsPeering` and waits for Core to feed in the peer set.
-fn derive_initial_state(routing: &HopRouting, allow_insecure: bool) -> RouteHealthState {
-    if routing.hop_count() == 0 && !allow_insecure {
+/// Pick the starting state purely from routing config.
+/// 0-hop without `allow_insecure` and 2+-hop without `allow_experimental`
+/// both short-circuit to `Unrecoverable`; everything else starts at
+/// `NeedsPeering` and waits for Core to feed in the peer set.
+fn derive_initial_state(routing: &HopRouting, allow_insecure: bool, allow_experimental: bool) -> RouteHealthState {
+    let hops = routing.hop_count();
+    let not_allowed = (hops == 0 && !allow_insecure) || (hops > 1 && !allow_experimental);
+    if not_allowed {
         RouteHealthState::Unrecoverable {
             reason: UnrecoverableReason::NotAllowed,
         }
@@ -1013,7 +1021,10 @@ impl Display for CheckScope {
 impl Display for UnrecoverableReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            UnrecoverableReason::NotAllowed => write!(f, "direct peering not allowed (insecure peering disabled)"),
+            UnrecoverableReason::NotAllowed => write!(
+                f,
+                "routing mode not allowed; use --allow-insecure for 0-hop or --allow-experimental for 2+ hops"
+            ),
             UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
             UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
                 write!(
@@ -1097,6 +1108,57 @@ mod tests {
         assert_eq!(derive_static_need(&routing, dest), StaticNeed::AnyChannel);
     }
 
+    // --- derive_initial_state ---
+
+    #[test]
+    fn zero_hop_without_allow_insecure_is_unrecoverable() {
+        let routing = HopRouting::try_from(0).unwrap();
+        assert!(matches!(
+            derive_initial_state(&routing, false, false),
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed
+            }
+        ));
+    }
+
+    #[test]
+    fn zero_hop_with_allow_insecure_is_allowed() {
+        let routing = HopRouting::try_from(0).unwrap();
+        assert!(matches!(
+            derive_initial_state(&routing, true, false),
+            RouteHealthState::NeedsPeering { .. }
+        ));
+    }
+
+    #[test]
+    fn one_hop_always_allowed() {
+        let routing = HopRouting::try_from(1).unwrap();
+        assert!(matches!(
+            derive_initial_state(&routing, false, false),
+            RouteHealthState::NeedsPeering { .. }
+        ));
+    }
+
+    #[test]
+    fn multi_hop_without_allow_experimental_is_unrecoverable() {
+        let routing = HopRouting::try_from(2).unwrap();
+        assert!(matches!(
+            derive_initial_state(&routing, false, false),
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed
+            }
+        ));
+    }
+
+    #[test]
+    fn multi_hop_with_allow_experimental_is_allowed() {
+        let routing = HopRouting::try_from(2).unwrap();
+        assert!(matches!(
+            derive_initial_state(&routing, false, true),
+            RouteHealthState::NeedsPeering { .. }
+        ));
+    }
+
     // --- is_peered for AnyChannel routes ---
 
     #[test]
@@ -1126,7 +1188,7 @@ mod tests {
             HopRouting::try_from(1).unwrap(),
             Default::default(),
         );
-        let mut rh = RouteHealth::new(&dest, false, CancellationToken::new());
+        let mut rh = RouteHealth::new(&dest, false, false, CancellationToken::new());
         rh.exit_failures = failures;
         rh.failure_backoff()
     }
