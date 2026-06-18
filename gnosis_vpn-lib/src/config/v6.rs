@@ -494,8 +494,19 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         }
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
-                for (k, _) in strategy.iter() {
+                for (k, v) in strategy.iter() {
                     if k == "desired_message_count" || k == "min_open_channels" || k == "target_open_channels" {
+                        continue;
+                    }
+                    if k == "channel_allowlist" {
+                        if let Some(allowlist) = v.as_table() {
+                            for (k2, _) in allowlist.iter() {
+                                if k2 == "enabled" || k2 == "peers" {
+                                    continue;
+                                }
+                                wrong.push(format!("strategy.channel_allowlist.{k2}"));
+                            }
+                        }
                         continue;
                     }
                     wrong.push(format!("strategy.{k}"));
@@ -508,11 +519,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong
 }
 
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ChannelAllowlistConfig {
+    pub(super) enabled: bool,
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    pub(super) peers: Vec<Address>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Strategy {
     pub(super) desired_message_count: Option<u64>,
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
+    pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
 }
 
 impl From<Option<Strategy>> for StrategyConfig {
@@ -531,6 +551,10 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .as_ref()
                 .and_then(|s| s.target_open_channels)
                 .unwrap_or(def.target_open_channels),
+            channel_allowlist: v
+                .as_ref()
+                .and_then(|s| s.channel_allowlist.as_ref())
+                .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
         }
     }
 }
@@ -612,8 +636,10 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, convert_destinations};
+    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
+    use edgli::hopr_lib::api::types::primitive::prelude::Address;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
@@ -690,5 +716,37 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn strategy_channel_allowlist_enabled_produces_some() {
+        let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
+        let strategy = Some(Strategy {
+            desired_message_count: None,
+            min_open_channels: None,
+            target_open_channels: None,
+            channel_allowlist: Some(ChannelAllowlistConfig {
+                enabled: true,
+                peers: vec![addr.clone()],
+            }),
+        });
+        let cfg: StrategyConfig = strategy.into();
+        assert_eq!(cfg.channel_allowlist, Some(std::collections::HashSet::from([addr])));
+    }
+
+    #[test]
+    fn strategy_channel_allowlist_disabled_produces_none() {
+        let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
+        let strategy = Some(Strategy {
+            desired_message_count: None,
+            min_open_channels: None,
+            target_open_channels: None,
+            channel_allowlist: Some(ChannelAllowlistConfig {
+                enabled: false,
+                peers: vec![addr],
+            }),
+        });
+        let cfg: StrategyConfig = strategy.into();
+        assert!(cfg.channel_allowlist.is_none());
     }
 }
