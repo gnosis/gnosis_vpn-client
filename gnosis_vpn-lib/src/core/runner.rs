@@ -75,11 +75,7 @@ pub(crate) enum Results {
         res: Result<(), Error>,
     },
     ConnectedPeers {
-        /// All connected peer addresses — used for route-health tracking.
-        connected: Result<Vec<Address>, Error>,
-        /// IPv4 addresses from peers with observed multiaddresses — used for IP-allowlist refresh.
-        /// Best-effort: an error here still allows route-health to proceed.
-        announced_ips: Vec<std::net::Ipv4Addr>,
+        res: Result<Vec<Address>, Error>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -245,21 +241,8 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
 
 pub(crate) async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting connected peers runner");
-    let (connected, announced_ips) = tokio::join!(async { hopr.connected_peers().await.map_err(Error::from) }, async {
-        match hopr.announced_peers().await {
-            Ok(peers) => peers.into_values().flat_map(|p| p.ipv4_addrs).collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(error = %e, "announced_peers() failed; skipping allowlist refresh");
-                Vec::new()
-            }
-        }
-    });
-    let _ = results_sender
-        .send(Results::ConnectedPeers {
-            connected,
-            announced_ips,
-        })
-        .await;
+    let res = hopr.connected_peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::ConnectedPeers { res }).await;
 }
 
 pub(crate) async fn monitor_session(
@@ -610,16 +593,8 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::ConnectedPeers {
-                connected,
-                announced_ips,
-            } => match connected {
-                Ok(peers) => write!(
-                    f,
-                    "ConnectedPeers: {} peers, {} announced IPs",
-                    peers.len(),
-                    announced_ips.len()
-                ),
+            Results::ConnectedPeers { res } => match res {
+                Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
                 Err(err) => write!(f, "ConnectedPeers: Error({})", err),
             },
             Results::IncentiveOperations { res } => match res {

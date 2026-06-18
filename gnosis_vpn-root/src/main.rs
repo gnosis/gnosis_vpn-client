@@ -1016,37 +1016,6 @@ impl DaemonState {
             .await;
     }
 
-    async fn refresh_peer_allowlist(&mut self, peer_ips: Vec<Ipv4Addr>) {
-        let ips_for_fw: Vec<IpAddr> = peer_ips.iter().copied().map(IpAddr::V4).collect();
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let _ = self
-            .routing_actor_sender
-            .send(routing_actor::Msg::UpdateAllowedPeers {
-                ips: ips_for_fw,
-                reply: reply_tx,
-            })
-            .await;
-        // Run killswitch and routing bypass concurrently. Take the router out temporarily
-        // so Rust allows the independent borrows inside tokio::join!.
-        let mut router = self.router.take();
-        let (fw_result, bypass_result) = tokio::join!(reply_rx, async {
-            if let Some(ref mut r) = router {
-                r.update_peer_bypass(&peer_ips).await
-            } else {
-                Ok(())
-            }
-        });
-        self.router = router;
-        match fw_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(error = %e, "killswitch peer allowlist refresh failed"),
-            Err(_) => tracing::warn!("killswitch actor dropped reply during peer allowlist refresh"),
-        }
-        if let Err(e) = bypass_result {
-            tracing::warn!(error = ?e, "routing-level bypass refresh failed");
-        }
-    }
-
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
@@ -1110,10 +1079,6 @@ impl DaemonState {
             RequestToRoot::CacheBlokliIps { ips } => {
                 tracing::debug!(?ips, "caching blokli IPs for worker restart");
                 self.worker_params.set_cached_blokli_ips(ips);
-                Ok(())
-            }
-            RequestToRoot::UpdatePeerIps { peer_ips } => {
-                self.refresh_peer_allowlist(peer_ips).await;
                 Ok(())
             }
         }

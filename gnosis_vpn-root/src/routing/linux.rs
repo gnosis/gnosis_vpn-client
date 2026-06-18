@@ -33,7 +33,6 @@ use gnosis_vpn_lib::{event, wireguard, worker};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use super::bypass;
 use super::netlink_ops::{NetlinkOps, RealNetlinkOps, RouteSpec, RuleSpec};
 use super::nftables_ops::{self, NfTablesOps, RealNfTablesOps};
 use super::route_ops::RouteOps;
@@ -102,7 +101,6 @@ pub fn static_fallback_router(
         peer_ips,
         route_ops,
         wg,
-        bypass_manager: None,
     })
 }
 
@@ -424,9 +422,6 @@ pub struct FallbackRouter<R: RouteOps, W: WgOps> {
     peer_ips: Vec<Ipv4Addr>,
     route_ops: R,
     wg: W,
-    /// Tracks dynamically-discovered peer routes added after setup.
-    /// Populated after `setup()` succeeds; None before that.
-    bypass_manager: Option<bypass::BypassRouteManager<R>>,
 }
 
 // ============================================================================
@@ -842,15 +837,10 @@ impl<N: NetlinkOps + 'static, W: WgOps + 'static> Routing for Router<N, W> {
         teardown_fwmark_infrastructure_with(self.infra.clone(), &nft).await;
         tracing::info!("VPN routing teardown complete");
     }
-
-    // UID/fwmark-based bypass automatically handles all peers — no per-IP routes to update.
-    async fn update_peer_bypass(&mut self, _peer_ips: &[Ipv4Addr]) -> Result<(), Error> {
-        Ok(())
-    }
 }
 
 #[async_trait]
-impl<R: RouteOps + Clone + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W> {
+impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for FallbackRouter<R, W> {
     /// Install split-tunnel routing for FallbackRouter.
     ///
     /// Uses a phased approach to avoid a race condition where HOPR p2p connections
@@ -891,52 +881,24 @@ impl<R: RouteOps + Clone + 'static, W: WgOps + 'static> Routing for FallbackRout
 
         let interface_name = self.wg.wg_quick_up(self.state_home.clone(), wg_quick_content).await?;
         tracing::debug!(%interface_name, "wg-quick up");
-
-        // Initialise bypass_manager for dynamic peer updates after setup.
-        // Static peer_ips are already handled by the PostUp hooks above; the manager
-        // starts with an empty tracked set and only manages peers discovered later.
-        self.bypass_manager = Some(bypass::BypassRouteManager::new(
-            bypass::WanInterface { device, gateway },
-            vec![],
-            self.route_ops.clone(),
-        ));
-
         Ok(interface_name)
-    }
-
-    async fn update_peer_bypass(&mut self, peer_ips: &[Ipv4Addr]) -> Result<(), Error> {
-        if let Some(bypass) = self.bypass_manager.as_mut() {
-            // Exclude IPs already managed by wg-quick PostUp/PreDown hooks so we don't
-            // double-add on refresh or double-delete on teardown.
-            let dynamic: Vec<Ipv4Addr> = peer_ips
-                .iter()
-                .filter(|ip| !self.peer_ips.contains(ip))
-                .copied()
-                .collect();
-            bypass.update_peer_routes(&dynamic).await?;
-        }
-        Ok(())
     }
 
     /// Teardown split-tunnel routing for FallbackRouter.
     ///
     /// Teardown order:
-    /// 1. wg-quick down (PreDown hooks clean up static peer routes)
-    /// 2. Remove dynamically-added bypass routes
+    /// 1. Remove VPN subnet route (best-effort)
+    /// 2. wg-quick down
+    /// 3. Remove bypass routes
     ///
     async fn teardown(&mut self, logs: Logs) {
-        // wg-quick down — PreDown hooks delete static peer routes
+        // wg-quick down
         match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
             Ok(_) => tracing::debug!("wg-quick down"),
             Err(error) => {
                 tracing::error!(?error, "wg-quick down failed during teardown");
             }
         }
-        // Clean up dynamically-added bypass routes that aren't in PreDown
-        if let Some(ref mut bypass) = self.bypass_manager {
-            bypass.teardown().await;
-        }
-        self.bypass_manager = None;
     }
 }
 
@@ -1744,7 +1706,6 @@ mod tests {
             peer_ips: vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
             route_ops,
             wg,
-            bypass_manager: None,
         }
     }
 

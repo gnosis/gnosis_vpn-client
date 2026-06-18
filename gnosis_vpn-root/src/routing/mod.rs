@@ -100,11 +100,4 @@ pub trait Routing {
     /// Set up the VPN tunnel. Returns the resolved WireGuard interface name on success.
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
-
-    /// Refresh the routing-level bypass host routes for the current live peer-IP set.
-    ///
-    /// Called periodically while the VPN is connected to keep the bypass routes in sync
-    /// with libp2p's observed peer addresses. Implementations that use UID/fwmark-based
-    /// bypass (Linux dynamic Router) can return Ok(()) — those paths auto-handle all peers.
-    async fn update_peer_bypass(&mut self, peer_ips: &[std::net::Ipv4Addr]) -> Result<(), Error>;
 }

@@ -138,33 +138,6 @@ impl<R: RouteOps> BypassRouteManager<R> {
         self.added_rfc1918_routes.clear();
     }
 
-    /// Reconcile bypass routes against a new desired peer-IP set.
-    ///
-    /// Adds routes for IPs not yet tracked, removes routes for IPs no longer in the set.
-    /// Individual failures are logged and skipped rather than causing a rollback — this is
-    /// a periodic refresh path, not a setup transaction.
-    pub async fn update_peer_routes(&mut self, desired: &[Ipv4Addr]) -> Result<(), Error> {
-        let desired_set: std::collections::HashSet<Ipv4Addr> = desired.iter().copied().collect();
-        let current_set: std::collections::HashSet<Ipv4Addr> = self.added_peer_routes.iter().copied().collect();
-
-        for ip in desired_set.difference(&current_set).copied().collect::<Vec<_>>() {
-            if let Err(e) = self.add_peer_route(&ip).await {
-                tracing::warn!(%e, peer_ip = %ip, "failed to add bypass route during refresh");
-                continue;
-            }
-            self.added_peer_routes.push(ip);
-        }
-        for ip in current_set.difference(&desired_set).copied().collect::<Vec<_>>() {
-            if let Err(e) = self.delete_peer_route(&ip).await {
-                tracing::warn!(%e, peer_ip = %ip, "failed to delete bypass route during refresh");
-                continue;
-            }
-            self.added_peer_routes.retain(|x| *x != ip);
-        }
-        self.peer_ips = desired.to_vec();
-        Ok(())
-    }
-
     // ========================================================================
     // Route operations via RouteOps trait
     // ========================================================================
@@ -369,80 +342,5 @@ mod tests {
         let state = route_ops.state.lock().unwrap();
         assert_eq!(state.added_routes.len(), 1);
         assert_eq!(state.added_routes[0].1, None); // no gateway
-    }
-
-    #[tokio::test]
-    async fn test_update_peer_routes_adds_new() {
-        let route_ops = make_route_ops();
-        let wan = WanInterface {
-            device: "eth0".to_string(),
-            gateway: Some("192.168.1.1".to_string()),
-        };
-        let a: Ipv4Addr = "1.2.3.4".parse().unwrap();
-        let b: Ipv4Addr = "5.6.7.8".parse().unwrap();
-        let c: Ipv4Addr = "9.10.11.12".parse().unwrap();
-
-        let mut manager = BypassRouteManager::new(wan, vec![a, b], route_ops.clone());
-        manager.setup_peer_routes().await.unwrap();
-        route_ops.state.lock().unwrap().added_routes.clear();
-
-        manager.update_peer_routes(&[a, b, c]).await.unwrap();
-
-        let state = route_ops.state.lock().unwrap();
-        // Only c should have been added (a and b via add_peer_route = del+add, but only c is new in set-diff)
-        assert!(
-            state.added_routes.iter().any(|r| r.0 == "9.10.11.12"),
-            "c should be added"
-        );
-        assert!(manager.added_peer_routes.contains(&c));
-    }
-
-    #[tokio::test]
-    async fn test_update_peer_routes_removes_gone() {
-        let route_ops = make_route_ops();
-        let wan = WanInterface {
-            device: "eth0".to_string(),
-            gateway: Some("192.168.1.1".to_string()),
-        };
-        let a: Ipv4Addr = "1.2.3.4".parse().unwrap();
-        let b: Ipv4Addr = "5.6.7.8".parse().unwrap();
-
-        let mut manager = BypassRouteManager::new(wan, vec![a, b], route_ops.clone());
-        manager.setup_peer_routes().await.unwrap();
-
-        manager.update_peer_routes(&[a]).await.unwrap();
-
-        // route_del removes b from added_routes (mock removes from the vec on delete)
-        let state = route_ops.state.lock().unwrap();
-        assert!(
-            !state.added_routes.iter().any(|r| r.0 == "5.6.7.8"),
-            "b should be removed from routing table"
-        );
-        assert!(!manager.added_peer_routes.contains(&b));
-        assert!(manager.added_peer_routes.contains(&a));
-    }
-
-    #[tokio::test]
-    async fn test_update_peer_routes_no_change() {
-        let route_ops = make_route_ops();
-        let wan = WanInterface {
-            device: "eth0".to_string(),
-            gateway: Some("192.168.1.1".to_string()),
-        };
-        let a: Ipv4Addr = "1.2.3.4".parse().unwrap();
-        let b: Ipv4Addr = "5.6.7.8".parse().unwrap();
-
-        let mut manager = BypassRouteManager::new(wan, vec![a, b], route_ops.clone());
-        manager.setup_peer_routes().await.unwrap();
-
-        // Route count before: 2 (a and b)
-        let before = route_ops.state.lock().unwrap().added_routes.len();
-
-        manager.update_peer_routes(&[a, b]).await.unwrap();
-
-        // Route count after should be identical — no additions or deletions
-        let after = route_ops.state.lock().unwrap().added_routes.len();
-        assert_eq!(before, after, "no routes should change on a no-change update");
-        assert_eq!(manager.added_peer_routes.len(), 2);
     }
 }
