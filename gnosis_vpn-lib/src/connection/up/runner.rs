@@ -31,6 +31,8 @@ pub(crate) struct Runner {
     worker_params: WorkerParams,
     cached_blokli_ips: Vec<Ipv4Addr>,
     cached_pseudonym: Option<HoprPseudonym>,
+    /// WireGuard public key from a previous connection to unregister during background bridge cleanup.
+    prev_public_key: Option<String>,
 }
 
 impl Runner {
@@ -42,6 +44,7 @@ impl Runner {
         worker_params: WorkerParams,
         cached_blokli_ips: Vec<Ipv4Addr>,
         cached_pseudonym: Option<HoprPseudonym>,
+        prev_public_key: Option<String>,
     ) -> Self {
         Self {
             destination,
@@ -51,6 +54,7 @@ impl Runner {
             worker_params,
             cached_blokli_ips,
             cached_pseudonym,
+            prev_public_key,
         }
     }
 
@@ -60,7 +64,7 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
-        // -1. resolve blokli ips - use cached IPs resolution in case of killswitch active
+        // 1. resolve blokli ips — use cached IPs when killswitch is active (DNS unreachable)
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         let blokli_ips = if self.cached_blokli_ips.is_empty() {
@@ -69,14 +73,14 @@ impl Runner {
             self.cached_blokli_ips.clone()
         };
 
-        // 0. generate wg keys
+        // 2. generate wg keys
         let _ = results_sender
             .send(progress(Progress::GenerateWg(blokli_ips.clone())))
             .await;
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
         let public_key = wg.key_pair.public_key.clone();
 
-        // 1. open bridge session
+        // 3. open bridge session
         let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
         let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
         let bridge_session = open_bridge_session(
@@ -91,198 +95,52 @@ impl Runner {
             .send(progress(Progress::BridgeOpened(bridge_session.clone())))
             .await;
 
-        // 2. register wg public key
+        // 4. register wg public key
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &bridge_session, public_key, &results_sender).await?;
 
-        // 3. close bridge session
+        // 5. signal ping phase (carries registration) and close bridge in background
         let _ = results_sender
-            .send(progress(Progress::CloseBridge(registration.clone())))
+            .send(progress(Progress::OpenPing(registration.clone())))
             .await;
-        close_bridge_session(&self.hopr, &bridge_session).await?;
+        spawn_background_bridge_cleanup(
+            self.hopr.clone(),
+            bridge_session,
+            self.options.clone(),
+            self.prev_public_key.clone(),
+            results_sender.clone(),
+        );
 
-        // 4. open ping session
-        let _ = results_sender.send(progress(Progress::OpenPing)).await;
+        // 6. open ping session
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session = open_ping_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            ping_surb,
-            self.cached_pseudonym,
-            &results_sender,
-        )
-        .await?;
+        let session =
+            open_ping_session(&self.hopr, &self.destination, &self.options, ping_surb, self.cached_pseudonym, &results_sender).await?;
 
-        // dynamic routing might block all outgoing communication
-        // this leads to loosing peers and thus falling back to static routing might break because of that
-        // gather peers before we start any routing attempt to ensure static routing might still work
-        // 5. gather ips of all announced peers
+        // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr).await?;
         peer_ips.extend(blokli_ips);
 
-        // dynamic routing is only available on Linux
-        cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
-                let force_static = false;
-            } else if #[cfg(target_os = "macos")] {
-                let force_static = true;
-            }
-        }
-
-        if force_static || self.worker_params.force_static_routing() {
-            tracing::info!("using static routing");
-            self.run_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
-                .await
-        } else {
-            let res = request_dynamic_wg_tunnel(&wg, &registration, &session, &results_sender).await;
-            match res {
-                Ok(interface) => {
-                    self.run_check_dynamic_routing(&wg, &registration, &session, peer_ips, interface, &results_sender)
-                        .await
-                }
-                Err(err) => {
-                    tracing::warn!(error = ?err, "failed to establish dynamically routed WireGuard tunnel - fallback to static routing");
-                    self.run_fallback_static_wg_tunnel(&wg, &registration, &session, peer_ips, &results_sender)
-                        .await
-                }
-            }
-        }
-    }
-
-    async fn run_static_wg_tunnel(
-        &self,
-        wg: &WireGuard,
-        registration: &Registration,
-        session: &SessionClientMetadata,
-        peer_ips: Vec<Ipv4Addr>,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 6b. request static wg tunnel from root
+        // 8. setup static wg tunnel — returns the resolved WireGuard interface name
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
+        let interface =
+            request_static_wg_tunnel(&wg, &registration, &session, peer_ips.clone(), &results_sender).await?;
 
-        // setup static routing — returns the resolved WireGuard interface name
-        let interface = request_static_wg_tunnel(wg, registration, session, peer_ips.clone(), results_sender).await?;
-
-        // 6. activate killswitch now that the interface name is known
+        // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips, interface, results_sender).await?;
+        request_killswitch_lockdown(peer_ips, interface, &results_sender).await?;
 
-        // and verify it works
-        self.run_check_static_routing(session, results_sender).await
-    }
-
-    async fn run_fallback_static_wg_tunnel(
-        &self,
-        wg: &WireGuard,
-        registration: &Registration,
-        old_session: &SessionClientMetadata,
-        peer_ips: Vec<Ipv4Addr>,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // teardown any existing dynamic routing
-        let _ = results_sender
-            .send(Results::ConnectionRequestToRoot(RunnerToRoot::TearDownWg))
-            .await;
-
-        // static routing needs to first close the session already used for dynamic routing
-        if let Err(err) = self
-            .hopr
-            .close_session(old_session.bound_host, old_session.protocol)
-            .await
-        {
-            tracing::warn!(error = ?err, "failed to close ping session used for dynamic routing - attempting to continue with static routing setup");
-        }
-
-        // open a new ping session
-        let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session = open_ping_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            ping_surb,
-            self.cached_pseudonym,
-            results_sender,
-        )
-        .await?;
-
-        // 6b. dismantle dynamic routing and request static wg tunnel from root
-        let _ = results_sender
-            .send(progress(Progress::StaticWgTunnel(session.clone())))
-            .await;
-
-        // setup static routing — returns the resolved WireGuard interface name
-        let interface = request_static_wg_tunnel(wg, registration, &session, peer_ips.clone(), results_sender).await?;
-
-        // 6. activate killswitch now that the interface name is known
-        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips, interface, results_sender).await?;
-
-        // and verify it works
-        self.run_check_static_routing(&session, results_sender).await
-    }
-
-    async fn run_check_dynamic_routing(
-        &self,
-        wg: &WireGuard,
-        registration: &Registration,
-        session: &SessionClientMetadata,
-        peer_ips: Vec<Ipv4Addr>,
-        interface: String,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 6. activate killswitch now that the interface name is known
-        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips.clone(), interface, results_sender).await?;
-
-        // 7a. request ping from root to check if dynamic routing works
+        // 10. verify tunnel with ping — give it some leeway with 5 retries
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        // only one retry to avoid long fallback time in case dynamic routing doesn't work
-        let res = request_ping(&self.options.ping_options, 1, results_sender).await;
-        match res {
-            Ok(round_trip_time) => {
-                self.run_after_verified_working(round_trip_time, session, results_sender)
-                    .await
-            }
+        let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
 
-            Err(err) => {
-                tracing::warn!(error = ?err, "ping over dynamically routed WireGuard tunnel failed - fallback to static routing");
-                self.run_fallback_static_wg_tunnel(wg, registration, session, peer_ips, results_sender)
-                    .await
-            }
-        }
-    }
-
-    async fn run_check_static_routing(
-        &self,
-        session: &SessionClientMetadata,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 7b. request ping from root to check if static routing works
-        let _ = results_sender.send(progress(Progress::Ping)).await;
-        // this is our last chance - give it some leeway with 5 retries
-        let round_trip_time = request_ping(&self.options.ping_options, 5, results_sender).await?;
-        self.run_after_verified_working(round_trip_time, session, results_sender)
-            .await
-    }
-
-    async fn run_after_verified_working(
-        &self,
-        round_trip_time: Duration,
-        session: &SessionClientMetadata,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> Result<SessionClientMetadata, Error> {
-        // 8. adjust to main session
+        // 11. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
-
-        // Config validation ensures ping.enabled == main.enabled, so if main has no
-        // SURB management, the ping session was also opened without it — no adjust needed.
         if let Some(main_config) = main_surb.management {
             let active_client = match session.active_clients.as_slice() {
                 [] => return Err(HoprError::SessionNotFound.into()),
@@ -407,8 +265,8 @@ async fn open_ping_session(
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path: destination.routing,
-        return_path: destination.routing,
+        forward_path: destination.routing.clone(),
+        return_path: destination.routing.clone(),
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
         pseudonym,
@@ -452,59 +310,12 @@ async fn request_killswitch_lockdown(
 
     tokio::select!(
         res = rx => match res {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(interface)) => Ok(interface),
             Ok(Err(e)) => Err(Error::Routing(e)),
             Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {reason}"))),
         },
         _ = tokio::time::sleep(Duration::from_secs(20)) => {
             Err(Error::Runtime("Timed out waiting for killswitch lockdown".to_string()))
-        }
-    )
-}
-
-async fn request_dynamic_wg_tunnel(
-    wg: &WireGuard,
-    registration: &Registration,
-    session: &SessionClientMetadata,
-    results_sender: &mpsc::Sender<Results>,
-) -> Result<String, Error> {
-    // 6a. request dynamic wg tunnel from root
-    let _ = results_sender
-        .send(progress(Progress::DynamicWgTunnel(session.clone())))
-        .await;
-    let (tx, rx) = oneshot::channel();
-    let interface_info = wireguard::InterfaceInfo {
-        address: registration.address(),
-    };
-    let peer_info = wireguard::PeerInfo {
-        public_key: registration.server_public_key(),
-        preshared_key: registration.preshared_key(),
-        endpoint: format!(
-            "{host}:{port}",
-            host = session.bound_host.ip(),
-            port = session.bound_host.port()
-        ),
-    };
-    let wg_data = event::WireGuardData {
-        wg: wg.clone(),
-        peer_info,
-        interface_info,
-    };
-    let _ = results_sender
-        .send(Results::ConnectionRequestToRoot(RunnerToRoot::DynamicWgRouting {
-            wg_data,
-            resp: tx,
-        }))
-        .await;
-
-    tokio::select!(
-        res = rx => match res {
-            Ok(Ok(interface)) => Ok(interface),
-            Ok(Err(e)) => Err(Error::Routing(e)),
-            Err(reason) => Err(Error::Runtime(format!("Channel closed unexpectedly: {}", reason))),
-        },
-        _ = tokio::time::sleep(Duration::from_secs(20)) => {
-            Err(Error::Runtime("Timed out waiting for response".to_string()))
         }
     )
 }
@@ -556,7 +367,9 @@ async fn request_static_wg_tunnel(
 
 async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
     let peers = hopr.announced_peers().await?;
-    let peer_ips = peers.into_values().flat_map(|p| p.ipv4_addrs).collect();
+    let mut peer_ips: Vec<Ipv4Addr> = peers.into_values().flat_map(|p| p.ipv4_addrs).collect();
+    peer_ips.sort_unstable();
+    peer_ips.dedup();
     Ok(peer_ips)
 }
 
@@ -595,6 +408,34 @@ async fn request_ping(
         });
     })
     .await
+}
+
+fn spawn_background_bridge_cleanup(
+    hopr: Arc<Hopr>,
+    bridge_session: SessionClientMetadata,
+    options: Options,
+    prev_public_key: Option<String>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    tokio::spawn(async move {
+        if let Some(old_key) = prev_public_key {
+            let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
+            let client = reqwest::Client::new();
+            match gvpn_client::unregister(&client, &input).await {
+                Ok(()) => tracing::debug!("unregistered old wg public key"),
+                Err(gvpn_client::Error::RegistrationNotFound) => {
+                    tracing::warn!("old wg key not found during unregister, possibly already removed");
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "failed to unregister old wg public key");
+                }
+            }
+        }
+        if let Err(err) = close_bridge_session(&hopr, &bridge_session).await {
+            tracing::warn!(%err, "failed to close bridge session in background");
+        }
+        let _ = results_sender.send(progress(Progress::BridgeClosed)).await;
+    });
 }
 
 fn setback(setback: Setback) -> Results {

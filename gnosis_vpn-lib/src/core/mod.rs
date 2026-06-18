@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::net;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
@@ -77,6 +77,7 @@ pub struct Core {
     cancel_node_wxhopr: CancellationToken,
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
+    cancel_balances: CancellationToken,
 
     // user provided data
     target_destination: Option<Destination>,
@@ -100,6 +101,7 @@ pub struct Core {
     responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
+    reconnecting_since: Option<SystemTime>,
     pseudonym_cache: PseudonymCache,
 }
 
@@ -191,6 +193,7 @@ impl Core {
             cancel_node_wxhopr: cancel_on_shutdown.child_token(),
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
+            cancel_balances: cancel_on_shutdown.child_token(),
 
             // user provided data
             target_destination,
@@ -211,6 +214,7 @@ impl Core {
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
             pseudonym_cache,
+            reconnecting_since: None,
         };
         Ok((core, incoming_sender))
     }
@@ -292,19 +296,6 @@ impl Core {
                                 request_id,
                                 ?res,
                                 "no responder for killswitch lockdown response (evicted or duplicate)"
-                            );
-                        }
-                    }
-                    ResponseFromRoot::DynamicWgRouting { request_id, res } => {
-                        if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
-                            let _ = tx.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for dynamic wg routing response");
-                            });
-                        } else {
-                            tracing::debug!(
-                                request_id,
-                                ?res,
-                                "no responder for dynamic wg routing response (evicted or duplicate)"
                             );
                         }
                     }
@@ -435,13 +426,29 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
-                        let connecting = match &self.phase {
-                            Phase::Connecting(conn) => Some(command::ConnectingInfo {
-                                destination_id: conn.destination.id.clone(),
-                                since: conn.phase.0,
-                                phase: conn.phase.1.clone(),
-                            }),
+                        let active_conn_phase = match &self.phase {
+                            Phase::Connecting(conn) => {
+                                Some((conn.destination.id.clone(), conn.phase.0, conn.phase.1.clone()))
+                            }
                             _ => None,
+                        };
+                        let reconnecting = self.reconnecting_since.and_then(|since| {
+                            active_conn_phase
+                                .as_ref()
+                                .map(|(dest_id, _, phase)| command::ReconnectingInfo {
+                                    destination_id: dest_id.clone(),
+                                    since,
+                                    phase: phase.clone(),
+                                })
+                        });
+                        let connecting = if reconnecting.is_some() {
+                            None
+                        } else {
+                            active_conn_phase.map(|(dest_id, since, phase)| command::ConnectingInfo {
+                                destination_id: dest_id,
+                                since,
+                                phase,
+                            })
                         };
                         let connected = match &self.phase {
                             Phase::Connected(conn) => Some(command::ConnectedInfo {
@@ -473,6 +480,7 @@ impl Core {
                             destinations,
                             target_destination: self.target_destination.as_ref().map(|d| d.id.clone()),
                             connecting,
+                            reconnecting,
                             connected,
                             disconnecting,
                         });
@@ -481,6 +489,7 @@ impl Core {
 
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
+                            self.reconnecting_since = None;
                             let is_already_active = match &self.phase {
                                 Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination == *dest,
                                 _ => false,
@@ -569,6 +578,30 @@ impl Core {
                             }
                         };
                         let _ = resp.send(Response::Telemetry(res));
+                    }
+
+                    WorkerCommand::RefreshNode => {
+                        // immediately request balances and cancel existing balance loop
+                        self.cancel_balances.cancel();
+                        self.cancel_balances = self.cancel_on_shutdown.child_token();
+                        self.spawn_balances_runner(results_sender, Duration::ZERO);
+                        let _ = resp.send(Response::RefreshNodeTriggered);
+                    }
+
+                    WorkerCommand::ForceReconnect => {
+                        let active_conn = match self.phase.clone() {
+                            Phase::Connected(conn) => Some(conn),
+                            Phase::Connecting(conn) => Some(conn),
+                            _ => None,
+                        };
+                        if let Some(conn) = active_conn {
+                            tracing::info!(%conn, "force reconnect triggered by WAN change");
+                            self.reconnecting_since = Some(SystemTime::now());
+                            self.force_reconnect(conn, results_sender).await;
+                        } else {
+                            tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
+                        }
+                        let _ = resp.send(Response::ForceReconnectAcknowledged);
                     }
 
                     WorkerCommand::FundingTool(secret) => match self.phase.clone() {
@@ -830,6 +863,7 @@ impl Core {
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
                 (Ok(session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
+                    self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     self.pseudonym_cache.remove(&conn.destination);
@@ -847,6 +881,7 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
+                    self.reconnecting_since = None;
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
                         rh.with_error(err.to_string());
                     }
@@ -911,13 +946,6 @@ impl Core {
                         peer_ips,
                         interface,
                     };
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
-
-                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
-                    let request_id = self.next_request_id();
-                    self.responders.insert(request_id, Responder::Str(resp));
-                    let request = RequestToRoot::DynamicWgRouting { request_id, wg_data };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
@@ -1449,7 +1477,7 @@ impl Core {
 
     fn spawn_balances_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_on_shutdown.clone();
+            let cancel = self.cancel_balances.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1512,6 +1540,7 @@ impl Core {
         &mut self,
         destination: Destination,
         exit: route_health::ExitHealth,
+        prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         if let Some(hopr) = self.hopr.clone() {
@@ -1533,6 +1562,7 @@ impl Core {
                 self.worker_params.clone(),
                 self.cached_resolved_blokli_ips.clone(),
                 cached_pseudonym,
+                prev_public_key,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1614,7 +1644,7 @@ impl Core {
                 if let Some(rh) = self.route_healths.get(&dest.id) {
                     if let Some(exit) = rh.ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), exit, results_sender);
+                        self.spawn_connection_runner(dest.clone(), exit, None, results_sender);
                     } else if rh.is_unrecoverable() {
                         tracing::error!(destination = %dest,route_health = ?rh.state(),  "refusing connection because of route health");
                     } else {
@@ -1651,7 +1681,7 @@ impl Core {
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
-        if let Some((_, session)) = &conn.active_session
+        if let Some((_, session)) = &conn.ping_session
             && let Some(client_id) = session.active_clients.first()
             && let Ok(session_id) = SessionId::from_str(client_id)
         {
@@ -1675,6 +1705,42 @@ impl Core {
             self.spawn_disconnection_runner(&disconn, results_sender);
         } else {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
+            self.act_on_target(results_sender);
+        }
+    }
+
+    /// Reconnect without a full disconnect cycle — used for ForceReconnect (WAN change).
+    ///
+    /// Cancels the running connection, tears down the WireGuard tunnel, then immediately
+    /// spawns a new connection runner that carries the old public key so the new runner's
+    /// background bridge-cleanup task can unregister it.
+    async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        let destination = conn.destination.clone();
+        let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
+        let exit_health = self
+            .route_healths
+            .get(&destination.id)
+            .and_then(|rh| rh.current_exit_health());
+
+        self.cancel_connection.cancel();
+        self.cancel_connection = self.cancel_on_shutdown.child_token();
+
+        let _ = self
+            .outgoing_sender
+            .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+            .await;
+
+        self.phase = Phase::HoprRunning;
+
+        if let Some(exit) = exit_health {
+            self.spawn_connection_runner(destination, exit, prev_public_key, results_sender);
+        } else {
+            // Invariant violation: force_reconnect is only called from Connecting/Connected
+            // which always sets route health to Connecting. Log and wait for health check.
+            tracing::warn!(
+                ?destination,
+                "force reconnect: no cached exit health — waiting for health check"
+            );
             self.act_on_target(results_sender);
         }
     }

@@ -321,7 +321,17 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::ReadyToConnect { .. })
     }
 
-    pub(crate) fn is_unrecoverable(&self) -> bool {
+    /// Returns the cached exit health from either `ReadyToConnect` or `Connecting` state.
+    /// Used by force-reconnect to reuse the last known good health without going through a
+    /// full disconnect/reconnect cycle.
+    pub(crate) fn current_exit_health(&self) -> Option<ExitHealth> {
+        match &self.state {
+            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connecting { exit, .. } => Some(exit.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn is_unrecoverable(&self) -> bool {
         matches!(self.state, RouteHealthState::Unrecoverable { .. })
     }
 }

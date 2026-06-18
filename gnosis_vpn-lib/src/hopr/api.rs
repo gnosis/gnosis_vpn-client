@@ -276,6 +276,7 @@ impl Hopr {
         tracing::debug!("query hopr info");
         Info {
             node_address: self.edgli.me_onchain(),
+            node_peer_id: self.edgli.me_peer_id().to_string(),
             safe_address: self.edgli.safe_address(),
         }
     }

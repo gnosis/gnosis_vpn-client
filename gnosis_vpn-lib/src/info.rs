@@ -9,6 +9,7 @@ use crate::serde_utils;
 pub struct Info {
     #[serde(with = "serde_utils::address")]
     pub node_address: Address,
+    pub node_peer_id: String,
     #[serde(with = "serde_utils::address")]
     pub safe_address: Address,
 }
