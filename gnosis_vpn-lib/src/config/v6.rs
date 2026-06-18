@@ -636,8 +636,10 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, convert_destinations};
+    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
+    use edgli::hopr_lib::api::types::primitive::prelude::Address;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
@@ -714,5 +716,37 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn strategy_channel_allowlist_enabled_produces_some() {
+        let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
+        let strategy = Some(Strategy {
+            desired_message_count: None,
+            min_open_channels: None,
+            target_open_channels: None,
+            channel_allowlist: Some(ChannelAllowlistConfig {
+                enabled: true,
+                peers: vec![addr.clone()],
+            }),
+        });
+        let cfg: StrategyConfig = strategy.into();
+        assert_eq!(cfg.channel_allowlist, Some(std::collections::HashSet::from([addr])));
+    }
+
+    #[test]
+    fn strategy_channel_allowlist_disabled_produces_none() {
+        let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
+        let strategy = Some(Strategy {
+            desired_message_count: None,
+            min_open_channels: None,
+            target_open_channels: None,
+            channel_allowlist: Some(ChannelAllowlistConfig {
+                enabled: false,
+                peers: vec![addr],
+            }),
+        });
+        let cfg: StrategyConfig = strategy.into();
+        assert!(cfg.channel_allowlist.is_none());
     }
 }
