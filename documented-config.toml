@@ -144,3 +144,7 @@ path    = { hops = 1 }
 # min_open_channels = 5
 # target number of open outgoing channels
 # target_open_channels = 8
+# restrict channel opening to a fixed set of peers; omit section to select peers by quality score (default)
+# [strategy.channel_allowlist]
+# enabled = false
+# peers = ["0x...", "0x..."]

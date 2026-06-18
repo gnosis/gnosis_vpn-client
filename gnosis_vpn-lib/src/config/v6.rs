@@ -494,8 +494,19 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         }
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
-                for (k, _) in strategy.iter() {
+                for (k, v) in strategy.iter() {
                     if k == "desired_message_count" || k == "min_open_channels" || k == "target_open_channels" {
+                        continue;
+                    }
+                    if k == "channel_allowlist" {
+                        if let Some(allowlist) = v.as_table() {
+                            for (k2, _) in allowlist.iter() {
+                                if k2 == "enabled" || k2 == "peers" {
+                                    continue;
+                                }
+                                wrong.push(format!("strategy.channel_allowlist.{k2}"));
+                            }
+                        }
                         continue;
                     }
                     wrong.push(format!("strategy.{k}"));
@@ -508,11 +519,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong
 }
 
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ChannelAllowlistConfig {
+    pub(super) enabled: bool,
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    pub(super) peers: Vec<Address>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Strategy {
     pub(super) desired_message_count: Option<u64>,
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
+    pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
 }
 
 impl From<Option<Strategy>> for StrategyConfig {
@@ -531,6 +551,10 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .as_ref()
                 .and_then(|s| s.target_open_channels)
                 .unwrap_or(def.target_open_channels),
+            channel_allowlist: v
+                .as_ref()
+                .and_then(|s| s.channel_allowlist.as_ref())
+                .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
         }
     }
 }
