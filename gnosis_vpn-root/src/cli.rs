@@ -81,6 +81,10 @@ pub struct Cli {
     #[arg(long)]
     pub allow_insecure: bool,
 
+    /// Allow experimental multi-hop connections with 2+ hops (only for testing purposes)
+    #[arg(long)]
+    pub allow_experimental: bool,
+
     /// Autostart client after service startup and shut it down after being idle for this duration.
     /// The idle countdown is suspended while a VPN connection is active and resumes on disconnect.
     #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
@@ -104,6 +108,7 @@ impl From<&Cli> for WorkerParams {
             None => worker_params::ConfigFileMode::Generated,
         };
         let allow_insecure = cli.allow_insecure;
+        let allow_experimental = cli.allow_experimental;
         let force_static_routing = cli.force_static_routing;
         let state_home = cli.state_home.clone();
 
@@ -112,6 +117,7 @@ impl From<&Cli> for WorkerParams {
             cli.hopr_identity_pass.clone(),
             config_mode,
             allow_insecure,
+            allow_experimental,
             cli.hopr_blokli_url.clone(),
             force_static_routing,
             state_home,

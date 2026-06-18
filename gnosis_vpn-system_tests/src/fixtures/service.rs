@@ -27,6 +27,10 @@ impl Service {
             cmd.arg("--allow-insecure");
         }
 
+        if cfg.allow_experimental {
+            cmd.arg("--allow-experimental");
+        }
+
         info!("Spawning gnosis-vpn service with command: {:?}", cmd);
 
         match cmd.spawn() {
