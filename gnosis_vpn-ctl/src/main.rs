@@ -261,7 +261,7 @@ fn pretty_print(resp: &Response) {
             safe,
             channels_out,
             info,
-            capacity_allocations: _,
+            capacity_allocations,
             ideal_balance: _,
             funding_issues,
         })) => {
@@ -278,12 +278,15 @@ fn pretty_print(resp: &Response) {
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
+                let allocations = capacity_allocations.as_deref().unwrap_or(&[]);
                 let sci = balance::wxhopr_scientific(*safe)
                     .map(|s| format!(" ({s})"))
                     .unwrap_or_default();
-                str_resp.push_str(&format!("Safe: {safe}{sci}\n"));
+                let safe_cap = find_capacity(allocations, &balance::CapacityAllocator::Safe);
+                str_resp.push_str(&format!("Safe: {safe}{sci}{}\n", format_capacity(safe_cap)));
                 for ch in channels_out {
-                    str_resp.push_str(&format!("{ch}\n"));
+                    let ch_cap = find_capacity(allocations, &balance::CapacityAllocator::Peer(ch.address));
+                    str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
                 }
             }
             match funding_issues.as_deref() {
@@ -360,6 +363,20 @@ fn format_probability(p: f64) -> String {
     let s = format!("{:.8}", p);
     let trimmed = s.trim_end_matches('0');
     trimmed.trim_end_matches('.').to_string()
+}
+
+fn find_capacity<'a>(
+    allocations: &'a [balance::CapacityEntry],
+    allocator: &balance::CapacityAllocator,
+) -> Option<&'a balance::Capacity> {
+    allocations.iter().find(|e| &e.allocator == allocator).map(|e| &e.capacity)
+}
+
+fn format_capacity(capacity: Option<&balance::Capacity>) -> String {
+    match capacity {
+        None => String::new(),
+        Some(c) => format!(" [{} msgs, {}]", human_msgs(c.expected_messages), human_bytes(c.byte_capacity)),
+    }
 }
 
 fn human_bytes(bytes: u64) -> String {
