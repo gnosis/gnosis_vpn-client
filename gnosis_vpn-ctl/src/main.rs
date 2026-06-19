@@ -274,9 +274,7 @@ fn pretty_print(resp: &Response) {
             let safe_sci = balance::wxhopr_scientific(*safe)
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
-            str_resp.push_str(&format!(
-                "---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"
-            ));
+            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {

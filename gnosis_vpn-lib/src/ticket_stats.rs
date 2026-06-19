@@ -1,7 +1,6 @@
 use edgli::hopr_lib::api::types::primitive::prelude::{Balance, WxHOPR};
 use serde::{Deserialize, Serialize};
 
-
 use crate::serde_utils;
 
 #[derive(Copy, Debug, Clone, Serialize, Deserialize)]

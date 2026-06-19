@@ -1119,7 +1119,11 @@ impl DaemonState {
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
-            RequestToRoot::KillswitchLockdown { request_id, peer_ips, interface } => {
+            RequestToRoot::KillswitchLockdown {
+                request_id,
+                peer_ips,
+                interface,
+            } => {
                 let ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
                 let res = self.apply_killswitch(interface, ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)

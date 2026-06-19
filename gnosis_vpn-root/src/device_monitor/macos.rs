@@ -117,7 +117,10 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
                 // if_indextoname succeeded: interface still exists, flags changed
                 Some(name) => Some(NetworkEvent::LinkChanged { index, name }),
                 // if_indextoname failed: interface is gone, this is a deletion signal
-                None => Some(NetworkEvent::LinkRemoved { index, name: format!("if#{index}") }),
+                None => Some(NetworkEvent::LinkRemoved {
+                    index,
+                    name: format!("if#{index}"),
+                }),
             }
         }
         libc::RTM_NEWADDR => {
@@ -146,7 +149,10 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             let index = ifm.ifm_index as u32;
             match if_name(index) {
                 Some(name) => Some(NetworkEvent::LinkChanged { index, name }),
-                None => Some(NetworkEvent::LinkRemoved { index, name: format!("if#{index}") }),
+                None => Some(NetworkEvent::LinkRemoved {
+                    index,
+                    name: format!("if#{index}"),
+                }),
             }
         }
         RTM_IFANNOUNCE => {

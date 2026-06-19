@@ -113,8 +113,15 @@ impl Runner {
 
         // 6. open ping session
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session =
-            open_ping_session(&self.hopr, &self.destination, &self.options, ping_surb, self.cached_pseudonym, &results_sender).await?;
+        let session = open_ping_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            ping_surb,
+            self.cached_pseudonym,
+            &results_sender,
+        )
+        .await?;
 
         // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;

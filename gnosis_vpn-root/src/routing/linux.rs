@@ -219,7 +219,9 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     }
 
     async fn add_peer_bypass_route(&mut self, ip: Ipv4Addr) -> Result<(), Error> {
-        let Some(ref wan) = self.wan_info else { return Ok(()); };
+        let Some(ref wan) = self.wan_info else {
+            return Ok(());
+        };
         let device = wan.device.clone();
         let gateway = wan.gateway.clone();
         let dest = ip.to_string();
@@ -230,7 +232,9 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
     }
 
     async fn remove_peer_bypass_route(&mut self, ip: Ipv4Addr) -> Result<(), Error> {
-        let Some(ref wan) = self.wan_info else { return Ok(()); };
+        let Some(ref wan) = self.wan_info else {
+            return Ok(());
+        };
         let dest = ip.to_string();
         let device = wan.device.clone();
         if let Err(e) = self.route_ops.route_del(&dest, &device).await {

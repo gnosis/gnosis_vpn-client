@@ -249,7 +249,10 @@ impl Actor {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            if let Err(e) = self.firewall.apply_policy(&policy.interface, &combined, policy.lan_lockdown) {
+            if let Err(e) = self
+                .firewall
+                .apply_policy(&policy.interface, &combined, policy.lan_lockdown)
+            {
                 tracing::warn!(error = %e, "failed to refresh killswitch after peer allowlist update");
             } else {
                 tracing::debug!(count = combined.len(), "killswitch peer allowlist refreshed");
