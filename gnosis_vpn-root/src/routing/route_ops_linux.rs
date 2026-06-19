@@ -35,7 +35,6 @@ impl NetlinkRouteOps {
     }
 
     /// Parse a destination string like "10.0.0.0/8" or "1.2.3.4" into (addr, prefix_len).
-    #[allow(dead_code)]
     fn parse_dest(dest: &str) -> Result<(Ipv4Addr, u8), Error> {
         if let Some((addr_str, prefix_str)) = dest.split_once('/') {
             let addr = Ipv4Addr::from_str(addr_str)
@@ -53,7 +52,6 @@ impl NetlinkRouteOps {
     }
 
     /// Resolve a device name to its interface index.
-    #[allow(dead_code)]
     async fn resolve_ifindex(&self, device: &str) -> Result<u32, Error> {
         let links: Vec<_> = self
             .handle

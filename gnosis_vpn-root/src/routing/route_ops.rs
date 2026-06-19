@@ -49,10 +49,8 @@ pub trait RouteOps: Send + Sync + Clone {
     async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error>;
 
     /// Add a route: destination via optional gateway through device.
-    #[allow(dead_code)]
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error>;
 
     /// Delete a route by destination and device.
-    #[allow(dead_code)]
     async fn route_del(&self, dest: &str, device: &str) -> Result<(), Error>;
 }
