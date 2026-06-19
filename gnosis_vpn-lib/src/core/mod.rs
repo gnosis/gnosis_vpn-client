@@ -78,6 +78,7 @@ pub struct Core {
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
+    cancel_announced_peers: CancellationToken,
 
     // user provided data
     target_destination: Option<Destination>,
@@ -194,6 +195,7 @@ impl Core {
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
+            cancel_announced_peers: cancel_on_shutdown.child_token(),
 
             // user provided data
             target_destination,
@@ -876,6 +878,9 @@ impl Core {
                     log_output::print_session_established(route.as_str());
                     self.spawn_session_monitoring(session, results_sender);
                     self.spawn_tunnel_ping_probe(results_sender);
+                    self.cancel_announced_peers.cancel();
+                    self.cancel_announced_peers = self.cancel_on_shutdown.child_token();
+                    self.spawn_announced_peers(results_sender, Duration::from_secs(10));
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -1524,7 +1529,7 @@ impl Core {
 
     fn spawn_announced_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_on_shutdown.clone();
+            let cancel = self.cancel_announced_peers.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
