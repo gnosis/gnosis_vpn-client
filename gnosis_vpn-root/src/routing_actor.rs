@@ -1,3 +1,18 @@
+//! Routing and killswitch actor.
+//!
+//! Serialises all routing and firewall mutations through a single message queue so that
+//! setup, teardown, and policy changes cannot interleave.
+//!
+//! The killswitch allowlist has two tiers:
+//! * **Static floor** (`AppliedPolicy::ips`) — set once at `KillswitchLockdown` time
+//!   (blokli IPs + peers alive at initial connection). Overwritten on reconnect, cleared
+//!   only on explicit disconnect, preserved as-is during a worker crash so the firewall
+//!   stays active until the next successful connection.
+//! * **Dynamic delta** (`Actor::active_bypass`) — peers discovered after initial
+//!   connection. Added and removed by `update_peer_ips`; reset to empty on routing
+//!   teardown. The firewall sees `floor ∪ delta`, so the floor is always allowed even
+//!   when the delta shrinks to zero.
+
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
@@ -51,6 +66,8 @@ const PEER_IP_HYSTERESIS_SECS: u64 = 300;
 
 struct AppliedPolicy {
     interface: String,
+    /// Static floor: blokli IPs + peers alive at initial connection.
+    /// Never updated by peer refreshes; overwritten only when a new lockdown fires.
     ips: Vec<IpAddr>,
     lan_lockdown: bool,
 }
@@ -62,7 +79,11 @@ struct Actor {
     firewall: Firewall,
     router: Option<Box<dyn Routing + Send>>,
     applied_policy: Option<AppliedPolicy>,
+    /// Timestamp of the last `update_peer_ips` observation per IP.
+    /// An IP is retained in the allowlist for `PEER_IP_HYSTERESIS_SECS` after last observation.
     peer_ip_last_seen: std::collections::HashMap<Ipv4Addr, Instant>,
+    /// Dynamic delta above the static floor: peers discovered after initial connection.
+    /// Diffed and reconciled by `update_peer_ips`; reset to empty on routing teardown.
     active_bypass: HashSet<Ipv4Addr>,
 }
 
@@ -239,7 +260,8 @@ impl Actor {
 
         self.active_bypass = alive.clone();
 
-        // Refresh the killswitch allowlist if active, merging static + dynamic IPs.
+        // Union the static floor (policy.ips) with the dynamic delta (alive) so blokli
+        // and the initial peer snapshot stay allowed even when alive is empty.
         if let Some(ref policy) = self.applied_policy {
             let combined: Vec<IpAddr> = policy
                 .ips

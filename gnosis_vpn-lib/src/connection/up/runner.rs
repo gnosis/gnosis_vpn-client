@@ -126,6 +126,8 @@ impl Runner {
         // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr).await?;
+        // blokli must be in the initial snapshot so it becomes part of the permanent
+        // firewall floor and stays reachable for the duration of the connection.
         peer_ips.extend(blokli_ips);
 
         // 8. setup static wg tunnel — returns the resolved WireGuard interface name
