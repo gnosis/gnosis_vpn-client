@@ -369,13 +369,20 @@ fn find_capacity<'a>(
     allocations: &'a [balance::CapacityEntry],
     allocator: &balance::CapacityAllocator,
 ) -> Option<&'a balance::Capacity> {
-    allocations.iter().find(|e| &e.allocator == allocator).map(|e| &e.capacity)
+    allocations
+        .iter()
+        .find(|e| &e.allocator == allocator)
+        .map(|e| &e.capacity)
 }
 
 fn format_capacity(capacity: Option<&balance::Capacity>) -> String {
     match capacity {
         None => String::new(),
-        Some(c) => format!(" [{} msgs, {}]", human_msgs(c.expected_messages), human_bytes(c.byte_capacity)),
+        Some(c) => format!(
+            " [{} msgs, {}]",
+            human_msgs(c.expected_messages),
+            human_bytes(c.byte_capacity)
+        ),
     }
 }
 
