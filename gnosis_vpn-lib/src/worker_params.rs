@@ -47,8 +47,6 @@ pub enum ConfigFileMode {
 }
 
 impl WorkerParams {
-    // TODO: remove force_static_routing (upcoming refactor) — that will bring this back to 7 args
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
@@ -162,10 +160,6 @@ impl WorkerParams {
 
     pub fn allow_experimental(&self) -> bool {
         self.allow_experimental
-    }
-
-    pub fn force_static_routing(&self) -> bool {
-        true
     }
 
     pub fn blokli_url(&self) -> Option<Url> {
