@@ -7,6 +7,8 @@ use thiserror::Error;
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use gnosis_vpn_lib::{dirs, wireguard};
 
+use std::net::Ipv4Addr;
+
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
@@ -82,4 +84,13 @@ pub trait Routing {
     /// own routing setup/teardown (which would otherwise feed back into an
     /// endless reconnect loop).
     async fn wan_changed(&mut self) -> Result<bool, Error>;
+
+    /// Add a /32 bypass route for a dynamically-discovered peer IP.
+    /// Called by the routing actor during periodic allowlist refresh.
+    /// Should be a no-op (return Ok) if routing is not yet set up.
+    async fn add_peer_bypass_route(&mut self, ip: Ipv4Addr) -> Result<(), Error>;
+
+    /// Remove the /32 bypass route for a peer IP that is no longer alive.
+    /// Should be a no-op (return Ok) if routing is not yet set up.
+    async fn remove_peer_bypass_route(&mut self, ip: Ipv4Addr) -> Result<(), Error>;
 }

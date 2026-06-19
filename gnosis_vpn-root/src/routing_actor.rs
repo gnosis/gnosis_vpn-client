@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::killswitch::Firewall;
@@ -37,7 +39,15 @@ pub enum Msg {
         removed_link: Option<String>,
         reply: oneshot::Sender<bool>,
     },
+    /// Fire-and-forget: update the peer-IP bypass routes and killswitch allowlist.
+    /// Sent periodically from Core with a snapshot of announced peer IPv4 addresses.
+    /// The actor applies hysteresis and diffs against its current active set.
+    UpdatePeerIps {
+        peer_ips: Vec<Ipv4Addr>,
+    },
 }
+
+const PEER_IP_HYSTERESIS_SECS: u64 = 300;
 
 struct AppliedPolicy {
     interface: String,
@@ -52,6 +62,8 @@ struct Actor {
     firewall: Firewall,
     router: Option<Box<dyn Routing + Send>>,
     applied_policy: Option<AppliedPolicy>,
+    peer_ip_last_seen: std::collections::HashMap<Ipv4Addr, Instant>,
+    active_bypass: HashSet<Ipv4Addr>,
 }
 
 impl Actor {
@@ -60,6 +72,8 @@ impl Actor {
             firewall: Firewall::new().map_err(|e| e.to_string())?,
             router: None,
             applied_policy: None,
+            peer_ip_last_seen: std::collections::HashMap::new(),
+            active_bypass: HashSet::new(),
         })
     }
 
@@ -100,6 +114,9 @@ impl Actor {
             Msg::ReapplyKillswitch => self.reapply_policy(),
             Msg::NetworkChanged { removed_link, reply } => {
                 let _ = reply.send(self.should_reconnect(removed_link).await);
+            }
+            Msg::UpdatePeerIps { peer_ips } => {
+                self.update_peer_ips(peer_ips).await;
             }
         }
     }
@@ -182,9 +199,62 @@ impl Actor {
 
     async fn teardown_routing(&mut self) {
         if let Some(ref mut router) = self.router {
+            for ip in self.active_bypass.drain().collect::<Vec<_>>() {
+                if let Err(e) = router.remove_peer_bypass_route(ip).await {
+                    tracing::warn!(error = %e, peer_ip = %ip, "failed to remove dynamic bypass route on teardown");
+                }
+            }
             router.teardown(Logs::Print).await;
         }
         self.router = None;
+        self.peer_ip_last_seen.clear();
+    }
+
+    async fn update_peer_ips(&mut self, peer_ips: Vec<Ipv4Addr>) {
+        let now = Instant::now();
+        for ip in &peer_ips {
+            self.peer_ip_last_seen.insert(*ip, now);
+        }
+        self.peer_ip_last_seen
+            .retain(|_, t| now.duration_since(*t) < Duration::from_secs(PEER_IP_HYSTERESIS_SECS));
+
+        let alive: HashSet<Ipv4Addr> = self.peer_ip_last_seen.keys().copied().collect();
+
+        if alive == self.active_bypass {
+            return;
+        }
+
+        if let Some(ref mut router) = self.router {
+            for ip in alive.difference(&self.active_bypass).copied().collect::<Vec<_>>() {
+                if let Err(e) = router.add_peer_bypass_route(ip).await {
+                    tracing::warn!(error = %e, peer_ip = %ip, "failed to add dynamic peer bypass route");
+                }
+            }
+            for ip in self.active_bypass.difference(&alive).copied().collect::<Vec<_>>() {
+                if let Err(e) = router.remove_peer_bypass_route(ip).await {
+                    tracing::warn!(error = %e, peer_ip = %ip, "failed to remove dynamic peer bypass route");
+                }
+            }
+        }
+
+        self.active_bypass = alive.clone();
+
+        // Refresh the killswitch allowlist if active, merging static + dynamic IPs.
+        if let Some(ref policy) = self.applied_policy {
+            let combined: Vec<IpAddr> = policy
+                .ips
+                .iter()
+                .copied()
+                .chain(alive.iter().map(|ip| IpAddr::V4(*ip)))
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            if let Err(e) = self.firewall.apply_policy(&policy.interface, &combined, policy.lan_lockdown) {
+                tracing::warn!(error = %e, "failed to refresh killswitch after peer allowlist update");
+            } else {
+                tracing::debug!(count = combined.len(), "killswitch peer allowlist refreshed");
+            }
+        }
     }
 
     fn apply_policy(&mut self, interface: String, ips: Vec<IpAddr>, lan_lockdown: bool) -> Result<(), String> {

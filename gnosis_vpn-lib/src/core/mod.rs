@@ -761,10 +761,10 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::ConnectedPeers { res } => match res {
+            Results::AnnouncedPeers { res } => match res {
                 Ok(peers) => {
-                    tracing::info!(num_peers = %peers.len(), "fetched connected peers");
-                    let all_peers = HashSet::from_iter(peers.iter().cloned());
+                    tracing::info!(num_peers = %peers.len(), "fetched announced peers");
+                    let all_peers = HashSet::from_iter(peers.keys().copied());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                     let channels_already_available = self
                         .capacity_allocations
@@ -793,16 +793,25 @@ impl Core {
                         }
                     }
 
-                    let delay = if route_health::any_needs_peers(self.route_healths.values()) {
+                    let peer_ips: Vec<net::Ipv4Addr> =
+                        peers.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
+                    let _ = self
+                        .outgoing_sender
+                        .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
+                        .await;
+
+                    let delay = if self.target_destination.is_some()
+                        || route_health::any_needs_peers(self.route_healths.values())
+                    {
                         Duration::from_secs(10)
                     } else {
                         Duration::from_secs(90)
                     };
-                    self.spawn_connected_peers(results_sender, delay);
+                    self.spawn_announced_peers(results_sender, delay);
                 }
                 Err(err) => {
-                    tracing::error!(?err, "failed to fetch connected peers");
-                    self.spawn_connected_peers(results_sender, Duration::from_secs(10));
+                    tracing::error!(?err, "failed to fetch announced peers");
+                    self.spawn_announced_peers(results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -1513,7 +1522,7 @@ impl Core {
         }
     }
 
-    fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_announced_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
@@ -1521,7 +1530,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::connected_peers(hopr, results_sender).await;
+                        runner::announced_peers(hopr, results_sender).await;
                     })
                     .await
             });
@@ -1743,7 +1752,7 @@ impl Core {
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         self.spawn_balances_runner(results_sender, Duration::ZERO);
         if route_health::any_needs_peers(self.route_healths.values()) {
-            self.spawn_connected_peers(results_sender, Duration::ZERO);
+            self.spawn_announced_peers(results_sender, Duration::ZERO);
         } else {
             self.act_on_target(results_sender);
         }

@@ -312,12 +312,6 @@ impl Hopr {
         self.edgli.status()
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
-        tracing::debug!("query hopr connected peers");
-        self.edgli.connected_peer_addresses().await.map_err(HoprError::HoprLib)
-    }
-
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn start_telemetry_reactor(
         &self,

@@ -1164,9 +1164,11 @@ impl DaemonState {
                 self.worker_params.set_cached_blokli_ips(ips);
                 Ok(())
             }
-            RequestToRoot::CacheBlokliIps { ips } => {
-                tracing::debug!(?ips, "caching blokli IPs for worker restart");
-                self.worker_params.set_cached_blokli_ips(ips);
+            RequestToRoot::UpdatePeerIps { peer_ips } => {
+                let _ = self
+                    .routing_actor_sender
+                    .send(routing_actor::Msg::UpdatePeerIps { peer_ips })
+                    .await;
                 Ok(())
             }
         }

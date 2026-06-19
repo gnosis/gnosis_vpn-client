@@ -228,4 +228,26 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
             Some(r) => Ok(r.src_ip != snapshot.src_ip || r.gateway != snapshot.gateway),
         }
     }
+
+    async fn add_peer_bypass_route(&mut self, ip: Ipv4Addr) -> Result<(), Error> {
+        let Some(ref wan) = self.wan_info else { return Ok(()); };
+        let device = wan.device.clone();
+        let gateway = wan.gateway.clone();
+        let dest = ip.to_string();
+        let _ = self.route_ops.route_del(&dest, &device).await;
+        self.route_ops.route_add(&dest, gateway.as_deref(), &device).await?;
+        self.active_bypass_routes.push((dest, device));
+        Ok(())
+    }
+
+    async fn remove_peer_bypass_route(&mut self, ip: Ipv4Addr) -> Result<(), Error> {
+        let Some(ref wan) = self.wan_info else { return Ok(()); };
+        let dest = ip.to_string();
+        let device = wan.device.clone();
+        if let Err(e) = self.route_ops.route_del(&dest, &device).await {
+            tracing::warn!(%e, %ip, "failed to remove dynamic peer bypass route");
+        }
+        self.active_bypass_routes.retain(|(d, _)| d != &dest);
+        Ok(())
+    }
 }

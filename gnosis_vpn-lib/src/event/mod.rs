@@ -119,6 +119,10 @@ pub enum RequestToRoot {
     CacheBlokliIps {
         ips: Vec<Ipv4Addr>,
     },
+    /// Fire-and-forget: refresh the peer-IP allowlist used by the killswitch and routing bypass.
+    UpdatePeerIps {
+        peer_ips: Vec<Ipv4Addr>,
+    },
 }
 
 /// Root execution response from root process.
