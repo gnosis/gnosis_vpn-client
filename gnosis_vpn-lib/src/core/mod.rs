@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::net;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
@@ -578,14 +578,6 @@ impl Core {
                             }
                         };
                         let _ = resp.send(Response::Telemetry(res));
-                    }
-
-                    WorkerCommand::RefreshNode => {
-                        // immediately request balances and cancel existing balance loop
-                        self.cancel_balances.cancel();
-                        self.cancel_balances = self.cancel_on_shutdown.child_token();
-                        self.spawn_balances_runner(results_sender, Duration::ZERO);
-                        let _ = resp.send(Response::RefreshNodeTriggered);
                     }
 
                     WorkerCommand::ForceReconnect => {

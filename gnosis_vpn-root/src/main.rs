@@ -1119,27 +1119,14 @@ impl DaemonState {
     async fn incoming_worker_request(&mut self, request: RequestToRoot) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?request, "received worker request to root");
         match request {
-            RequestToRoot::KillswitchLockdown { peer_ips, interface } => {
+            RequestToRoot::KillswitchLockdown { request_id, peer_ips, interface } => {
                 let ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
                 let res = self.apply_killswitch(interface, ips).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
                     send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { res }),
-                        &mut child.socket_writer,
-                    )
-                    .await?;
-                }
-                Ok(())
-            }
-            RequestToRoot::DynamicWgRouting { request_id, wg_data } => {
-                let res = self.setup_dynamic_routing(wg_data).await;
-                if matches!(self.shutdown_ongoing, Shutdown::None)
-                    && let Some(ref mut child) = self.worker_child
-                {
-                    send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::DynamicWgRouting { request_id, res }),
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { request_id, res }),
                         &mut child.socket_writer,
                     )
                     .await?;

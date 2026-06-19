@@ -261,8 +261,8 @@ fn pretty_print(resp: &Response) {
             safe,
             channels_out,
             info,
-            capacity_allocations,
-            ideal_balance,
+            capacity_allocations: _,
+            ideal_balance: _,
             funding_issues,
         })) => {
             let mut str_resp = String::new();
@@ -355,7 +355,6 @@ fn pretty_print(resp: &Response) {
         // Internal response sent by the root process to itself when a WAN interface change
         // triggers a HOPR session reconnect. Never issued in response to a ctl command.
         Response::ForceReconnectAcknowledged => {}
-        Response::RefreshNodeTriggered => {}
     }
 }
 
@@ -428,7 +427,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::WorkerOffline => exitcode::UNAVAILABLE,
         // Internal response — see pretty_print for explanation
         Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
-        Response::RefreshNodeTriggered => exitcode::OK,
     }
 }
 

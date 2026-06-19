@@ -58,7 +58,6 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
-    RefreshNode,
     /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
     /// Used by the root process when a WAN interface change is detected.
     ForceReconnect,
@@ -73,7 +72,6 @@ pub enum Response {
     Balance(Result<BalanceResponse, String>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
-    RefreshNodeTriggered,
     /// Acknowledgment for [`WorkerCommand::ForceReconnect`]. Never sent in response to a ctl
     /// command — the root process uses id=0 fire-and-forget and discards this response.
     ForceReconnectAcknowledged,
@@ -486,7 +484,7 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                balance_recommendation,
+                balance_recommendation: _,
             } => {
                 let wxhopr_sci = balance::wxhopr_scientific(*node_wxhopr)
                     .map(|s| format!(" ({s})"))

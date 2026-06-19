@@ -265,8 +265,8 @@ async fn open_ping_session(
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
-        forward_path: destination.routing.clone(),
-        return_path: destination.routing.clone(),
+        forward_path: destination.routing,
+        return_path: destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
         pseudonym,
