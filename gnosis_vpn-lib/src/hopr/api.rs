@@ -357,6 +357,13 @@ impl Hopr {
                 peers.insert(entry.chain_addr, Peer::new(entry.chain_addr, ipv4_addrs));
             }
         }
+        tracing::debug!(
+            peers = %peers.iter()
+                .map(|(addr, p)| format!("{addr}:{:?}", p.ipv4_addrs))
+                .collect::<Vec<_>>()
+                .join(" "),
+            "announced peers"
+        );
         Ok(peers)
     }
 
