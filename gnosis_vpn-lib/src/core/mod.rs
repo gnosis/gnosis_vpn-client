@@ -976,11 +976,6 @@ impl Core {
                     let request = RequestToRoot::Ping { request_id, options };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
-
-                RunnerToRoot::TearDownWg => {
-                    let request = RequestToRoot::TearDownWg;
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
             },
 
             Results::HealthCheck { id, outcome } => {
@@ -1560,15 +1555,18 @@ impl Core {
             if let Some(pseudonym) = &cached_pseudonym {
                 tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
             }
+            let prev_conn = connection::up::runner::PreviousConnection {
+                blokli_ips: self.cached_resolved_blokli_ips.clone(),
+                pseudonym: cached_pseudonym,
+                wg_public_key: prev_public_key,
+            };
             let runner = connection::up::runner::Runner::new(
                 conn.destination.clone(),
                 config_connection,
                 config_wireguard,
                 hopr,
                 self.worker_params.clone(),
-                self.cached_resolved_blokli_ips.clone(),
-                cached_pseudonym,
-                prev_public_key,
+                prev_conn,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1731,6 +1729,7 @@ impl Core {
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
 
+        // this is a oneshot command and we do not wait for any result
         let _ = self
             .outgoing_sender
             .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))

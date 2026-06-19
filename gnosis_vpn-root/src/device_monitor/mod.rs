@@ -7,12 +7,25 @@ mod linux;
 mod macos;
 
 pub enum NetworkEvent {
-    LinkChanged { index: u32, name: String },
-    LinkRemoved { index: u32, name: String },
-    AddressAdded { index: u32, name: String },
-    AddressRemoved { index: u32, name: String },
+    LinkChanged {
+        index: u32,
+        name: String,
+    },
+    LinkRemoved {
+        index: u32,
+        name: String,
+    },
+    AddressAdded {
+        index: u32,
+        name: String,
+    },
+    AddressRemoved {
+        index: u32,
+        name: String,
+    },
     RouteAdded,
     RouteRemoved,
+    #[cfg(target_os = "macos")]
     RouteChanged,
 }
 

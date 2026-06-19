@@ -75,7 +75,6 @@ pub(crate) enum RunnerToRoot {
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<String, String>>,
     },
-    TearDownWg,
     Ping {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,

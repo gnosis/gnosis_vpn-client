@@ -1238,6 +1238,32 @@ mod tests {
         );
     }
 
+    // --- select_api_version ---
+
+    #[test]
+    fn select_api_version_finds_v1() {
+        let versions = vec!["v1".to_string()];
+        assert_eq!(select_api_version(&versions), Some("v1"));
+    }
+
+    #[test]
+    fn select_api_version_returns_none_for_empty_list() {
+        assert_eq!(select_api_version(&[]), None);
+    }
+
+    #[test]
+    fn select_api_version_returns_none_when_no_match() {
+        let versions = vec!["v2".to_string(), "v99".to_string()];
+        assert_eq!(select_api_version(&versions), None);
+    }
+
+    // --- jitter ---
+
+    #[test]
+    fn jitter_zero_returns_zero() {
+        assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
+    }
+
     // --- is_peered for Peering routes (0-hop) ---
 
     #[test]

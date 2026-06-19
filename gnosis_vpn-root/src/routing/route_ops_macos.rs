@@ -37,19 +37,6 @@ pub struct DarwinRouteOps;
 
 #[async_trait]
 impl RouteOps for DarwinRouteOps {
-    async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
-        let output = Command::new("route")
-            .arg("-n")
-            .arg("get")
-            .arg("0.0.0.0")
-            .run_stdout(Logs::Print)
-            .await?;
-
-        // Use shared parser with macOS-specific keys and suffix filter
-        // (filters out "index:" when gateway shows "gateway: index: 28")
-        parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
-    }
-
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
         for arg in route_add_args(dest, gateway, device) {

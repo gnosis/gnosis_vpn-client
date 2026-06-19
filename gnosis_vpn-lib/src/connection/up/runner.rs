@@ -23,16 +23,23 @@ use crate::{ping, remote_data};
 
 use super::{Error, Event, Progress, Setback};
 
+/// State carried over from a previous connection attempt.
+pub(crate) struct PreviousConnection {
+    /// Blokli IPs resolved during the previous connection (reused when killswitch blocks DNS).
+    pub blokli_ips: Vec<Ipv4Addr>,
+    /// Session pseudonym from the previous connection (reused to avoid re-registration churn).
+    pub pseudonym: Option<HoprPseudonym>,
+    /// WireGuard public key from the previous connection to unregister during bridge cleanup.
+    pub wg_public_key: Option<String>,
+}
+
 pub(crate) struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
-    cached_blokli_ips: Vec<Ipv4Addr>,
-    cached_pseudonym: Option<HoprPseudonym>,
-    /// WireGuard public key from a previous connection to unregister during background bridge cleanup.
-    prev_public_key: Option<String>,
+    prev_conn: PreviousConnection,
 }
 
 impl Runner {
@@ -42,9 +49,7 @@ impl Runner {
         wg_config: wireguard::Config,
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
-        cached_blokli_ips: Vec<Ipv4Addr>,
-        cached_pseudonym: Option<HoprPseudonym>,
-        prev_public_key: Option<String>,
+        prev_conn: PreviousConnection,
     ) -> Self {
         Self {
             destination,
@@ -52,9 +57,7 @@ impl Runner {
             options,
             wg_config,
             worker_params,
-            cached_blokli_ips,
-            cached_pseudonym,
-            prev_public_key,
+            prev_conn,
         }
     }
 
@@ -67,10 +70,10 @@ impl Runner {
         // 1. resolve blokli ips — use cached IPs when killswitch is active (DNS unreachable)
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
-        let blokli_ips = if self.cached_blokli_ips.is_empty() {
+        let blokli_ips = if self.prev_conn.blokli_ips.is_empty() {
             remote_data::resolve_ips(&blokli_url).await?
         } else {
-            self.cached_blokli_ips.clone()
+            self.prev_conn.blokli_ips.clone()
         };
 
         // 2. generate wg keys
@@ -107,7 +110,7 @@ impl Runner {
             self.hopr.clone(),
             bridge_session,
             self.options.clone(),
-            self.prev_public_key.clone(),
+            self.prev_conn.wg_public_key.clone(),
             results_sender.clone(),
         );
 
@@ -118,7 +121,7 @@ impl Runner {
             &self.destination,
             &self.options,
             ping_surb,
-            self.cached_pseudonym,
+            self.prev_conn.pseudonym,
             &results_sender,
         )
         .await?;

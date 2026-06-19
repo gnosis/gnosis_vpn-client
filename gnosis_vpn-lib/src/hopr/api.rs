@@ -337,22 +337,7 @@ impl Hopr {
 
         let mut peers = HashMap::new();
         while let Some(entry) = stream.next().await {
-            let ipv4_addrs: Vec<Ipv4Addr> = entry
-                .get_multiaddrs()
-                .iter()
-                .flat_map(|addr| {
-                    let mut addr = addr.clone();
-                    let mut found = vec![];
-                    while let Some(protocol) = addr.pop() {
-                        if let Protocol::Ip4(ipv4) = protocol {
-                            found.push(ipv4);
-                        }
-                    }
-                    found
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
+            let ipv4_addrs = extract_ipv4_addrs(entry.get_multiaddrs());
             if !ipv4_addrs.is_empty() {
                 peers.insert(entry.chain_addr, Peer::new(entry.chain_addr, ipv4_addrs));
             }
@@ -403,5 +388,64 @@ impl Hopr {
             tracing::info!("shutting down session listener: {:?}", process.key());
             process.value().abort_handle.abort();
         }
+    }
+}
+
+/// Extract all unique IPv4 addresses from a list of multiaddrs.
+///
+/// Walks each multiaddr from right to left (via `pop`), collecting
+/// `Protocol::Ip4` components. The result is deduplicated and sorted
+/// via `BTreeSet`, then returned as a `Vec`.
+fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
+    multiaddrs
+        .iter()
+        .flat_map(|addr| {
+            let mut addr = addr.clone();
+            let mut found = vec![];
+            while let Some(protocol) = addr.pop() {
+                if let Protocol::Ip4(ipv4) = protocol {
+                    found.push(ipv4);
+                }
+            }
+            found
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn multiaddr(s: &str) -> multiaddr::Multiaddr {
+        multiaddr::Multiaddr::from_str(s).expect("valid multiaddr")
+    }
+
+    #[test]
+    fn extract_ipv4_single_address() {
+        let addrs = vec![multiaddr("/ip4/1.2.3.4/tcp/9091")];
+        let result = extract_ipv4_addrs(&addrs);
+        assert_eq!(result, vec!["1.2.3.4".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn extract_ipv4_deduplicates_same_ip_across_multiaddrs() {
+        let addrs = vec![multiaddr("/ip4/1.2.3.4/tcp/9091"), multiaddr("/ip4/1.2.3.4/udp/9092")];
+        let result = extract_ipv4_addrs(&addrs);
+        assert_eq!(result, vec!["1.2.3.4".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn extract_ipv4_ignores_non_ipv4_protocols() {
+        let addrs = vec![multiaddr("/dns4/example.com/tcp/9091")];
+        let result = extract_ipv4_addrs(&addrs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_ipv4_empty_input_returns_empty() {
+        assert!(extract_ipv4_addrs(&[]).is_empty());
     }
 }
