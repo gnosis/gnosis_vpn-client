@@ -193,5 +193,4 @@ mod tests {
         let args = route_add_args("10.0.0.0/8", None, "utun5");
         assert_eq!(args, vec!["-n", "add", "-inet", "10.0.0.0/8", "-interface", "utun5"]);
     }
-
 }
