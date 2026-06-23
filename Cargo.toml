@@ -24,14 +24,14 @@ chrono = { version = "0.4.38", default-features = false, features = [
 cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
 clap_complete = "4"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "12769bc78a2ef66ea92f7b1439ffe3edcf824ab2", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "625965d1438e795fca6a7b49d3d2220b5026de8f", features = [
   "blokli",
   "telemetry",
 ] }
 exitcode = "1.1.2"
 futures = "0.3.31"
 futures-util = "0.3.31"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "b128645cd89181b27d8a133370cf8208d5bdc12e", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "1765e5c48e9dbfcccc5b411bf59bee5ca65efc4e", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "0.1.4"
