@@ -122,6 +122,23 @@ Check available params and env vars via:
 
 `gnosis_vpn-root --help` `gnosis_vpn-ctl --help`
 
+## Dependency Updates
+
+Renovate runs on Renovate's `schedule:earlyMondays` preset with a 14-day minimum
+release age, so most PRs appear early Monday morning and only for packages that
+have been released for at least two weeks.
+
+Updates are grouped by ecosystem:
+
+| Group               | What it covers                                        | Notes                                                                                                 |
+| ------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `nix flake updates` | `flake.lock` inputs (nixpkgs, crane, rust-overlay, …) | digest/pinDigest updates; `pinDigests` disabled for the `nix` manager since nix pins via `flake.lock` |
+| `github-actions`    | `.github/workflows` action refs                       | digest-pinned                                                                                         |
+| _(individual PRs)_  | Cargo crates                                          | one PR per crate                                                                                      |
+
+`prCreation: immediate` is intentional — CI only triggers on pull request
+events, so waiting for branch checks would deadlock.
+
 ## Deployment
 
 Show potential deployment targets:
