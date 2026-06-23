@@ -22,8 +22,6 @@ fn covers(prefix: Ipv4Addr, len: u8, dest: Ipv4Addr) -> bool {
 }
 
 /// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
-///
-/// Reuses the same netlink connection as [`RealNetlinkOps`](super::netlink_ops::RealNetlinkOps).
 #[derive(Clone)]
 pub struct NetlinkRouteOps {
     handle: rtnetlink::Handle,
