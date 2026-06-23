@@ -11,7 +11,7 @@ use tokio_util::task::TaskTracker;
 
 use std::collections::{HashMap, HashSet};
 use std::net;
-use std::str::FromStr;
+use edgli::hopr_lib::api::types::primitive::prelude::ToHex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1687,9 +1687,9 @@ impl Core {
         // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
         if let Some((_, session)) = &conn.active_session
             && let Some(client_id) = session.active_clients.first()
-            && let Ok(session_id) = SessionId::from_str(client_id)
+            && let Ok(session_id) = SessionId::from_hex(client_id)
         {
-            self.pseudonym_cache.insert(&conn.destination, *session_id.pseudonym());
+            self.pseudonym_cache.insert(&conn.destination, session_id);
         }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();

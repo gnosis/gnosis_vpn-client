@@ -25,7 +25,7 @@ use tokio::task::JoinSet;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap};
-use std::str::FromStr;
+use edgli::hopr_lib::api::types::primitive::prelude::ToHex;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -256,7 +256,7 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
         tracing::debug!("adjust hopr session");
-        let session_id = SessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+        let session_id = SessionId::from_hex(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
         // NOTE: the live SURB balancer is updated via the configurator below, but the
         // cached `max_surb_upstream` and `response_buffer` snapshots stored in
