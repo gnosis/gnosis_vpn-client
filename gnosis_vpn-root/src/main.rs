@@ -794,6 +794,7 @@ impl DaemonState {
             }
             device_monitor::NetworkEvent::RouteAdded => tracing::info!("route added"),
             device_monitor::NetworkEvent::RouteRemoved => tracing::info!("route removed"),
+            #[cfg(target_os = "macos")]
             device_monitor::NetworkEvent::RouteChanged => tracing::info!("route changed"),
         }
     }

@@ -13,6 +13,7 @@ pub enum NetworkEvent {
     AddressRemoved { index: u32, name: String },
     RouteAdded,
     RouteRemoved,
+    #[cfg(target_os = "macos")]
     RouteChanged,
 }
 

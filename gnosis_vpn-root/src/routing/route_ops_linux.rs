@@ -88,68 +88,6 @@ impl NetlinkRouteOps {
 
 #[async_trait]
 impl RouteOps for NetlinkRouteOps {
-    async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
-        // List all IPv4 routes and find the default (0.0.0.0/0)
-        let routes: Vec<_> = self
-            .handle
-            .route()
-            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
-            .execute()
-            .try_collect()
-            .await?;
-
-        // Find the default route (prefix_len == 0) in the main routing table only.
-        // wg-quick creates its own routing table with a 0/0 route at metric 0; including
-        // other tables here would cause it to shadow the real WAN default route.
-        let default_route = routes
-            .iter()
-            .filter(|r| r.header.destination_prefix_length == 0)
-            .filter(|r| r.header.table == 254)
-            .min_by_key(|r| {
-                // Prefer routes with lower metric
-                r.attributes
-                    .iter()
-                    .find_map(|a| match a {
-                        RouteAttribute::Priority(p) => Some(*p),
-                        _ => None,
-                    })
-                    .unwrap_or(0)
-            })
-            .ok_or(Error::NoInterface)?;
-
-        // Extract interface index
-        let if_index = default_route
-            .attributes
-            .iter()
-            .find_map(|a| match a {
-                RouteAttribute::Oif(idx) => Some(*idx),
-                _ => None,
-            })
-            .ok_or(Error::NoInterface)?;
-
-        // Extract gateway
-        let gateway = default_route.attributes.iter().find_map(|a| match a {
-            RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
-            _ => None,
-        });
-
-        // Resolve ifindex to name
-        let links: Vec<_> = self.handle.link().get().execute().try_collect().await?;
-
-        let if_name = links
-            .iter()
-            .find(|l| l.header.index == if_index)
-            .and_then(|l| {
-                l.attributes.iter().find_map(|a| match a {
-                    LinkAttribute::IfName(n) => Some(n.clone()),
-                    _ => None,
-                })
-            })
-            .ok_or_else(|| Error::General(format!("interface name not found for index {if_index}")))?;
-
-        Ok((if_name, gateway))
-    }
-
     async fn get_wan_route_for(&self, dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error> {
         let exclude_idx = self.resolve_ifindex(exclude_iface).await.ok();
 
