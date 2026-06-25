@@ -1687,9 +1687,9 @@ impl Core {
         // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
         if let Some((_, session)) = &conn.active_session
             && let Some(client_id) = session.active_clients.first()
-            && let Ok(session_id) = SessionId::from_hex(client_id)
+            && let Ok(pseudonym) = SessionId::from_hex(client_id)
         {
-            self.pseudonym_cache.insert(&conn.destination, session_id);
+            self.pseudonym_cache.insert(&conn.destination, pseudonym);
         }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
