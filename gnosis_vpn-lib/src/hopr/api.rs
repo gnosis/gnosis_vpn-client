@@ -5,10 +5,8 @@ use edgli::{
     hopr_lib::{
         HoprSessionClientConfig,
         api::{
-            chain::ChainKeyOperations,
             chain::{AccountSelector, ChainReadAccountOperations},
-            node::{HasChainApi, HasTransportApi},
-            types::{internal::channels::ChannelStatus, primitive::prelude::Address},
+            node::HasChainApi,
             types::{
                 internal::channels::ChannelStatus,
                 primitive::{prelude::Address, traits::ToHex},
