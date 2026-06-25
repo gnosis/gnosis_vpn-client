@@ -5,9 +5,14 @@ use edgli::{
     hopr_lib::{
         HoprSessionClientConfig,
         api::{
+            chain::ChainKeyOperations,
             chain::{AccountSelector, ChainReadAccountOperations},
-            node::HasChainApi,
+            node::{HasChainApi, HasTransportApi},
             types::{internal::channels::ChannelStatus, primitive::prelude::Address},
+            types::{
+                internal::channels::ChannelStatus,
+                primitive::{prelude::Address, traits::ToHex},
+            },
         },
         errors::HoprLibError,
         exports::{
@@ -25,7 +30,6 @@ use multiaddr::Protocol;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap};
-use std::str::FromStr;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -256,7 +260,7 @@ impl Hopr {
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
         tracing::debug!("adjust hopr session");
-        let session_id = SessionId::from_str(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+        let session_id = SessionId::from_hex(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
 
         // NOTE: the live SURB balancer is updated via the configurator below, but the
         // cached `max_surb_upstream` and `response_buffer` snapshots stored in
