@@ -22,9 +22,19 @@ async fn run(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToken) {
         );
         return;
     }
-    unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) };
 
-    let async_fd = match AsyncFd::new(unsafe { OwnedFd::from_raw_fd(fd) }) {
+    // Take ownership now so the fd is closed on all subsequent exit paths.
+    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+
+    if unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
+        tracing::error!(
+            error = ?std::io::Error::last_os_error(),
+            "device monitor: failed to set non-blocking mode on PF_ROUTE socket"
+        );
+        return;
+    }
+
+    let async_fd = match AsyncFd::new(owned) {
         Ok(f) => f,
         Err(e) => {
             tracing::error!(error = ?e, "device monitor: failed to register PF_ROUTE socket with tokio");
@@ -182,14 +192,12 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
 }
 
 fn if_name(index: u32) -> Option<String> {
-    let mut buf = [0i8; libc::IF_NAMESIZE];
-    let ptr = unsafe { libc::if_indextoname(index, buf.as_mut_ptr()) };
+    let mut buf = [0u8; libc::IF_NAMESIZE];
+    let ptr = unsafe { libc::if_indextoname(index, buf.as_mut_ptr().cast()) };
     if ptr.is_null() {
         return None;
     }
-    Some(
-        unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
-            .to_string_lossy()
-            .into_owned(),
-    )
+    std::ffi::CStr::from_bytes_until_nul(&buf)
+        .ok()
+        .map(|s| s.to_string_lossy().into_owned())
 }

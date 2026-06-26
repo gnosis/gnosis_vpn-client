@@ -1254,7 +1254,14 @@ impl DaemonState {
         let fd = child_socket.as_raw_fd();
         unsafe {
             let flags = libc::fcntl(fd, libc::F_GETFD);
-            libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            if flags < 0 {
+                tracing::warn!(
+                    error = ?std::io::Error::last_os_error(),
+                    "failed to read FD flags on child socket; CLOEXEC may remain set"
+                );
+            } else {
+                libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            }
         }
 
         let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
