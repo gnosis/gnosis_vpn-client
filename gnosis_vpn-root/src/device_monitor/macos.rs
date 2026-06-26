@@ -66,6 +66,8 @@ async fn run(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToken) {
                     }) {
                         Ok(Ok(n)) => {
                             if let Some(event) = to_network_event(&buf[..n]) {
+                                // try_send keeps the drain loop non-blocking; if the channel
+                                // is full we drop the event rather than stalling the socket reader.
                                 let _ = tx.try_send(event);
                             }
                         }

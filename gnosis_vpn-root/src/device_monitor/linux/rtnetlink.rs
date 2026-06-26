@@ -51,6 +51,8 @@ async fn run(
                     if let NetlinkPayload::InnerMessage(inner) = msg.payload {
                         tracing::debug!(kind = %msg_kind(&inner), "device monitor: rtnetlink event");
                         if let Some(event) = to_network_event(inner) {
+                            // try_send drops the event if the channel is full rather than
+                            // applying backpressure that would stall netlink message processing.
                             let _ = tx.try_send(event);
                         }
                     }
