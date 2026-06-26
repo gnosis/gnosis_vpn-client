@@ -297,6 +297,11 @@ impl Actor {
     }
 
     fn apply_policy(&mut self, interface: String, ips: Vec<IpAddr>, lan_lockdown: bool) -> Result<(), String> {
+        let ips: Vec<IpAddr> = ips
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let result = self
             .firewall
             .apply_policy(&interface, &ips, lan_lockdown)
