@@ -5,7 +5,8 @@ use std::{
     fmt::{self, Display},
 };
 
-use crate::{balance, connection::destination::Destination, info::Info, serde_utils};
+pub use crate::info::Info;
+use crate::{balance, connection::destination::Destination, serde_utils};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {

@@ -41,6 +41,8 @@ use crate::hopr::{Hopr, HoprError};
 use crate::serde_utils;
 use crate::{gvpn_client, log_output};
 
+pub use crate::gvpn_client::{Health, LoadAvg, Slots, Versions};
+
 const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
 const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
 /// Retry interval for the first few health-check failures while the HOPR
