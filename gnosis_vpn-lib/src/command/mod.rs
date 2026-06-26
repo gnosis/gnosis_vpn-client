@@ -15,10 +15,10 @@ use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::serde_utils;
-use crate::ticket_stats::TicketStats;
+pub use crate::ticket_stats::TicketStats;
 
 mod balance_response;
-pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut};
+pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut, Info};
 
 /// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
