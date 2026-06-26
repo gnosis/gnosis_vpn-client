@@ -12,8 +12,7 @@ use gnosis_vpn_lib::command::{
     StatusResponse, TicketStats, TicketStatsStatus, WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting};
-use gnosis_vpn_lib::connection::down::Phase as DownPhase;
-use gnosis_vpn_lib::connection::up::Phase as UpPhase;
+use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
 use gnosis_vpn_lib::route_health::{
     ExitHealth, Health, LoadAvg, RouteHealthState, Slots, UnrecoverableReason, Versions,
 };
