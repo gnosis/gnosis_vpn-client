@@ -107,7 +107,6 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
         return None;
     }
     let rtm_type = buf[3] as libc::c_int;
-    tracing::debug!(rtm_type, buf_len = buf.len(), "device monitor: PF_ROUTE message");
     match rtm_type {
         libc::RTM_IFINFO => {
             if buf.len() < std::mem::size_of::<libc::if_msghdr>() {
