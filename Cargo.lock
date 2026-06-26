@@ -1766,12 +1766,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cidr"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "579504560394e388085d0c080ea587dfa5c15f7e251b4d5247d1e1a61d1d6928"
-
-[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3259,15 +3253,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cfg-if",
- "cidr",
  "clap",
  "exitcode",
  "futures",
  "gnosis_vpn-lib",
  "humantime",
  "libc",
- "mnl",
- "nftnl",
  "notify",
  "rtnetlink",
  "serde_json",
