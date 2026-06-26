@@ -119,6 +119,7 @@ impl RouteOps for NetlinkRouteOps {
                     .unwrap_or(Ipv4Addr::UNSPECIFIED);
                 covers(prefix_addr, prefix_len, dest)
             })
+            .filter(|r| r.attributes.iter().any(|a| matches!(a, RouteAttribute::Oif(_))))
             .max_by_key(|r| {
                 let metric = r
                     .attributes
