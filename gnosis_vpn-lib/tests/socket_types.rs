@@ -3,13 +3,12 @@
 //! so any type that can't be named here isn't properly exported.
 //! Compilation failure == missing export.
 
-use gnosis_vpn_lib::balance::{BalanceRecommendation, CapacityAllocator, CapacityEntry, Capacity, FundingIssue};
+use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocator, CapacityEntry, FundingIssue};
 use gnosis_vpn_lib::command::{
-    ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse,
-    ConnectingInfo, ConnectedInfo, DestinationState, DisconnectResponse, DisconnectingInfo,
-    FundingToolResponse, HoprInitStatus, HoprStatus, Info, InfoResponse, NerdStatsResponse,
-    ReconnectingInfo, Response, RouteHealthView, RunMode, StartClientResponse, StopClientResponse,
-    StatusResponse, TicketStats, TicketStatsStatus, WorkerCommand,
+    ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
+    ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
+    HoprStatus, Info, InfoResponse, NerdStatsResponse, ReconnectingInfo, Response, RouteHealthView, RunMode,
+    StartClientResponse, StatusResponse, StopClientResponse, TicketStats, TicketStatsStatus, WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
