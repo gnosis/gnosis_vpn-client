@@ -229,6 +229,7 @@ impl Actor {
         }
         self.router = None;
         self.peer_ip_last_seen.clear();
+        self.active_bypass.clear();
     }
 
     async fn update_peer_ips(&mut self, peer_ips: Vec<Ipv4Addr>) {
