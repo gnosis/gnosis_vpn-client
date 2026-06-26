@@ -5,26 +5,26 @@ use edgli::{
     hopr_lib::{
         HoprSessionClientConfig,
         api::{
-            chain::ChainKeyOperations,
-            node::{HasChainApi, HasTransportApi},
+            chain::{AccountSelector, ChainReadAccountOperations},
+            node::HasChainApi,
             types::{
                 internal::channels::ChannelStatus,
                 primitive::{prelude::Address, traits::ToHex},
             },
         },
+        errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
             transport::{SESSION_MTU, SURB_SIZE, SessionId, SessionTarget, SurbBalancerConfig},
         },
     },
 };
-use futures_util::future::AbortHandle;
+use futures_util::{StreamExt, future::AbortHandle};
 use hopr_utils_session::{
     HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
 };
 use multiaddr::Protocol;
-use tokio::task::JoinSet;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap};
@@ -278,6 +278,7 @@ impl Hopr {
         tracing::debug!("query hopr info");
         Info {
             node_address: self.edgli.me_onchain(),
+            node_peer_id: self.edgli.me_peer_id().to_string(),
             safe_address: self.edgli.safe_address(),
         }
     }
@@ -313,12 +314,6 @@ impl Hopr {
         self.edgli.status()
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn connected_peers(&self) -> Result<Vec<Address>, HoprError> {
-        tracing::debug!("query hopr connected peers");
-        self.edgli.connected_peer_addresses().await.map_err(HoprError::HoprLib)
-    }
-
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn start_telemetry_reactor(
         &self,
@@ -334,58 +329,28 @@ impl Hopr {
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn announced_peers(&self) -> Result<HashMap<Address, Peer>, HoprError> {
-        tracing::debug!("query hopr connected peers");
-        let offchain_keys = self
+        tracing::debug!("query hopr announced peers");
+        let selector = AccountSelector::default().with_public_only(true);
+        let mut stream = self
             .edgli
-            .transport()
-            .network_connected_peers()
-            .await
-            .map_err(|e| HoprError::HoprLib(e.into()))?;
-        let mut set: JoinSet<Option<Peer>> = JoinSet::new();
-        for key in offchain_keys {
-            let address = match self.edgli.chain_api().packet_key_to_chain_key(&key) {
-                Ok(Some(address)) => address,
-                Ok(None) => {
-                    tracing::warn!(%key, "no chain address for offchain key");
-                    continue;
-                }
-                Err(err) => {
-                    tracing::error!(%key, ?err, "failed to get chain address for offchain key");
-                    continue;
-                }
-            };
-            let hopr = self.edgli.clone();
-            set.spawn(async move {
-                let observed = hopr.transport().network_observed_multiaddresses(&key).await;
-                let ipv4_addrs: Vec<Ipv4Addr> = observed
-                    .iter()
-                    .flat_map(|addr| {
-                        let mut addr = addr.clone();
-                        let mut found = vec![];
-                        while let Some(protocol) = addr.pop() {
-                            if let Protocol::Ip4(ipv4) = protocol {
-                                found.push(ipv4);
-                            }
-                        }
-                        found
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                if ipv4_addrs.is_empty() {
-                    None
-                } else {
-                    Some(Peer::new(address, ipv4_addrs))
-                }
-            });
-        }
+            .chain_api()
+            .stream_accounts(selector)
+            .map_err(|e| HoprError::HoprLib(HoprLibError::GeneralError(e.to_string())))?;
 
         let mut peers = HashMap::new();
-        while let Some(res) = set.join_next().await {
-            if let Ok(Some(peer)) = res {
-                peers.insert(peer.address, peer);
+        while let Some(entry) = stream.next().await {
+            let ipv4_addrs = extract_ipv4_addrs(entry.get_multiaddrs());
+            if !ipv4_addrs.is_empty() {
+                peers.insert(entry.chain_addr, Peer::new(entry.chain_addr, ipv4_addrs));
             }
         }
+        tracing::debug!(
+            peers = %peers.iter()
+                .map(|(addr, p)| format!("{addr}:{:?}", p.ipv4_addrs))
+                .collect::<Vec<_>>()
+                .join(" "),
+            "announced peers"
+        );
         Ok(peers)
     }
 
@@ -425,5 +390,64 @@ impl Hopr {
             tracing::info!("shutting down session listener: {:?}", process.key());
             process.value().abort_handle.abort();
         }
+    }
+}
+
+/// Extract all unique IPv4 addresses from a list of multiaddrs.
+///
+/// Walks each multiaddr from right to left (via `pop`), collecting
+/// `Protocol::Ip4` components. The result is deduplicated and sorted
+/// via `BTreeSet`, then returned as a `Vec`.
+fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
+    multiaddrs
+        .iter()
+        .flat_map(|addr| {
+            let mut addr = addr.clone();
+            let mut found = vec![];
+            while let Some(protocol) = addr.pop() {
+                if let Protocol::Ip4(ipv4) = protocol {
+                    found.push(ipv4);
+                }
+            }
+            found
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn multiaddr(s: &str) -> multiaddr::Multiaddr {
+        multiaddr::Multiaddr::from_str(s).expect("valid multiaddr")
+    }
+
+    #[test]
+    fn extract_ipv4_single_address() {
+        let addrs = vec![multiaddr("/ip4/1.2.3.4/tcp/9091")];
+        let result = extract_ipv4_addrs(&addrs);
+        assert_eq!(result, vec!["1.2.3.4".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn extract_ipv4_deduplicates_same_ip_across_multiaddrs() {
+        let addrs = vec![multiaddr("/ip4/1.2.3.4/tcp/9091"), multiaddr("/ip4/1.2.3.4/udp/9092")];
+        let result = extract_ipv4_addrs(&addrs);
+        assert_eq!(result, vec!["1.2.3.4".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn extract_ipv4_ignores_non_ipv4_protocols() {
+        let addrs = vec![multiaddr("/dns4/example.com/tcp/9091")];
+        let result = extract_ipv4_addrs(&addrs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_ipv4_empty_input_returns_empty() {
+        assert!(extract_ipv4_addrs(&[]).is_empty());
     }
 }

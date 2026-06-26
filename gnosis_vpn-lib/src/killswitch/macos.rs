@@ -58,6 +58,15 @@ impl Firewall {
         Ok(())
     }
 
+    /// Re-assert an already applied policy (e.g. after a network change).
+    /// Unlike `apply_policy` this does not flush PF states: killing established
+    /// flows is only needed on first apply, and network events can fire often.
+    pub fn reapply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+        self.enable()?;
+        self.add_anchor()?;
+        self.set_rules(interface, allowed_ips, lan_lockdown)
+    }
+
     /// Remove the killswitch anchor, restoring normal networking.
     pub fn reset_policy(&mut self) -> Result<(), Error> {
         // Run all three even on partial failure; return first error encountered.
@@ -132,8 +141,10 @@ impl Firewall {
         };
         for state in states {
             let is_loopback = state.local_address().map(|a| a.ip().is_loopback()).unwrap_or(true); // keep state if we can't parse it
-            if !is_loopback && let Err(e) = self.pf.kill_state(&state) {
-                tracing::warn!(?e, "failed to kill PF state");
+            if !is_loopback {
+                if let Err(e) = self.pf.kill_state(&state) {
+                    tracing::warn!(?e, "failed to kill PF state");
+                }
             }
         }
     }

@@ -5,12 +5,13 @@
 //! PF_ROUTE sockets directly for CLI-free operation.
 
 use async_trait::async_trait;
+use std::net::Ipv4Addr;
 use tokio::process::Command;
 
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
 
 use super::Error;
-use super::route_ops::RouteOps;
+use super::route_ops::{RouteOps, WanRoute};
 
 /// Build the argument list for a `route add` invocation.
 ///
@@ -36,19 +37,6 @@ pub struct DarwinRouteOps;
 
 #[async_trait]
 impl RouteOps for DarwinRouteOps {
-    async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
-        let output = Command::new("route")
-            .arg("-n")
-            .arg("get")
-            .arg("0.0.0.0")
-            .run_stdout(Logs::Print)
-            .await?;
-
-        // Use shared parser with macOS-specific keys and suffix filter
-        // (filters out "index:" when gateway shows "gateway: index: 28")
-        parse_key_value_output(&output, "interface:", "gateway:", Some(":"))
-    }
-
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {
         let mut cmd = Command::new("route");
         for arg in route_add_args(dest, gateway, device) {
@@ -68,50 +56,123 @@ impl RouteOps for DarwinRouteOps {
             .await?;
         Ok(())
     }
+
+    async fn get_route_via_device(&self, _dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error> {
+        // Use netstat rather than `route get -ifscope` because the VPN split routes
+        // (0/1, 128/1) shadow the scoped FIB lookup for public destinations while
+        // the tunnel is up, causing the command to error and falsely appear as if
+        // the WAN device has no route. netstat shows the raw routing table entries
+        // (the 0/0 default route via the WAN interface is always present alongside
+        // the more-specific VPN routes) and is unaffected by route shadowing.
+        let output = Command::new("netstat")
+            .args(["-rn", "-f", "inet"])
+            .run_stdout(Logs::Suppress)
+            .await?;
+
+        let Some(gateway) = parse_netstat_default_for_device(&output, device) else {
+            return Ok(None);
+        };
+
+        let src_ip = get_interface_address(device).await;
+
+        Ok(Some(WanRoute {
+            device: device.to_owned(),
+            gateway,
+            src_ip,
+        }))
+    }
+
+    async fn get_wan_route_for(&self, _dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error> {
+        let output = Command::new("netstat")
+            .arg("-rn")
+            .arg("-f")
+            .arg("inet")
+            .run_stdout(Logs::Suppress)
+            .await?;
+
+        let (device, gateway) = match parse_netstat_default_excluding(&output, exclude_iface) {
+            Ok(pair) => pair,
+            Err(_) => return Ok(None),
+        };
+
+        let src_ip = get_interface_address(&device).await;
+
+        Ok(Some(WanRoute {
+            device,
+            gateway,
+            src_ip,
+        }))
+    }
 }
 
-/// Parses key-value pairs from command output to extract device and gateway.
-///
-/// This utility works for both Linux (`ip route show default`) and macOS
-/// (`route -n get 0.0.0.0`) command outputs by parameterizing the key names.
-///
-/// # Arguments
-/// * `output` - The command output to parse
-/// * `device_key` - Key for device name (e.g., "dev" on Linux, "interface:" on macOS)
-/// * `gateway_key` - Key for gateway IP (e.g., "via" on Linux, "gateway:" on macOS)
-/// * `filter_suffix` - Optional suffix to filter out (e.g., Some(":") for macOS
-///   to handle "gateway: index: 28" cases)
-///
-/// # Returns
-/// A tuple of (device_name, Option<gateway_ip>)
-pub(crate) fn parse_key_value_output(
-    output: &str,
-    device_key: &str,
-    gateway_key: &str,
-    filter_suffix: Option<&str>,
-) -> Result<(String, Option<String>), Error> {
-    let parts: Vec<&str> = output.split_whitespace().collect();
-
-    let device_index = parts.iter().position(|&x| x == device_key);
-    let gateway_index = parts.iter().position(|&x| x == gateway_key);
-
-    let device = match device_index.and_then(|idx| parts.get(idx + 1)) {
-        Some(dev) => dev.to_string(),
-        None => {
-            tracing::error!(%output, "Unable to determine default interface");
-            return Err(Error::NoInterface);
+/// Parses `netstat -rn -f inet` output, returning the gateway for entries whose `netif` matches `device`.
+/// Returns `Some(gateway)` when the device has a default route, `None` when it does not.
+/// Used by `get_route_via_device` to check whether the captured WAN device is still viable.
+fn parse_netstat_default_for_device(output: &str, device: &str) -> Option<Option<String>> {
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let [dest, gateway, _, netif, ..] = tokens[..] else {
+            continue;
+        };
+        if dest != "default" || netif != device {
+            continue;
         }
-    };
+        // Do NOT filter out 'I'-scoped routes here. When a higher-priority interface
+        // is added (e.g. cable while WiFi VPN is up), macOS demotes the original
+        // interface's default route to interface-scoped ('I' flag) but the interface
+        // is still connected and its bypass routes remain valid — we should not reconnect.
+        let gateway = if gateway.starts_with("link#") {
+            None
+        } else {
+            Some(gateway.to_string())
+        };
+        return Some(gateway);
+    }
+    None
+}
 
-    let gateway = gateway_index
-        .and_then(|idx| parts.get(idx + 1))
-        .filter(|gw| {
-            // Filter out values matching the suffix (e.g., "index:" on macOS)
-            filter_suffix.is_none_or(|suffix| !gw.ends_with(suffix))
-        })
-        .map(|gw| gw.to_string());
+/// Parses `netstat -rn -f inet` output, returning device and gateway of the WAN default route,
+/// skipping entries whose `netif` matches `exclude_iface`. Used by `get_wan_route_for` to skip the VPN tunnel interface.
+fn parse_netstat_default_excluding(output: &str, exclude_iface: &str) -> Result<(String, Option<String>), Error> {
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let [dest, gateway, flags, netif, ..] = tokens[..] else {
+            continue;
+        };
+        if dest != "default" {
+            continue;
+        }
+        if flags.contains('I') {
+            continue;
+        }
+        if netif == exclude_iface {
+            continue;
+        }
+        let gateway = if gateway.starts_with("link#") {
+            None
+        } else {
+            Some(gateway.to_string())
+        };
+        return Ok((netif.to_string(), gateway));
+    }
+    tracing::error!(%output, "Unable to determine WAN default route from netstat (excluding {exclude_iface})");
+    Err(Error::NoInterface)
+}
 
-    Ok((device, gateway))
+/// Returns the first IPv4 address assigned to `device` via `ifconfig`.
+async fn get_interface_address(device: &str) -> Option<Ipv4Addr> {
+    let output = Command::new("ifconfig")
+        .arg(device)
+        .run_stdout(Logs::Suppress)
+        .await
+        .ok()?;
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.first() == Some(&"inet") {
+            return tokens.get(1).and_then(|s| s.parse().ok());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -133,42 +194,92 @@ mod tests {
         assert_eq!(args, vec!["-n", "add", "-inet", "10.0.0.0/8", "-interface", "utun5"]);
     }
 
+    // Realistic `netstat -rn -f inet` header + rows used across parser tests.
+    const NETSTAT_OUTPUT: &str = "\
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            192.168.1.1        UGScg               en0
+default            link#18            UCSIg               utun5
+default            10.0.0.1           UGSc                en1
+127                127.0.0.1          UCS                 lo0
+";
+
+    // ── parse_netstat_default_for_device ────────────────────────────────────
+
     #[test]
-    fn parses_interface_gateway() -> anyhow::Result<()> {
-        let output = r#"
-                      route to: default
-                   destination: default
-                          mask: default
-                       gateway: 192.168.178.1
-                     interface: en1
-                         flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-                    recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire
-                          0         0         0         0         0         0      1500         0
-                   "#;
-
-        let (device, gateway) = super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
-
-        assert_eq!(device, "en1");
-        assert_eq!(gateway, Some("192.168.178.1".to_string()));
-        Ok(())
+    fn netstat_for_device_returns_gateway_when_found() {
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "en0");
+        assert_eq!(result, Some(Some("192.168.1.1".to_string())));
     }
 
     #[test]
-    fn parses_interface_no_gateway_with_index() -> anyhow::Result<()> {
-        // When VPN is active, gateway may show as "index: N" instead of an IP
-        let output = r#"
-                                 route to: default
-                              destination: default
-                                     mask: default
-                                  gateway: index: 28
-                                interface: utun8
-                                    flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
-                              "#;
+    fn netstat_for_device_returns_none_gateway_for_link_local() {
+        // utun5 row has `link#18` as gateway → no routable gateway.
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "utun5");
+        assert_eq!(result, Some(None));
+    }
 
-        let (device, gateway) = super::parse_key_value_output(output, "interface:", "gateway:", Some(":"))?;
+    #[test]
+    fn netstat_for_device_returns_none_when_device_absent() {
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "en9");
+        assert_eq!(result, None);
+    }
 
-        assert_eq!(device, "utun8");
-        assert_eq!(gateway, None); // Should be None, not "index:"
-        Ok(())
+    #[test]
+    fn netstat_for_device_accepts_interface_scoped_route() {
+        // 'I'-flagged routes must NOT be filtered out for this parser — the WAN
+        // interface is still valid when macOS demotes its route to interface-scoped.
+        let output = "default            192.168.2.1        UGScgI              en0\n";
+        let result = parse_netstat_default_for_device(output, "en0");
+        assert_eq!(result, Some(Some("192.168.2.1".to_string())));
+    }
+
+    #[test]
+    fn netstat_for_device_skips_header_lines() {
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "Destination");
+        assert_eq!(result, None);
+    }
+
+    // ── parse_netstat_default_excluding ─────────────────────────────────────
+
+    #[test]
+    fn netstat_excluding_returns_first_non_excluded_route() {
+        // utun5 is the VPN tunnel; en0 should be returned as the WAN default.
+        let result = parse_netstat_default_excluding(NETSTAT_OUTPUT, "utun5");
+        assert_eq!(result, Ok(("en0".to_string(), Some("192.168.1.1".to_string()))));
+    }
+
+    #[test]
+    fn netstat_excluding_skips_excluded_iface() {
+        // Exclude en0; next non-I default is en1.
+        let result = parse_netstat_default_excluding(NETSTAT_OUTPUT, "en0");
+        assert_eq!(result, Ok(("en1".to_string(), Some("10.0.0.1".to_string()))));
+    }
+
+    #[test]
+    fn netstat_excluding_skips_interface_scoped_routes() {
+        // utun5 row has the 'I' flag and must be skipped even when it is not the
+        // excluded interface.
+        let output = "\
+default            link#18            UCSIg               utun5
+default            192.168.1.1        UGScg               en0
+";
+        let result = parse_netstat_default_excluding(output, "en9");
+        assert_eq!(result, Ok(("en0".to_string(), Some("192.168.1.1".to_string()))));
+    }
+
+    #[test]
+    fn netstat_excluding_returns_none_gateway_for_link_local() {
+        let output = "default            link#5             UCSg                en0\n";
+        let result = parse_netstat_default_excluding(output, "utun5");
+        assert_eq!(result, Ok(("en0".to_string(), None)));
+    }
+
+    #[test]
+    fn netstat_excluding_errors_when_no_default_route_remains() {
+        let result = parse_netstat_default_excluding("127  127.0.0.1  UCS  lo0\n", "en0");
+        assert!(matches!(result, Err(Error::NoInterface)));
     }
 }

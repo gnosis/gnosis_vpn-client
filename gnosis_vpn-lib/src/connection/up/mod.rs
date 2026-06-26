@@ -23,7 +23,6 @@ pub enum Event {
 
 #[derive(Clone, Debug)]
 pub enum SessionKind {
-    Bridge,
     Ping,
     Main,
 }
@@ -35,11 +34,10 @@ pub enum Progress {
     OpenBridge(WireGuard),
     BridgeOpened(SessionClientMetadata),
     RegisterWg,
-    CloseBridge(Registration),
-    OpenPing,
+    OpenPing(Registration),
+    BridgeClosed,
     PeerIps,
     KillswitchLockdown,
-    DynamicWgTunnel(SessionClientMetadata),
     StaticWgTunnel(SessionClientMetadata),
     Ping,
     AdjustToMain(Duration),
@@ -83,7 +81,10 @@ pub struct Up {
     pub phase: (SystemTime, Phase),
     pub wireguard: Option<WireGuard>,
     pub registration: Option<Registration>,
-    pub active_session: Option<(SessionKind, SessionClientMetadata)>,
+    /// Temporary bridge session used during key registration; cleared once the background close completes.
+    pub bridge_session: Option<SessionClientMetadata>,
+    /// The ping session while connecting, promoted to Main once connected.
+    pub ping_session: Option<(SessionKind, SessionClientMetadata)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -93,12 +94,10 @@ pub enum Phase {
     GeneratingWg,
     OpeningBridge,
     RegisterWg,
-    ClosingBridge,
     OpeningPing,
-    FallbackGatherPeerIps,
+    GatherPeerIps,
     KillswitchLockdown,
-    EstablishDynamicWgTunnel,
-    FallbackToStaticWgTunnel,
+    EstablishWgTunnel,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
@@ -117,7 +116,8 @@ impl Up {
             phase: (SystemTime::now(), Phase::Init),
             wireguard: None,
             registration: None,
-            active_session: None,
+            bridge_session: None,
+            ping_session: None,
         }
     }
 
@@ -131,24 +131,21 @@ impl Up {
                 self.wireguard = Some(wg);
             }
             Progress::BridgeOpened(meta) => {
-                self.active_session = Some((SessionKind::Bridge, meta));
+                self.bridge_session = Some(meta);
             }
             Progress::RegisterWg => self.phase = (now, Phase::RegisterWg),
-            Progress::CloseBridge(reg) => {
-                self.phase = (now, Phase::ClosingBridge);
+            Progress::OpenPing(reg) => {
+                self.phase = (now, Phase::OpeningPing);
                 self.registration = Some(reg);
-                self.active_session = None;
             }
-            Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::DynamicWgTunnel(session) => {
-                self.phase = (now, Phase::EstablishDynamicWgTunnel);
-                self.active_session = Some((SessionKind::Ping, session));
+            Progress::BridgeClosed => {
+                self.bridge_session = None;
             }
-            Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
             Progress::StaticWgTunnel(session) => {
-                self.phase = (now, Phase::FallbackToStaticWgTunnel);
-                self.active_session = Some((SessionKind::Ping, session));
+                self.phase = (now, Phase::EstablishWgTunnel);
+                self.ping_session = Some((SessionKind::Ping, session));
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
@@ -157,8 +154,8 @@ impl Up {
 
     pub fn connected(&mut self) {
         self.phase = (SystemTime::now(), Phase::ConnectionEstablished);
-        if let Some((SessionKind::Ping, meta)) = self.active_session.take() {
-            self.active_session = Some((SessionKind::Main, meta));
+        if let Some((SessionKind::Ping, meta)) = self.ping_session.take() {
+            self.ping_session = Some((SessionKind::Main, meta));
         }
     }
 }
@@ -183,12 +180,10 @@ impl Display for Phase {
             Phase::GeneratingWg => "Generating WireGuard keypairs",
             Phase::OpeningBridge => "Opening bridge connection",
             Phase::RegisterWg => "Registering WireGuard public key",
-            Phase::ClosingBridge => "Closing bridge connection",
             Phase::OpeningPing => "Opening main connection",
-            Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
-            Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::GatherPeerIps => "Retrieving peer IPs",
             Phase::KillswitchLockdown => "Activating killswitch",
-            Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
+            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
             Phase::ConnectionEstablished => "Connection established",
@@ -214,9 +209,8 @@ impl Display for Progress {
             Progress::OpenBridge(_) => write!(f, "Opening bridge connection"),
             Progress::BridgeOpened(_) => write!(f, "Bridge session opened"),
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
-            Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
-            Progress::OpenPing => write!(f, "Opening main connection"),
-            Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
+            Progress::OpenPing(_) => write!(f, "Opening main connection"),
+            Progress::BridgeClosed => write!(f, "Bridge session closed"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),

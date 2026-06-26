@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "LGPL-3.0"
-version = "0.86.0"
+version = "0.91.1"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
@@ -21,7 +21,6 @@ chrono = { version = "0.4.38", default-features = false, features = [
   "serde",
   "std",
 ] }
-cidr = "0.3.2"
 clap = { version = "4.5.57", features = ["derive", "env"] }
 clap_complete = "4"
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "556365f7b544a25b78ec22cce31bef026993901b", features = [

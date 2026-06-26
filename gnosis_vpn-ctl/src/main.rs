@@ -223,18 +223,23 @@ fn pretty_print(resp: &Response) {
             destinations,
             target_destination,
             connecting,
+            reconnecting,
             connected,
             disconnecting,
         }) => {
             let mut str_resp = format!("{run_mode}\n");
             if let Some(id) = target_destination {
                 let is_active = connecting.as_ref().is_some_and(|c| c.destination_id == *id)
+                    || reconnecting.as_ref().is_some_and(|c| c.destination_id == *id)
                     || connected.as_ref().is_some_and(|c| c.destination_id == *id);
                 if !is_active {
                     str_resp.push_str(&format!("---\nWaiting to connect to {id}\n"));
                 }
             }
             if let Some(info) = connecting {
+                str_resp.push_str(&format!("---\n{info}\n"));
+            }
+            if let Some(info) = reconnecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
             }
             if let Some(info) = connected {
@@ -257,7 +262,7 @@ fn pretty_print(resp: &Response) {
             channels_out,
             info,
             capacity_allocations,
-            ideal_balance,
+            ideal_balance: _,
             funding_issues,
         })) => {
             let mut str_resp = String::new();
@@ -266,52 +271,22 @@ fn pretty_print(resp: &Response) {
                 info.node_address.to_checksum(),
                 info.safe_address.to_checksum()
             ));
-            if let Some(rec) = ideal_balance {
-                let sci = balance::wxhopr_scientific(rec.wxhopr)
-                    .map(|s| format!(" ({s})"))
-                    .unwrap_or_default();
-                str_resp.push_str(&format!(
-                    "---\nIdeal Node Balance: >= {}\nIdeal Safe Balance: >= {}{}\n",
-                    rec.xdai, rec.wxhopr, sci
-                ));
-            }
-            str_resp.push_str(&format!("---\nNode: {node}\n"));
-            if let Some(entries) = capacity_allocations
-                && !entries.is_empty()
-            {
-                for e in entries {
-                    let label = match &e.allocator {
-                        balance::CapacityAllocator::Safe => "Safe".to_string(),
-                        balance::CapacityAllocator::Peer(addr) => {
-                            let exit = channels_out
-                                .iter()
-                                .find(|ch| ch.address == *addr)
-                                .and_then(|ch| ch.matched_exit.as_deref());
-                            match exit {
-                                Some(exit) => format!("Channel({},{})", addr.to_checksum(), exit),
-                                None => format!("Channel({})", addr.to_checksum()),
-                            }
-                        }
-                    };
-                    let sci = balance::wxhopr_scientific(e.capacity.stake)
-                        .map(|s| format!(" ({s})"))
-                        .unwrap_or_default();
-                    str_resp.push_str(&format!(
-                        "{}: {}{} [{} msgs, {}]\n",
-                        label,
-                        e.capacity.stake,
-                        sci,
-                        human_msgs(e.capacity.expected_messages),
-                        human_bytes(e.capacity.byte_capacity)
-                    ));
-                }
+            let safe_sci = balance::wxhopr_scientific(*safe)
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
+            if channels_out.is_empty() {
+                str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
+                let allocations = capacity_allocations.as_deref().unwrap_or(&[]);
                 let sci = balance::wxhopr_scientific(*safe)
                     .map(|s| format!(" ({s})"))
                     .unwrap_or_default();
-                str_resp.push_str(&format!("Safe: {safe}{sci}\n"));
+                let safe_cap = find_capacity(allocations, &balance::CapacityAllocator::Safe);
+                str_resp.push_str(&format!("Safe: {safe}{sci}{}\n", format_capacity(safe_cap)));
                 for ch in channels_out {
-                    str_resp.push_str(&format!("{ch}\n"));
+                    let ch_cap = find_capacity(allocations, &balance::CapacityAllocator::Peer(ch.address));
+                    str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
                 }
             }
             match funding_issues.as_deref() {
@@ -378,6 +353,9 @@ fn pretty_print(resp: &Response) {
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
+        // Internal response sent by the root process to itself when a WAN interface change
+        // triggers a HOPR session reconnect. Never issued in response to a ctl command.
+        Response::ForceReconnectAcknowledged => {}
     }
 }
 
@@ -385,6 +363,27 @@ fn format_probability(p: f64) -> String {
     let s = format!("{:.8}", p);
     let trimmed = s.trim_end_matches('0');
     trimmed.trim_end_matches('.').to_string()
+}
+
+fn find_capacity<'a>(
+    allocations: &'a [balance::CapacityEntry],
+    allocator: &balance::CapacityAllocator,
+) -> Option<&'a balance::Capacity> {
+    allocations
+        .iter()
+        .find(|e| &e.allocator == allocator)
+        .map(|e| &e.capacity)
+}
+
+fn format_capacity(capacity: Option<&balance::Capacity>) -> String {
+    match capacity {
+        None => String::new(),
+        Some(c) => format!(
+            " [{} msgs, {}]",
+            human_msgs(c.expected_messages),
+            human_bytes(c.byte_capacity)
+        ),
+    }
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -448,6 +447,8 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
+        // Internal response — see pretty_print for explanation
+        Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
     }
 }
 
@@ -507,8 +508,11 @@ fn print_connecting_stats(stats: &command::ConnStats) {
         )
         .as_str(),
     );
-    str_resp.push_str(&print_active_session(
-        &stats.active_session,
+    if let Some(ref session) = stats.bridge_session {
+        str_resp.push_str(&print_session(session));
+    }
+    str_resp.push_str(&print_session_or_pending(
+        &stats.main_session,
         "--pending session creation--",
     ));
     str_resp.push_str(
@@ -533,27 +537,36 @@ fn print_connected_stats(stats: &command::ConnStats) {
     if let Some(ref ip) = stats.wg_ip {
         str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
     }
-    str_resp.push_str(&print_active_session(&stats.active_session, "--none--"));
+    if let Some(ref session) = stats.bridge_session {
+        str_resp.push_str(&print_session(session));
+    }
+    str_resp.push_str(&print_session_or_pending(&stats.main_session, "--none--"));
     if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     println!("{str_resp}");
 }
 
-fn print_active_session(session: &Option<command::ActiveSession>, pending: &str) -> String {
+fn print_session(session: &command::ActiveSession) -> String {
     use command::ActiveSession;
     match session {
-        Some(ActiveSession::Bridge { bound_host, id }) => {
+        ActiveSession::Bridge { bound_host, id } => {
             format!("Bridge Session entry: {bound_host}\nBridge Session ID: {id}\n")
         }
-        Some(ActiveSession::Ping { bound_host, id }) => {
+        ActiveSession::Ping { bound_host, id } => {
             format!("Ping Session entry: {bound_host}\nPing Session ID: {id}\n")
         }
-        Some(ActiveSession::Main { bound_host, id }) => {
+        ActiveSession::Main { bound_host, id } => {
             format!("Main Session entry: {bound_host}\nMain Session ID: {id}\n")
         }
-        None => format!("Session entry: {pending}\nSession ID: {pending}\n"),
     }
+}
+
+fn print_session_or_pending(session: &Option<command::ActiveSession>, pending: &str) -> String {
+    session
+        .as_ref()
+        .map(print_session)
+        .unwrap_or_else(|| format!("Session entry: {pending}\nSession ID: {pending}\n"))
 }
 
 fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {

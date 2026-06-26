@@ -13,7 +13,7 @@ use tokio_util::task::TaskTracker;
 use std::collections::{HashMap, HashSet};
 use std::net;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 
 use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
@@ -39,9 +39,6 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
-/// How long a peer IP remains in the killswitch allowlist after it was last seen in an
-/// `announced_peers` snapshot. Prevents churn during brief libp2p reconnects.
-const PEER_IP_HYSTERESIS_SECS: u64 = 300;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -80,6 +77,8 @@ pub struct Core {
     cancel_node_wxhopr: CancellationToken,
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
+    cancel_balances: CancellationToken,
+    cancel_announced_peers: CancellationToken,
 
     // user provided data
     target_destination: Option<Destination>,
@@ -103,12 +102,8 @@ pub struct Core {
     responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
+    reconnecting_since: Option<SystemTime>,
     pseudonym_cache: PseudonymCache,
-    /// Last time each peer IP was seen in an `announced_peers` snapshot.
-    /// IPs are retained in the killswitch allowlist for PEER_IP_HYSTERESIS_SECS after
-    /// they last appeared — avoids flapping during brief libp2p churn.
-    peer_ip_last_seen: HashMap<net::Ipv4Addr, Instant>,
-    last_sent_peer_ips: Vec<net::Ipv4Addr>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,6 +194,8 @@ impl Core {
             cancel_node_wxhopr: cancel_on_shutdown.child_token(),
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
+            cancel_balances: cancel_on_shutdown.child_token(),
+            cancel_announced_peers: cancel_on_shutdown.child_token(),
 
             // user provided data
             target_destination,
@@ -219,8 +216,7 @@ impl Core {
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
             pseudonym_cache,
-            peer_ip_last_seen: HashMap::new(),
-            last_sent_peer_ips: Vec::new(),
+            reconnecting_since: None,
         };
         Ok((core, incoming_sender))
     }
@@ -302,19 +298,6 @@ impl Core {
                                 request_id,
                                 ?res,
                                 "no responder for killswitch lockdown response (evicted or duplicate)"
-                            );
-                        }
-                    }
-                    ResponseFromRoot::DynamicWgRouting { request_id, res } => {
-                        if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
-                            let _ = tx.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for dynamic wg routing response");
-                            });
-                        } else {
-                            tracing::debug!(
-                                request_id,
-                                ?res,
-                                "no responder for dynamic wg routing response (evicted or duplicate)"
                             );
                         }
                     }
@@ -445,13 +428,29 @@ impl Core {
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
 
-                        let connecting = match &self.phase {
-                            Phase::Connecting(conn) => Some(command::ConnectingInfo {
-                                destination_id: conn.destination.id.clone(),
-                                since: conn.phase.0,
-                                phase: conn.phase.1.clone(),
-                            }),
+                        let active_conn_phase = match &self.phase {
+                            Phase::Connecting(conn) => {
+                                Some((conn.destination.id.clone(), conn.phase.0, conn.phase.1.clone()))
+                            }
                             _ => None,
+                        };
+                        let reconnecting = self.reconnecting_since.and_then(|since| {
+                            active_conn_phase
+                                .as_ref()
+                                .map(|(dest_id, _, phase)| command::ReconnectingInfo {
+                                    destination_id: dest_id.clone(),
+                                    since,
+                                    phase: phase.clone(),
+                                })
+                        });
+                        let connecting = if reconnecting.is_some() {
+                            None
+                        } else {
+                            active_conn_phase.map(|(dest_id, since, phase)| command::ConnectingInfo {
+                                destination_id: dest_id,
+                                since,
+                                phase,
+                            })
                         };
                         let connected = match &self.phase {
                             Phase::Connected(conn) => Some(command::ConnectedInfo {
@@ -483,6 +482,7 @@ impl Core {
                             destinations,
                             target_destination: self.target_destination.as_ref().map(|d| d.id.clone()),
                             connecting,
+                            reconnecting,
                             connected,
                             disconnecting,
                         });
@@ -491,6 +491,7 @@ impl Core {
 
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
+                            self.reconnecting_since = None;
                             let is_already_active = match &self.phase {
                                 Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination == *dest,
                                 _ => false,
@@ -579,6 +580,22 @@ impl Core {
                             }
                         };
                         let _ = resp.send(Response::Telemetry(res));
+                    }
+
+                    WorkerCommand::ForceReconnect => {
+                        let active_conn = match self.phase.clone() {
+                            Phase::Connected(conn) => Some(conn),
+                            Phase::Connecting(conn) => Some(conn),
+                            _ => None,
+                        };
+                        if let Some(conn) = active_conn {
+                            tracing::info!(%conn, "force reconnect triggered by WAN change");
+                            self.reconnecting_since = Some(SystemTime::now());
+                            self.force_reconnect(conn, results_sender).await;
+                        } else {
+                            tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
+                        }
+                        let _ = resp.send(Response::ForceReconnectAcknowledged);
                     }
 
                     WorkerCommand::FundingTool(secret) => match self.phase.clone() {
@@ -746,13 +763,10 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::ConnectedPeers {
-                connected,
-                announced_ips,
-            } => match connected {
+            Results::AnnouncedPeers { res } => match res {
                 Ok(peers) => {
-                    tracing::info!(num_peers = %peers.len(), "fetched connected peers");
-                    let all_peers = HashSet::from_iter(peers.iter().cloned());
+                    tracing::info!(num_peers = %peers.len(), "fetched announced peers");
+                    let all_peers = HashSet::from_iter(peers.keys().copied());
                     let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                     let channels_already_available = self
                         .capacity_allocations
@@ -781,37 +795,25 @@ impl Core {
                         }
                     }
 
-                    // Refresh the killswitch / routing-bypass allowlist while connected.
-                    if matches!(self.phase, Phase::Connected(_)) {
-                        let now = Instant::now();
-                        for ip in &announced_ips {
-                            self.peer_ip_last_seen.insert(*ip, now);
-                        }
-                        self.peer_ip_last_seen
-                            .retain(|_, t| now.duration_since(*t) < Duration::from_secs(PEER_IP_HYSTERESIS_SECS));
-                        let mut alive: Vec<net::Ipv4Addr> = self.peer_ip_last_seen.keys().copied().collect();
-                        alive.sort_unstable();
-                        if alive.is_empty() {
-                            tracing::debug!("peer allowlist refresh skipped: live peer IP set is empty");
-                        } else if alive != self.last_sent_peer_ips {
-                            self.last_sent_peer_ips = alive.clone();
-                            let request = RequestToRoot::UpdatePeerIps { peer_ips: alive };
-                            let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                        }
-                    }
+                    let peer_ips: Vec<net::Ipv4Addr> =
+                        peers.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
+                    let _ = self
+                        .outgoing_sender
+                        .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
+                        .await;
 
-                    let delay = if matches!(self.phase, Phase::Connected(_))
+                    let delay = if self.target_destination.is_some()
                         || route_health::any_needs_peers(self.route_healths.values())
                     {
                         Duration::from_secs(10)
                     } else {
                         Duration::from_secs(90)
                     };
-                    self.spawn_connected_peers(results_sender, delay);
+                    self.spawn_announced_peers(results_sender, delay);
                 }
                 Err(err) => {
-                    tracing::error!(?err, "failed to fetch connected peers");
-                    self.spawn_connected_peers(results_sender, Duration::from_secs(10));
+                    tracing::error!(?err, "failed to fetch announced peers");
+                    self.spawn_announced_peers(results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -864,6 +866,7 @@ impl Core {
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
                 (Ok(session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
+                    self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     self.pseudonym_cache.remove(&conn.destination);
@@ -875,12 +878,16 @@ impl Core {
                     log_output::print_session_established(route.as_str());
                     self.spawn_session_monitoring(session, results_sender);
                     self.spawn_tunnel_ping_probe(results_sender);
+                    self.cancel_announced_peers.cancel();
+                    self.cancel_announced_peers = self.cancel_on_shutdown.child_token();
+                    self.spawn_announced_peers(results_sender, Duration::from_secs(10));
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
+                    self.reconnecting_since = None;
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
                         rh.with_error(err.to_string());
                     }
@@ -948,13 +955,6 @@ impl Core {
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
-                RunnerToRoot::DynamicWgRouting { wg_data, resp } => {
-                    let request_id = self.next_request_id();
-                    self.responders.insert(request_id, Responder::Str(resp));
-                    let request = RequestToRoot::DynamicWgRouting { request_id, wg_data };
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
-
                 RunnerToRoot::StaticWgRouting {
                     wg_data,
                     peer_ips,
@@ -974,11 +974,6 @@ impl Core {
                     let request_id = self.next_request_id();
                     self.responders.insert(request_id, Responder::Duration(resp));
                     let request = RequestToRoot::Ping { request_id, options };
-                    let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                }
-
-                RunnerToRoot::TearDownWg => {
-                    let request = RequestToRoot::TearDownWg;
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
             },
@@ -1483,7 +1478,7 @@ impl Core {
 
     fn spawn_balances_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_on_shutdown.clone();
+            let cancel = self.cancel_balances.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1527,15 +1522,15 @@ impl Core {
         }
     }
 
-    fn spawn_connected_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_announced_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_on_shutdown.clone();
+            let cancel = self.cancel_announced_peers.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::connected_peers(hopr, results_sender).await;
+                        runner::announced_peers(hopr, results_sender).await;
                     })
                     .await
             });
@@ -1546,6 +1541,7 @@ impl Core {
         &mut self,
         destination: Destination,
         exit: route_health::ExitHealth,
+        prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         if let Some(hopr) = self.hopr.clone() {
@@ -1559,14 +1555,18 @@ impl Core {
             if let Some(pseudonym) = &cached_pseudonym {
                 tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
             }
+            let prev_conn = connection::up::runner::PreviousConnection {
+                blokli_ips: self.cached_resolved_blokli_ips.clone(),
+                pseudonym: cached_pseudonym,
+                wg_public_key: prev_public_key,
+            };
             let runner = connection::up::runner::Runner::new(
                 conn.destination.clone(),
                 config_connection,
                 config_wireguard,
                 hopr,
                 self.worker_params.clone(),
-                self.cached_resolved_blokli_ips.clone(),
-                cached_pseudonym,
+                prev_conn,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1648,7 +1648,7 @@ impl Core {
                 if let Some(rh) = self.route_healths.get(&dest.id) {
                     if let Some(exit) = rh.ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        self.spawn_connection_runner(dest.clone(), exit, results_sender);
+                        self.spawn_connection_runner(dest.clone(), exit, None, results_sender);
                     } else if rh.is_unrecoverable() {
                         tracing::error!(destination = %dest,route_health = ?rh.state(),  "refusing connection because of route health");
                     } else {
@@ -1685,7 +1685,7 @@ impl Core {
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
-        if let Some((_, session)) = &conn.active_session
+        if let Some((_, session)) = &conn.ping_session
             && let Some(client_id) = session.active_clients.first()
             && let Ok(pseudonym) = SessionId::from_hex(client_id)
         {
@@ -1695,8 +1695,6 @@ impl Core {
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         self.responders.clear();
         self.phase = Phase::HoprRunning;
-        // Clear hysteresis state so stale IPs from this session don't pollute the next.
-        self.peer_ip_last_seen.clear();
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
         {
@@ -1715,13 +1713,50 @@ impl Core {
         }
     }
 
+    /// Reconnect without a full disconnect cycle — used for ForceReconnect (WAN change).
+    ///
+    /// Cancels the running connection, tears down the WireGuard tunnel, then immediately
+    /// spawns a new connection runner that carries the old public key so the new runner's
+    /// background bridge-cleanup task can unregister it.
+    async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        let destination = conn.destination.clone();
+        let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
+        let exit_health = self
+            .route_healths
+            .get(&destination.id)
+            .and_then(|rh| rh.current_exit_health());
+
+        self.cancel_connection.cancel();
+        self.cancel_connection = self.cancel_on_shutdown.child_token();
+
+        // this is a oneshot command and we do not wait for any result
+        let _ = self
+            .outgoing_sender
+            .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+            .await;
+
+        self.phase = Phase::HoprRunning;
+
+        if let Some(exit) = exit_health {
+            self.spawn_connection_runner(destination, exit, prev_public_key, results_sender);
+        } else {
+            // Invariant violation: force_reconnect is only called from Connecting/Connected
+            // which always sets route health to Connecting. Log and wait for health check.
+            tracing::warn!(
+                ?destination,
+                "force reconnect: no cached exit health — waiting for health check"
+            );
+            self.act_on_target(results_sender);
+        }
+    }
+
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         self.spawn_balances_runner(results_sender, Duration::ZERO);
         if route_health::any_needs_peers(self.route_healths.values()) {
-            self.spawn_connected_peers(results_sender, Duration::ZERO);
+            self.spawn_announced_peers(results_sender, Duration::ZERO);
         } else {
             self.act_on_target(results_sender);
         }

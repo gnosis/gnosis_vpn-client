@@ -224,11 +224,9 @@ pub(super) enum DestinationPath {
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong_keys = Vec::new();
     for (key, value) in table.iter() {
-        // version plain key
         if key == "version" {
             continue;
         }
-        // wireguard nested struct
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
@@ -251,8 +249,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
-        // blokli nested struct
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
@@ -264,12 +260,10 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
-        // connection nested struct
         if key == "connection" {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
-                    if k == "http_timeout" {
+                    if k == "http_timeout" || k == "announced_peer_minimum_score" || k == "lan_lockdown" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
@@ -294,24 +288,26 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "buffer" {
-                        if let Some(buffer) = v.as_table() {
-                            for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                    if k == "surb_balancing" {
+                        if let Some(sb) = v.as_table() {
+                            for (session_key, session_val) in sb.iter() {
+                                let is_valid_session =
+                                    matches!(session_key.as_str(), "bridge" | "ping" | "main" | "health_check");
+                                if !is_valid_session {
+                                    wrong_keys.push(format!("connection.surb_balancing.{session_key}"));
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.buffer.{k}"));
-                            }
-                        }
-                        continue;
-                    }
-                    if k == "max_surb_upstream" {
-                        if let Some(surbs) = v.as_table() {
-                            for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
-                                    continue;
+                                if let Some(session) = session_val.as_table() {
+                                    for (k2, _v) in session.iter() {
+                                        let is_valid_field = matches!(
+                                            k2.as_str(),
+                                            "enabled" | "buffer" | "max_surb_upstream" | "always_max_out_surbs"
+                                        );
+                                        if !is_valid_field {
+                                            wrong_keys.push(format!("connection.surb_balancing.{session_key}.{k2}"));
+                                        }
+                                    }
                                 }
-                                wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
                         continue;
@@ -332,15 +328,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "announced_peer_minimum_score" {
-                        continue;
-                    }
                     wrong_keys.push(format!("connection.{k}"));
                 }
             }
             continue;
         }
-        // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
                 for (id, v) in destinations.iter() {
@@ -358,7 +350,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
         wrong_keys.push(key.clone());
     }
     wrong_keys
@@ -531,15 +522,29 @@ timeout = "7s"
 ttl = 6
 seq_count = 1
 
-[connection.max_surb_upstream]
-bridge = "512 Kb/s"
-ping = "1 Mb/s"
-main = "16 Mb/s"
+[connection.surb_balancing.bridge]
+enabled = false
+buffer = "32 kB"
+max_surb_upstream = "512 Kb/s"
+always_max_out_surbs = false
 
-[connection.buffer]
-bridge = "32 kB"
-ping = "32 kB"
-main = "2 MB"
+[connection.surb_balancing.ping]
+enabled = true
+buffer = "1 MB"
+max_surb_upstream = "512 Kb/s"
+always_max_out_surbs = true
+
+[connection.surb_balancing.main]
+enabled = true
+buffer = "10 MB"
+max_surb_upstream = "16 Mb/s"
+always_max_out_surbs = true
+
+[connection.surb_balancing.health_check]
+enabled = false
+buffer = "16 kB"
+max_surb_upstream = "128 Kb/s"
+always_max_out_surbs = false
 
 [wireguard]
 listen_port = 51820

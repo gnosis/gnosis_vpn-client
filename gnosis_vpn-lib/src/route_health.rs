@@ -321,7 +321,17 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::ReadyToConnect { .. })
     }
 
-    pub(crate) fn is_unrecoverable(&self) -> bool {
+    /// Returns the cached exit health from either `ReadyToConnect` or `Connecting` state.
+    /// Used by force-reconnect to reuse the last known good health without going through a
+    /// full disconnect/reconnect cycle.
+    pub(crate) fn current_exit_health(&self) -> Option<ExitHealth> {
+        match &self.state {
+            RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connecting { exit, .. } => Some(exit.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn is_unrecoverable(&self) -> bool {
         matches!(self.state, RouteHealthState::Unrecoverable { .. })
     }
 }
@@ -1226,6 +1236,32 @@ mod tests {
             MAX_INTERVAL_BETWEEN_FAILURES,
             "backoff must not exceed MAX_INTERVAL_BETWEEN_FAILURES"
         );
+    }
+
+    // --- select_api_version ---
+
+    #[test]
+    fn select_api_version_finds_v1() {
+        let versions = vec!["v1".to_string()];
+        assert_eq!(select_api_version(&versions), Some("v1"));
+    }
+
+    #[test]
+    fn select_api_version_returns_none_for_empty_list() {
+        assert_eq!(select_api_version(&[]), None);
+    }
+
+    #[test]
+    fn select_api_version_returns_none_when_no_match() {
+        let versions = vec!["v2".to_string(), "v99".to_string()];
+        assert_eq!(select_api_version(&versions), None);
+    }
+
+    // --- jitter ---
+
+    #[test]
+    fn jitter_zero_returns_zero() {
+        assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
     }
 
     // --- is_peered for Peering routes (0-hop) ---

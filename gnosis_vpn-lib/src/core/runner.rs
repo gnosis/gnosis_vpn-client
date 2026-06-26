@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, connection, event, ping, remote_data};
+use crate::{balance, connection, event, peer, ping, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -74,12 +75,8 @@ pub(crate) enum Results {
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
-    ConnectedPeers {
-        /// All connected peer addresses — used for route-health tracking.
-        connected: Result<Vec<Address>, Error>,
-        /// IPv4 addresses from peers with observed multiaddresses — used for IP-allowlist refresh.
-        /// Best-effort: an error here still allows route-health to proceed.
-        announced_ips: Vec<std::net::Ipv4Addr>,
+    AnnouncedPeers {
+        res: Result<HashMap<Address, peer::Peer>, Error>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -243,23 +240,10 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub(crate) async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting connected peers runner");
-    let (connected, announced_ips) = tokio::join!(async { hopr.connected_peers().await.map_err(Error::from) }, async {
-        match hopr.announced_peers().await {
-            Ok(peers) => peers.into_values().flat_map(|p| p.ipv4_addrs).collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(error = %e, "announced_peers() failed; skipping allowlist refresh");
-                Vec::new()
-            }
-        }
-    });
-    let _ = results_sender
-        .send(Results::ConnectedPeers {
-            connected,
-            announced_ips,
-        })
-        .await;
+pub(crate) async fn announced_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting announced peers runner");
+    let res = hopr.announced_peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::AnnouncedPeers { res }).await;
 }
 
 pub(crate) async fn monitor_session(
@@ -610,17 +594,9 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::ConnectedPeers {
-                connected,
-                announced_ips,
-            } => match connected {
-                Ok(peers) => write!(
-                    f,
-                    "ConnectedPeers: {} peers, {} announced IPs",
-                    peers.len(),
-                    announced_ips.len()
-                ),
-                Err(err) => write!(f, "ConnectedPeers: Error({})", err),
+            Results::AnnouncedPeers { res } => match res {
+                Ok(peers) => write!(f, "AnnouncedPeers: {} peers", peers.len()),
+                Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
             },
             Results::IncentiveOperations { res } => match res {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),

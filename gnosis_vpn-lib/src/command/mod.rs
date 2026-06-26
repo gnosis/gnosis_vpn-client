@@ -58,6 +58,9 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
+    /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
+    /// Used by the root process when a WAN interface change is detected.
+    ForceReconnect,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,6 +72,9 @@ pub enum Response {
     Balance(Result<BalanceResponse, String>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
+    /// Acknowledgment for [`WorkerCommand::ForceReconnect`]. Never sent in response to a ctl
+    /// command — the root process uses id=0 fire-and-forget and discards this response.
+    ForceReconnectAcknowledged,
     Pong,
     Info(InfoResponse),
     StartClient(StartClientResponse),
@@ -83,6 +89,7 @@ pub struct StatusResponse {
     pub destinations: Vec<DestinationState>,
     pub target_destination: Option<String>,
     pub connecting: Option<ConnectingInfo>,
+    pub reconnecting: Option<ReconnectingInfo>,
     pub connected: Option<ConnectedInfo>,
     pub disconnecting: Vec<DisconnectingInfo>,
 }
@@ -90,6 +97,15 @@ pub struct StatusResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
+    pub since: SystemTime,
+    pub phase: connection::up::Phase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReconnectingInfo {
+    pub destination_id: String,
+    /// When the WAN change that triggered the reconnect was detected.
     #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::up::Phase,
@@ -274,27 +290,34 @@ pub struct ConnStats {
     pub wg_pubkey: Option<String>,
     pub wg_server_pubkey: Option<String>,
     pub wg_ip: Option<String>,
-    pub active_session: Option<ActiveSession>,
+    pub bridge_session: Option<ActiveSession>,
+    pub main_session: Option<ActiveSession>,
 }
 
 impl ConnStats {
     pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
         use connection::up::SessionKind;
+        let bridge_session = conn.bridge_session.as_ref().and_then(|meta| {
+            let id = meta.active_clients.first()?.to_string();
+            let bound_host = meta.bound_host;
+            Some(ActiveSession::Bridge { bound_host, id })
+        });
+        let main_session = conn.ping_session.as_ref().and_then(|(kind, meta)| {
+            let id = meta.active_clients.first()?.to_string();
+            let bound_host = meta.bound_host;
+            Some(match kind {
+                SessionKind::Ping => ActiveSession::Ping { bound_host, id },
+                SessionKind::Main => ActiveSession::Main { bound_host, id },
+            })
+        });
         ConnStats {
             node_address,
             destination: conn.destination.clone(),
             wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
             wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
-            active_session: conn.active_session.as_ref().and_then(|(kind, meta)| {
-                let id = meta.active_clients.first()?.to_string();
-                let bound_host = meta.bound_host;
-                Some(match kind {
-                    SessionKind::Bridge => ActiveSession::Bridge { bound_host, id },
-                    SessionKind::Ping => ActiveSession::Ping { bound_host, id },
-                    SessionKind::Main => ActiveSession::Main { bound_host, id },
-                })
-            }),
+            bridge_session,
+            main_session,
         }
     }
 }
@@ -461,15 +484,15 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                balance_recommendation,
+                balance_recommendation: _,
             } => {
+                let wxhopr_sci = balance::wxhopr_scientific(*node_wxhopr)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
                 let mut msg = format!(
-                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}",
-                    node_address.to_checksum(),
+                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}{wxhopr_sci}",
+                    node_address.to_checksum()
                 );
-                if let Some(rec) = balance_recommendation {
-                    msg = format!("{msg}, recommended: wxHOPR >= {}, xDAI >= {}", rec.wxhopr, rec.xdai);
-                }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
                         format!("{msg}, funding tool: {tool}, error: {error})")
@@ -529,6 +552,18 @@ impl Display for ConnectingInfo {
         write!(
             f,
             "Connecting to {} (since {}, phase {})",
+            self.destination_id,
+            log_output::elapsed(&self.since),
+            self.phase
+        )
+    }
+}
+
+impl Display for ReconnectingInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Reconnecting to {} (since {}, phase {})",
             self.destination_id,
             log_output::elapsed(&self.since),
             self.phase
