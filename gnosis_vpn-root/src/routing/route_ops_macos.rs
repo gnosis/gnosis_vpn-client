@@ -193,4 +193,93 @@ mod tests {
         let args = route_add_args("10.0.0.0/8", None, "utun5");
         assert_eq!(args, vec!["-n", "add", "-inet", "10.0.0.0/8", "-interface", "utun5"]);
     }
+
+    // Realistic `netstat -rn -f inet` header + rows used across parser tests.
+    const NETSTAT_OUTPUT: &str = "\
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            192.168.1.1        UGScg               en0
+default            link#18            UCSIg               utun5
+default            10.0.0.1           UGSc                en1
+127                127.0.0.1          UCS                 lo0
+";
+
+    // ── parse_netstat_default_for_device ────────────────────────────────────
+
+    #[test]
+    fn netstat_for_device_returns_gateway_when_found() {
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "en0");
+        assert_eq!(result, Some(Some("192.168.1.1".to_string())));
+    }
+
+    #[test]
+    fn netstat_for_device_returns_none_gateway_for_link_local() {
+        // utun5 row has `link#18` as gateway → no routable gateway.
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "utun5");
+        assert_eq!(result, Some(None));
+    }
+
+    #[test]
+    fn netstat_for_device_returns_none_when_device_absent() {
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "en9");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn netstat_for_device_accepts_interface_scoped_route() {
+        // 'I'-flagged routes must NOT be filtered out for this parser — the WAN
+        // interface is still valid when macOS demotes its route to interface-scoped.
+        let output = "default            192.168.2.1        UGScgI              en0\n";
+        let result = parse_netstat_default_for_device(output, "en0");
+        assert_eq!(result, Some(Some("192.168.2.1".to_string())));
+    }
+
+    #[test]
+    fn netstat_for_device_skips_header_lines() {
+        let result = parse_netstat_default_for_device(NETSTAT_OUTPUT, "Destination");
+        assert_eq!(result, None);
+    }
+
+    // ── parse_netstat_default_excluding ─────────────────────────────────────
+
+    #[test]
+    fn netstat_excluding_returns_first_non_excluded_route() {
+        // utun5 is the VPN tunnel; en0 should be returned as the WAN default.
+        let result = parse_netstat_default_excluding(NETSTAT_OUTPUT, "utun5");
+        assert_eq!(result, Ok(("en0".to_string(), Some("192.168.1.1".to_string()))));
+    }
+
+    #[test]
+    fn netstat_excluding_skips_excluded_iface() {
+        // Exclude en0; next non-I default is en1.
+        let result = parse_netstat_default_excluding(NETSTAT_OUTPUT, "en0");
+        assert_eq!(result, Ok(("en1".to_string(), Some("10.0.0.1".to_string()))));
+    }
+
+    #[test]
+    fn netstat_excluding_skips_interface_scoped_routes() {
+        // utun5 row has the 'I' flag and must be skipped even when it is not the
+        // excluded interface.
+        let output = "\
+default            link#18            UCSIg               utun5
+default            192.168.1.1        UGScg               en0
+";
+        let result = parse_netstat_default_excluding(output, "en9");
+        assert_eq!(result, Ok(("en0".to_string(), Some("192.168.1.1".to_string()))));
+    }
+
+    #[test]
+    fn netstat_excluding_returns_none_gateway_for_link_local() {
+        let output = "default            link#5             UCSg                en0\n";
+        let result = parse_netstat_default_excluding(output, "utun5");
+        assert_eq!(result, Ok(("en0".to_string(), None)));
+    }
+
+    #[test]
+    fn netstat_excluding_errors_when_no_default_route_remains() {
+        let result = parse_netstat_default_excluding("127  127.0.0.1  UCS  lo0\n", "en0");
+        assert!(matches!(result, Err(Error::NoInterface)));
+    }
 }
