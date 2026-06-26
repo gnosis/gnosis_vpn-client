@@ -85,6 +85,9 @@ struct Actor {
     /// Dynamic delta above the static floor: peers discovered after initial connection.
     /// Diffed and reconciled by `update_peer_ips`; reset to empty on routing teardown.
     active_bypass: HashSet<Ipv4Addr>,
+    /// Resolved WireGuard interface name (e.g. "utun8" on macOS, "wg0_gnosisvpn" on Linux).
+    /// Populated after a successful routing setup; cleared on teardown.
+    wg_interface_name: Option<String>,
 }
 
 impl Actor {
@@ -95,6 +98,7 @@ impl Actor {
             applied_policy: None,
             peer_ip_last_seen: std::collections::HashMap::new(),
             active_bypass: HashSet::new(),
+            wg_interface_name: None,
         })
     }
 
@@ -143,28 +147,35 @@ impl Actor {
     }
 
     async fn should_reconnect(&mut self, removed_link: Option<String>) -> bool {
+        // On macOS the WireGuard interface is a dynamic utunN, not the config name.
+        // Use the resolved name so comparisons and kernel lookups target the real interface.
+        let wg_iface = self
+            .wg_interface_name
+            .as_deref()
+            .unwrap_or(wireguard::WG_INTERFACE)
+            .to_string();
+
         let Some(router) = &mut self.router else {
             tracing::debug!("should_reconnect: no active router, skipping");
             return false;
         };
 
-        tracing::debug!(removed_link = ?removed_link, wg_interface = wireguard::WG_INTERFACE, "should_reconnect: evaluating");
+        tracing::debug!(removed_link = ?removed_link, wg_iface = %wg_iface, "should_reconnect: evaluating");
 
         // Tunnel gone — reconnect regardless of WAN state.
         // Planned teardown can't reach here: TeardownRouting is awaited before
         // NetworkChanged is dispatched, so self.router is None by then.
-        if removed_link.as_deref() == Some(wireguard::WG_INTERFACE) {
+        if removed_link.as_deref() == Some(&wg_iface) {
             tracing::info!("WireGuard device removed — reconnect needed");
             return true;
         }
 
-        // On macOS, RTM_IFANNOUNCE is not sent for kernel WireGuard interfaces.
-        // When the WG device is deleted, RTM_IFINFO fires but if_indextoname
-        // already fails, so we emit LinkRemoved with a synthetic "if#N" name.
-        // Check directly whether WG_INTERFACE still exists in that case.
+        // On macOS, when a utunN interface is deleted, RTM_IFINFO fires but
+        // if_indextoname already fails, so we emit LinkRemoved with a synthetic
+        // "if#N" name. Check whether the resolved WG interface still exists.
         #[cfg(target_os = "macos")]
         if removed_link.as_ref().map_or(false, |n| n.starts_with("if#")) {
-            let wg_gone = std::ffi::CString::new(wireguard::WG_INTERFACE)
+            let wg_gone = std::ffi::CString::new(wg_iface.as_str())
                 .map(|name| unsafe { libc::if_nametoindex(name.as_ptr()) } == 0)
                 .unwrap_or(false);
             if wg_gone {
@@ -207,6 +218,7 @@ impl Actor {
         self.router = Some(Box::new(router));
         match res_setup {
             Ok(interface_name) => {
+                self.wg_interface_name = Some(interface_name.clone());
                 tracing::info!("static routing setup successfully");
                 Ok(interface_name)
             }
@@ -228,6 +240,7 @@ impl Actor {
             router.teardown(Logs::Print).await;
         }
         self.router = None;
+        self.wg_interface_name = None;
         self.peer_ip_last_seen.clear();
         self.active_bypass.clear();
     }
