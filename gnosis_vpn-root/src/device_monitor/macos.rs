@@ -112,8 +112,8 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             if buf.len() < std::mem::size_of::<libc::if_msghdr>() {
                 return None;
             }
-            let ifm = unsafe { &*(buf.as_ptr() as *const libc::if_msghdr) };
-            let index = ifm.ifm_index as u32;
+            let offset = std::mem::offset_of!(libc::if_msghdr, ifm_index);
+            let index = u16::from_ne_bytes(buf[offset..offset + 2].try_into().unwrap()) as u32;
             match if_name(index) {
                 // if_indextoname succeeded: interface still exists, flags changed
                 Some(name) => Some(NetworkEvent::LinkChanged { index, name }),
@@ -128,8 +128,8 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             if buf.len() < std::mem::size_of::<libc::ifa_msghdr>() {
                 return None;
             }
-            let ifam = unsafe { &*(buf.as_ptr() as *const libc::ifa_msghdr) };
-            let index = ifam.ifam_index as u32;
+            let offset = std::mem::offset_of!(libc::ifa_msghdr, ifam_index);
+            let index = u16::from_ne_bytes(buf[offset..offset + 2].try_into().unwrap()) as u32;
             let name = if_name(index).unwrap_or_else(|| format!("if#{index}"));
             Some(NetworkEvent::AddressAdded { index, name })
         }
@@ -137,8 +137,8 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             if buf.len() < std::mem::size_of::<libc::ifa_msghdr>() {
                 return None;
             }
-            let ifam = unsafe { &*(buf.as_ptr() as *const libc::ifa_msghdr) };
-            let index = ifam.ifam_index as u32;
+            let offset = std::mem::offset_of!(libc::ifa_msghdr, ifam_index);
+            let index = u16::from_ne_bytes(buf[offset..offset + 2].try_into().unwrap()) as u32;
             let name = if_name(index).unwrap_or_else(|| format!("if#{index}"));
             Some(NetworkEvent::AddressRemoved { index, name })
         }
@@ -146,8 +146,8 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
             if buf.len() < std::mem::size_of::<libc::if_msghdr2>() {
                 return None;
             }
-            let ifm = unsafe { &*(buf.as_ptr() as *const libc::if_msghdr2) };
-            let index = ifm.ifm_index as u32;
+            let offset = std::mem::offset_of!(libc::if_msghdr2, ifm_index);
+            let index = u16::from_ne_bytes(buf[offset..offset + 2].try_into().unwrap()) as u32;
             match if_name(index) {
                 Some(name) => Some(NetworkEvent::LinkChanged { index, name }),
                 None => Some(NetworkEvent::LinkRemoved {
