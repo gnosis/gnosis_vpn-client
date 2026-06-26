@@ -143,7 +143,7 @@ impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
         tracing::debug!(device = %device, gateway = ?gateway, src_ip = ?wan_route.src_ip, "WAN interface for bypass routes");
 
         // Phase 1: bypass routes before wg-quick up (avoids race with HOPR p2p connections)
-        for ip in &self.peer_ips.clone() {
+        for ip in self.peer_ips.clone() {
             let dest = ip.to_string();
             let _ = self.route_ops.route_del(&dest, &device).await;
             if let Err(e) = self.route_ops.route_add(&dest, gateway.as_deref(), &device).await {
