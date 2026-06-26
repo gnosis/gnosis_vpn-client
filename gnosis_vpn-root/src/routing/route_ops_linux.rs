@@ -119,7 +119,17 @@ impl RouteOps for NetlinkRouteOps {
                     .unwrap_or(Ipv4Addr::UNSPECIFIED);
                 covers(prefix_addr, prefix_len, dest)
             })
-            .max_by_key(|r| r.header.destination_prefix_length);
+            .max_by_key(|r| {
+                let metric = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Priority(m) => Some(*m),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                (r.header.destination_prefix_length, std::cmp::Reverse(metric))
+            });
 
         let Some(route) = best else {
             return Ok(None);
@@ -188,7 +198,17 @@ impl RouteOps for NetlinkRouteOps {
                     .unwrap_or(Ipv4Addr::UNSPECIFIED);
                 covers(prefix_addr, prefix_len, dest)
             })
-            .max_by_key(|r| r.header.destination_prefix_length);
+            .max_by_key(|r| {
+                let metric = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Priority(m) => Some(*m),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                (r.header.destination_prefix_length, std::cmp::Reverse(metric))
+            });
 
         let Some(route) = best else {
             return Ok(None);
