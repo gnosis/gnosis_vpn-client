@@ -1,4 +1,4 @@
-use std::os::unix::io::{FromRawFd, OwnedFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 
 use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
