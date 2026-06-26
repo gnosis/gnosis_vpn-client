@@ -309,9 +309,17 @@ impl Actor {
             return;
         };
         tracing::info!("re-applying killswitch after network change");
+        let combined: Vec<IpAddr> = policy
+            .ips
+            .iter()
+            .copied()
+            .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         if let Err(error) = self
             .firewall
-            .reapply_policy(&policy.interface, &policy.ips, policy.lan_lockdown)
+            .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
         {
             tracing::warn!(?error, "failed to re-apply killswitch after network change");
         }
