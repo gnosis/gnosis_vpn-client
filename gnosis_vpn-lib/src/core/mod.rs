@@ -919,6 +919,7 @@ impl Core {
             Results::SessionMonitorFailed => match self.phase.clone() {
                 Phase::Connected(conn) => {
                     tracing::warn!(%conn, "session monitor failed - reconnecting");
+                    self.reconnecting_since = Some(SystemTime::now());
                     self.disconnect_from_connection(&conn, results_sender);
                 }
                 phase => {
@@ -934,6 +935,7 @@ impl Core {
                     let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
                     if failures >= max {
                         tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
+                        self.reconnecting_since = Some(SystemTime::now());
                         self.disconnect_from_connection(&conn, results_sender);
                     }
                 }
