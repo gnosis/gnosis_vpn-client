@@ -414,7 +414,6 @@ async fn run(
                                 debounce_pending = false;
                                 debounce_started = None;
                                 removed_link = None;
-                                debounce.as_mut().reset(time::Instant::now() + Duration::MAX);
                             }
                             None => {}
                         }
