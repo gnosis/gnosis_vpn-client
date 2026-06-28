@@ -116,18 +116,13 @@ impl Actor {
                 reply,
             } => {
                 let result = self.setup_routing(state_home, *wg_data, peer_ips).await;
-                let action = if result.is_ok() {
-                    Some(MonitorAction::Start)
-                } else {
-                    None
-                };
                 let _ = reply.send(result);
-                action
+                None
             }
             Msg::TeardownRouting { reply } => {
                 self.teardown_routing().await;
                 let _ = reply.send(());
-                Some(MonitorAction::Stop)
+                None
             }
             Msg::SetAllowedIps {
                 ips,
@@ -136,15 +131,20 @@ impl Actor {
                 reply,
             } => {
                 let result = self.apply_policy(interface, ips, lan_lockdown);
+                let start_monitor = result.is_ok();
                 let _ = reply.send(result);
-                None
+                if start_monitor {
+                    Some(MonitorAction::Start)
+                } else {
+                    None
+                }
             }
             Msg::DisableKillswitch => {
                 self.applied_policy = None;
                 if let Err(error) = self.firewall.reset_policy() {
                     tracing::warn!(?error, "failed to disable killswitch on disconnect");
                 }
-                None
+                Some(MonitorAction::Stop)
             }
             Msg::UpdatePeerIps { peer_ips } => {
                 self.update_peer_ips(peer_ips).await;
