@@ -29,22 +29,14 @@ pub enum NetworkEvent {
     RouteChanged,
 }
 
-pub fn start() -> std::io::Result<(
-    CancellationToken,
-    tokio::task::JoinHandle<()>,
-    mpsc::Receiver<NetworkEvent>,
-)> {
-    let (tx, rx) = mpsc::channel(32);
-
+pub fn start(tx: mpsc::Sender<NetworkEvent>) -> std::io::Result<(CancellationToken, tokio::task::JoinHandle<()>)> {
     #[cfg(target_os = "linux")]
     {
-        let (cancel, handle) = linux::start(tx)?;
-        Ok((cancel, handle, rx))
+        linux::start(tx)
     }
 
     #[cfg(target_os = "macos")]
     {
-        let (cancel, handle) = macos::start_pf_route(tx);
-        return Ok((cancel, handle, rx));
+        Ok(macos::start_pf_route(tx))
     }
 }

@@ -494,17 +494,14 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (keep_alive_instruction_sender, keep_alive_instruction_receiver) = mpsc::channel(32);
     let (cancel_keep_alive_timer, keep_alive_expired) = keep_alive_timer(keep_alive_instruction_receiver).await?;
 
+    let (reconnect_tx, reconnect_rx) = mpsc::channel(1);
+
     let cancel_routing_actor = CancellationToken::new();
     let (routing_actor_sender, routing_actor_handle) =
-        routing_actor::start(cancel_routing_actor.clone()).map_err(|error| {
+        routing_actor::start(cancel_routing_actor.clone(), reconnect_tx).map_err(|error| {
             tracing::error!(?error, "failed to initialize firewall");
             exitcode::UNAVAILABLE
         })?;
-
-    let (cancel_device_monitor, device_monitor_handle, network_events) = device_monitor::start().map_err(|error| {
-        tracing::error!(?error, "failed to start device monitor");
-        exitcode::UNAVAILABLE
-    })?;
 
     let mut state = DaemonState {
         config,
@@ -538,7 +535,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             socket_listener,
             config_receiver,
             keep_alive_expired,
-            network_events,
+            reconnect_rx,
         )
         .await;
 
@@ -549,9 +546,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     cancel_signal_handlers.cancel();
     cancel_config_watcher.cancel();
     cancel_keep_alive_timer.cancel();
-    cancel_device_monitor.cancel();
     let _ = routing_actor_handle.await;
-    let _ = device_monitor_handle.await;
 
     // remove socket file
     let _ = fs::remove_file(&socket_path).await.map_err(|err| {
@@ -680,9 +675,6 @@ async fn main() {
     }
 }
 
-const KILLSWITCH_DEBOUNCE_SETTLE: Duration = Duration::from_millis(250);
-const KILLSWITCH_DEBOUNCE_MAX: Duration = Duration::from_secs(1);
-
 impl DaemonState {
     async fn daemon_loop(
         &mut self,
@@ -690,14 +682,9 @@ impl DaemonState {
         mut socket_listener: mpsc::Receiver<SocketCmd>,
         mut config_receiver: mpsc::Receiver<()>,
         mut keep_alive_expired: mpsc::Receiver<Duration>,
-        mut network_events: mpsc::Receiver<device_monitor::NetworkEvent>,
+        mut reconnect_rx: mpsc::Receiver<()>,
     ) -> Result<(), exitcode::ExitCode> {
         tracing::info!("entering root main loop");
-        let network_debounce = time::sleep(Duration::MAX);
-        tokio::pin!(network_debounce);
-        let mut network_change_pending = false;
-        let mut network_burst_started: Option<time::Instant> = None;
-        let mut removed_link: Option<String> = None;
         loop {
             tokio::select! {
                 Some(signal) = signal_receiver.recv() => self.incoming_signal(signal).await?,
@@ -710,53 +697,12 @@ impl DaemonState {
                 Some(line) = self.incoming_worker_channel.1.recv() => self.incoming_worker_line(line).await?,
                 Some(res) = self.worker_exit_channel.1.recv() => self.incoming_worker_exit(res).await?,
                 Some(dur) = keep_alive_expired.recv() => self.keep_alive_expired(dur).await?,
-                Some(event) = network_events.recv() => {
-                    match &event {
-                        device_monitor::NetworkEvent::LinkRemoved { name, .. }
-                        | device_monitor::NetworkEvent::AddressRemoved { name, .. } => {
-                            tracing::debug!(name, "network burst: recording removed link");
-                            removed_link = Some(name.clone());
-                        }
-                        _ => {}
-                    }
-                    self.incoming_network_event(event);
-                    let burst_started = *network_burst_started.get_or_insert_with(time::Instant::now);
-                    let deadline = burst_started + KILLSWITCH_DEBOUNCE_MAX;
-                    let settle = time::Instant::now() + KILLSWITCH_DEBOUNCE_SETTLE;
-                    network_debounce.as_mut().reset(settle.min(deadline));
-                    network_change_pending = true;
-                }
-                _ = network_debounce.as_mut(), if network_change_pending => {
-                    network_change_pending = false;
-                    network_burst_started = None;
-                    tracing::debug!(removed_link = ?removed_link, "network burst settled — dispatching NetworkChanged");
-                    self.react_to_network_change(removed_link.take()).await;
-                }
+                Some(()) = reconnect_rx.recv() => self.force_reconnect_on_network_change().await,
                 else => {
                     tracing::error!("unexpected channel closure");
                     return Err(exitcode::IOERR);
                 }
             }
-        }
-    }
-
-    async fn react_to_network_change(&mut self, removed_link: Option<String>) {
-        let _ = self
-            .routing_actor_sender
-            .send(routing_actor::Msg::ReapplyKillswitch)
-            .await;
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let _ = self
-            .routing_actor_sender
-            .send(routing_actor::Msg::NetworkChanged {
-                removed_link,
-                reply: reply_tx,
-            })
-            .await;
-        match reply_rx.await {
-            Ok(true) => self.force_reconnect_on_network_change().await,
-            Ok(false) => tracing::debug!("network event burst, no reconnect needed"),
-            Err(_) => tracing::warn!("routing actor dropped NetworkChanged reply — skipping reconnect"),
         }
     }
 
@@ -775,27 +721,6 @@ impl DaemonState {
             if let Err(e) = send_to_worker(msg, &mut child.socket_writer).await {
                 tracing::warn!(?e, "failed to send ForceReconnect to worker");
             }
-        }
-    }
-
-    fn incoming_network_event(&self, event: device_monitor::NetworkEvent) {
-        match event {
-            device_monitor::NetworkEvent::LinkChanged { index, name } => {
-                tracing::info!(index, name, "network link changed");
-            }
-            device_monitor::NetworkEvent::LinkRemoved { index, name } => {
-                tracing::info!(index, name, "network link removed");
-            }
-            device_monitor::NetworkEvent::AddressAdded { index, name } => {
-                tracing::info!(index, name, "network address added");
-            }
-            device_monitor::NetworkEvent::AddressRemoved { index, name } => {
-                tracing::info!(index, name, "network address removed");
-            }
-            device_monitor::NetworkEvent::RouteAdded => tracing::info!("route added"),
-            device_monitor::NetworkEvent::RouteRemoved => tracing::info!("route removed"),
-            #[cfg(target_os = "macos")]
-            device_monitor::NetworkEvent::RouteChanged => tracing::info!("route changed"),
         }
     }
 
