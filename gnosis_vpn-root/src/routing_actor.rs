@@ -23,9 +23,14 @@ use gnosis_vpn_lib::killswitch::Firewall;
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::wireguard;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use crate::device_monitor::{self, NetworkEvent};
 use crate::routing::{self, Routing};
+
+const DEBOUNCE_SETTLE: Duration = Duration::from_millis(250);
+const DEBOUNCE_MAX: Duration = Duration::from_secs(1);
 
 pub enum Msg {
     SetupRouting {
@@ -44,22 +49,18 @@ pub enum Msg {
         reply: oneshot::Sender<Result<(), String>>,
     },
     DisableKillswitch,
-    /// Re-apply the last successfully applied killswitch policy (e.g. after a network change).
-    ReapplyKillswitch,
-    /// Ask whether a reconnect should be triggered given the latest network event burst.
-    /// `removed_link` is the name of any interface removed during the burst, if any.
-    /// Replies `false` when no routing is active (nothing to reconnect) or when
-    /// the events were caused by our own route mutations or unrelated route churn.
-    NetworkChanged {
-        removed_link: Option<String>,
-        reply: oneshot::Sender<bool>,
-    },
     /// Fire-and-forget: update the peer-IP bypass routes and killswitch allowlist.
     /// Sent periodically from Core with a snapshot of announced peer IPv4 addresses.
     /// The actor applies hysteresis and diffs against its current active set.
     UpdatePeerIps {
         peer_ips: Vec<Ipv4Addr>,
     },
+}
+
+/// Returned by `Actor::handle` to tell `run` whether to start or stop the device monitor.
+enum MonitorAction {
+    Start,
+    Stop,
 }
 
 const PEER_IP_HYSTERESIS_SECS: u64 = 300;
@@ -106,7 +107,7 @@ impl Actor {
     // so they run inline. Routing setup/teardown (wg-quick, route changes) is
     // genuinely async and may take seconds — queued messages simply wait,
     // which is exactly the serialization we want.
-    async fn handle(&mut self, msg: Msg) {
+    async fn handle(&mut self, msg: Msg) -> Option<MonitorAction> {
         match msg {
             Msg::SetupRouting {
                 state_home,
@@ -116,10 +117,12 @@ impl Actor {
             } => {
                 let result = self.setup_routing(state_home, *wg_data, peer_ips).await;
                 let _ = reply.send(result);
+                None
             }
             Msg::TeardownRouting { reply } => {
                 self.teardown_routing().await;
                 let _ = reply.send(());
+                None
             }
             Msg::SetAllowedIps {
                 ips,
@@ -128,20 +131,24 @@ impl Actor {
                 reply,
             } => {
                 let result = self.apply_policy(interface, ips, lan_lockdown);
+                let start_monitor = result.is_ok();
                 let _ = reply.send(result);
+                if start_monitor {
+                    Some(MonitorAction::Start)
+                } else {
+                    None
+                }
             }
             Msg::DisableKillswitch => {
                 self.applied_policy = None;
                 if let Err(error) = self.firewall.reset_policy() {
                     tracing::warn!(?error, "failed to disable killswitch on disconnect");
                 }
-            }
-            Msg::ReapplyKillswitch => self.reapply_policy(),
-            Msg::NetworkChanged { removed_link, reply } => {
-                let _ = reply.send(self.should_reconnect(removed_link).await);
+                Some(MonitorAction::Stop)
             }
             Msg::UpdatePeerIps { peer_ips } => {
                 self.update_peer_ips(peer_ips).await;
+                None
             }
         }
     }
@@ -351,29 +358,115 @@ impl Actor {
     }
 }
 
-pub fn start(cancel: CancellationToken) -> Result<(mpsc::Sender<Msg>, tokio::task::JoinHandle<()>), String> {
+pub fn start(
+    cancel: CancellationToken,
+    reconnect_tx: mpsc::Sender<()>,
+) -> Result<(mpsc::Sender<Msg>, tokio::task::JoinHandle<()>), String> {
     let actor = Actor::new()?;
     let (sender, receiver) = mpsc::channel(32);
-    let handle = tokio::spawn(run(actor, receiver, cancel));
+    let handle = tokio::spawn(run(actor, receiver, cancel, reconnect_tx));
     Ok((sender, handle))
 }
 
-async fn run(mut actor: Actor, mut receiver: mpsc::Receiver<Msg>, cancel: CancellationToken) {
+async fn run(
+    mut actor: Actor,
+    mut receiver: mpsc::Receiver<Msg>,
+    cancel: CancellationToken,
+    reconnect_tx: mpsc::Sender<()>,
+) {
     tracing::info!("routing actor started");
+
+    let (network_tx, mut network_rx) = mpsc::channel::<NetworkEvent>(32);
+    let mut monitor_cancel: Option<CancellationToken> = None;
+
+    let debounce = time::sleep(Duration::MAX);
+    tokio::pin!(debounce);
+    let mut debounce_pending = false;
+    let mut debounce_started: Option<time::Instant> = None;
+    let mut removed_link: Option<String> = None;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 tracing::info!("routing actor stopping");
                 break;
             }
-            msg = receiver.recv() => match msg {
-                Some(msg) => actor.handle(msg).await,
-                None => {
-                    tracing::info!("routing actor channel closed");
-                    break;
+            msg = receiver.recv() => {
+                match msg {
+                    Some(msg) => {
+                        match actor.handle(msg).await {
+                            Some(MonitorAction::Start) => {
+                                if monitor_cancel.is_none() {
+                                    match device_monitor::start(network_tx.clone()) {
+                                        Ok((cancel_dm, _handle)) => {
+                                            tracing::debug!("device monitor started");
+                                            monitor_cancel = Some(cancel_dm);
+                                        }
+                                        Err(error) => tracing::error!(?error, "failed to start device monitor"),
+                                    }
+                                }
+                            }
+                            Some(MonitorAction::Stop) => {
+                                if let Some(c) = monitor_cancel.take() {
+                                    c.cancel();
+                                    tracing::debug!("device monitor stopped");
+                                }
+                                debounce_pending = false;
+                                debounce_started = None;
+                                removed_link = None;
+                            }
+                            None => {}
+                        }
+                    }
+                    None => {
+                        tracing::info!("routing actor channel closed");
+                        break;
+                    }
+                }
+            }
+            event = network_rx.recv() => {
+                if let Some(event) = event {
+                    log_network_event(&event);
+                    if let NetworkEvent::LinkRemoved { name, .. } | NetworkEvent::AddressRemoved { name, .. } = &event {
+                        removed_link = Some(name.clone());
+                    }
+                    let burst_started = *debounce_started.get_or_insert_with(time::Instant::now);
+                    let deadline = burst_started + DEBOUNCE_MAX;
+                    let settle = time::Instant::now() + DEBOUNCE_SETTLE;
+                    debounce.as_mut().reset(settle.min(deadline));
+                    debounce_pending = true;
+                }
+            }
+            _ = debounce.as_mut(), if debounce_pending => {
+                debounce_pending = false;
+                debounce_started = None;
+                tracing::debug!(removed_link = ?removed_link, "network burst settled");
+                actor.reapply_policy();
+                if actor.should_reconnect(removed_link.take()).await {
+                    tracing::info!("network changed — notifying daemon to reconnect");
+                    let _ = reconnect_tx.send(()).await;
+                } else {
+                    tracing::debug!("network event burst, no reconnect needed");
                 }
             }
         }
     }
+
+    if let Some(c) = monitor_cancel.take() {
+        c.cancel();
+    }
     actor.teardown().await;
+}
+
+fn log_network_event(event: &NetworkEvent) {
+    match event {
+        NetworkEvent::LinkChanged { index, name } => tracing::info!(index, name, "network link changed"),
+        NetworkEvent::LinkRemoved { index, name } => tracing::info!(index, name, "network link removed"),
+        NetworkEvent::AddressAdded { index, name } => tracing::info!(index, name, "network address added"),
+        NetworkEvent::AddressRemoved { index, name } => tracing::info!(index, name, "network address removed"),
+        NetworkEvent::RouteAdded => tracing::info!("route added"),
+        NetworkEvent::RouteRemoved => tracing::info!("route removed"),
+        #[cfg(target_os = "macos")]
+        NetworkEvent::RouteChanged => tracing::info!("route changed"),
+    }
 }
