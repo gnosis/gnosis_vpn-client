@@ -497,8 +497,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let (reconnect_tx, reconnect_rx) = mpsc::channel(1);
 
     let cancel_routing_actor = CancellationToken::new();
-    let (routing_actor_sender, routing_actor_handle) =
-        routing_actor::start(cancel_routing_actor.clone(), reconnect_tx).map_err(|error| {
+    let (routing_actor_sender, routing_actor_handle) = routing_actor::start(cancel_routing_actor.clone(), reconnect_tx)
+        .map_err(|error| {
             tracing::error!(?error, "failed to initialize firewall");
             exitcode::UNAVAILABLE
         })?;

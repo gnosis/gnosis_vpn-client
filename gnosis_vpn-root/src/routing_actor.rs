@@ -116,7 +116,11 @@ impl Actor {
                 reply,
             } => {
                 let result = self.setup_routing(state_home, *wg_data, peer_ips).await;
-                let action = if result.is_ok() { Some(MonitorAction::Start) } else { None };
+                let action = if result.is_ok() {
+                    Some(MonitorAction::Start)
+                } else {
+                    None
+                };
                 let _ = reply.send(result);
                 action
             }
